@@ -237,6 +237,24 @@ async function invokeController(command, request, controller, signal) {
 
 const launchNative = (request, controller) => invokeController("native-spawn", request, controller);
 
+// Copilot 1.0.98 reports user_exit for /exit, a terminal hangup, and a signal alike; only /exit
+// reaches the extension without a SIGHUP first, so a hung-up provider never records an end.
+export function createSessionEndGate() {
+  let finish;
+  const settled = new Promise(resolve => { finish = resolve; });
+  return { hungUp: false, armed: false, finish,
+    async drain(ms) {
+      if (!this.armed || this.hungUp) return;
+      let timer;
+      await Promise.race([settled, new Promise(resolve => { timer = setTimeout(resolve, ms); })]);
+      clearTimeout(timer);
+    } };
+}
+export const sessionEndGate = createSessionEndGate();
+// The record outlives the extension's shutdown signal; the gate bounds how long exit waits.
+const recordSessionEnd = (request, controller) =>
+  invokeController("native-session-end", request, controller, AbortSignal.timeout(3000));
+
 function toolSpecs(managed) {
   const specs = {
     maestro_peers: {
@@ -324,7 +342,7 @@ export function managedToolSpecs() {
 
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
   closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
-  endSession, observe, signal, onListener, diagnostic = () => {
+  endSession, endGate = sessionEndGate, observe, signal, onListener, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
 } }) {
   signal?.throwIfAborted();
@@ -523,16 +541,17 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   // Join only the CLI-owned session; do not supply account, model, or permission handlers.
   signal?.throwIfAborted();
-  // Maestro's own SessionEnd observer (ADR 0024): only a user exit of this exact session is
-  // reported, by identifiers; nothing else from the hook input is read or kept.
+  // Maestro's own SessionEnd observer (ADR 0024): only a user exit of this exact session, with no
+  // hangup first, is reported, by identifiers; nothing else from the hook input is read or kept.
   const hooks = managed && endSession ? { onSessionEnd: async (input, invocation) => {
-    if (input?.reason !== "user_exit" || session?.sessionId !== own.sessionId ||
-      invocation?.sessionId !== own.sessionId) return;
     try {
+      if (endGate.hungUp || input?.reason !== "user_exit" || session?.sessionId !== own.sessionId ||
+        invocation?.sessionId !== own.sessionId) return;
       await endSession({ identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability } },
         expected.controller);
-    } catch { /* Fail open: the end stays unrecorded. */ }
+    } catch { /* Fail open: the end stays unrecorded. */ } finally { endGate.finish(); }
   } } : undefined;
+  if (hooks) endGate.armed = true;
   session = await joinSession(hooks ? { tools, hooks } : { tools });
   signal?.throwIfAborted();
   requireCondition(session.sessionId === own.sessionId);
@@ -687,7 +706,7 @@ async function invokeEnroll(request, controller, signal) {
 // Tools are declared at join, so managed tools refuse until enrollment succeeds.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
   diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
-  endSession = (request, path) => invokeController("native-session-end", request, path, signal),
+  endSession = recordSessionEnd, endGate = sessionEndGate,
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -784,7 +803,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
       root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener,
       expected: { workspaceId: enrolled.workspaceId, sessionId, generation: enrolled.generation,
         nodeId: enrolled.nodeId, controller },
-      endSession,
+      endSession, endGate,
       joinSession: async (config) => {
         for (const tool of config.tools) delegates[tool.name] = tool.handler;
         if (config.hooks?.onSessionEnd) delegates.onSessionEnd = config.hooks.onSessionEnd;

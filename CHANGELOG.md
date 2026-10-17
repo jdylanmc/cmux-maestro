@@ -8,8 +8,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - A born-managed root resumes as managed after a CMUX relaunch (#252). When CMUX restarts its
   session in the same surface, the controller resumes the same node as its next generation, in
-  the same run, with its children. It refuses a live or uncertain session, a different surface, or
-  a different account; for an account mismatch, `maestro_readiness` names the recorded login. See
+  the same run, with its children. It refuses a session the human ended with `/exit`, a live or
+  uncertain session, a different surface, or a different account; for an account mismatch,
+  `maestro_readiness` names the recorded login. A quit, hangup, or signal is not an `/exit`. See
   `docs/reference/relaunch-restore.md`.
 - Copilot sessions you start in a CMUX terminal are born managed (#252, ADR 0025). After setup,
   each new session enrolls itself as its own root: it can see and message its workspace peers

@@ -3019,6 +3019,11 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
     def require_resumable(node, state):
         if node.get("enrollment") != "born":
             raise EnrollmentRefused("session-previously-managed")
+        # Unresolved records are uncertain before anything else: an unknown surface is never a mismatch.
+        # A launch lease is loaded only for a launching node, so phase covers it.
+        if (node["phase"] == "launching" or node.get("surfaceUnknown")
+                or process_observation(node.get("providerProcess")) is not False):
+            raise EnrollmentRefused("session-live-or-uncertain")
         if (node["workspaceId"], node.get("surfaceId")) != (workspace, surface):
             raise EnrollmentRefused("surface-mismatch")
         recorded = recorded_account(node)
@@ -3029,11 +3034,8 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
         if node.get("sessionEndedGeneration") == node["generation"]:
             # The human ended this session; a later manual resume is not a relaunch restore.
             raise EnrollmentRefused("session-ended")
-        if (node["phase"] == "launching" or node.get("surfaceUnknown") or node["id"] in state["launches"]
-                or process_observation(node.get("providerProcess")) is not False):
-            raise EnrollmentRefused("session-live-or-uncertain")
-        if any(item["id"] != node["id"] and (
-                item.get("surfaceId") == node["surfaceId"] or item.get("providerProcess") == anchor)
+        # Loaded state already proves the surface has one owner; the new provider must have none.
+        if any(item["id"] != node["id"] and item.get("providerProcess") == anchor
                for item in state["nodes"].values()):
             raise EnrollmentRefused("surface-owned")
         try:

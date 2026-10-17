@@ -114,6 +114,11 @@ try:
         result = {"workspace_id": workspace, "surfaces": [
             {"id": item, "render_health": "not_started"} for item in state["surfaces"]
         ]}
+    elif command == "rpc" and args[args.index("rpc") + 1] == "surface.close":
+        closing = json.loads(args[args.index("rpc") + 2])
+        state["surfaces"].remove(closing["surface_id"])
+        state.setdefault("closed", []).append(closing)
+        result = {"workspace_id": closing["workspace_id"], "surface_id": closing["surface_id"]}
     elif command == "rpc":
         if args[args.index("rpc") + 1] != "surface.create":
             raise SystemExit("unsupported RPC")
@@ -1747,11 +1752,26 @@ with open(os.path.splitext(state_path)[0] + ".lock", "a+") as lock:
     with open(state_path + ".tmp", "w") as stream:
         json.dump(data, stream)
     os.replace(state_path + ".tmp", state_path)
-if env.get("FAKE_HOLD_SESSION_LOCK"):
-    # Copilot marks the session it holds with inuse.<PID>.lock.
+holders = []
+holder = env.get("FAKE_HOLD_SESSION_LOCK")
+if holder:
+    # Copilot marks the session it holds with inuse.<PID>.lock; the owner may be the provider,
+    # its direct child, a grandchild, or an orphan started after it (unrelated).
+    owner = os.getpid()
+    if holder != "1":
+        code = {"child": "import sys; sys.stdin.read()",
+                "grandchild": "import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', "
+                              "'import sys; sys.stdin.read()']); print(p.pid, flush=True); sys.stdin.read()",
+                "unrelated": "import subprocess, sys; p = subprocess.Popen([sys.executable, '-c', "
+                             "'import sys; sys.stdin.read()'], start_new_session=True); print(p.pid, flush=True)",
+                }[holder]
+        process = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                   text=True)
+        holders.append(process)
+        owner = process.pid if holder == "child" else int(process.stdout.readline())
     state = os.path.join(env["HOME"], ".copilot", "session-state", env["SESSION_ID"])
     os.makedirs(state, mode=0o700, exist_ok=True)
-    open(os.path.join(state, "inuse.%d.lock" % os.getpid()), "w").close()
+    open(os.path.join(state, "inuse.%d.lock" % owner), "w").close()
 sessions = json.loads(sys.argv[5])
 runs = [({**request, "sessionId": session}, {**env, "SESSION_ID": session}) for session in sessions] or \
     [(request, env)] * int(sys.argv[4])
@@ -1768,6 +1788,9 @@ if then:
              "env": runs[0][1], "results": results}
     exec(then, scope)
     results.append(scope["result"])
+for process in holders:
+    process.stdin.close()  # the lock holders read stdin and end at its EOF
+    process.wait(timeout=10)
 print(json.dumps([{"pid": os.getpid(), "returncode": result.returncode,
                    "stdout": result.stdout, "stderr": result.stderr} for result in results]))
 """
@@ -1836,7 +1859,7 @@ class BornFixture:
             child = {key: value for key, value in json.loads(json.dumps(root)).items() if key != "enrollment"}
             child.update(id=child_id, role="worker", parentId=root_id, surfaceId=surface,
                          copilotSessionId=str(uuid.uuid4()), launchAccepted=True,
-                         providerProcess=root["providerProcess"] if provider == "ended" else None)
+                         providerProcess=root["providerProcess"] if provider == "ended" else provider)
             state["nodes"][child_id] = child
         self.h.change_state(add)
         return child_id, surface
@@ -2296,30 +2319,79 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
         self.unchanged(before)
         self.assertEqual(sorted(self.routes.iterdir()), routes)
 
-    def test_lease_unresolved_or_owned_surface_refuses_and_leaves_routes(self):
-        for change in ("lease", "owned"):
-            with self.subTest(change=change):
-                first = self.first()
+    def refused_leaving_routes(self, first, reason, change=None, **options):
+        if change:
+            self.h.change_state(change)
+        before, routes = self.h.state(), sorted(self.routes.iterdir())
+        self.refused(self.resume(first, **options), reason)
+        self.unchanged(before)
+        self.assertEqual(sorted(self.routes.iterdir()), routes)
 
-                def mark(state, change=change, first=first):
-                    node = state["nodes"][first["nodeId"]]
-                    if change == "lease":
-                        node["phase"] = "launching"
-                        state["launches"][node["id"]] = {
-                            "workerId": node["id"], "runId": node["runId"], "workspaceId": self.h.workspace,
-                            "sessionId": first["session"], "generation": 1, "surfaceId": first["surface"],
-                            "state": "attaching", "createdAt": CONTROLLER_API["now"](),
-                            "updatedAt": CONTROLLER_API["now"]()}
-                    else:
-                        other = {**json.loads(json.dumps(node)), "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
-                                 "copilotSessionId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4())}
-                        state["nodes"][other["id"]] = other
-                        node["surfaceId"], other["surfaceId"] = other["surfaceId"], node["surfaceId"]
-                self.h.change_state(mark)
-                routes = sorted(self.routes.iterdir())
-                outcome = self.resume(first)
-                self.assertFalse(outcome["ok"], outcome)
-                self.assertEqual(sorted(self.routes.iterdir()), routes)
+    def lease(self, first, phase="launching"):
+        def change(state):
+            node = state["nodes"][first["nodeId"]]
+            node["phase"] = phase
+            state["launches"][node["id"]] = {
+                "workerId": node["id"], "runId": node["runId"], "workspaceId": self.h.workspace,
+                "sessionId": first["session"], "generation": 1, "surfaceId": first["surface"],
+                "state": "attaching", "createdAt": CONTROLLER_API["now"](), "updatedAt": CONTROLLER_API["now"]()}
+        return change
+
+    def test_a_launching_leased_or_unresolved_record_refuses_as_uncertain(self):
+        for name, change in (
+            ("launching", lambda first: lambda state: state["nodes"][first["nodeId"]].update(phase="launching")),
+            ("lease", self.lease),
+            ("surface-unknown", lambda first: lambda state: state["nodes"][first["nodeId"]].update(
+                surfaceUnknown=True, surfaceId=None)),
+        ):
+            with self.subTest(name=name):
+                first = self.first()
+                self.refused_leaving_routes(first, "session-live-or-uncertain", change(first))
+
+    def raced(self, first, race, reason):
+        """The change lands after the snapshot checks pass and before the commit lock."""
+        node, routes = self.h.state()["nodes"][first["nodeId"]], sorted(self.routes.iterdir())
+        self.refused(self.resume(first, env={"FAKE_RESUME_RACE": race}), reason)
+        # The refused commit changed nothing and retired the next generation's route.
+        self.assertEqual(sorted(self.routes.iterdir()), routes)
+        return node, self.h.state()["nodes"][first["nodeId"]]
+
+    def test_identity_changed_before_the_commit_lock_refuses(self):
+        first = self.first()
+        ended = {"pid": self.dead_pid(), "start": "Thu Jan  1 00:00:00 2026"}
+        before, after = self.raced(first, f"state['nodes'][{first['nodeId']!r}]['providerProcess'] = {ended!r}",
+                                   "session-live-or-uncertain")
+        self.assertEqual(after, {**before, "providerProcess": ended})
+
+    def test_eligibility_lost_before_the_commit_lock_refuses_with_its_reason(self):
+        # Another record claims the resuming provider after the snapshot checks passed.
+        first = self.first()
+        other = str(uuid.uuid4())
+        before, after = self.raced(first, (
+            f"node = state['nodes'][{first['nodeId']!r}]\n"
+            "other = json.loads(json.dumps(node))\n"
+            f"other.update(id={other!r}, runId={str(uuid.uuid4())!r}, copilotSessionId={str(uuid.uuid4())!r},"
+            f" surfaceId={str(uuid.uuid4())!r})\n"
+            "other['providerProcess'] = {'pid': os.getppid(), 'start': api['process_start'](os.getppid())}\n"
+            "state['nodes'][other['id']] = other\n"), "surface-owned")
+        self.assertEqual(after, before)
+        self.assertIn(other, self.h.state()["nodes"])
+
+    def dead_pid(self):
+        return int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                                  capture_output=True, text=True, check=True).stdout)
+
+    def test_session_lock_owned_by_the_providers_direct_child_is_accepted(self):
+        first = self.first()
+        resumed = self.resume(first, env={"FAKE_HOLD_SESSION_LOCK": "child"})
+        self.assertTrue(resumed["ok"], resumed)
+        self.assertEqual(resumed["generation"], 2)
+
+    def test_session_lock_owned_by_a_grandchild_or_unrelated_process_refuses(self):
+        for holder in ("grandchild", "unrelated"):
+            with self.subTest(holder=holder):
+                first = self.first()
+                self.refused_leaving_routes(first, "session-live-or-uncertain", env={"FAKE_HOLD_SESSION_LOCK": holder})
 
     def test_resume_refreshes_the_provider_launch_context(self):
         first = self.first()
@@ -2345,6 +2417,56 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
         new = json.loads((self.routes / f"{resumed['peer']}.json").read_text())
         self.assertEqual(new["generation"], 2)
         self.assertEqual(CONTROLLER_API["authorize_native_actor"](state, identity(new))["id"], first["nodeId"])
+
+    def test_resumed_root_spawns_and_closes_children_only_as_its_new_generation(self):
+        first = self.first()
+        # The retained child is live: its own provider holds its session.
+        live = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        self.addCleanup(lambda: (live.stdin.close(), live.wait(timeout=5)))
+        process = {"pid": live.pid, "start": None}
+        while process["start"] is None:
+            process["start"] = CONTROLLER_API["process_start"](live.pid)
+        child_id, child_surface = self.add_child(first["nodeId"], provider=process)
+        self.h.add_surface(child_surface)
+        child = self.h.state()["nodes"][child_id]
+        (self.session_state(child["copilotSessionId"]) / f"inuse.{live.pid}.lock").write_text("")
+        fields = ("nodeId", "workspaceId", "sessionId", "generation", "capability")
+        old = {key: value for key, value in
+               json.loads((self.routes / f"{first['peer']}.json").read_text()).items() if key in fields}
+        target = {"workerId": child_id, "workspaceId": child["workspaceId"], "surfaceId": child_surface,
+                  "sessionId": child["copilotSessionId"], "generation": child["generation"]}
+        assignment = {"name": "Worker", "cwd": str(REPO), "task": "Complete the bounded task.", "denyTools": []}
+        then = (
+            "receipt = json.loads(results[0].stdout)\n"
+            "binding = json.load(open(os.path.join(receipt['routes'], receipt['peer'] + '.json')))\n"
+            f"new = {{k: binding[k] for k in {fields!r}}}\n"
+            "def call(command, body):\n"
+            "    done = subprocess.run([sys.executable, driver, command], input=json.dumps(body),"
+            " capture_output=True, text=True, env={**env, 'FAKE_SESSION_MODE': 'interactive'}, timeout=30)\n"
+            "    return [done.returncode, done.stdout, done.stderr]\n"
+            "out = {}\n"
+            f"for name, identity in (('old', {old!r}), ('new', new)):\n"
+            "    out[name] = {\n"
+            "        'spawn': call('native-spawn', {'identity': {**identity, 'login': 'human-account',"
+            f" 'host': 'github.com'}}, 'assignment': {assignment!r}}}),\n"
+            f"        'close': call('native-close', {{'identity': identity, 'target': {target!r}}})}}\n"
+            "result = subprocess.CompletedProcess([], 0, json.dumps(out), '')\n")
+        resumed, calls = self.resume(first, env={"FAKE_THEN": then})
+        self.assertTrue(resumed["ok"], resumed)
+        for name in ("spawn", "close"):
+            code, _, stderr = calls["old"][name]
+            self.assertNotEqual(code, 0)
+            self.assertRegex(stderr, "Native (session identity changed|capability is unavailable)")
+        code, stdout, stderr = calls["new"]["spawn"]
+        self.assertEqual(code, 0, stderr)
+        spawned = json.loads(stdout)
+        state = self.h.state()
+        self.assertEqual(state["nodes"][spawned["workerId"]]["parentId"], first["nodeId"])
+        code, stdout, stderr = calls["new"]["close"]
+        self.assertEqual(code, 0, stderr)
+        self.assertTrue(json.loads(stdout)["closeAccepted"])
+        self.assertEqual(self.h.cmux_data()["closed"], [
+            {"workspace_id": self.h.workspace, "surface_id": child_surface, "force": True}])
 
     def test_without_its_own_session_lock_the_provider_is_unproven(self):
         first = self.first()

@@ -10,7 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
+  createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
   startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
 
@@ -506,6 +506,14 @@ test("actual native loader closes its listener on SIGTERM and the same binding r
   assert.deepEqual(await f.stop(replacement), [0, null]);
   assert.equal(await f.exists(f.endpoint), null);
   assert.deepEqual(await fs.readFile(f.route), bindingBefore);
+});
+
+test("actual native loader treats SIGHUP as a hangup and closes its listener", async (t) => {
+  const f = await loaderFixture(t);
+  const first = f.launch();
+  await f.listening();
+  assert.deepEqual(await f.stop(first, "SIGHUP"), [0, null]);
+  assert.equal(await f.exists(f.endpoint), null);
 });
 
 for (const stage of ["join", "observe", "chmod"]) {
@@ -2048,6 +2056,30 @@ test("installed routes refuse stale generations, lost participation and wrong in
   assert.equal(f.sends.length, 0);
 });
 
+test("a resumed root's new generation messages its retained child; the old generation's address is gone", async (t) => {
+  // Relaunch restore keeps the node, retires the old route, and binds the next generation.
+  const f = await managedFixture(t, { owners: [0, 0] });
+  const old = { ...f.bindings[0] };
+  const resumed = { ...old, peer: "00000000000000ff", generation: 2, capability: "f".repeat(64) };
+  await fs.unlink(path.join(f.root, `${old.peer}.json`));
+  await fs.writeFile(path.join(f.root, `${resumed.peer}.json`), JSON.stringify(resumed), { mode: 0o600 });
+  f.bindings[0] = resumed;
+  await f.launch(0, { CMUX_MAESTRO_MESSAGE_PEER: resumed.peer, CMUX_MAESTRO_GENERATION: "2" });
+  await f.launch(1);
+  let delivered = once(f.events, "send");
+  const sent = await f.tools[0].maestro_send({ destination: managedAddress(f.bindings[1]), body: "after relaunch" });
+  assert.notEqual(sent.resultType, "failure", sent.textResultForLlm);
+  await delivered;
+  assert.equal(f.sends.at(-1).index, 1);
+  const stale = await f.tools[1].maestro_send({ destination: managedAddress(old), body: "stale" });
+  assert.equal(stale.resultType, "failure");
+  delivered = once(f.events, "send");
+  const reply = await f.tools[1].maestro_send({ destination: managedAddress(resumed), body: "reply" });
+  assert.notEqual(reply.resultType, "failure", reply.textResultForLlm);
+  await delivered;
+  assert.deepEqual(f.sends.map(item => item.index), [1, 0]);
+});
+
 test("native close supplies private invoking identity and one explicit target without account or observation calls", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
@@ -2402,7 +2434,7 @@ process.exitCode=packet.code;
 // ---- Born managed (ADR 0025) ------------------------------------------------------------------
 
 async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}, statusTimeoutMs,
-  startManagedRuntime } = {}) {
+  startManagedRuntime, endGate = createSessionEndGate(), endSession } = {}) {
   const f = await managedFixture(t, { owners: [0, 0] });
   const own = f.bindings[0];
   const env = {
@@ -2424,7 +2456,11 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     environment: env, parentPid, controller: "/synthetic/controller",
     ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
     ...(startManagedRuntime === undefined ? {} : { startManagedRuntime }),
-    endSession: async (request, controller) => { calls.ended.push({ request, controller }); },
+    endGate,
+    endSession: async (request, controller) => {
+      if (endSession) await endSession(request);
+      calls.ended.push({ request, controller });
+    },
     joinSession: async (options) => {
       assert.deepEqual(Object.keys(options), ["tools", "hooks"]);
       hooks = options.hooks;
@@ -2441,7 +2477,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     },
   });
   if (born?.listener) f.adapters.push(born.listener);
-  return { ...f, own, env, born, tools, hooks, calls, session };
+  return { ...f, own, env, born, tools, hooks, calls, session, endGate };
 }
 
 const readiness = async (f) => JSON.parse(await f.tools.maestro_readiness({}));
@@ -2532,6 +2568,9 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     ["enrollment refused: session-live-or-uncertain", "session-live-or-uncertain"],
     ["enrollment refused: account-mismatch: work-account", "account-mismatch"],
     ["enrollment refused: account-mismatch: bad/name", "enrollment-failed"],
+    // Only account-mismatch may carry the recorded account to the human.
+    ["enrollment refused: surface-owned: work-account", "surface-owned"],
+    ["enrollment refused: session-ended: work-account", "session-ended"],
     ["Traceback /private/path", "enrollment-failed"],
   ]) {
     const controller = path.join(directory, `controller-${reason}-${randomUUID()}`);
@@ -2556,6 +2595,39 @@ test("born managed: the controller transport keeps only known refusal reasons", 
       assert.equal("recordedAccount" in report.managed, false);
     }
   }
+});
+
+test("born managed: a SessionEnd after a hangup is never recorded (quit, close, or signal)", async (t) => {
+  // Copilot 1.0.98 reports user_exit for all of these; only the SIGHUP that precedes them differs.
+  const f = await bornFixture(t);
+  f.endGate.hungUp = true;
+  await f.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.ended.length, 0);
+  const started = Date.now();
+  await f.endGate.drain(5000);
+  assert.ok(Date.now() - started < 1000);
+});
+
+test("born managed: exit waits, bounded, for a /exit SessionEnd record to land", async (t) => {
+  let release;
+  const f = await bornFixture(t, { endSession: () => new Promise(resolve => { release = resolve; }) });
+  assert.equal(f.endGate.armed, true);
+  const begun = Date.now();
+  const drained = f.endGate.drain(5000).then(() => [f.calls.ended.length, Date.now() - begun < 1000]);
+  const ending = f.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: f.own.sessionId });
+  await new Promise(resolve => setTimeout(resolve, 50));
+  release();
+  await ending;
+  assert.deepEqual(await drained, [1, true]);
+  const idle = createSessionEndGate();
+  idle.armed = true;
+  const started = Date.now();
+  await idle.drain(100);
+  assert.ok(Date.now() - started >= 90);
+  const unarmed = createSessionEndGate();
+  const quick = Date.now();
+  await unarmed.drain(5000);
+  assert.ok(Date.now() - quick < 1000);
 });
 
 test("born managed: a committed enrollment with deferred projection is used; a runtime failure is distinct", async (t) => {

@@ -179,8 +179,11 @@ observation already occurred. Legacy bindings and loaders keep their existing
 path; existing sessions are not converted or restarted.
 
 The CLI may stop and reload an extension within the same owned session. On
-SIGTERM, the loader cancels its pending local observation and closes only its
-own listener/connections before exiting, including during initialization.
+SIGTERM or SIGHUP, the loader cancels its pending local observation and closes only its
+own listener/connections before exiting, including during initialization. On
+SIGTERM it first waits up to one second for an in-flight `/exit` SessionEnd
+record; after SIGHUP it records no SessionEnd (see
+[Relaunch restore](reference/relaunch-restore.md)).
 The private session binding stays intact for the CLI's replacement extension.
 There is no timer, messaging retry or startup acknowledgement. An occupied
 socket, or one left behind by forced termination, still fails closed; startup
