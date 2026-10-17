@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Managed nodes have one recorded account `{login, host}` (#252): the launch's pinned login, or
+  the account a session reported itself. No credential is stored. ADR 0024 sets one restore owner
+  per node and the rules for resuming an ended managed session after a CMUX relaunch; ADR 0004
+  now limits the fresh session ID to new workers.
 - Reorder workspaces, and the surfaces in one workspace, in Maestro's sidebar. Drag a row's
   title, or use **Move Up** and **Move Down** in its actions menu or as VoiceOver actions.
   The order is Maestro's only and is never sent to CMUX (ADR 0021): it lives in the

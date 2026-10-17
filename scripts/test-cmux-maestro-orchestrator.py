@@ -1652,6 +1652,72 @@ class AdmissionGateTests(unittest.TestCase):
         self.assertEqual(self.h.calls(), [])
 
 
+class RecordedAccountTests(unittest.TestCase):
+    """One recorded account per node: observed when reported, else the launch's pinned login."""
+
+    accessor = staticmethod(CONTROLLER_API["recorded_account"])
+    validate = staticmethod(CONTROLLER_API["validate_recorded_account"])
+
+    def test_launched_and_older_nodes_derive_from_launch_settings(self):
+        self.assertEqual(self.accessor({"launchSettings": {"version": 1, "copilotAccount": "work-user"}}),
+                         {"login": "work-user", "host": "github.com"})
+        self.assertIsNone(self.accessor({"launchSettings": {"version": 1}}))
+        self.assertIsNone(self.accessor({}))
+
+    def test_an_observed_account_is_the_only_store(self):
+        observed = {"launchSettings": {"version": 1}, "copilotAccount": {"login": "seen-user", "host": "github.com"}}
+        self.validate(observed)
+        self.assertEqual(self.accessor(observed), {"login": "seen-user", "host": "github.com"})
+        self.validate({"launchSettings": {"version": 1, "copilotAccount": "work-user"}})
+
+    def test_invalid_or_duplicated_records_refuse(self):
+        for node in (
+            {"launchSettings": {"version": 1, "copilotAccount": "work-user"},
+             "copilotAccount": {"login": "work-user", "host": "github.com"}},
+            {"copilotAccount": {"login": "work-user", "host": "example.com"}},
+            {"copilotAccount": {"login": "work-user", "host": "github.com", "token": "synthetic"}},
+            {"copilotAccount": {"login": "--show-token", "host": "github.com"}},
+            {"copilotAccount": {"login": "work-user"}},
+            {"copilotAccount": "work-user"},
+            {"copilotAccount": None},
+        ):
+            with self.subTest(node=node), self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                self.validate(node)
+
+
+class RecordedAccountStateLoadTests(unittest.TestCase):
+    """The state loader enforces the account rule, not only the helper."""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+
+    def load_with(self, change):
+        path = self.h.root / "control" / "state.json"
+        state = json.loads(path.read_text())
+        change(state["nodes"][self.h.node])
+        path.write_text(json.dumps(state))
+        return CONTROLLER_API["read_state"](self.h.root)
+
+    def test_state_with_an_invalid_account_record_refuses_to_load(self):
+        for record in (
+            {"login": "synthetic-account", "host": "example.com"},
+            {"login": "synthetic-account", "host": "github.com", "token": "synthetic"},
+            {"login": "--show-token", "host": "github.com"},
+        ):
+            with self.subTest(record=record), self.assertRaisesRegex(
+                    CONTROLLER_API["OrchestrationError"], "recorded account"):
+                self.load_with(lambda node: node.update(copilotAccount=record))
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "recorded account"):
+            # Pinned launch login plus an observed record: two stores.
+            self.load_with(lambda node: node.update(copilotAccount={"login": "other", "host": "github.com"}))
+
+    def test_state_without_the_field_loads_and_derives_the_account(self):
+        state = self.load_with(lambda node: node.pop("copilotAccount", None))
+        self.assertEqual(CONTROLLER_API["recorded_account"](state["nodes"][self.h.node]),
+                         {"login": "synthetic-account", "host": "github.com"})
+
+
 class OrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness()
@@ -1938,6 +2004,8 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIsNone(node["parentId"])
             self.assertNotEqual(node["runId"], h.registration["runId"])
             self.assertEqual(node["launchSettings"]["copilotAccount"], "root-account")
+            self.assertEqual(CONTROLLER_API["recorded_account"](node), {"login": "root-account", "host": "github.com"})
+            self.assertNotIn("copilotAccount", node)
             self.assertEqual(node["toolPolicy"]["deny"], ["web"])
             self.assertEqual(h.state()["nodes"][h.node]["surfaceId"], h.surface)
             self.assertEqual(h.cmux_data()["selected"], h.surface)
@@ -4158,6 +4226,8 @@ class DirectLaunchTests(unittest.TestCase):
             child = h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess"))
             self.assertEqual(child["parentId"], root_id)
             self.assertEqual(child["launchSettings"]["copilotAccount"], "root-account")
+            self.assertEqual(CONTROLLER_API["recorded_account"](child), {"login": "root-account", "host": "github.com"})
+            self.assertNotIn("synthetic-work-token", json.dumps(h.state()))
             call = next(call for call in h.calls() if call["session"] == child["copilotSessionId"])
             prompt = call["args"][call["args"].index("--interactive") + 1]
             address = json.loads(next(line.split(": ", 1)[1] for line in prompt.splitlines()

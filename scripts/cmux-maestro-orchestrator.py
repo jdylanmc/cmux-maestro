@@ -323,6 +323,34 @@ def validate_launch_settings(value):
     return value
 
 
+RECORDED_ACCOUNT_HOST = "github.com"
+ACCOUNT_LOGIN = r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}"
+
+
+def recorded_account(node):
+    """The node's one recorded account {login, host}; never a credential.
+
+    An explicitly observed account (a session that reported its own account) wins. Otherwise
+    the account is the launch's pinned GitHub.com login, so older launched nodes keep theirs.
+    """
+    if "copilotAccount" in node:
+        return dict(node["copilotAccount"])
+    login = (node.get("launchSettings") or {}).get("copilotAccount")
+    return None if login is None else {"login": login, "host": RECORDED_ACCOUNT_HOST}
+
+
+def validate_recorded_account(node):
+    if "copilotAccount" not in node:
+        return
+    account = node["copilotAccount"]
+    # One source of truth: an observed account never coexists with a pinned launch login.
+    if (not isinstance(account, dict) or set(account) != {"login", "host"}
+            or account["host"] != RECORDED_ACCOUNT_HOST
+            or not isinstance(account["login"], str) or re.fullmatch(ACCOUNT_LOGIN, account["login"]) is None
+            or (node.get("launchSettings") or {}).get("copilotAccount") is not None):
+        raise OrchestrationError("Stored recorded account is invalid.")
+
+
 def worker_launch_settings(root):
     data = with_store(root, lambda store: store._read_regular(
         "worker-settings.json", 8192, private=True, directory=store.root_fd
@@ -1016,6 +1044,7 @@ def _validate_node_mode(node):
 def _validate_node_launch_configuration(node, mode):
     if node.get("launchSettings") is not None:
         validate_launch_settings(node["launchSettings"])
+    validate_recorded_account(node)
     if "launchSelection" in node:
         validate_launch_selection(node["launchSelection"])
         configured = node["launchSelection"]["configured"]
