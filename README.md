@@ -69,7 +69,7 @@ Agents launched by Maestro are normal interactive Copilot sessions. You can type
 
 Every Copilot session you start in CMUX after setup is managed from its start: it sees its workspace peers and can spawn children. Sessions that were already running are left alone.
 
-After CMUX quits and reopens, managed sessions come back on their exact session. Approve Maestro's resume command once in **CMUX Settings > Terminal > Resume Commands**. Details and gaps: [relaunch restore](docs/reference/relaunch-restore.md).
+After CMUX quits and reopens, sessions Maestro launched are designed to come back on their exact session once you approve Maestro's resume command prefix in **CMUX Settings > Terminal > Resume Commands**. Sessions you started come back only through CMUX's own Copilot restore, which needs CMUX's Copilot hooks and does not work for sessions started with `--name`. Wrapped launches (such as Agency) are not covered. This is not yet verified in a live CMUX; see [relaunch restore](docs/reference/relaunch-restore.md) for the gaps and the live checks.
 
 ## Rules of the house
 

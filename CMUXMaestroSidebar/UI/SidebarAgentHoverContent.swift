@@ -49,7 +49,7 @@ enum SidebarAgentHoverContent {
                 }
             }
             return .init(
-                id: "managed-\(id)-\(generation)", category: retained ? "Work context" : "Agent preview", title: node.label,
+                id: "managed-\(id)-\(generation)", category: retained ? "Work context" : "Agent preview", title: node.title,
                 subtitle: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree).title,
                 lines: lines,
                 notice: retained ? SidebarPresentation.retainedFocusUnavailable

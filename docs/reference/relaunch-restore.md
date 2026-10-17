@@ -67,7 +67,7 @@ CMUX runs a custom resume binding only after a human approves its command prefix
 
 A restored tab used to show as `Terminal`. The sidebar shows an unmanaged Copilot row only after Maestro's observer hook binds the session to its surface. A restored session can show the CMUX surface title until that binding exists. Live checks must confirm when the hook binds a resumed session.
 
-A born-managed or resumed managed session does not wait for the hook. The controller's projection names its exact surface, so the sidebar shows a managed Copilot row at once. A born root's row shows its Copilot session name when one exact observed session matches (ADR 0022). Otherwise it shows `Copilot session`.
+A born-managed or resumed managed session is expected not to wait for the hook: the controller's projection names its exact surface, so the sidebar should show a managed Copilot row as soon as the projection is read. This is not yet confirmed in a live CMUX (see [Live checks](#live-checks)). A born root's row shows its Copilot session name under ADR 0022's rules: one live, fresh observation of that exact session in that workspace and surface, or the last name read during observation loss while its grace lasts. Otherwise it shows `Copilot session`.
 
 ## Known gaps
 
@@ -77,3 +77,30 @@ A born-managed or resumed managed session does not wait for the hook. The contro
 - Launches made before this change have no binding and do not resume.
 - A session started before the Maestro integration was installed is never enrolled, so it is not resumed as managed.
 - If recording a born root's `/exit` fails twice (for example the state lock stays busy), the extension logs it and the end stays unrecorded. A later manual `copilot --resume` in the same surface can then come back managed.
+- An unmanaged restored session can show the CMUX surface title (for example `Terminal`) until Maestro's observer hook binds it.
+
+## Live checks
+
+Nothing in this document has been verified in a live CMUX yet. Run these before calling relaunch restore done. CMUX's CLI refuses processes started outside CMUX, so a human (or a verifier driving the CMUX window through Computer Use) runs them inside CMUX.
+
+Prerequisites:
+
+- Maestro production setup has run, including CMUX's Copilot hooks (installed by setup once #252's last change lands). Remove any CMUX Copilot hook file you installed yourself, so CMUX does not receive each event twice.
+- **Resume agent sessions** (`terminal.autoResumeAgentSessions`) is on.
+- The prefix `<controller> resume` is approved once in **CMUX Settings > Terminal > Resume Commands**.
+- Copilot sessions are restarted once after setup.
+
+Cases (quit CMUX with ⌘Q and reopen it unless noted):
+
+1. A session you start after setup: `maestro_readiness` says managed, it sees its peers, and its recorded account is yours. Its row shows its session name.
+2. A session that was running before setup stays unmanaged.
+3. After relaunch, the born root comes back managed as generation 2 and its row shows its session name, not `Terminal`.
+4. A `maestro_spawn` child comes back on its exact session after relaunch, keeps its deny rules, sees its peers, and its row shows its launch label. Send it a message and close it from its parent.
+5. An unmanaged restored session's row: record what it shows before and after the observer hook binds it.
+6. With two CMUX windows open, each window's rows come back in their own window.
+7. `/exit` a born root, then run `copilot --resume <id>` by hand: it stays unmanaged with `session-ended`.
+8. ⌘Q with a born root and a child running: neither records an end (`sessionEndedGeneration` absent); both come back managed.
+9. Sign in to a different account than the born root recorded, then relaunch: it stays unmanaged with `account-mismatch` naming the recorded login.
+10. `/exit` a child, then relaunch: it does not come back.
+11. A live session: running its resume command refuses. A signed-out recorded account: one line naming it.
+12. No managed tab appears in `~/.cmuxterm/copilot-hook-sessions.json`, and `cmux surface resume show --json` holds no token.

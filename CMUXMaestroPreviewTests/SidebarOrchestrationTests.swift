@@ -523,46 +523,118 @@ struct SidebarOrchestrationTests {
         return root
     }
 
-    private func observed(_ session: UUID, workspace: UUID, surface: UUID, name: String?) -> SidebarCopilotSession {
+    private func observed(
+        _ session: UUID, workspace: UUID, surface: UUID, name: String?,
+        liveness: AgentProcessLiveness = .alive, observedAt: Date = Date()
+    ) -> SidebarCopilotSession {
         var value = SidebarCopilotSession(
-            id: session, workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .working,
-            model: nil, observedAt: Date(), nodes: [], childrenComplete: true, treeDegraded: false,
+            id: session, workspaceID: workspace, surfaceID: surface, liveness: liveness, state: .working,
+            model: nil, observedAt: observedAt, nodes: [], childrenComplete: true, treeDegraded: false,
             omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
         value.sessionName = name
         return value
     }
 
-    @Test func bornRootTakesItsExactSessionNameAndLaunchesKeepTheirLabel() throws {
+    private func tree(
+        _ sessions: [SidebarCopilotSession], availability: SidebarCopilotAvailability = .ready,
+        issues: [AgentSnapshotIssue] = [], lost: [SidebarCopilotSession] = []
+    ) -> SidebarCopilotTree {
+        var value = SidebarCopilotTree(availability: availability, sessions: sessions, issues: issues, generatedAt: Date())
+        value.statusSessions = lost
+        return value
+    }
+
+    private func titles(_ snapshot: SidebarOrchestrationSnapshot, _ tree: SidebarCopilotTree) -> [String] {
+        snapshot.namingBornRoots(from: tree, now: Date()).nodes.map(\.title)
+    }
+
+    @Test func bornRootTakesItsExactSessionNameUnderADR0022Rules() throws {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let born = bornRoot(workspace: workspace, surface: surface, session: session)
-        let launched = node(run: UUID(), role: "worker", parent: nil, workspace: workspace,
-                            copilotSessionId: UUID())
         let snapshot = SidebarOrchestrationSnapshot(
             version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born])
         try SidebarOrchestrationReader.validate(snapshot)
-        let named = snapshot.namingBornRoots(from: [observed(session, workspace: workspace, surface: surface,
-                                                             name: "Synthetic refactor")])
-        #expect(named.nodes.map(\.label) == ["Synthetic refactor"])
-        // Placement or a different session never names a row.
-        for other in [observed(UUID(), workspace: workspace, surface: surface, name: "Other"),
-                      observed(session, workspace: workspace, surface: UUID(), name: "Moved"),
-                      observed(session, workspace: workspace, surface: surface, name: nil),
-                      observed(session, workspace: workspace, surface: surface, name: "   ")] {
-            #expect(snapshot.namingBornRoots(from: [other]).nodes.map(\.label) == ["Copilot session"])
+        let exact = observed(session, workspace: workspace, surface: surface, name: "Synthetic refactor")
+        let named = snapshot.namingBornRoots(from: tree([exact]), now: Date())
+        #expect(named.nodes.map(\.title) == ["Synthetic refactor"])
+        #expect(named.nodes.map(\.label) == ["Copilot session"])  // the projected label is never rewritten
+        let unnamed: [SidebarCopilotTree] = [
+            tree([observed(UUID(), workspace: workspace, surface: surface, name: "Other session")]),
+            tree([observed(session, workspace: workspace, surface: UUID(), name: "Moved surface")]),
+            tree([observed(session, workspace: UUID(), surface: surface, name: "Other workspace")]),
+            tree([observed(session, workspace: workspace, surface: surface, name: nil)]),
+            tree([observed(session, workspace: workspace, surface: surface, name: "Dead", liveness: .dead)]),
+            tree([observed(session, workspace: workspace, surface: surface, name: "Stale",
+                           observedAt: Date().addingTimeInterval(-60))]),
+            // The same UUID observed on another surface too: ambiguous.
+            tree([exact, observed(session, workspace: workspace, surface: UUID(), name: "Twin")]),
+            tree([exact], issues: [.permissionDenied]),
+            tree([exact], availability: .unavailable),
+        ]
+        for evidence in unnamed {
+            #expect(titles(snapshot, evidence) == ["Copilot session"])
         }
-        let duplicate = observed(session, workspace: workspace, surface: surface, name: "A")
-        #expect(snapshot.namingBornRoots(from: [duplicate, duplicate]).nodes.map(\.label) == ["Copilot session"])
-        let launchedSnapshot = SidebarOrchestrationSnapshot(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [launched])
-        #expect(launchedSnapshot.namingBornRoots(from: [observed(launched.copilotSessionId!, workspace: workspace,
-            surface: launched.surfaceId, name: "Ignored")]).nodes.map(\.label) == ["Implementation"])
     }
 
-    @Test func bornLabelIsBoundedOnACharacterBoundary() {
-        let long = String(repeating: "é", count: 80)
-        let label = SidebarOrchestrationSnapshot.boundedLabel(long)
-        #expect(label.map { $0.utf8.count <= 100 } == true)
-        #expect(label == String(repeating: "é", count: 50))
+    @Test func bornRootKeepsItsNameDuringObservationLossOnlyWithinTheGrace() {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
+            nodes: [bornRoot(workspace: workspace, surface: surface, session: session)])
+        let last = observed(session, workspace: workspace, surface: surface, name: "Last read name")
+        let retained = SidebarCopilotTree.statusOnly(last, retainingStatus: true)
+        let expired = SidebarCopilotTree.statusOnly(last, retainingStatus: false)
+        #expect(titles(snapshot, tree([], availability: .partial, lost: [retained])) == ["Last read name"])
+        #expect(titles(snapshot, tree([], availability: .partial, lost: [expired])) == ["Copilot session"])
+        #expect(titles(snapshot, tree([], issues: [.permissionDenied], lost: [retained])) == ["Copilot session"])
+        #expect(titles(snapshot, tree([], lost: [retained, retained])) == ["Copilot session"])
+        for misplaced in [observed(session, workspace: UUID(), surface: surface, name: "Other workspace"),
+                          observed(session, workspace: workspace, surface: UUID(), name: "Other surface")] {
+            let lost = SidebarCopilotTree.statusOnly(misplaced, retainingStatus: true)
+            #expect(titles(snapshot, tree([], availability: .partial, lost: [lost])) == ["Copilot session"])
+        }
+    }
+
+    @Test func bornRootNameFollowsTheSameTwoHundredCharacterRuleAsUnmanagedRows() {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
+            nodes: [bornRoot(workspace: workspace, surface: surface, session: session)])
+        let name = String(repeating: "é", count: 200)
+        let exact = observed(session, workspace: workspace, surface: surface, name: name)
+        #expect(titles(snapshot, tree([exact])) == [name])
+        #expect(SidebarPresentation.agentTitle(for: exact, in: .empty) == name)
+    }
+
+    @Test func onlyTheBornRootIsRenamedInAMixedRun() {
+        let workspace = UUID(), surface = UUID(), session = UUID(), childSession = UUID()
+        let born = bornRoot(workspace: workspace, surface: surface, session: session)
+        let child = node(run: born.runId, role: "worker", parent: born.id, workspace: workspace,
+                         copilotSessionId: childSession)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born, child])
+        let evidence = tree([observed(session, workspace: workspace, surface: surface, name: "Root name"),
+                             observed(childSession, workspace: workspace, surface: child.surfaceId, name: "Child name")])
+        #expect(titles(snapshot, evidence) == ["Root name", "Implementation"])
+    }
+
+    @Test func pollingRetitlesBornRootsAsObservationsChange() async {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let born = bornRoot(workspace: workspace, surface: surface, session: session)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born])
+        let poll = SidebarOrchestrationPolling(read: { snapshot }, pause: { try await Task.sleep(for: .seconds(60)) })
+        poll.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
+        poll.updateObservedSessions(tree([observed(session, workspace: workspace, surface: surface, name: "Before poll")]))
+        poll.setVisible(true)
+        for _ in 0..<100 where poll.snapshot.nodes.isEmpty { await Task.yield() }
+        #expect(poll.snapshot.nodes.map(\.title) == ["Before poll"])
+        poll.updateObservedSessions(tree([observed(session, workspace: workspace, surface: surface, name: "Renamed")]))
+        #expect(poll.snapshot.nodes.map(\.title) == ["Renamed"])
+        poll.updateObservedSessions(tree([]))
+        #expect(poll.snapshot.nodes.map(\.title) == ["Copilot session"])
+        poll.setVisible(false)
     }
 
     @Test func enrollmentDecodesAndOnlyBornRootsMayCarryIt() throws {
@@ -578,7 +650,36 @@ struct SidebarOrchestrationTests {
         worker.enrollment = "born"
         var invented = born
         invented.enrollment = "adopted"
-        for nodes in [[born, worker], [invented]] {
+        // Each clause alone: a worker, a non-interactive root, a root without a session.
+        func bornVariant(role: String = "coordinator", mode: SidebarWorkerMode? = .interactive,
+                         session: UUID? = UUID(), phase: String = "turn-running", run: UUID = UUID(),
+                         parent: UUID? = nil, enrollment: String? = "born", generation: Int = 1,
+                         availability: String = "busy") -> SidebarOrchestrationNode {
+            var value = SidebarOrchestrationNode(
+                id: UUID(), runId: run, parentId: parent, role: role, label: "Copilot session",
+                workspaceId: workspace, surfaceId: UUID(), generation: generation, phase: phase,
+                availability: availability, copilotSessionId: session, executionMode: mode,
+                createdAt: Date(), updatedAt: Date())
+            value.enrollment = enrollment
+            return value
+        }
+        func snapshot(_ nodes: [SidebarOrchestrationNode]) -> SidebarOrchestrationSnapshot {
+            .init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: nodes)
+        }
+        // Each case differs from an accepted one only by the born clause under test.
+        let launchedRoot = bornVariant(enrollment: nil)
+        let interactiveChild = bornVariant(role: "worker", run: launchedRoot.runId, parent: launchedRoot.id,
+                                           enrollment: nil)
+        let registered = bornVariant(mode: nil, session: nil, phase: "registered", enrollment: nil,
+                                     generation: 0, availability: "active")
+        for nodes in [[bornVariant()], [launchedRoot, interactiveChild], [registered]] {
+            try SidebarOrchestrationReader.validate(snapshot(nodes))
+        }
+        var bornChild = interactiveChild
+        bornChild.enrollment = "born"
+        var bornRegistered = registered
+        bornRegistered.enrollment = "born"
+        for nodes in [[born, worker], [invented], [launchedRoot, bornChild], [bornRegistered]] {
             #expect(throws: CopilotFileError.self) {
                 try SidebarOrchestrationReader.validate(
                     .init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: nodes))

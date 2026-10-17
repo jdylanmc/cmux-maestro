@@ -837,8 +837,8 @@ struct SidebarView: View {
         .onChange(of: model.orchestration.snapshot) { _, snapshot in
             model.copilot.updateManagedSubjects(snapshot)
         }
-        .onChange(of: model.copilot.tree.sessions, initial: true) { _, sessions in
-            model.orchestration.updateObservedSessions(sessions)
+        .onChange(of: model.copilot.tree, initial: true) { _, tree in
+            model.orchestration.updateObservedSessions(tree)
         }
         .onChange(of: model.hierarchy) { old, new in
             preferences.refreshLayout()
@@ -1528,24 +1528,24 @@ private struct ManagedNodeRow: View {
     var body: some View {
         HStack(spacing: 4) {
             if hasChildren {
-                ExpandButton(expanded: expanded, label: node.label, toggle: toggleExpanded)
+                ExpandButton(expanded: expanded, label: node.title, toggle: toggleExpanded)
             } else {
                 Color.clear.frame(width: 18, height: SidebarPresentation.minimumControlSize)
             }
             SidebarItemIcon(
                 kind: .agent, target: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate),
-                title: node.label, agentGlyph: node.iconId, agentColor: node.iconColor,
+                title: node.title, agentGlyph: node.iconId, agentColor: node.iconColor,
                 inspect: select, picker: $showingPicker
             )
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
                 navigation: navigation,
-                label: isRetainedRecord ? "Inspect work context \(node.label)" : "Focus \(node.label)",
+                label: isRetainedRecord ? "Inspect work context \(node.title)" : "Focus \(node.title)",
                 detail: metadataHelp, inspection: .managed(node), inspectOnly: isRetainedRecord ? select : nil
             ) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
-                        Text(node.label).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        Text(node.title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
                         Spacer(minLength: 0)
                         if activeDescendants > 0 && !expanded {
                             Label("\(activeDescendants)", systemImage: SidebarPresentation.state(.working).symbol)
@@ -1586,7 +1586,7 @@ private struct ManagedNodeRow: View {
         }
         .frame(minHeight: density.rowHeight)
         .environment(\.sidebarReorderSource, reorder?.dragSource)
-        .sidebarRowActions(title: node.label, groups: actions) {
+        .sidebarRowActions(title: node.title, groups: actions) {
             SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                  belowTitle: 18)
         }
@@ -1839,7 +1839,7 @@ enum SidebarSurfaceUnit {
 
     var title: String {
         switch self {
-        case .managed(let node): node.label
+        case .managed(let node): node.title
         case .surface(let surface): surface.title.isEmpty ? "Untitled surface" : surface.title
         }
     }
