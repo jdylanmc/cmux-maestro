@@ -2112,6 +2112,51 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         self.assertNotIn("does not match the invoking native session", closed["error"])
         self.assertIn("not registered", closed["error"])  # past the actor gate, at target lookup
 
+    def dead_pid(self):
+        return int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                                  capture_output=True, text=True, check=True).stdout)
+
+    def test_generation_marks_at_the_cap_prune_sessions_copilot_no_longer_keeps(self):
+        first = self.enroll()
+        kept = [str(uuid.uuid4()) for _ in range(4)]
+        for session in kept:
+            (self.h.home / ".copilot" / "session-state" / session).mkdir(parents=True)
+        marks = {str(uuid.uuid4()): 1 for _ in range(CONTROLLER_API["MAX_HOST_NODES"] - len(kept))}
+        marks.update({session: 3 for session in kept})
+        self.h.change_state(lambda state: state.update(bornGenerations=marks))
+        result = self.h.run("archive-ended", "--workspace", self.h.workspace)
+        self.assertEqual(len(result["archivedRuns"]), 1)
+        after = self.h.state()["bornGenerations"]
+        self.assertEqual(after, {**{session: 3 for session in kept}, first["session"]: 1})
+
+    def test_generation_marks_full_of_resumable_sessions_keep_the_run_without_failing(self):
+        first = self.enroll()
+        marks = {}
+        for _ in range(CONTROLLER_API["MAX_HOST_NODES"]):
+            session = str(uuid.uuid4())
+            (self.h.home / ".copilot" / "session-state" / session).mkdir(parents=True)
+            marks[session] = 1
+        self.h.change_state(lambda state: state.update(bornGenerations=marks))
+        result = self.h.run("archive-ended", "--workspace", self.h.workspace)
+        self.assertEqual((result["archivedRuns"], result["keptRuns"]), ([], 1))
+        self.assertIn(first["nodeId"], self.h.state()["nodes"])
+        # Surface reuse keeps the run too, refusing only this surface.
+        self.refused(self.enroll(surface=first["surface"]), "surface-owned")
+        self.assertTrue(self.enroll()["ok"])
+
+    def test_attempt_records_of_ended_providers_are_all_swept(self):
+        dead = self.dead_pid()
+        attempts = {f"{uuid.uuid4()}:{dead}:Thu Jan  1 00:00:00 2026": {
+            "outcome": "refused", "reason": "capacity-unavailable", "at": "2026-01-01T00:00:00Z"}
+            for _ in range(CONTROLLER_API["MAX_HOST_NODES"] - 1)}
+        live = f"{uuid.uuid4()}:{os.getpid()}:{CONTROLLER_API['process_start'](os.getpid())}"
+        attempts[live] = {"outcome": "refused", "reason": "surface-owned", "at": "2025-01-01T00:00:00Z"}
+        self.h.change_state(lambda state: state.update(enrollmentAttempts=attempts))
+        self.assertTrue(self.enroll()["ok"])
+        remaining = self.h.state()["enrollmentAttempts"]
+        self.assertIn(live, remaining)
+        self.assertEqual(len(remaining), 2)
+
     def test_without_a_recorded_decision_only_a_fresh_provider_enrolls(self):
         before = self.h.state()
         self.refused(self.enroll(env={"FAKE_BORN_ENROLL_WINDOW_SECONDS": "-1"}), "enrollment-window-passed")

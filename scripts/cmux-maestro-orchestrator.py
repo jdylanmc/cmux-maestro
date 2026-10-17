@@ -2679,6 +2679,8 @@ def archive_born_run(state, run_id, retiring):
     root = next(node for node in nodes if node["parentId"] is None)
     marks = state.setdefault("bornGenerations", {})
     if root["copilotSessionId"] not in marks and len(marks) >= MAX_HOST_NODES:
+        prune_born_generations(marks)
+    if root["copilotSessionId"] not in marks and len(marks) >= MAX_HOST_NODES:
         # Without a provable next generation the run is kept, not archived.
         raise OrchestrationError("Born-session generation record is full; the ended run stays recorded.")
     marks[root["copilotSessionId"]] = max(marks.get(root["copilotSessionId"], 0), root["generation"])
@@ -2697,6 +2699,26 @@ def archive_born_run(state, run_id, retiring):
     if len(state["retainedResources"]) > MAX_HOST_NODES:
         raise OrchestrationError("Host retained-resource safety limit reached; the ended run stays recorded.")
     return nodes
+
+
+def born_generation_recordable(state, root):
+    marks = state.setdefault("bornGenerations", {})
+    if root["copilotSessionId"] in marks or len(marks) < MAX_HOST_NODES:
+        return True
+    prune_born_generations(marks)
+    return len(marks) < MAX_HOST_NODES
+
+
+def prune_born_generations(marks):
+    """Forget marks for sessions Copilot no longer keeps: they can never be resumed again."""
+    state_root = Path.home() / ".copilot/session-state"
+    for session in list(marks):
+        try:
+            os.lstat(state_root / session)
+        except FileNotFoundError:
+            del marks[session]
+        except OSError:
+            pass
 
 
 def remove_direct_scripts(root, nodes):
@@ -2724,7 +2746,7 @@ def command_archive_ended(args, root):
                  and same_workspace(node["workspaceId"], workspace)]
         runs, kept = [], 0
         for node in roots:
-            if born_run_proven_ended(state, node["runId"]):
+            if born_run_proven_ended(state, node["runId"]) and born_generation_recordable(state, node):
                 archived.extend(archive_born_run(state, node["runId"], retiring))
                 runs.append(node["runId"])
             else:
@@ -2759,11 +2781,16 @@ def attempt_key(session, anchor):
 def prune_attempts(state):
     """Forget start attempts only once their provider process is proven ended."""
     attempts = state.setdefault("enrollmentAttempts", {})
-    # Bounded work under the state lock: at most 16 process checks, oldest records first.
-    for key in sorted(attempts, key=lambda item: attempts[item].get("at", ""))[:16]:
-        _, pid, start = key.split(":", 2)
-        if process_observation({"pid": int(pid), "start": start}) is False:
+    # One cheap signal per record under the state lock: a PID that no longer exists has ended.
+    # A reused PID only keeps a record longer, never shorter.
+    for key in list(attempts):
+        _, pid, _ = key.split(":", 2)
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
             del attempts[key]
+        except (OSError, ValueError):
+            pass
 
 
 def record_refusal(root, key, reason):
@@ -2886,7 +2913,8 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         # A new session in a surface whose earlier born run is proven ended supersedes it.
         # Uncertain or live runs keep the surface; nothing is guessed.
         if (holder is not None and holder.get("enrollment") == "born" and holder["parentId"] is None
-                and holder["workspaceId"] == workspace and born_run_proven_ended(state, holder["runId"])):
+                and holder["workspaceId"] == workspace and born_run_proven_ended(state, holder["runId"])
+                and born_generation_recordable(state, holder)):
             archived.extend(archive_born_run(state, holder["runId"], retiring))
         if (any(item.get("surfaceId") == surface for item in state["nodes"].values())
                 or any(item["surfaceId"] == surface for item in state["retainedResources"])
