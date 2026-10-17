@@ -28,17 +28,19 @@ CMUX's own restore needs its Copilot hooks. `cmux hooks copilot install` fails o
 
 ## Maestro-launched sessions
 
-Children from `maestro_spawn`, and coordinators from `launch-coordinator`, do not use CMUX's own restore. Their launch sets `CMUX_COPILOT_HOOKS_DISABLED=1`, so CMUX's hooks never record them. CMUX's restore drops launch flags, which could drop deny rules or the parent link.
+Children from `maestro_spawn`, and coordinators from `launch-coordinator`, do not use CMUX's own restore. The owner approved the binding for `launch-coordinator` roots too: they carry recorded flags just like children. Their launch sets `CMUX_COPILOT_HOOKS_DISABLED=1`, so CMUX's hooks never record them. CMUX's restore drops launch flags, which could drop deny rules or the parent link.
 
 Instead, each launch attaches a resume binding to its exact surface:
 
 ```text
 cmux surface resume set --workspace <workspace> --surface <surface> --cwd <dir> \
-  --kind agent --checkpoint <session> -- <python> <controller> resume-managed \
+  --kind agent --checkpoint <session> -- <controller> resume-managed \
   --worker-id <node> --session-id <session>
 ```
 
-The binding holds identifiers only. It holds no token, prompt, or temporary path. The launch receipt reports `resumeBinding: "set"` or `"unavailable"`.
+The binding holds identifiers only. It holds no token, prompt, or temporary path. `<controller>` is the installed `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator`. It runs through its own `#!/usr/bin/env python3`, so the binding and its approved prefix survive Python and app upgrades. The launch receipt reports `resumeBinding: "set"` or `"unavailable"`.
+
+When the session ends by user exit (Copilot `SessionEnd` with reason `user_exit`, for example `/exit`), Maestro's native extension records the end for that generation and clears that surface's binding with `cmux surface resume clear`, like CMUX does for its own records. It sends only identifiers and reads nothing from the hook input. If the clear fails, the binding stays, but `resume-managed` still refuses a user-ended generation. Other end reasons are not trusted, because a CMUX quit may report them. The extension is Maestro's own SessionEnd observer: `CMUX_COPILOT_HOOKS_DISABLED` silences only CMUX's hooks, never Maestro's extension or its identity hook. `resume-managed` refuses when the Maestro integration that carries this observer is not installed. A quit, crash, or kill sends no end event, so the session resumes at the next relaunch.
 
 On relaunch, CMUX types that command into the restored shell. `resume-managed` checks:
 
@@ -61,7 +63,5 @@ CMUX runs a custom resume binding only after a human approves its command prefix
 - Maestro setup does not yet install CMUX's Copilot hooks (#252 follow-up). Without them CMUX has no record to restore, and the tab stays a plain shell.
 - CMUX's Copilot restore keeps `--name` and adds `--resume`. Copilot 1.0.98 refuses that pair. A session started with `--name` does not come back through CMUX's restore. Rename the session inside Copilot instead.
 - Sessions launched through wrappers such as Agency are not covered.
-- A Maestro-launched session that you exit yourself, before CMUX quits, keeps its binding. It resumes at the next relaunch. Close the tab to end it for good.
-- Maestro Settings has no opt-out for managed restore yet. Turn off CMUX's resume setting, or do not approve the prefix.
 - Launches made before this change have no binding and do not resume.
 - A session started before the Maestro integration was installed is never enrolled, so it is not resumed as managed.

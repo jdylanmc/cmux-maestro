@@ -2598,3 +2598,37 @@ test("born managed: only this session's user exit reaches the SessionEnd record,
   await refused.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: refused.own.sessionId });
   assert.equal(refused.calls.ended.length, 0);
 });
+
+test("a Maestro launch clears its resume binding on its own SessionEnd only, failing open", async (t) => {
+  const f = await managedFixture(t, { owners: [0, 0] });
+  const own = f.bindings[0];
+  let config;
+  const ended = [];
+  let fail = false;
+  const environment = { ...f.environment(0), CMUX_MAESTRO_DIRECT_LAUNCH: "1", CMUX_MAESTRO_LAUNCH_PID: "4242",
+    CMUX_COPILOT_HOOKS_DISABLED: "1",
+    CMUX_SURFACE_ID: randomUUID(), CMUX_MAESTRO_ORCHESTRATOR: "/synthetic/controller" };
+  const adapter = await startManaged({
+    environment, observe: async () => {},
+    sessionEnd: async (request, controller) => {
+      ended.push({ request, controller });
+      if (fail) throw new Error("private failure");
+    },
+    joinSession: async (options) => { config = options; return { sessionId: own.sessionId, send: async () => {} }; },
+  });
+  f.adapters.push(adapter);
+  assert.deepEqual(Object.keys(config), ["tools", "hooks"]);
+  assert.deepEqual(Object.keys(config.hooks), ["onSessionEnd"]);
+  await config.hooks.onSessionEnd({ reason: "user_exit", finalMessage: "PRIVATE" }, { sessionId: randomUUID() });
+  assert.equal(ended.length, 0);
+  assert.equal(await config.hooks.onSessionEnd({ reason: "user_exit", finalMessage: "PRIVATE" },
+    { sessionId: own.sessionId }), undefined);
+  assert.deepEqual(ended, [{ controller: "/synthetic/controller", request: { identity: {
+    nodeId: own.nodeId, workspaceId: own.workspaceId, sessionId: own.sessionId, generation: 1,
+    capability: own.capability } } }]);
+  assert.equal(JSON.stringify(ended).includes("PRIVATE"), false);
+  await config.hooks.onSessionEnd({ reason: "abort" }, { sessionId: own.sessionId });
+  assert.equal(ended.length, 1, "only a user exit is trusted; a CMUX quit may report other reasons");
+  fail = true;
+  assert.equal(await config.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: own.sessionId }), undefined);
+});

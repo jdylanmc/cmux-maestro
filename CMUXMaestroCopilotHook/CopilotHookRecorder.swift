@@ -98,11 +98,11 @@ nonisolated struct CopilotHookRecorder {
         return id
     }
 
+    /// Only Maestro's own switch. `CMUX_COPILOT_HOOKS_DISABLED` silences CMUX's restore hooks, and
+    /// Maestro launches set it (ADR 0024); Maestro must still observe those sessions.
     static func isDisabled(_ environment: [String: String]) -> Bool {
-        ["CMUX_COPILOT_HOOKS_DISABLED", "MAESTRO_NATIVE_DISABLED"].contains {
-            guard let value = environment[$0]?.lowercased() else { return false }
-            return !value.isEmpty && value != "0" && value != "false"
-        }
+        guard let value = environment["MAESTRO_NATIVE_DISABLED"]?.lowercased() else { return false }
+        return !value.isEmpty && value != "0" && value != "false"
     }
 
     /// What a proven owner may do. Every intent shares one ownership proof.
