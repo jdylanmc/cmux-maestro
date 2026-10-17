@@ -402,6 +402,13 @@ export async function joinSession(config) {
     process.stdin.resume();
     await new Promise(() => {});
   }
+  if (process.env.FIXTURE_SESSION_END) {
+    // Like Copilot 1.0.98: SessionEnd (reason user_exit) arrives shortly after the signal.
+    for (const signal of ["SIGHUP", "SIGTERM"]) process.once(signal, () => setTimeout(() =>
+      config.hooks?.onSessionEnd?.({ reason: "user_exit" }, { sessionId: process.env.SESSION_ID }), 50));
+    return { sessionId: process.env.SESSION_ID, rpc: { gitHubAuth: { getStatus: async () =>
+      ({ isAuthenticated: true, login: "human-account", host: "https://github.com" }) } } };
+  }
   return { sessionId: process.env.SESSION_ID };
 }
 `, { mode: 0o600 });
@@ -485,7 +492,42 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ok: true, ob
     const info = await exists(endpoint);
     return info?.isSocket() && (info.mode & 0o777) === 0o600;
   });
-  return { root, binding, endpoint, route, exists, waitFor, exited, stop, launch, listening };
+  // A born root (no launcher inputs) whose installed controller enrolls it and logs each call.
+  async function launchBorn() {
+    const home = path.join(root, "home");
+    const bin = path.join(home, "Library/Application Support/CMUXMaestroPreview/Orchestration/bin");
+    await fs.mkdir(bin, { recursive: true, mode: 0o700 });
+    const calls = path.join(root, "controller-calls");
+    await fs.writeFile(path.join(bin, "cmux-maestro-orchestrator"), `#!/usr/bin/env node
+const { appendFileSync } = require("node:fs");
+const command = process.argv[2];
+process.stdin.resume();
+process.stdin.on("end", () => {
+  appendFileSync(${JSON.stringify(calls)}, command + "\\n");
+  process.stdout.write(JSON.stringify(command === "native-enroll" ? { ok: true, nodeId: ${JSON.stringify(binding.nodeId)},
+    workspaceId: ${JSON.stringify(binding.workspaceId)}, sessionId: ${JSON.stringify(binding.sessionId)}, generation: 1,
+    routes: ${JSON.stringify(root)}, peer: ${JSON.stringify(binding.peer)} } : { ok: true }));
+});
+`, { mode: 0o700 });
+    const child = spawn(process.execPath, [
+      "--import", pathToFileURL(path.join(root, "preload.mjs")).href,
+      fileURLToPath(new URL("./delivery-proof/extension.mjs", import.meta.url)),
+    ], {
+      env: {
+        PATH: process.env.PATH, HOME: home, SESSION_ID: binding.sessionId, CMUX_WORKSPACE_ID: binding.workspaceId,
+        CMUX_SURFACE_ID: surfaceId, COPILOT_EXTENSION_PARENT_PID: String(process.pid), FIXTURE_SESSION_END: "1",
+        FIXTURE_STAGE: path.join(root, "born-stage"), FIXTURE_ERRORS: path.join(root, "born-errors"),
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const item = { child, done: once(child, "exit"), stderr: "",
+      calls: async () => ((await exists(calls)) ? (await fs.readFile(calls, "utf8")).trim().split("\n") : []) };
+    child.stderr.setEncoding("utf8").on("data", chunk => { item.stderr += chunk; });
+    child.stdout.resume();
+    children.push(item);
+    return item;
+  }
+  return { root, binding, endpoint, route, exists, waitFor, exited, stop, launch, launchBorn, listening };
 }
 
 test("actual native loader closes its listener on SIGTERM and the same binding reloads", async (t) => {
@@ -507,6 +549,19 @@ test("actual native loader closes its listener on SIGTERM and the same binding r
   assert.equal(await f.exists(f.endpoint), null);
   assert.deepEqual(await fs.readFile(f.route), bindingBefore);
 });
+
+for (const [signal, recorded] of [["SIGHUP", false], ["SIGTERM", true]]) {
+  test(`actual native loader ${recorded ? "waits for and records" : "never records"} a SessionEnd after ${signal}`, async (t) => {
+    // Copilot 1.0.98 says user_exit for both; only a quit, hangup, or signal sends SIGHUP (#252 spike).
+    const f = await loaderFixture(t);
+    const born = await f.launchBorn();
+    await f.listening();
+    assert.deepEqual(await born.calls(), ["native-enroll"]);
+    assert.deepEqual(await f.stop(born, signal), [0, null], born.stderr);
+    assert.deepEqual(await born.calls(), recorded ? ["native-enroll", "native-session-end"] : ["native-enroll"]);
+    assert.equal(await f.exists(f.endpoint), null);
+  });
+}
 
 test("actual native loader treats SIGHUP as a hangup and closes its listener", async (t) => {
   const f = await loaderFixture(t);
