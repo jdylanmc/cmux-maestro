@@ -1616,6 +1616,7 @@ class Store:
             "phase": item["phase"],
             "availability": item["availability"],
             "copilotSessionId": item.get("copilotSessionId"),
+            **({"enrollment": item["enrollment"]} if "enrollment" in item else {}),
             "worktreeLabel": item.get("worktreeLabel"),
             "branchLabel": item.get("branchLabel"),
             "gitEvidenceStatus": item.get("gitEvidenceStatus"),

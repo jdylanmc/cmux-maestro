@@ -837,6 +837,9 @@ struct SidebarView: View {
         .onChange(of: model.orchestration.snapshot) { _, snapshot in
             model.copilot.updateManagedSubjects(snapshot)
         }
+        .onChange(of: model.copilot.tree.sessions, initial: true) { _, sessions in
+            model.orchestration.updateObservedSessions(sessions)
+        }
         .onChange(of: model.hierarchy) { old, new in
             preferences.refreshLayout()
             if let target = SidebarPresentation.focusInteraction(from: old, to: new) {
