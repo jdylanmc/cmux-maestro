@@ -2116,33 +2116,23 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         return int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
                                   capture_output=True, text=True, check=True).stdout)
 
-    def test_generation_marks_at_the_cap_prune_sessions_copilot_no_longer_keeps(self):
+    def test_generation_marks_at_the_cap_evict_into_a_floor(self):
         first = self.enroll()
-        kept = [str(uuid.uuid4()) for _ in range(4)]
-        for session in kept:
-            (self.h.home / ".copilot" / "session-state" / session).mkdir(parents=True)
-        marks = {str(uuid.uuid4()): 1 for _ in range(CONTROLLER_API["MAX_HOST_NODES"] - len(kept))}
-        marks.update({session: 3 for session in kept})
+        cap = CONTROLLER_API["MAX_HOST_NODES"]
+        oldest = str(uuid.uuid4())
+        marks = {oldest: 7, **{str(uuid.uuid4()): 9 for _ in range(cap - 1)}}
         self.h.change_state(lambda state: state.update(bornGenerations=marks))
         result = self.h.run("archive-ended", "--workspace", self.h.workspace)
-        self.assertEqual(len(result["archivedRuns"]), 1)
-        after = self.h.state()["bornGenerations"]
-        self.assertEqual(after, {**{session: 3 for session in kept}, first["session"]: 1})
-
-    def test_generation_marks_full_of_resumable_sessions_keep_the_run_without_failing(self):
-        first = self.enroll()
-        marks = {}
-        for _ in range(CONTROLLER_API["MAX_HOST_NODES"]):
-            session = str(uuid.uuid4())
-            (self.h.home / ".copilot" / "session-state" / session).mkdir(parents=True)
-            marks[session] = 1
-        self.h.change_state(lambda state: state.update(bornGenerations=marks))
-        result = self.h.run("archive-ended", "--workspace", self.h.workspace)
-        self.assertEqual((result["archivedRuns"], result["keptRuns"]), ([], 1))
-        self.assertIn(first["nodeId"], self.h.state()["nodes"])
-        # Surface reuse keeps the run too, refusing only this surface.
-        self.refused(self.enroll(surface=first["surface"]), "surface-owned")
-        self.assertTrue(self.enroll()["ok"])
+        self.assertEqual((len(result["archivedRuns"]), result["keptRuns"]), (1, 0))
+        state = self.h.state()
+        self.assertEqual(len(state["bornGenerations"]), cap)
+        self.assertNotIn(oldest, state["bornGenerations"])
+        self.assertEqual(state["bornGenerationFloor"], 7)
+        self.assertEqual(state["bornGenerations"][first["session"]], 1)
+        # A session whose mark was evicted starts above the floor; its address cannot repeat.
+        again = self.enroll(session=oldest)
+        self.assertTrue(again["ok"], again)
+        self.assertEqual(again["generation"], 8)
 
     def test_attempt_records_of_ended_providers_are_all_swept(self):
         dead = self.dead_pid()

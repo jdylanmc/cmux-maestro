@@ -1011,6 +1011,9 @@ def _validate_state_header(state):
             isinstance(key, str) and len(key) <= 64 and type(value) is int and value >= 1
             for key, value in marks.items()):
         raise OrchestrationError("Stored born-session generations are invalid.")
+    floor = state.get("bornGenerationFloor", 0)
+    if type(floor) is not int or floor < 0:
+        raise OrchestrationError("Stored born-session generation floor is invalid.")
     limits = state.get("workspaceCapacity", {})
     if not isinstance(limits, dict) or len(limits) > MAX_WORKSPACE_CAPACITY_SETTINGS:
         raise OrchestrationError("Host workspace-capacity setting safety limit reached.")
@@ -2678,12 +2681,14 @@ def archive_born_run(state, run_id, retiring):
     workspace = nodes[0]["workspaceId"]
     root = next(node for node in nodes if node["parentId"] is None)
     marks = state.setdefault("bornGenerations", {})
-    if root["copilotSessionId"] not in marks and len(marks) >= MAX_HOST_NODES:
-        prune_born_generations(marks)
-    if root["copilotSessionId"] not in marks and len(marks) >= MAX_HOST_NODES:
-        # Without a provable next generation the run is kept, not archived.
-        raise OrchestrationError("Born-session generation record is full; the ended run stays recorded.")
-    marks[root["copilotSessionId"]] = max(marks.get(root["copilotSessionId"], 0), root["generation"])
+    session = root["copilotSessionId"]
+    mark = max(marks.pop(session, 0), root["generation"])
+    while len(marks) >= MAX_HOST_NODES:
+        # Evict the lowest mark into one floor; every later generation starts above it, so any
+        # eviction keeps peer addresses unique (state is stored with sorted keys, no age order).
+        lowest = min(marks, key=lambda key: (marks[key], key))
+        state["bornGenerationFloor"] = max(state.get("bornGenerationFloor", 0), marks.pop(lowest))
+    marks[session] = mark
     state["archives"].append(archive_summary(state, run_id))
     state["archives"] = state["archives"][-MAX_ARCHIVES:]
     for node in nodes:
@@ -2699,26 +2704,6 @@ def archive_born_run(state, run_id, retiring):
     if len(state["retainedResources"]) > MAX_HOST_NODES:
         raise OrchestrationError("Host retained-resource safety limit reached; the ended run stays recorded.")
     return nodes
-
-
-def born_generation_recordable(state, root):
-    marks = state.setdefault("bornGenerations", {})
-    if root["copilotSessionId"] in marks or len(marks) < MAX_HOST_NODES:
-        return True
-    prune_born_generations(marks)
-    return len(marks) < MAX_HOST_NODES
-
-
-def prune_born_generations(marks):
-    """Forget marks for sessions Copilot no longer keeps: they can never be resumed again."""
-    state_root = Path.home() / ".copilot/session-state"
-    for session in list(marks):
-        try:
-            os.lstat(state_root / session)
-        except FileNotFoundError:
-            del marks[session]
-        except OSError:
-            pass
 
 
 def remove_direct_scripts(root, nodes):
@@ -2746,7 +2731,7 @@ def command_archive_ended(args, root):
                  and same_workspace(node["workspaceId"], workspace)]
         runs, kept = [], 0
         for node in roots:
-            if born_run_proven_ended(state, node["runId"]) and born_generation_recordable(state, node):
+            if born_run_proven_ended(state, node["runId"]):
                 archived.extend(archive_born_run(state, node["runId"], retiring))
                 runs.append(node["runId"])
             else:
@@ -2808,7 +2793,7 @@ def record_refusal(root, key, reason):
 def born_generation(state, session):
     """A session archived earlier keeps counting generations, so its peer address never repeats.
     The high-water mark survives archive-summary trimming."""
-    return state.get("bornGenerations", {}).get(session, 0) + 1
+    return state.get("bornGenerations", {}).get(session, state.get("bornGenerationFloor", 0)) + 1
 
 
 def command_native_enroll(root, cmux):
@@ -2913,8 +2898,7 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         # A new session in a surface whose earlier born run is proven ended supersedes it.
         # Uncertain or live runs keep the surface; nothing is guessed.
         if (holder is not None and holder.get("enrollment") == "born" and holder["parentId"] is None
-                and holder["workspaceId"] == workspace and born_run_proven_ended(state, holder["runId"])
-                and born_generation_recordable(state, holder)):
+                and holder["workspaceId"] == workspace and born_run_proven_ended(state, holder["runId"])):
             archived.extend(archive_born_run(state, holder["runId"], retiring))
         if (any(item.get("surfaceId") == surface for item in state["nodes"].values())
                 or any(item["surfaceId"] == surface for item in state["retainedResources"])
