@@ -1,0 +1,20 @@
+# Each CMUX window's sidebar binds only to its own connection
+
+CMUX runs one Maestro extension process for every CMUX window. Each window hosts its own sidebar view (`EXHostViewController`) and opens its own XPC connection to that process. The pinned SDK had two process-wide seams: `CmuxSidebarExtensionScene` kept one transport that replaced and invalidated the previous connection whenever another was accepted, and Maestro kept one `SidebarConnectionModel` on the extension instance, fed by the process-wide `update(context:)`. Opening a second window therefore showed the new window's workspaces in the first window's sidebar.
+
+Decision: window-scoped state belongs to one sidebar view, and that view binds to exactly one connection or to none.
+
+- A reviewed patch to the pinned SDK (`scripts/sdk-patches/`, applied by `scripts/fetch-sdk.sh`) gives each accepted connection its own transport, so accepting one window never invalidates another. Each scene evaluation creates one `CmuxSidebarScene`, injected into its views as `@Environment(\.cmuxSidebarScene)`. Its state is `bound` to one connection ID only while exactly one live connection and at most one on-screen view belong to it; otherwise `unpaired`; with no connection, `waitingForHost`. A bound context's `host` sends actions only to that connection.
+- Maestro's `SidebarWindowView` owns one `SidebarWindowBinding`, and so one `SidebarConnectionModel` (hierarchy, navigation, Copilot and orchestration polling), per view. An unpaired view, a view with no scene, and a view whose connection changes drop every window-scoped fact first (`resetWindow`, `.unpaired`), so no view ever renders another window's data.
+- Preferences, layout, order, icons, history and pets stay process-wide; they are keyed by exact IDs or are global settings (ADR 0020, 0021). The Beats store stays process-wide. Its row liveness is kept per window and merged by exact session UUID, and the Beats panel opens only in the window that asked for it.
+
+Why: the pairing between a view and a connection is identity evidence (ADR 0002). Window focus, titles, order of arrival, or the snapshot's `windowID` cannot pair them: the extension cannot see which CMUX window it is drawn in.
+
+ExtensionKit evidence, macOS SDK in Xcode on 2026-10-15: `ExtensionKit.swiftinterface` exposes no per-session handle to `PrimitiveAppExtensionScene`'s `content` or `onConnection`, and `AppExtensionSceneConfiguration.accept(connection:)` forwards only to its optional inner configuration. The ExtensionKit binary (`dyld_info -objc`, `-disassemble`, `__cstring`) has per-host-view scene sessions (`_EXUISceneSession`, `connectToScene:` creating one view controller each) and routes each session's connection through its own view controller (`-[_EXExtensionViewController shouldAcceptXPCConnection:]`). It stores scene definitions in `_ConfigurationScene(scenes:)`, which suggests, but does not prove, that a scene's closures are evaluated once per process. The design is correct either way: per-session evaluation gives every window its own bound scene; a shared scene sees two connections or two views and becomes `unpaired` until only one window remains.
+
+Rejected:
+- Inferring a view's window from focus, activation order or the snapshot's `windowID`: heuristics (ADR 0002).
+- Keeping the latest connection and invalidating others (the old SDK behaviour): it steals a live window's connection.
+- A Maestro-owned scene without an SDK change: the transport, codec receiver and runtime are internal to the SDK.
+
+Consequences: if ExtensionKit shares one scene across windows, two open windows both show "This window's CMUX connection is unavailable" until one closes. A host-side or ExtensionKit change that hands each view its connection would remove that limit; the upstream issue text is in the PR that added this decision. The SDK patch must apply with exact context; a drifted pin fails the fetch. The fetch stamp records the patch digest, so a changed patch refetches. Runtime behaviour in a live multi-window CMUX host still needs human validation; tests drive the patched SDK over real in-process XPC connections, not ExtensionKit.

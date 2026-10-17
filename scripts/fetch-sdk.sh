@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CMUX_COMMIT="ae7fbce99f98c98df5ccf915e548dd080d33cfa8"
 SDK_DIR="$ROOT/vendor/CmuxExtensionKit"
 STAMP="$SDK_DIR/.cmux-commit"
+# Reviewed Maestro patches, applied in name order to the pinned SDK before install.
+PATCH_DIR="$ROOT/scripts/sdk-patches"
 INSTALL_LOCK="$ROOT/vendor/.cmux-sdk-install.lock"
 TRANSACTION_PREFIX="$ROOT/vendor/.cmux-sdk-fetch.$$"
 TRANSACTION_DIR="$TRANSACTION_PREFIX"
@@ -14,8 +16,16 @@ INSTALL_LOCK_WAIT_SECONDS=0.05
 INSTALL_LOCK_TIMEOUT_SECONDS=10
 LOCK_ACQUIRED=0
 
-if [[ -f "$STAMP" ]] && [[ "$(<"$STAMP")" == "$CMUX_COMMIT" ]]; then
-    echo "CmuxExtensionKit already pinned at $CMUX_COMMIT"
+PATCHES=("$PATCH_DIR"/*.patch)
+if [[ ! -f "${PATCHES[0]}" ]]; then
+    echo "No SDK patches found in $PATCH_DIR" >&2
+    exit 1
+fi
+PATCH_DIGEST="$(cat "${PATCHES[@]}" | shasum -a 256 | cut -d' ' -f1)"
+EXPECTED_STAMP="$(printf '%s\npatches %s' "$CMUX_COMMIT" "$PATCH_DIGEST")"
+
+if [[ -f "$STAMP" ]] && [[ "$(<"$STAMP")" == "$EXPECTED_STAMP" ]]; then
+    echo "CmuxExtensionKit already pinned at $CMUX_COMMIT (patches $PATCH_DIGEST)"
     exit 0
 fi
 
@@ -70,6 +80,15 @@ tar -xzf "$ARCHIVE" -C "$FETCH_DIR" \
     --strip-components=3 \
     "cmux-$CMUX_COMMIT/Packages/macOS/CmuxExtensionKit"
 
+for sdk_patch in "${PATCHES[@]}"; do
+    # Exact context only: a drifted SDK must fail here, not apply with fuzz.
+    patch -p1 -N -s -F 0 -d "$FETCH_DIR/CmuxExtensionKit" -i "$sdk_patch"
+done
+if find "$FETCH_DIR/CmuxExtensionKit" \( -name '*.rej' -o -name '*.orig' \) -print -quit | grep -q .; then
+    echo "SDK patches left rejected or backup files; refusing to install" >&2
+    exit 1
+fi
+
 lock_attempt=0
 while [[ "$lock_attempt" -lt "$INSTALL_LOCK_ATTEMPTS" ]]; do
     if [[ -d "$INSTALL_LOCK" ]] || [[ -L "$INSTALL_LOCK" ]]; then
@@ -106,13 +125,13 @@ if [[ "$LOCK_ACQUIRED" -ne 1 ]]; then
     exit 1
 fi
 
-if [[ -f "$STAMP" ]] && [[ "$(<"$STAMP")" == "$CMUX_COMMIT" ]]; then
-    echo "CmuxExtensionKit already pinned at $CMUX_COMMIT"
+if [[ -f "$STAMP" ]] && [[ "$(<"$STAMP")" == "$EXPECTED_STAMP" ]]; then
+    echo "CmuxExtensionKit already pinned at $CMUX_COMMIT (patches $PATCH_DIGEST)"
     exit 0
 fi
 
 rm -rf -- "$SDK_DIR"
 mv "$FETCH_DIR/CmuxExtensionKit" "$SDK_DIR"
-printf '%s\n' "$CMUX_COMMIT" > "$STAMP"
+printf '%s\n' "$EXPECTED_STAMP" > "$STAMP"
 
-echo "Fetched CmuxExtensionKit at $CMUX_COMMIT"
+echo "Fetched CmuxExtensionKit at $CMUX_COMMIT (patches $PATCH_DIGEST)"

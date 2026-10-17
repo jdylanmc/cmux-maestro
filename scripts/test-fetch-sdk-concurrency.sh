@@ -85,6 +85,25 @@ mkdir -p "$destination/CmuxExtensionKit"
 printf '%s\n' "$payload" > "$destination/CmuxExtensionKit/payload"
 EOF
 
+cat > "$TEST_ROOT/bin/patch" <<'EOF'
+#!/bin/bash
+set -euo pipefail
+
+directory=""
+patch_file=""
+while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+        -d) directory="$2"; shift 2 ;;
+        -i) patch_file="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+
+[[ -f "$directory/payload" ]]
+[[ -f "$patch_file" ]]
+printf '%s\n' "$(basename "$patch_file")" >> "$directory/applied-patches"
+EOF
+
 cat > "$TEST_ROOT/bin/mkdir" <<'EOF'
 #!/bin/bash
 set -euo pipefail
@@ -201,6 +220,7 @@ setup_case() {
 
     mkdir -p "$case_root/scripts" "$case_root/control"
     cp "$ROOT/scripts/fetch-sdk.sh" "$case_root/scripts/fetch-sdk.sh"
+    cp -R "$ROOT/scripts/sdk-patches" "$case_root/scripts/sdk-patches"
     chmod +x "$case_root/scripts/fetch-sdk.sh"
 }
 
@@ -287,8 +307,10 @@ run_contention_case() {
     [[ "$first_destination" != "$second_destination" ]]
 
     EXPECTED_COMMIT="ae7fbce99f98c98df5ccf915e548dd080d33cfa8"
-    [[ "$(<"$case_root/vendor/CmuxExtensionKit/.cmux-commit")" == "$EXPECTED_COMMIT" ]]
+    PATCH_DIGEST="$(cat "$ROOT"/scripts/sdk-patches/*.patch | shasum -a 256 | cut -d' ' -f1)"
+    [[ "$(<"$case_root/vendor/CmuxExtensionKit/.cmux-commit")" == "$(printf '%s\npatches %s' "$EXPECTED_COMMIT" "$PATCH_DIGEST")" ]]
     [[ "$(<"$case_root/vendor/CmuxExtensionKit/payload")" == "first" ]]
+    [[ "$(<"$case_root/vendor/CmuxExtensionKit/applied-patches")" == "$(cd "$ROOT/scripts/sdk-patches" && ls -1 *.patch)" ]]
 
     if find "$case_root/vendor" -maxdepth 1 \
         \( -name '.cmux-sdk-fetch.*' -o -name '.cmux-sdk-install.lock' \) \
