@@ -211,7 +211,7 @@ generation, or `diagnostic-only` with that reason. See
 [ADR 0025](adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md) for
 the checks.
 
-Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `provider-process-unverified`, `account-unverified`,
+Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrollment-window-passed`, `provider-process-unverified`, `account-unverified`,
 `integration-not-installed`, `session-started-before-install`,
 `cmux-identity-unverified`, `surface-owned`, `provider-already-enrolled`,
 `session-previously-managed`, `capacity-unavailable`, `enrollment-failed`.

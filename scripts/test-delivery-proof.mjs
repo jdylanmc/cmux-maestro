@@ -2554,3 +2554,19 @@ test("born managed: a committed enrollment with deferred projection is used; a r
   const failing = await bornFixture(t, { startManagedRuntime: async () => { throw new Error("listen failed"); } });
   assert.equal((await readiness(failing)).managed.reason, "enrolled-runtime-unavailable");
 });
+
+test("born managed: a runtime that joined then failed never hands managed tools their delegates", async (t) => {
+  let called = 0;
+  const f = await bornFixture(t, { startManagedRuntime: async ({ joinSession }) => {
+    await joinSession({ tools: managedToolSpecs().map(spec => ({ ...spec,
+      handler: async () => { called++; return "delegated"; } })) });
+    throw new Error("listen failed after join");
+  } });
+  assert.equal((await readiness(f)).managed.reason, "enrolled-runtime-unavailable");
+  for (const name of ["maestro_send", "maestro_peers", "maestro_spawn"]) {
+    const result = await f.tools[name]({});
+    assert.equal(result.resultType, "failure");
+    assert.match(result.textResultForLlm, /enrolled-runtime-unavailable/);
+  }
+  assert.equal(called, 0);
+});

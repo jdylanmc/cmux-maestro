@@ -51,6 +51,9 @@ GLYPH_CATALOG_SHA256 = "d2fa6615a38eb527462cb71ff17aa44b1d6453d437ed263ab8d5b458
 ICON_COLORS = ("theme", "green", "teal", "blue", "purple", "pink", "red", "gray")
 STALE_SECONDS = 600
 HEARTBEAT_SECONDS = 15
+# A born session enrolls at its own start. With no decision recorded for its provider, a later
+# attempt is admitted only this soon after the provider started (an unrecorded refusal can't reopen).
+BORN_ENROLL_WINDOW_SECONDS = 120
 STARTUP_SECONDS = 8
 ARCHIVE_SECONDS = 5
 GIT_EXECUTABLE = "/usr/bin/git"
@@ -1003,6 +1006,11 @@ def _validate_state_header(state):
             and (value["outcome"] == "refused") == isinstance(value.get("reason"), str)
             for key, value in attempts.items()):
         raise OrchestrationError("Stored enrollment attempts are invalid.")
+    marks = state.get("bornGenerations", {})
+    if not isinstance(marks, dict) or len(marks) > MAX_HOST_NODES or not all(
+            isinstance(key, str) and len(key) <= 64 and type(value) is int and value >= 1
+            for key, value in marks.items()):
+        raise OrchestrationError("Stored born-session generations are invalid.")
     limits = state.get("workspaceCapacity", {})
     if not isinstance(limits, dict) or len(limits) > MAX_WORKSPACE_CAPACITY_SETTINGS:
         raise OrchestrationError("Host workspace-capacity setting safety limit reached.")
@@ -2668,6 +2676,12 @@ def archive_born_run(state, run_id, retiring):
     """
     nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
     workspace = nodes[0]["workspaceId"]
+    root = next(node for node in nodes if node["parentId"] is None)
+    marks = state.setdefault("bornGenerations", {})
+    if root["copilotSessionId"] not in marks and len(marks) >= MAX_HOST_NODES:
+        # Without a provable next generation the run is kept, not archived.
+        raise OrchestrationError("Born-session generation record is full; the ended run stays recorded.")
+    marks[root["copilotSessionId"]] = max(marks.get(root["copilotSessionId"], 0), root["generation"])
     state["archives"].append(archive_summary(state, run_id))
     state["archives"] = state["archives"][-MAX_ARCHIVES:]
     for node in nodes:
@@ -2745,7 +2759,8 @@ def attempt_key(session, anchor):
 def prune_attempts(state):
     """Forget start attempts only once their provider process is proven ended."""
     attempts = state.setdefault("enrollmentAttempts", {})
-    for key in list(attempts):
+    # Bounded work under the state lock: at most 16 process checks, oldest records first.
+    for key in sorted(attempts, key=lambda item: attempts[item].get("at", ""))[:16]:
         _, pid, start = key.split(":", 2)
         if process_observation({"pid": int(pid), "start": start}) is False:
             del attempts[key]
@@ -2764,10 +2779,9 @@ def record_refusal(root, key, reason):
 
 
 def born_generation(state, session):
-    """A session archived earlier keeps counting generations, so its peer address never repeats."""
-    previous = [item.get("bornSession", {}).get("generation", 0) for item in state["archives"]
-                if item.get("bornSession", {}).get("sessionId") == session]
-    return max(previous, default=0) + 1
+    """A session archived earlier keeps counting generations, so its peer address never repeats.
+    The high-water mark survives archive-summary trimming."""
+    return state.get("bornGenerations", {}).get(session, 0) + 1
 
 
 def command_native_enroll(root, cmux):
@@ -2823,8 +2837,11 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         raise EnrollmentRefused("integration-not-installed") from error
     if messaging is None:
         raise EnrollmentRefused("integration-not-installed")
-    if not started_after_install(process_start_epoch(anchor["start"]), integration_installed_at(messaging)):
+    started = process_start_epoch(anchor["start"])
+    if not started_after_install(started, integration_installed_at(messaging)):
         raise EnrollmentRefused("session-started-before-install")
+    if time.time() - started > BORN_ENROLL_WINDOW_SECONDS:
+        raise EnrollmentRefused("enrollment-window-passed")
     try:
         pane = cmux.validate_surface(workspace, surface)
         if surface not in cmux.workspace_surfaces(workspace):
@@ -5479,9 +5496,6 @@ def archive_summary(state, run_id):
         "runId": run_id, "coordinatorLabel": root["label"],
         "nodeCount": len(nodes), "archivedAt": now(),
     }
-    if root.get("enrollment") == "born":
-        # Identifiers only: a later enrollment of the same session continues its generations.
-        summary["bornSession"] = {"sessionId": root["copilotSessionId"], "generation": root["generation"]}
     return summary
 
 

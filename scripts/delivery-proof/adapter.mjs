@@ -645,7 +645,7 @@ export const ENROLLMENT_REASONS = new Set([
   "integration-not-installed", "provider-process-unverified", "session-started-before-install",
   "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
   "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
-  "enrolled-runtime-unavailable",
+  "enrolled-runtime-unavailable", "enrollment-window-passed",
 ]);
 const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
 
@@ -673,7 +673,7 @@ async function invokeEnroll(request, controller, signal) {
 // production integration installed and no launcher inputs enrolls itself as its own root.
 // Tools are declared at join, so managed tools refuse until enrollment succeeds.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
-  diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000,
+  diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -726,6 +726,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
   session = await joinSession({ tools });
   signal?.throwIfAborted();
   requireCondition(session?.sessionId === sessionId);
+  onJoined?.(session);  // Beats need only the joined session, not enrollment.
   if (state.status !== "pending") return { session };
   // Unverified accounts still reach the controller, as null, so the refusal is recorded for this
   // provider and a later extension reload cannot enroll it.

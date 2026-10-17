@@ -2112,9 +2112,17 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         self.assertNotIn("does not match the invoking native session", closed["error"])
         self.assertIn("not registered", closed["error"])  # past the actor gate, at target lookup
 
+    def test_without_a_recorded_decision_only_a_fresh_provider_enrolls(self):
+        before = self.h.state()
+        self.refused(self.enroll(env={"FAKE_BORN_ENROLL_WINDOW_SECONDS": "-1"}), "enrollment-window-passed")
+        self.unchanged(before)
+
     def test_archived_session_enrolls_again_with_a_later_generation(self):
         first = self.enroll()
         self.h.run("archive-ended", "--workspace", self.h.workspace)
+        # The high-water mark survives archive-summary trimming.
+        self.h.change_state(lambda state: state.update(archives=[]))
+        self.assertEqual(self.h.state()["bornGenerations"], {first["session"]: 1})
         again = self.enroll(session=first["session"])
         self.assertTrue(again["ok"], again)
         self.assertEqual(again["generation"], 2)

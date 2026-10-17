@@ -13,6 +13,7 @@ Notable changes are recorded using Keep a Changelog categories.
   At capacity, or if any identity check fails, the session stays unmanaged and
   `maestro_readiness` says why. A new session in a tab whose earlier born run has fully ended
   archives that run first; `archive-ended --workspace <id>` archives every such run by hand.
+  Until born-root re-enrollment ships (#255), a born root comes back unmanaged after a relaunch.
 - Managed nodes have one recorded account `{login, host}` (#252): the launch's pinned login, or
   the account a session reported itself. No credential is stored. ADR 0024 sets one restore owner
   per node and the rules for resuming an ended managed session after a CMUX relaunch; ADR 0004
