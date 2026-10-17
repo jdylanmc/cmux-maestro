@@ -618,6 +618,7 @@ test("actual ordinary loader sanitizes join failure without managed fallback", a
 test("ordinary readiness reports only supported self identity without inspecting private state", async () => {
   const environment = {
     SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: randomUUID(), CMUX_SURFACE_ID: randomUUID(),
+    CMUX_MAESTRO_EXECUTION_MODE: "interactive",
   };
   let tool;
   let joins = 0;
@@ -640,7 +641,7 @@ test("ordinary readiness reports only supported self identity without inspecting
     status: "diagnostic-only",
     session: { sessionId: session.sessionId, source: "copilot-extension-join" },
     cmux: { status: "environment-present-unverified" },
-    managed: { status: "unavailable", reason: "launcher-inputs-absent", binding: "not-inspected" },
+    managed: { status: "unavailable", reason: "launcher-inputs-incomplete", binding: "not-inspected" },
     capabilities: {
       scope: "this-extension", readiness: true, selfSessionIdentity: true,
       managedIdentity: false, peerDiscovery: false, peerMessaging: false,
@@ -705,6 +706,7 @@ test("ordinary readiness refuses failed or mismatched joins without retry", asyn
   const environment = {
     SESSION_ID: "abcdef12-1234-5678-9012-abcdef123456",
     CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(), CMUX_SURFACE_ID: ordinarySurface.toUpperCase(),
+    CMUX_MAESTRO_EXECUTION_MODE: "interactive",
   };
   for (const outcome of ["failed", "mismatch", "case-mismatch", "missing"]) {
     let joins = 0;
@@ -729,6 +731,7 @@ test("ordinary readiness respects cancellation before join, during join and duri
   const environment = {
     SESSION_ID: randomUUID(),
     CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(), CMUX_SURFACE_ID: ordinarySurface.toUpperCase(),
+    CMUX_MAESTRO_EXECUTION_MODE: "interactive",
   };
   const before = new AbortController();
   before.abort();
@@ -2398,7 +2401,8 @@ process.exitCode=packet.code;
 
 // ---- Born managed (ADR 0025) ------------------------------------------------------------------
 
-async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {} } = {}) {
+async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}, statusTimeoutMs,
+  startManagedRuntime } = {}) {
   const f = await managedFixture(t, { owners: [0, 0] });
   const own = f.bindings[0];
   const env = {
@@ -2417,6 +2421,8 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
   };
   const born = await startBornManaged({
     environment: env, parentPid, controller: "/synthetic/controller",
+    ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
+    ...(startManagedRuntime === undefined ? {} : { startManagedRuntime }),
     joinSession: async (options) => {
       assert.deepEqual(Object.keys(options), ["tools"]);
       tools = Object.fromEntries(options.tools.map((tool) =>
@@ -2480,13 +2486,16 @@ test("born managed: a refused enrollment stays unmanaged with one stable reason"
   }
 });
 
-test("born managed: an unverified account or provider never reaches the controller", async (t) => {
+test("born managed: an unverified account is recorded as a refusal; an unverified provider never reaches the controller", async (t) => {
   for (const auth of [{ isAuthenticated: false }, { isAuthenticated: true, login: "--x", host: "github.com" },
-    { isAuthenticated: true, login: "human", host: "example.com" }]) {
-    const f = await bornFixture(t, { auth });
+    { isAuthenticated: true, login: "human", host: "example.com" }, new Promise(() => {})]) {
+    const f = await bornFixture(t, { auth, statusTimeoutMs: 20,
+      enroll: async () => { throw Object.assign(new Error("x"), { reason: "account-unverified" }); } });
     assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
       reason: "account-unverified" });
-    assert.equal(f.calls.enroll.length, 0);
+    assert.equal(f.calls.enroll.length, 1);
+    assert.equal(f.calls.enroll[0].request.login, null);
+    assert.equal(f.calls.enroll[0].request.host, null);
   }
   for (const pid of ["", "1", "4243", "abc"]) {
     const f = await bornFixture(t, { environment: { COPILOT_EXTENSION_PARENT_PID: pid } });
@@ -2533,4 +2542,15 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     const report = JSON.parse(await tool.handler({}, { sessionId: f.own.sessionId }));
     assert.equal(report.managed.reason, reason);
   }
+});
+
+test("born managed: a committed enrollment with deferred projection is used; a runtime failure is distinct", async (t) => {
+  const f = await bornFixture(t, { enroll: undefined });
+  const committed = await bornFixture(t, { enroll: async (request) => ({
+    ok: true, nodeId: f.own.nodeId, workspaceId: request.workspaceId, sessionId: request.sessionId,
+    generation: 1, routes: f.root, peer: f.own.peer, projection: "deferred", routesNotRetired: 1 }) });
+  // The fixture's own binding differs, so the runtime refuses; the reason says the controller enrolled.
+  assert.equal((await readiness(committed)).managed.reason, "enrolled-runtime-unavailable");
+  const failing = await bornFixture(t, { startManagedRuntime: async () => { throw new Error("listen failed"); } });
+  assert.equal((await readiness(failing)).managed.reason, "enrolled-runtime-unavailable");
 });

@@ -645,6 +645,7 @@ export const ENROLLMENT_REASONS = new Set([
   "integration-not-installed", "provider-process-unverified", "session-started-before-install",
   "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
   "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
+  "enrolled-runtime-unavailable",
 ]);
 const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
 
@@ -672,7 +673,7 @@ async function invokeEnroll(request, controller, signal) {
 // production integration installed and no launcher inputs enrolls itself as its own root.
 // Tools are declared at join, so managed tools refuse until enrollment succeeds.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
-  diagnostic, parentPid = process.ppid, controller = defaultController(),
+  diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000,
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -726,28 +727,33 @@ export async function startBornManaged({ joinSession, environment = process.env,
   signal?.throwIfAborted();
   requireCondition(session?.sessionId === sessionId);
   if (state.status !== "pending") return { session };
-  let account;
+  // Unverified accounts still reach the controller, as null, so the refusal is recorded for this
+  // provider and a later extension reload cannot enroll it.
+  let account = { login: null, host: null };
   try {
-    const auth = await session.rpc.gitHubAuth.getStatus();
+    const auth = await Promise.race([session.rpc.gitHubAuth.getStatus(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), statusTimeoutMs).unref?.())]);
     requireCondition(auth?.isAuthenticated === true && typeof auth.login === "string" &&
       /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
       ["github.com", "https://github.com"].includes(auth.host));
     account = { login: auth.login, host: auth.host };
   } catch {
     signal?.throwIfAborted();
-    state = { status: "unavailable", reason: "account-unverified" };
-    return { session };
   }
   let enrolled;
   try {
     enrolled = await enroll({ ...placement, pid: providerPid, ...account }, controller);
-    exactKeys(enrolled, ["ok", "nodeId", "workspaceId", "sessionId", "generation", "routes", "peer"]);
+    requireCondition(account.login !== null);
+    // A committed enrollment may report a deferred projection or routes it could not retire.
+    exactKeys(enrolled, ["ok", "nodeId", "workspaceId", "sessionId", "generation", "routes", "peer",
+      ...["projection", "routesNotRetired"].filter(key => Object.hasOwn(enrolled, key))]);
     requireCondition(UUID.test(enrolled.nodeId) && enrolled.sessionId === sessionId &&
       enrolled.workspaceId === placement.workspaceId && Number.isSafeInteger(enrolled.generation) &&
       enrolled.generation > 0 && typeof enrolled.routes === "string" && MANAGED_PEER.test(enrolled.peer));
   } catch (error) {
     signal?.throwIfAborted();
-    state = { status: "unavailable", reason: ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed" };
+    state = { status: "unavailable", reason: account.login === null ? "account-unverified"
+      : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed" };
     return { session };
   }
   let listener;
@@ -763,7 +769,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
     });
   } catch (error) {
     if (signal?.aborted) throw error;
-    state = { status: "unavailable", reason: "enrollment-failed" };
+    // The controller enrolled this session; only this extension's runtime failed to start.
+    state = { status: "unavailable", reason: "enrolled-runtime-unavailable" };
     return { session };
   }
   state = { status: "enrolled", nodeId: enrolled.nodeId, generation: enrolled.generation };
@@ -781,7 +788,9 @@ export async function startReadiness({ joinSession, environment = process.env, s
   ];
   // A complete managed launch belongs exclusively to startManaged, even if it fails.
   if (launcherInputs.slice(0, 3).every(Boolean) && launcherInputs[3] === "interactive") return null;
-  const reason = launcherInputs.some(Boolean) ? "launcher-inputs-incomplete" : "launcher-inputs-absent";
+  // With no launcher inputs at all, born-managed enrollment owns the session instead.
+  if (!launcherInputs.some(Boolean)) return null;
+  const reason = "launcher-inputs-incomplete";
   let session;
   let ready = false;
   signal?.throwIfAborted();

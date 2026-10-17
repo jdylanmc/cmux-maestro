@@ -211,7 +211,7 @@ generation, or `diagnostic-only` with that reason. See
 [ADR 0025](adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md) for
 the checks.
 
-Reasons: `provider-process-unverified`, `account-unverified`,
+Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `provider-process-unverified`, `account-unverified`,
 `integration-not-installed`, `session-started-before-install`,
 `cmux-identity-unverified`, `surface-owned`, `provider-already-enrolled`,
 `session-previously-managed`, `capacity-unavailable`, `enrollment-failed`.
@@ -231,9 +231,10 @@ Existing managed startup and native tools are unchanged; a failed managed
 initialization never falls back to this branch.
 
 The diagnostic reports its joined Copilot session UUID, after matching the
-CLI-supplied `SESSION_ID` and the invoking tool session. It distinguishes absent
-from incomplete required launcher inputs (message root, peer, worker ID and
-interactive execution mode). That is **not** proof that no binding exists on
+CLI-supplied `SESSION_ID` and the invoking tool session. It reports incomplete
+required launcher inputs (message root, peer, worker ID and interactive
+execution mode); with no launcher inputs at all, born-managed enrollment owns
+the session instead. That is **not** proof that no binding exists on
 disk: bindings are not inspected. Complete managed inputs belong exclusively to
 the managed initializer.
 

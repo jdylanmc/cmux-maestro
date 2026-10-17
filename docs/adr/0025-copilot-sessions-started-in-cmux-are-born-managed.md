@@ -1,6 +1,6 @@
 # Copilot sessions started in CMUX are born managed
 
-A Copilot session that starts in a CMUX terminal, with the production Maestro integration installed, becomes managed when it starts. It is its own root coordinator in a new run. It gets `maestro_identity`, `maestro_peers`, `maestro_send`, `maestro_spawn`, and `maestro_close` for its own children. It peers with every participant in its workspace. There is no opt-out. A start includes `copilot --resume`.
+A Copilot session that starts in a CMUX terminal, with the production Maestro integration installed, becomes managed when it starts. It is its own root coordinator in a new run. It gets `maestro_identity`, `maestro_peers`, `maestro_send`, `maestro_spawn`, and `maestro_close` for its own children. It peers with every participant in its workspace. There is no opt-out. A start includes `copilot --resume` of a session Maestro has not recorded. A resume of a recorded session follows re-enrollment ([ADR 0024](0024-resume-ended-managed-sessions-after-relaunch.md)).
 
 How: Maestro's installed native extension joins every session. When CMUX workspace and surface IDs are present and no launcher inputs are, the extension asks the controller to enroll its own session. The controller checks, in order:
 
@@ -8,13 +8,14 @@ How: Maestro's installed native extension joins every session. When CMUX workspa
 - The production integration is installed.
 - The provider is an ancestor of the controller with a stable start time. It started after the installed extension files were written, in a later second.
 - CMUX confirms the exact workspace and surface, and `surface.list` lists the surface.
-- The account comes from the session's own `gitHubAuth.getStatus()`. Only `github.com` is accepted. The node records `{login, host}`, never a credential.
+- The provider's controlling TTY equals the TTY CMUX `top` reports for that surface. Inherited `CMUX_*` values in a nested shell or multiplexer name another surface but not its TTY. Unknown refuses.
+- The account comes from the session's own `gitHubAuth.getStatus()`, bounded in time. Host `github.com` or `https://github.com` is accepted and recorded as `github.com`. The node records `{login, host}`, never a credential.
 - No node holds the surface, the session, or the provider process. A retained resource or launch lease on the surface also refuses.
 - Node, workspace, and host capacity admit one more root.
 
 The new root records a default launch policy with no grants and no YOLO ([ADR 0006](0006-recorded-launch-policy-deny-wins.md)). Its children inherit that policy.
 
-Any failed check leaves the session unmanaged. `maestro_readiness` names one stable reason, such as `capacity-unavailable` or `session-started-before-install`. There is no retry and no fallback. An extension reload in the same enrolled provider process reuses the same node.
+Any failed check leaves the session unmanaged. `maestro_readiness` names one stable reason, such as `capacity-unavailable` or `session-started-before-install`; `enrollment-pending` shows while enrollment runs. There is no retry and no fallback. The decision is recorded per session and provider process (session ID, PID, and start time): a later extension reload in that process returns the same refusal, or reuses the same node after an enrollment, even when the extension files changed since. Records go once the provider process is proven ended. If the controller committed an enrollment but this extension's runtime failed, the reason is `enrolled-runtime-unavailable`. A session archived earlier and enrolled again continues its generations, so its peer address never repeats.
 
 Why this is not adoption: enrollment happens when that exact session's process starts with Maestro present. Maestro never enrolls a session that was already running when the integration was installed, and never enrolls a session whose provider already belongs to another node. Live sessions are never adopted ([ADR 0004](0004-interactive-workers-only.md)).
 

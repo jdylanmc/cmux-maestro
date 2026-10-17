@@ -20,6 +20,12 @@ CMUX_MAESTRO_ORCHESTRATOR="${CMUX_MAESTRO_ORCHESTRATOR:-$HOME/Library/Applicatio
 
 ## Start a managed coordinator
 
+A Copilot session started in CMUX after setup is already a born-managed root
+(`maestro_readiness` reports `managed`). Use its native `maestro_spawn`
+instead. `launch-coordinator` and `register` refuse on a born session's
+surface; when that run has ended, `archive-ended --workspace "$CMUX_WORKSPACE_ID"`
+releases it.
+
 For agent-to-agent coordination, start a new Maestro-managed coordinator.
 Registration alone does not enable an existing conversation. Never replace,
 restart, or adopt that conversation to obtain messaging.
