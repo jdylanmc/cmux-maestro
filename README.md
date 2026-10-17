@@ -67,11 +67,15 @@ npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --gl
 
 Agents launched by Maestro are normal interactive Copilot sessions. You can type to them. They never run headless.
 
+Every Copilot session you start in CMUX after setup is managed from its start: it sees its workspace peers and can spawn children. Sessions that were already running are left alone.
+
+After CMUX quits and reopens, managed sessions come back on their exact session. Approve Maestro's resume command once in **CMUX Settings > Terminal > Resume Commands**. Details and gaps: [relaunch restore](docs/reference/relaunch-restore.md).
+
 ## Rules of the house
 
 - Unknown is a valid answer.
 - Previews do nothing. Clicks do things.
-- Maestro never kills, restarts, or types into your sessions.
+- Maestro never kills, restarts, or types into your live sessions.
 - Preview install is yours, not a release. No license yet.
 
 Why each rule exists: [decisions](docs/adr/).

@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Born-managed rows in the sidebar show their Copilot session name, from the exact observed
+  session, instead of `Copilot session` (#252, ADR 0022 amendment). The controller projects
+  `enrollment: "born"`; the sidebar refuses that value on any other node.
 - Maestro-launched sessions resume after a CMUX relaunch (#252). Each launch sets
   `CMUX_COPILOT_HOOKS_DISABLED=1` and attaches a CMUX resume binding with identifiers only. On
   relaunch, the new `resume <session>` command checks the exact surface and its terminal, an

@@ -1941,6 +1941,9 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
                          (node["id"], outcome["session"], 1))
         self.assertNotIn("synthetic-work-token", json.dumps(self.h.state()))
         self.assertEqual(self.h.calls(), [])
+        projected = json.loads((self.h.root / "observer" / "current.json").read_text())["nodes"]
+        self.assertEqual([item.get("enrollment") for item in projected if item["id"] == node["id"]], ["born"])
+        self.assertTrue(all("enrollment" not in item for item in projected if item["id"] != node["id"]))
 
     def test_extension_reload_in_the_same_provider_reuses_the_node(self):
         first, reload = self.enroll(repeat=2)

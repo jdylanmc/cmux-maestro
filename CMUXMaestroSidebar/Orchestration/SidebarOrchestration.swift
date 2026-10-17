@@ -74,7 +74,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let runId: UUID
     let parentId: UUID?
     let role: String
-    let label: String
+    var label: String
     let workspaceId: UUID
     let surfaceId: UUID
     let generation: Int
@@ -82,6 +82,8 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let availability: String
     let copilotSessionId: UUID?
     let executionMode: SidebarWorkerMode?
+    /// `born` for a session that enrolled itself at start (ADR 0025); nil for launches.
+    var enrollment: String? = nil
     var iconId: String?
     var iconColor: SidebarAvatarColor?
     let worktreeLabel: String?
@@ -163,6 +165,37 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
     static let empty = Self(
         version: 1, generatedAt: .distantPast, complete: true, omittedCount: 0, nodes: []
     )
+}
+
+extension SidebarOrchestrationSnapshot {
+    /// A born-managed root has no launch label. Its row shows its exact session's
+    /// Copilot name instead (ADR 0022), when one observed session matches exactly.
+    func namingBornRoots(from sessions: [SidebarCopilotSession]) -> Self {
+        guard nodes.contains(where: { $0.enrollment == "born" }) else { return self }
+        let named = nodes.map { node -> SidebarOrchestrationNode in
+            guard node.enrollment == "born", let session = node.copilotSessionId else { return node }
+            let matches = sessions.filter {
+                $0.id == session && $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
+            }
+            guard matches.count == 1, let name = matches[0].sessionName,
+                  let label = Self.boundedLabel(name) else { return node }
+            var updated = node
+            updated.label = label
+            return updated
+        }
+        return .init(version: version, generatedAt: generatedAt, complete: complete,
+                     omittedCount: omittedCount, nodes: named)
+    }
+
+    /// At most 100 UTF-8 bytes, cut on a character boundary, as managed labels require.
+    static func boundedLabel(_ value: String) -> String? {
+        var result = ""
+        for character in value {
+            guard result.utf8.count + String(character).utf8.count <= 100 else { break }
+            result.append(character)
+        }
+        return result.trimmingCharacters(in: .whitespaces).isEmpty ? nil : result
+    }
 }
 
 nonisolated enum SidebarOrchestrationAvailability: Equatable, Sendable {
@@ -287,7 +320,10 @@ nonisolated enum SidebarOrchestrationReader {
             }
             guard validGitEvidence(node, generatedAt: snapshot.generatedAt),
                   node.role == "worker" || node.executionMode == .interactive
-                    || node.copilotSessionId == nil else {
+                    || node.copilotSessionId == nil,
+                  node.enrollment == nil || (node.enrollment == "born" && node.role == "coordinator"
+                    && node.parentId == nil && node.executionMode == .interactive
+                    && node.copilotSessionId != nil) else {
                 throw CopilotFileError.unsafePath
             }
 
@@ -401,6 +437,9 @@ final class SidebarOrchestrationPolling {
 
     private(set) var availability: SidebarOrchestrationAvailability = .waiting
     private(set) var snapshot = SidebarOrchestrationSnapshot.empty
+    // The filtered projection before born-root naming; names come from Copilot observations.
+    private var projected = SidebarOrchestrationSnapshot.empty
+    private var observedSessions: [SidebarCopilotSession] = []
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
@@ -431,6 +470,14 @@ final class SidebarOrchestrationPolling {
         }
     }
 
+    /// Re-titles born-managed roots from the latest exact Copilot observations (ADR 0022).
+    func updateObservedSessions(_ sessions: [SidebarCopilotSession]) {
+        guard sessions != observedSessions else { return }
+        observedSessions = sessions
+        let named = projected.namingBornRoots(from: sessions)
+        if named != snapshot { snapshot = named }
+    }
+
     func children(of id: UUID) -> [SidebarOrchestrationNode] {
         snapshot.nodes.filter { $0.parentId == id }
     }
@@ -453,6 +500,7 @@ final class SidebarOrchestrationPolling {
         worker?.cancel()
         worker = nil
         snapshot = .empty
+        projected = .empty
         availability = !visible ? .hidden : !connected ? .disconnected : .loading
         startIfNeeded()
     }
@@ -482,20 +530,23 @@ final class SidebarOrchestrationPolling {
                         }
                         return true
                     }
-                    self.snapshot = SidebarOrchestrationSnapshot(
+                    self.projected = SidebarOrchestrationSnapshot(
                         version: raw.version, generatedAt: raw.generatedAt,
                         complete: raw.complete, omittedCount: raw.omittedCount,
                         nodes: nodes
                     )
+                    self.snapshot = self.projected.namingBornRoots(from: self.observedSessions)
                     self.availability = SidebarOrchestrationReader.isStale(raw)
                         ? .stale : self.snapshot.complete ? .ready : .partial
                 } catch CopilotFileError.missing {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     self.snapshot = .empty
+                    self.projected = .empty
                     self.availability = .waiting
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     self.snapshot = .empty
+                    self.projected = .empty
                     self.availability = .unavailable
                 }
                 do { try await pause() } catch { break }

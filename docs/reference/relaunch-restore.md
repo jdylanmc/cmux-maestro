@@ -63,12 +63,17 @@ On any refusal it prints one line, such as `Maestro did not resume this session:
 
 CMUX runs a custom resume binding only after a human approves its command prefix. Open **CMUX Settings > Terminal > Resume Commands** and approve the prefix `<controller> resume` once (or choose "apply to all commands starting with" when CMUX asks; that choice may be scoped to the folder). Maestro never approves it for you. CMUX also needs **Resume agent sessions** (`terminal.autoResumeAgentSessions`) on.
 
+## Sidebar rows
+
+A restored tab used to show as `Terminal`. The sidebar shows an unmanaged Copilot row only after Maestro's observer hook binds the session to its surface. A restored session can show the CMUX surface title until that binding exists. Live checks must confirm when the hook binds a resumed session.
+
+A born-managed or resumed managed session does not wait for the hook. The controller's projection names its exact surface, so the sidebar shows a managed Copilot row at once. A born root's row shows its Copilot session name when one exact observed session matches (ADR 0022). Otherwise it shows `Copilot session`.
+
 ## Known gaps
 
 - Maestro setup does not yet install CMUX's Copilot hooks (#252 follow-up). Without them CMUX has no record to restore, and the tab stays a plain shell.
 - CMUX's Copilot restore keeps `--name` and adds `--resume`. Copilot 1.0.98 refuses that pair. A session started with `--name` does not come back through CMUX's restore. Rename the session inside Copilot instead.
 - Sessions launched through wrappers such as Agency are not covered.
-- Until the sidebar names born roots from their session (the next change in this stack), a resumed born root shows as "Terminal" in the Maestro sidebar.
 - Launches made before this change have no binding and do not resume.
 - A session started before the Maestro integration was installed is never enrolled, so it is not resumed as managed.
 - If recording a born root's `/exit` fails twice (for example the state lock stays busy), the extension logs it and the end stays unrecorded. A later manual `copilot --resume` in the same surface can then come back managed.
