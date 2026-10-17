@@ -1,6 +1,6 @@
 # Copilot sessions started in CMUX are born managed
 
-A Copilot session that starts in a CMUX terminal, with the production Maestro integration installed, becomes managed when it starts. It is its own root coordinator in a new run. It gets `maestro_identity`, `maestro_peers`, `maestro_send`, `maestro_spawn`, and `maestro_close` for its own children. It peers with every participant in its workspace. There is no opt-out. A start includes `copilot --resume` of a session Maestro has not recorded. A resume of a recorded session follows re-enrollment ([ADR 0024](0024-resume-ended-managed-sessions-after-relaunch.md)). Until re-enrollment ships (#255), that resume is refused with `session-previously-managed`, so a born root comes back unmanaged after a relaunch.
+A Copilot session that starts in a CMUX terminal, with the production Maestro integration installed, becomes managed when it starts. It is its own root coordinator in a new run. It gets `maestro_identity`, `maestro_peers`, `maestro_send`, `maestro_spawn`, and `maestro_close` for its own children. It peers with every participant in its workspace. There is no opt-out. A start includes `copilot --resume` of a session Maestro has not recorded. A resume of a recorded session follows re-enrollment ([ADR 0024](0024-resume-ended-managed-sessions-after-relaunch.md)).
 
 How: Maestro's installed native extension joins every session. When CMUX workspace and surface IDs are present and no launcher inputs are, the extension asks the controller to enroll its own session. The controller checks, in order:
 

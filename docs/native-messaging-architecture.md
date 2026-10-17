@@ -215,6 +215,10 @@ Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrollment-windo
 `integration-not-installed`, `session-started-before-install`,
 `cmux-identity-unverified`, `surface-owned`, `provider-already-enrolled`,
 `session-previously-managed`, `capacity-unavailable`, `enrollment-failed`.
+A resumed session also uses `surface-mismatch`, `account-mismatch` (with the
+recorded login), `account-unrecorded`, `session-ended` and
+`session-live-or-uncertain`; see
+[Relaunch restore](reference/relaunch-restore.md).
 Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
 
 The readiness-only branch below now applies only when launcher inputs are

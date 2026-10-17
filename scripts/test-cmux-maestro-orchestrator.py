@@ -1747,6 +1747,11 @@ with open(os.path.splitext(state_path)[0] + ".lock", "a+") as lock:
     with open(state_path + ".tmp", "w") as stream:
         json.dump(data, stream)
     os.replace(state_path + ".tmp", state_path)
+if env.get("FAKE_HOLD_SESSION_LOCK"):
+    # Copilot marks the session it holds with inuse.<PID>.lock.
+    state = os.path.join(env["HOME"], ".copilot", "session-state", env["SESSION_ID"])
+    os.makedirs(state, mode=0o700, exist_ok=True)
+    open(os.path.join(state, "inuse.%d.lock" % os.getpid()), "w").close()
 sessions = json.loads(sys.argv[5])
 runs = [({**request, "sessionId": session}, {**env, "SESSION_ID": session}) for session in sessions] or \
     [(request, env)] * int(sys.argv[4])
@@ -1768,8 +1773,8 @@ print(json.dumps([{"pid": os.getpid(), "returncode": result.returncode,
 """
 
 
-class BornManagedEnrollmentTests(unittest.TestCase):
-    """Copilot sessions started in CMUX enroll as their own root (ADR 0025)."""
+class BornFixture:
+    """Installed integration plus a synthetic provider whose controller is its descendant."""
 
     def setUp(self):
         self.h = Harness()
@@ -1823,6 +1828,19 @@ class BornManagedEnrollmentTests(unittest.TestCase):
                                  "error": json.loads(result["stderr"] or result["stdout"])["error"]})
         return outcomes[0] if len(outcomes) == 1 else outcomes
 
+    def add_child(self, root_id, *, provider="ended"):
+        child_id, surface = str(uuid.uuid4()), str(uuid.uuid4())
+
+        def add(state):
+            root = state["nodes"][root_id]
+            child = {key: value for key, value in json.loads(json.dumps(root)).items() if key != "enrollment"}
+            child.update(id=child_id, role="worker", parentId=root_id, surfaceId=surface,
+                         copilotSessionId=str(uuid.uuid4()), launchAccepted=True,
+                         providerProcess=root["providerProcess"] if provider == "ended" else None)
+            state["nodes"][child_id] = child
+        self.h.change_state(add)
+        return child_id, surface
+
     def unchanged(self, before):
         """Nothing owned changed; a recorded start-attempt refusal is allowed."""
         after = self.h.state()
@@ -1832,6 +1850,11 @@ class BornManagedEnrollmentTests(unittest.TestCase):
     def refused(self, outcome, reason):
         self.assertFalse(outcome["ok"], outcome)
         self.assertEqual(outcome["error"], f"enrollment refused: {reason}")
+
+
+
+class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
+    """Copilot sessions started in CMUX enroll as their own root (ADR 0025)."""
 
     def test_session_born_in_cmux_becomes_its_own_root_with_recorded_account(self):
         outcome = self.enroll()
@@ -1860,9 +1883,10 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         born = [n for n in self.h.state()["nodes"].values() if n.get("enrollment") == "born"]
         self.assertEqual([n["id"] for n in born], [first["nodeId"]])
         node = born[0]
-        # A different provider process on the same session is not a reload.
+        # A different provider process on the same session is not a reload; without proof the
+        # session is held only by that provider, it is not resumed either.
         again = self.enroll(surface=first["surface"], session=first["session"])
-        self.refused(again, "session-previously-managed")
+        self.refused(again, "session-live-or-uncertain")
         self.assertEqual(self.h.state()["nodes"][first["nodeId"]], node)
 
     def test_a_second_session_in_the_same_provider_is_refused(self):
@@ -1921,19 +1945,6 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         data["inventoryUnavailable"] = True
         self.h.cmux_state.write_text(json.dumps(data))
         self.refused(self.enroll(surface=surface), "cmux-identity-unverified")
-
-    def add_child(self, root_id, *, provider="ended"):
-        child_id, surface = str(uuid.uuid4()), str(uuid.uuid4())
-
-        def add(state):
-            root = state["nodes"][root_id]
-            child = {key: value for key, value in json.loads(json.dumps(root)).items() if key != "enrollment"}
-            child.update(id=child_id, role="worker", parentId=root_id, surfaceId=surface,
-                         copilotSessionId=str(uuid.uuid4()), launchAccepted=True,
-                         providerProcess=root["providerProcess"] if provider == "ended" else None)
-            state["nodes"][child_id] = child
-        self.h.change_state(add)
-        return child_id, surface
 
     def test_new_session_supersedes_a_proven_ended_born_run_in_its_surface(self):
         first = self.enroll()
@@ -2184,6 +2195,179 @@ class BornManagedEnrollmentTests(unittest.TestCase):
         self.assertEqual(authorized["id"], node["id"])
         self.assertEqual(CONTROLLER_API["recorded_native_permissions"](node),
                          ("default", {"allow": [], "deny": []}))
+
+
+class BornRootResumeTests(BornFixture, unittest.TestCase):
+    """A born root's ended session restarted in its own surface resumes (ADR 0024)."""
+
+    def first(self):
+        outcome = self.enroll()
+        self.assertTrue(outcome["ok"], outcome)
+        return outcome
+
+    def resume(self, first, **options):
+        env = {"FAKE_HOLD_SESSION_LOCK": "1", **options.pop("env", {})}
+        return self.enroll(surface=first["surface"], session=first["session"], env=env, **options)
+
+    def session_state(self, session):
+        path = self.h.home / ".copilot" / "session-state" / session
+        path.mkdir(mode=0o700, parents=True, exist_ok=True)
+        return path
+
+    def test_restarted_session_resumes_same_node_as_next_generation(self):
+        first = self.first()
+        before = self.h.state()["nodes"][first["nodeId"]]
+        resumed = self.resume(first)
+        self.assertTrue(resumed["ok"], resumed)
+        self.assertEqual(resumed["nodeId"], first["nodeId"])
+        self.assertEqual(resumed["generation"], 2)
+        node = self.h.state()["nodes"][first["nodeId"]]
+        self.assertEqual((node["runId"], node["surfaceId"], node["copilotAccount"], node["createdAt"]),
+                         (before["runId"], before["surfaceId"], before["copilotAccount"], before["createdAt"]))
+        self.assertEqual(node["providerProcess"]["pid"], resumed["pid"])
+        self.assertEqual((node["phase"], node["generation"]), ("turn-running", 2))
+        self.assertFalse((self.routes / f"{first['peer']}.json").exists())
+        self.assertTrue((self.routes / f"{resumed['peer']}.json").exists())
+        self.assertEqual(len([n for n in self.h.state()["nodes"].values() if n.get("enrollment")]), 1)
+
+    def test_live_or_uncertain_previous_process_refuses(self):
+        first = self.first()
+        live = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        self.addCleanup(lambda: (live.stdin.close(), live.wait(timeout=5)))
+        anchor = {"pid": live.pid, "start": None}
+        while anchor["start"] is None:
+            anchor["start"] = CONTROLLER_API["process_start"](live.pid)
+        self.h.change_state(lambda state: state["nodes"][first["nodeId"]].update(providerProcess=anchor))
+        before = self.h.state()
+        self.refused(self.resume(first), "session-live-or-uncertain")
+        self.unchanged(before)
+
+    def test_any_other_session_lock_refuses_live_or_dead(self):
+        first = self.first()
+        state = self.session_state(first["session"])
+        (state / f"inuse.{os.getpid()}.lock").write_text("")
+        self.refused(self.resume(first), "session-live-or-uncertain")
+        (state / f"inuse.{os.getpid()}.lock").unlink()
+        ended = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                               capture_output=True, text=True, check=True)
+        (state / f"inuse.{int(ended.stdout)}.lock").write_text("")
+        # A stale marker is ambiguous custody: fail closed.
+        self.refused(self.resume(first), "session-live-or-uncertain")
+
+    def test_session_directory_without_the_providers_own_lock_refuses(self):
+        first = self.first()
+        state = self.session_state(first["session"])
+        routes = sorted(self.routes.iterdir())
+        self.refused(self.enroll(surface=first["surface"], session=first["session"]), "session-live-or-uncertain")
+        ended = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
+                               capture_output=True, text=True, check=True)
+        (state / f"inuse.{int(ended.stdout)}.lock").write_text("")
+        self.refused(self.enroll(surface=first["surface"], session=first["session"]), "session-live-or-uncertain")
+        self.assertEqual(sorted(self.routes.iterdir()), routes)
+
+    def session_end_then(self, capability=None):
+        return (
+            "receipt = json.loads(results[0].stdout)\n"
+            "binding = json.load(open(os.path.join(receipt['routes'], receipt['peer'] + '.json')))\n"
+            "identity = {k: binding[k] for k in ('nodeId', 'workspaceId', 'sessionId', 'generation', 'capability')}\n"
+            + (f"identity['capability'] = {capability!r}\n" if capability else "") +
+            "result = subprocess.run([sys.executable, driver, 'native-session-end'], capture_output=True, text=True,"
+            " input=json.dumps({'identity': identity}), env=env, timeout=30)\n")
+
+    def test_session_end_records_the_generation_for_its_own_live_session_only(self):
+        enrolled, forged = self.enroll(env={"FAKE_THEN": self.session_end_then("0" * 64)})
+        self.assertFalse(forged["ok"])
+        self.assertNotIn("sessionEndedGeneration", self.h.state()["nodes"][enrolled["nodeId"]])
+        enrolled, ended = self.enroll(env={"FAKE_THEN": self.session_end_then()})
+        self.assertTrue(ended["ok"], ended)
+        self.assertEqual(self.h.state()["nodes"][enrolled["nodeId"]]["sessionEndedGeneration"], 1)
+        # Ended by the human: a later resume of that session is not a relaunch restore.
+        self.refused(self.resume(enrolled), "session-ended")
+
+    def test_an_observed_user_exit_makes_a_manual_resume_ineligible(self):
+        first = self.first()
+        self.h.change_state(lambda state: state["nodes"][first["nodeId"]].update(sessionEndedGeneration=1))
+        before = self.h.state()
+        routes = sorted(self.routes.iterdir())
+        self.refused(self.resume(first), "session-ended")
+        self.unchanged(before)
+        self.assertEqual(sorted(self.routes.iterdir()), routes)
+
+    def test_lease_unresolved_or_owned_surface_refuses_and_leaves_routes(self):
+        for change in ("lease", "owned"):
+            with self.subTest(change=change):
+                first = self.first()
+
+                def mark(state, change=change, first=first):
+                    node = state["nodes"][first["nodeId"]]
+                    if change == "lease":
+                        node["phase"] = "launching"
+                        state["launches"][node["id"]] = {
+                            "workerId": node["id"], "runId": node["runId"], "workspaceId": self.h.workspace,
+                            "sessionId": first["session"], "generation": 1, "surfaceId": first["surface"],
+                            "state": "attaching", "createdAt": CONTROLLER_API["now"](),
+                            "updatedAt": CONTROLLER_API["now"]()}
+                    else:
+                        other = {**json.loads(json.dumps(node)), "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
+                                 "copilotSessionId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4())}
+                        state["nodes"][other["id"]] = other
+                        node["surfaceId"], other["surfaceId"] = other["surfaceId"], node["surfaceId"]
+                self.h.change_state(mark)
+                routes = sorted(self.routes.iterdir())
+                outcome = self.resume(first)
+                self.assertFalse(outcome["ok"], outcome)
+                self.assertEqual(sorted(self.routes.iterdir()), routes)
+
+    def test_resume_refreshes_the_provider_launch_context(self):
+        first = self.first()
+        self.h.change_state(lambda state: state["nodes"][first["nodeId"]].update(
+            copilotExecutable="/synthetic/old/copilot", launchPath="/synthetic/old"))
+        self.assertTrue(self.resume(first)["ok"])
+        node = self.h.state()["nodes"][first["nodeId"]]
+        self.assertNotEqual(node["copilotExecutable"], "/synthetic/old/copilot")
+        self.assertNotEqual(node["launchPath"], "/synthetic/old")
+
+    def test_resumed_root_keeps_its_children_and_only_the_new_generation_has_authority(self):
+        first = self.first()
+        child_id, _ = self.add_child(first["nodeId"])
+        old = json.loads((self.routes / f"{first['peer']}.json").read_text())
+        resumed = self.resume(first)
+        self.assertTrue(resumed["ok"], resumed)
+        state = self.h.state()
+        self.assertEqual(state["nodes"][child_id]["parentId"], first["nodeId"])
+        identity = lambda binding: {key: binding[key] for key in
+                                    ("nodeId", "workspaceId", "sessionId", "generation", "capability")}
+        with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            CONTROLLER_API["authorize_native_actor"](state, identity(old))
+        new = json.loads((self.routes / f"{resumed['peer']}.json").read_text())
+        self.assertEqual(new["generation"], 2)
+        self.assertEqual(CONTROLLER_API["authorize_native_actor"](state, identity(new))["id"], first["nodeId"])
+
+    def test_without_its_own_session_lock_the_provider_is_unproven(self):
+        first = self.first()
+        self.refused(self.enroll(surface=first["surface"], session=first["session"]), "session-live-or-uncertain")
+
+    def test_recorded_account_mismatch_refuses_and_names_the_account(self):
+        first = self.first()
+        before = self.h.state()
+        self.refused(self.resume(first, login="other-account"), "account-mismatch: human-account")
+        self.unchanged(before)
+
+    def test_unrecorded_account_refuses(self):
+        first = self.first()
+        self.h.change_state(lambda state: state["nodes"][first["nodeId"]].pop("copilotAccount"))
+        self.refused(self.resume(first), "account-unrecorded")
+
+    def test_different_surface_refuses(self):
+        first = self.first()
+        moved = str(uuid.uuid4())
+        self.refused(self.enroll(surface=moved, session=first["session"], env={"FAKE_HOLD_SESSION_LOCK": "1"}),
+                     "surface-mismatch")
+
+    def test_launched_session_is_not_resumed_through_this_path(self):
+        surface = str(uuid.uuid4())
+        self.refused(self.enroll(surface=surface, session=self.h.identity["sessionId"],
+                                 env={"FAKE_HOLD_SESSION_LOCK": "1"}), "session-previously-managed")
 
 
 class OrchestratorTests(unittest.TestCase):
