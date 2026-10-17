@@ -44,7 +44,9 @@ session has no available managed adapter. Do not infer an address from a title,
 surface, terminal contents, current focus, or a recent session. Do not install,
 reload, restart, adopt, or spawn sessions merely to make a send work.
 
-For a new human-authorized coordination workflow, the lifecycle guide provides
+A Copilot session started in CMUX after setup is already a born-managed root
+with `maestro_spawn`; use that. For a new human-authorized coordination
+workflow from a plain shell, the lifecycle guide provides
 `launch-coordinator`: a fresh managed root with messaging, not adoption of the
 current conversation. Orchestration clients consume this public interface;
 repository and delivery policy remain with those clients.

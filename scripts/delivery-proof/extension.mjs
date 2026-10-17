@@ -1,5 +1,5 @@
 import { joinSession } from "@github/copilot-sdk/extension";
-import { startBeats, startManaged, startReadiness } from "./adapter.mjs";
+import { startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
 
 const shutdown = new AbortController();
 const diagnosticCodes = new Set([
@@ -33,12 +33,20 @@ process.on("SIGTERM", async () => {
 startManaged({
   joinSession, signal: shutdown.signal, onListener: value => { listener = value; },
 }).then(async managed => {
-  const session = managed === null
-    ? await startReadiness({ joinSession, signal: shutdown.signal })
-    : managed.session;
   // Beats hand recurring prompts to Copilot's own scheduler in any CMUX session; failures are
   // diagnosed inside and never stop messaging.
-  if (typeof session?.rpc?.schedule?.list === "function") beats = startBeats({ session });
+  const beatsFor = session => {
+    if (!beats && typeof session?.rpc?.schedule?.list === "function") beats = startBeats({ session });
+  };
+  let session = managed?.session;
+  if (managed === null) {
+    // A session born in CMUX enrolls itself (ADR 0025); otherwise readiness only.
+    const born = await startBornManaged({
+      joinSession, signal: shutdown.signal, onListener: value => { listener = value; }, onJoined: beatsFor,
+    });
+    session = born === null ? await startReadiness({ joinSession, signal: shutdown.signal }) : born.session;
+  }
+  beatsFor(session);
 }).catch(error => {
   if (!stopping) fail("unavailable for this session", error);
 });

@@ -5,7 +5,7 @@ After CMUX quits or crashes and opens again, a managed session may come back in 
 | Session | Restore owner | How |
 |---|---|---|
 | Maestro launch (`maestro_spawn` child or `launch-coordinator` root) | Maestro resume binding | `resume-managed` starts `copilot --resume=<id>` |
-| Human-started root (born managed) | CMUX's own Copilot restore | Maestro re-enrolls the resumed session (ADR 0025, added with born-managed enrollment) |
+| Human-started root (born managed) | CMUX's own Copilot restore | Maestro re-enrolls the resumed session ([ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md)) |
 
 ## Maestro-launched sessions: resume binding
 
@@ -24,7 +24,7 @@ After CMUX quits or crashes and opens again, a managed session may come back in 
 
 ## Human-started roots: re-enrollment
 
-CMUX has already started `copilot --resume <id>` before Maestro sees the tab, so the account, policy, and plain-shell rules above cannot apply. Re-enrollment instead requires: the exact recorded session, workspace, and surface; the prior process observed ended; the new provider as the only live lock owner; the recorded account equal to the session's own reported account. It records the next generation of the same node. Any mismatch leaves the session running but unmanaged, with one `maestro_readiness` reason; an account mismatch names the recorded account. Details: ADR 0025.
+CMUX has already started `copilot --resume <id>` before Maestro sees the tab, so the account, policy, and plain-shell rules above cannot apply. Re-enrollment instead requires: the exact recorded session, workspace, and surface; the prior process observed ended; the new provider as the only live lock owner; the recorded account equal to the session's own reported account. It records the next generation of the same node. Any mismatch leaves the session running but unmanaged, with one `maestro_readiness` reason; an account mismatch names the recorded account. Details: [ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md).
 
 Why: CMUX ended the process, not the human or Maestro. Resuming the exact session rebuilds work the human already authorized. It does not adopt live work. Without it, relaunch turns managed agents into unmanaged shells (#162).
 

@@ -237,6 +237,91 @@ async function invokeController(command, request, controller, signal) {
 
 const launchNative = (request, controller) => invokeController("native-spawn", request, controller);
 
+function toolSpecs(managed) {
+  const specs = {
+    maestro_peers: {
+      name: managed ? "maestro_peers" : "maestro_proof_peers",
+      description: "List explicitly participating same-workspace peers and reply addresses, not live availability. Grants no process-control rights.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    },
+    maestro_send: {
+      name: managed ? "maestro_send" : "maestro_proof_send",
+      description: "Attempt one fire-and-forget message to a participating same-workspace peer. Reply using the same tool and the received sender address. No delivery or response confirmation.",
+      parameters: {
+        type: "object",
+        properties: {
+          destination: {
+            type: "object",
+            properties: { workspaceId: { type: "string" }, sessionId: { type: "string" },
+              ...(managed ? { generation: { type: "integer", minimum: 1 } } : {}) },
+            required: ["workspaceId", "sessionId", ...(managed ? ["generation"] : [])],
+            additionalProperties: false,
+          },
+          body: { type: "string", maxLength: MAX_BODY },
+        },
+        required: ["destination", "body"],
+        additionalProperties: false,
+      },
+    },
+    maestro_identity: {
+      name: "maestro_identity",
+      description: "Read this managed session's exact public identity and current verified Copilot account. Optionally observe its current model, context tier and effort, not another child's settings. No credentials, plan inference, or launch effects.",
+      parameters: {
+        type: "object", properties: { includeModel: { type: "boolean" } }, additionalProperties: false,
+      },
+    },
+    maestro_close: {
+      name: "maestro_close",
+      description: "Request an explicitly authorized owned direct-child close, or a fixed descendant-first subtree pass with scope: subtree. Selects stock CMUX's documented noninteractive route on the initial admitted request; host refusals stay explicit. Acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
+      parameters: {
+        type: "object",
+        properties: {
+          target: {
+            type: "object",
+            properties: {
+              workerId: { type: "string" }, workspaceId: { type: "string" },
+              surfaceId: { type: "string" }, sessionId: { type: "string" },
+              generation: { type: "integer", minimum: 1 },
+            },
+            required: ["workerId", "workspaceId", "surfaceId", "sessionId", "generation"],
+            additionalProperties: false,
+          },
+          scope: { type: "string", enum: ["target-only", "subtree"] },
+        },
+        required: ["target"],
+        additionalProperties: false,
+      },
+    },
+    maestro_spawn: {
+      name: "maestro_spawn",
+      description: "Launch one explicitly authorized visible interactive Maestro child using this session's current Copilot account. Returns after exact terminal creation/ownership without waiting for provider, hooks, or tools. Acceptance is not prompt consumption, readiness, or task completion. Optional preference fallback is reported; no account fallback or launch retry.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string" }, cwd: { type: "string" }, task: { type: "string" },
+          icon: { type: "string" },
+          color: { type: "string", enum: ["theme", "green", "teal", "blue", "purple", "pink", "red", "gray"] },
+          allowTools: { type: "array", items: { type: "string" } },
+          denyTools: { type: "array", items: { type: "string" } },
+          model: { type: "string" },
+          contextTier: { type: "string" },
+          reasoningEffort: { type: "string" },
+          yolo: { type: "boolean", description: "Only with explicit human approval for a coordinator launch." },
+        },
+        required: ["name", "cwd", "task"],
+        additionalProperties: false,
+      },
+    },
+  };
+  if (!managed) for (const key of ["maestro_identity", "maestro_close", "maestro_spawn"]) delete specs[key];
+  return specs;
+}
+
+// Born-managed sessions declare these before enrollment; keep one definition.
+export function managedToolSpecs() {
+  return Object.values(toolSpecs(true));
+}
+
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
   closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
   observe, signal, onListener, diagnostic = () => {
@@ -258,6 +343,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   }
   let session;
   let observation;
+  const specs = toolSpecs(managed);
   async function currentAccount(invocation) {
     requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
     if (observation) await observation;
@@ -312,9 +398,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   }
   const tools = [
     {
-      name: managed ? "maestro_peers" : "maestro_proof_peers",
-      description: "List explicitly participating same-workspace peers and reply addresses, not live availability. Grants no process-control rights.",
-      parameters: { type: "object", properties: {}, additionalProperties: false },
+      ...specs.maestro_peers,
       handler: async (args, invocation) => {
         try {
           requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
@@ -331,23 +415,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
       },
     },
     {
-      name: managed ? "maestro_send" : "maestro_proof_send",
-      description: "Attempt one fire-and-forget message to a participating same-workspace peer. Reply using the same tool and the received sender address. No delivery or response confirmation.",
-      parameters: {
-        type: "object",
-        properties: {
-          destination: {
-            type: "object",
-            properties: { workspaceId: { type: "string" }, sessionId: { type: "string" },
-              ...(managed ? { generation: { type: "integer", minimum: 1 } } : {}) },
-            required: ["workspaceId", "sessionId", ...(managed ? ["generation"] : [])],
-            additionalProperties: false,
-          },
-          body: { type: "string", maxLength: MAX_BODY },
-        },
-        required: ["destination", "body"],
-        additionalProperties: false,
-      },
+      ...specs.maestro_send,
       handler: async (args, invocation) => {
         try {
           validateSend(args, managed);
@@ -371,11 +439,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
     },
   ];
   if (managed) tools.push({
-    name: "maestro_identity",
-    description: "Read this managed session's exact public identity and current verified Copilot account. Optionally observe its current model, context tier and effort, not another child's settings. No credentials, plan inference, or launch effects.",
-    parameters: {
-      type: "object", properties: { includeModel: { type: "boolean" } }, additionalProperties: false,
-    },
+    ...specs.maestro_identity,
     handler: async (args, invocation) => {
       try {
         exactKeys(args, args && Object.hasOwn(args, "includeModel") ? ["includeModel"] : []);
@@ -390,26 +454,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
     },
   });
   if (managed) tools.push({
-    name: "maestro_close",
-    description: "Request an explicitly authorized owned direct-child close, or a fixed descendant-first subtree pass with scope: subtree. Selects stock CMUX's documented noninteractive route on the initial admitted request; host refusals stay explicit. Acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
-    parameters: {
-      type: "object",
-      properties: {
-        target: {
-          type: "object",
-          properties: {
-            workerId: { type: "string" }, workspaceId: { type: "string" },
-            surfaceId: { type: "string" }, sessionId: { type: "string" },
-            generation: { type: "integer", minimum: 1 },
-          },
-          required: ["workerId", "workspaceId", "surfaceId", "sessionId", "generation"],
-          additionalProperties: false,
-        },
-        scope: { type: "string", enum: ["target-only", "subtree"] },
-      },
-      required: ["target"],
-      additionalProperties: false,
-    },
+    ...specs.maestro_close,
     handler: async (args, invocation) => {
       try {
         signal?.throwIfAborted();
@@ -445,24 +490,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
     },
   });
   if (managed) tools.push({
-    name: "maestro_spawn",
-    description: "Launch one explicitly authorized visible interactive Maestro child using this session's current Copilot account. Returns after exact terminal creation/ownership without waiting for provider, hooks, or tools. Acceptance is not prompt consumption, readiness, or task completion. Optional preference fallback is reported; no account fallback or launch retry.",
-    parameters: {
-      type: "object",
-      properties: {
-        name: { type: "string" }, cwd: { type: "string" }, task: { type: "string" },
-        icon: { type: "string" },
-        color: { type: "string", enum: ["theme", "green", "teal", "blue", "purple", "pink", "red", "gray"] },
-        allowTools: { type: "array", items: { type: "string" } },
-        denyTools: { type: "array", items: { type: "string" } },
-        model: { type: "string" },
-        contextTier: { type: "string" },
-        reasoningEffort: { type: "string" },
-        yolo: { type: "boolean", description: "Only with explicit human approval for a coordinator launch." },
-      },
-      required: ["name", "cwd", "task"],
-      additionalProperties: false,
-    },
+    ...specs.maestro_spawn,
     handler: async (assignment, invocation) => {
       try {
         requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
@@ -610,6 +638,146 @@ export async function startManaged({ joinSession, environment = process.env, dia
   return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal, onListener });
 }
 
+const LAUNCHER_INPUTS = ["CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",
+  "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_EXECUTION_MODE"];
+// Reasons the controller may give; anything else is reported generically.
+export const ENROLLMENT_REASONS = new Set([
+  "integration-not-installed", "provider-process-unverified", "session-started-before-install",
+  "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
+  "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
+  "enrolled-runtime-unavailable", "enrollment-window-passed",
+]);
+const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
+
+function cmuxEnvironment(environment) {
+  const sessionId = environment.SESSION_ID;
+  if (typeof sessionId !== "string" || !UUID.test(sessionId) ||
+    ![environment.CMUX_WORKSPACE_ID, environment.CMUX_SURFACE_ID].every(value =>
+      typeof value === "string" && value.length === 36 && UUID.test(value.toLowerCase()))) return null;
+  return { sessionId, workspaceId: environment.CMUX_WORKSPACE_ID.toLowerCase(),
+    surfaceId: environment.CMUX_SURFACE_ID.toLowerCase() };
+}
+
+async function invokeEnroll(request, controller, signal) {
+  try {
+    return await invokeController("native-enroll", request, controller, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    const reason = /^enrollment refused: ([a-z-]+)$/.exec(error?.message ?? "")?.[1];
+    throw Object.assign(new Error("Maestro enrollment refused."),
+      { reason: ENROLLMENT_REASONS.has(reason) ? reason : "enrollment-failed" });
+  }
+}
+
+// Born managed (ADR 0025): a Copilot session that starts in a CMUX terminal with the
+// production integration installed and no launcher inputs enrolls itself as its own root.
+// Tools are declared at join, so managed tools refuse until enrollment succeeds.
+export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
+  diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
+  enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
+  const placement = cmuxEnvironment(environment);
+  if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
+  const { sessionId } = placement;
+  const providerPid = Number(environment.COPILOT_EXTENSION_PARENT_PID);
+  let state = { status: "pending", reason: "enrollment-pending" };
+  if (!(Number.isSafeInteger(providerPid) && providerPid > 1 && providerPid === parentPid)) {
+    state = { status: "unavailable", reason: "provider-process-unverified" };
+  }
+  const delegates = {};
+  let session;
+  const refusal = () => ({ resultType: "failure",
+    textResultForLlm: `Maestro management is unavailable for this session (${state.reason}). No fallback was used.` });
+  const tools = managedToolSpecs().map(spec => ({ ...spec,
+    handler: async (args, invocation) => {
+      const delegate = delegates[spec.name];
+      return delegate && state.status === "enrolled" ? delegate(args, invocation) : refusal();
+    } }));
+  tools.push({
+    name: "maestro_readiness",
+    description: "Read whether this session is born managed by Maestro, or why not. No enrollment, retry, peer messaging, or lifecycle authority.",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    handler: async (args, invocation) => {
+      try {
+        signal?.throwIfAborted();
+        exactKeys(args, []);
+        requireCondition(session?.sessionId === sessionId && invocation?.sessionId === sessionId);
+        const enrolled = state.status === "enrolled";
+        return JSON.stringify({
+          status: enrolled ? "managed" : "diagnostic-only",
+          session: { sessionId, source: "copilot-extension-join" },
+          cmux: { status: enrolled ? "verified" : "environment-present-unverified" },
+          managed: enrolled
+            ? { status: "enrolled", origin: "born-managed", nodeId: state.nodeId, generation: state.generation }
+            : { status: state.status === "pending" ? "pending" : "unavailable", origin: "born-managed",
+              reason: state.reason },
+          capabilities: {
+            scope: "this-extension", readiness: true, selfSessionIdentity: true,
+            managedIdentity: enrolled, peerDiscovery: enrolled, peerMessaging: enrolled,
+            spawn: enrolled, close: enrolled, inPlaceEnrollment: false,
+          },
+        });
+      } catch {
+        return { resultType: "failure",
+          textResultForLlm: "Maestro readiness unavailable for this invocation; no enrollment or fallback was attempted." };
+      }
+    },
+  });
+  signal?.throwIfAborted();
+  session = await joinSession({ tools });
+  signal?.throwIfAborted();
+  requireCondition(session?.sessionId === sessionId);
+  onJoined?.(session);  // Beats need only the joined session, not enrollment.
+  if (state.status !== "pending") return { session };
+  // Unverified accounts still reach the controller, as null, so the refusal is recorded for this
+  // provider and a later extension reload cannot enroll it.
+  let account = { login: null, host: null };
+  try {
+    const auth = await Promise.race([session.rpc.gitHubAuth.getStatus(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), statusTimeoutMs).unref?.())]);
+    requireCondition(auth?.isAuthenticated === true && typeof auth.login === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
+      ["github.com", "https://github.com"].includes(auth.host));
+    account = { login: auth.login, host: auth.host };
+  } catch {
+    signal?.throwIfAborted();
+  }
+  let enrolled;
+  try {
+    enrolled = await enroll({ ...placement, pid: providerPid, ...account }, controller);
+    requireCondition(account.login !== null);
+    // A committed enrollment may report a deferred projection or routes it could not retire.
+    exactKeys(enrolled, ["ok", "nodeId", "workspaceId", "sessionId", "generation", "routes", "peer",
+      ...["projection", "routesNotRetired"].filter(key => Object.hasOwn(enrolled, key))]);
+    requireCondition(UUID.test(enrolled.nodeId) && enrolled.sessionId === sessionId &&
+      enrolled.workspaceId === placement.workspaceId && Number.isSafeInteger(enrolled.generation) &&
+      enrolled.generation > 0 && typeof enrolled.routes === "string" && MANAGED_PEER.test(enrolled.peer));
+  } catch (error) {
+    signal?.throwIfAborted();
+    state = { status: "unavailable", reason: account.login === null ? "account-unverified"
+      : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed" };
+    return { session };
+  }
+  let listener;
+  try {
+    listener = await startManagedRuntime({
+      root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener,
+      expected: { workspaceId: enrolled.workspaceId, sessionId, generation: enrolled.generation,
+        nodeId: enrolled.nodeId, controller },
+      joinSession: async (config) => {
+        for (const tool of config.tools) delegates[tool.name] = tool.handler;
+        return session;
+      },
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    // The controller enrolled this session; only this extension's runtime failed to start.
+    state = { status: "unavailable", reason: "enrolled-runtime-unavailable" };
+    return { session };
+  }
+  state = { status: "enrolled", nodeId: enrolled.nodeId, generation: enrolled.generation };
+  return { session, listener };
+}
+
 export async function startReadiness({ joinSession, environment = process.env, signal }) {
   const sessionId = environment.SESSION_ID;
   if (typeof sessionId !== "string" || !UUID.test(sessionId) ||
@@ -621,7 +789,9 @@ export async function startReadiness({ joinSession, environment = process.env, s
   ];
   // A complete managed launch belongs exclusively to startManaged, even if it fails.
   if (launcherInputs.slice(0, 3).every(Boolean) && launcherInputs[3] === "interactive") return null;
-  const reason = launcherInputs.some(Boolean) ? "launcher-inputs-incomplete" : "launcher-inputs-absent";
+  // With no launcher inputs at all, born-managed enrollment owns the session instead.
+  if (!launcherInputs.some(Boolean)) return null;
+  const reason = "launcher-inputs-incomplete";
   let session;
   let ready = false;
   signal?.throwIfAborted();
