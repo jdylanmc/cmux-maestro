@@ -360,6 +360,12 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
             throw HookFiles.Failure.unavailable
         }
+        // Never replace a hook file Maestro did not write; preserve every other hook.
+        let restoreHooks = restoreHooksFile
+        let restoreManifest = try CopilotRestoreHooks.manifest()
+        if let existing = try CopilotSetupFileState.read(restoreHooks).data, !CopilotRestoreHooks.isOwned(existing) {
+            throw HookFiles.Failure.unavailable
+        }
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
@@ -378,6 +384,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             .init(file: bin.appendingPathComponent("messaging.json"), data: try JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
             ], options: [.sortedKeys])),
+            .init(file: restoreHooks, data: restoreManifest),
         ]
         for (index, resource) in glyphData.enumerated() {
             writes.append(.init(file: bin.appendingPathComponent("NerdFonts/\(resource.0)"),
@@ -405,7 +412,19 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         return plugin.appendingPathComponent("skills/maestro/SKILL.md")
     }
 
+    var restoreHooksFile: URL {
+        nativeExtensions.deletingLastPathComponent().appendingPathComponent("hooks/\(CopilotRestoreHooks.filename)")
+    }
+
     func removeMessaging(root: URL) throws {
+        // The owned CMUX restore hooks go only when they are exactly Maestro's bytes.
+        if let data = try CopilotSetupFileState.read(restoreHooksFile).data, CopilotRestoreHooks.isOwned(data) {
+            let directory = try CopilotFileAccess.openDirectory(restoreHooksFile.deletingLastPathComponent(), owner: getuid())
+            defer { close(directory) }
+            if unlinkat(directory, restoreHooksFile.lastPathComponent, 0) != 0, errno != ENOENT {
+                throw HookFiles.Failure.unavailable
+            }
+        }
         // Remove only the installed entry point/configuration. Do not touch live
         // route bindings, sockets, cached children, or other extensions.
         let targets = [
@@ -942,6 +961,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         guard before == after else { throw CopilotFileError.changed }
         func foreign(_ hook: CopilotSetupMetadata.Hook) -> Bool {
             !(hook.origin == "plugin" && hook.source == CopilotPluginManifest.name)
+                && !CopilotRestoreHooks.isSource(hook, providerHome: registration.providerHome)
                 && !(hook.origin == "user" && [registration.file.path,
                     "hooks/\(CopilotObserverRegistration.filename)"].contains(hook.source))
         }

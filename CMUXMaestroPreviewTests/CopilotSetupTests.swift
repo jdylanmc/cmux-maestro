@@ -1238,6 +1238,20 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: installed.deletingLastPathComponent().appendingPathComponent("NerdFonts/glyphnames.json"))
             == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
+        let restoreHooks = local.restoreHooksFile
+        #expect(restoreHooks.path == directory.appendingPathComponent("hooks/cmux-maestro-restore.json").path)
+        #expect(try Data(contentsOf: restoreHooks) == CopilotRestoreHooks.manifest())
+        #expect((try FileManager.default.attributesOfItem(atPath: restoreHooks.path)[.posixPermissions] as? Int) == 0o600)
+        let declared = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: restoreHooks)) as? [String: Any])
+        let restoreDeclarations = try #require(declared["hooks"] as? [String: [[String: Any]]])
+        #expect(Set(restoreDeclarations.keys) == ["SessionStart", "Stop", "Notification", "SessionEnd"])
+        // CMUX 0.65.1's exact queued Copilot command and env guards.
+        #expect(restoreDeclarations["SessionStart"]?.first?["bash"] as? String == #"cmux_cli="${CMUX_BUNDLED_CLI_PATH:-}"; if [ -z "$cmux_cli" ] || [ ! -x "$cmux_cli" ]; then cmux_cli="$(command -v cmux 2>/dev/null || true)"; fi; agent_pid="${CMUX_COPILOT_PID:-${PPID:-}}"; if [ -n "$CMUX_SURFACE_ID" ] && [ "$CMUX_COPILOT_HOOKS_DISABLED" != "1" ] && [ -n "$cmux_cli" ]; then if [ -n "${CMUX_SOCKET_PATH:-}" ]; then CMUX_COPILOT_PID="$agent_pid" CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 "$cmux_cli" --socket "$CMUX_SOCKET_PATH" hooks enqueue copilot session-start 2>/dev/null || { cat >/dev/null; echo '{}'; }; else CMUX_COPILOT_PID="$agent_pid" CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 "$cmux_cli" hooks enqueue copilot session-start 2>/dev/null || { cat >/dev/null; echo '{}'; }; fi; else cat >/dev/null; echo '{}'; fi"#)
+        for (event, subcommand) in [("Stop", "stop"), ("Notification", "stop"), ("SessionEnd", "session-end")] {
+            #expect(restoreDeclarations[event]?.first?["bash"] as? String == CopilotRestoreHooks.command(subcommand))
+            #expect(restoreDeclarations[event]?.first?["timeoutSec"] as? Int == 5)
+            #expect(restoreDeclarations[event]?.first?["type"] as? String == "command")
+        }
         let kitData = try Data(contentsOf: petKit)
         try FileManager.default.removeItem(at: petKit)
         #expect(throws: (any Error).self) {
@@ -1284,10 +1298,53 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: unrelatedGuide) == Data("unrelated guide".utf8))
         let retained = routes.appendingPathComponent("retained.json")
         try Data("live route must survive uninstall".utf8).write(to: retained)
+        let unrelatedHook = restoreHooks.deletingLastPathComponent().appendingPathComponent("unrelated.json")
+        try Data("{\"version\":1,\"hooks\":{}}".utf8).write(to: unrelatedHook)
         try local.removeMessaging(root: integration)
         #expect(!FileManager.default.fileExists(atPath: native.appendingPathComponent("extension.mjs").path))
         #expect(!FileManager.default.fileExists(atPath: installed.deletingLastPathComponent().appendingPathComponent("messaging.json").path))
         #expect(FileManager.default.fileExists(atPath: retained.path))
+        #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
+        #expect(try Data(contentsOf: unrelatedHook) == Data("{\"version\":1,\"hooks\":{}}".utf8))
+        // A file at the owned name that Maestro did not write is never replaced or removed.
+        let foreign = Data("{\"version\":1,\"hooks\":{\"SessionStart\":[]}}".utf8)
+        try foreign.write(to: restoreHooks)
+        #expect(throws: (any Error).self) {
+            try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        }
+        try local.removeMessaging(root: integration)
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+    }
+
+    @Test func restoreHookCommandFollowsCMUXGuards() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fakeCLI = directory.appendingPathComponent("cmux")
+        let record = directory.appendingPathComponent("record")
+        try Data("#!/bin/sh\nprintf '%s|%s' \"$*\" \"$CMUX_COPILOT_PID\" > \"\(record.path)\"\n".utf8).write(to: fakeCLI)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fakeCLI.path)
+        func run(_ environment: [String: String]) throws -> String {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sh")
+            process.arguments = ["-c", CopilotRestoreHooks.command("session-end")]
+            process.environment = ["PATH": "/usr/bin:/bin", "CMUX_BUNDLED_CLI_PATH": fakeCLI.path].merging(environment) { _, new in new }
+            let output = Pipe()
+            process.standardOutput = output
+            process.standardInput = FileHandle.nullDevice
+            try process.run()
+            process.waitUntilExit()
+            #expect(process.terminationStatus == 0)
+            return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        }
+        #expect(try run([:]) == "{}\n")
+        #expect(!FileManager.default.fileExists(atPath: record.path))
+        #expect(try run(["CMUX_SURFACE_ID": "S", "CMUX_COPILOT_HOOKS_DISABLED": "1"]) == "{}\n")
+        #expect(!FileManager.default.fileExists(atPath: record.path))
+        _ = try run(["CMUX_SURFACE_ID": "S", "CMUX_COPILOT_PID": "4242"])
+        #expect(try String(contentsOf: record, encoding: .utf8) == "hooks enqueue copilot session-end|4242")
+        _ = try run(["CMUX_SURFACE_ID": "S", "CMUX_COPILOT_PID": "4242", "CMUX_SOCKET_PATH": "/synthetic.sock"])
+        #expect(try String(contentsOf: record, encoding: .utf8) == "--socket /synthetic.sock hooks enqueue copilot session-end|4242")
     }
 }
 

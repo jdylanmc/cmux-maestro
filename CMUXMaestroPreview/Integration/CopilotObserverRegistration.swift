@@ -202,6 +202,54 @@ nonisolated enum CopilotSetupJSON {
     }
 }
 
+/// CMUX 0.65.1's own Copilot hooks, as its installer would declare them, in a separate
+/// Maestro-owned file. CMUX's installer cannot parse Copilot's commented `config.json` (#252).
+/// They let CMUX's own restore resume human-started sessions; Maestro launches set
+/// `CMUX_COPILOT_HOOKS_DISABLED=1`, which these commands honor (ADR 0024).
+nonisolated enum CopilotRestoreHooks {
+    static let filename = "cmux-maestro-restore.json"
+    static let role = "cmux-copilot-restore"
+    static let events: [(event: String, subcommand: String)] = [
+        ("SessionStart", "session-start"), ("Stop", "stop"), ("Notification", "stop"), ("SessionEnd", "session-end"),
+    ]
+
+    /// CMUX 0.65.1 `queuedAgentHookShellCommand(agent: "copilot", …)`, byte for byte.
+    static func command(_ subcommand: String) -> String {
+        let invoke = "CMUX_COPILOT_PID=\"$agent_pid\" CMUXTERM_CLI_RESPONSE_TIMEOUT_SEC=0.5 \"$cmux_cli\""
+        let tail = " hooks enqueue copilot \(subcommand) 2>/dev/null || { cat >/dev/null; echo '{}'; }"
+        return [
+            "cmux_cli=\"${CMUX_BUNDLED_CLI_PATH:-}\"",
+            "if [ -z \"$cmux_cli\" ] || [ ! -x \"$cmux_cli\" ]; then cmux_cli=\"$(command -v cmux 2>/dev/null || true)\"; fi",
+            "agent_pid=\"${CMUX_COPILOT_PID:-${PPID:-}}\"",
+            "if [ -n \"$CMUX_SURFACE_ID\" ] && [ \"$CMUX_COPILOT_HOOKS_DISABLED\" != \"1\" ] && [ -n \"$cmux_cli\" ]; then "
+                + "if [ -n \"${CMUX_SOCKET_PATH:-}\" ]; then \(invoke) --socket \"$CMUX_SOCKET_PATH\"\(tail); "
+                + "else \(invoke)\(tail); fi; else cat >/dev/null; echo '{}'; fi",
+        ].joined(separator: "; ")
+    }
+
+    static func manifest() throws -> Data {
+        var hooks: [String: Any] = [:]
+        for item in events {
+            hooks[item.event] = [["type": "command", "bash": command(item.subcommand), "timeoutSec": 5]]
+        }
+        return try CopilotSetupJSON.data([
+            "version": 1,
+            "maestro": ["owner": CopilotPluginManifest.name, "schema": 1, "role": role, "cmux": "0.65.1"],
+            "hooks": hooks,
+        ])
+    }
+
+    /// Owned only when the bytes are exactly Maestro's; a look-alike is foreign.
+    static func isOwned(_ data: Data) -> Bool {
+        (try? manifest()) == data
+    }
+
+    static func isSource(_ hook: CopilotSetupMetadata.Hook, providerHome: URL) -> Bool {
+        hook.origin == "user" && (hook.source == "hooks/\(filename)"
+            || hook.source == providerHome.appendingPathComponent("hooks/\(filename)").path)
+    }
+}
+
 nonisolated struct CopilotObserverGeneration: Codable, Equatable {
     let id: UUID
     let helper: String
@@ -532,7 +580,10 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         _ = try HookFiles.metadata(directory, directory: true)
         let listing = try CopilotFileAccess.names(at: directory, limit: 128)
         guard !listing.limited else { throw CopilotFileError.tooLarge }
-        return try listing.names.filter { $0.lowercased().hasSuffix(".json") && $0 != Self.filename }.map { name in
+        // The restore file is owned by the resource transaction and checked by exact bytes there.
+        return try listing.names.filter {
+            $0.lowercased().hasSuffix(".json") && $0 != Self.filename && $0 != CopilotRestoreHooks.filename
+        }.map { name in
             let state = try CopilotSetupFileState.read(file.deletingLastPathComponent().appendingPathComponent(name))
             guard let data = state.data else { throw CopilotFileError.changed }
             if try containsHelper(CopilotSetupJSON.object(data)) {
@@ -553,7 +604,8 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         let identities = try metadata.plugins.filter { $0.name != CopilotPluginManifest.name }
             .map { try encoder.encode($0) }.sorted { $0.lexicographicallyPrecedes($1) }
         let hooks = try metadata.hooks.filter {
-            !isOwnedSource($0) && !($0.origin == "plugin" && $0.source == CopilotPluginManifest.name)
+            !isOwnedSource($0) && !CopilotRestoreHooks.isSource($0, providerHome: providerHome)
+                && !($0.origin == "plugin" && $0.source == CopilotPluginManifest.name)
         }.map { try encoder.encode($0) }.sorted { $0.lexicographicallyPrecedes($1) }
         // Continuity of public metadata, not authority over foreign source files.
         return ForeignInventory(identities: identities, hooks: hooks)
@@ -561,7 +613,8 @@ nonisolated final class CopilotObserverRegistration: Sendable {
 
     private func unrelatedDisabledKeys(_ metadata: CopilotSetupMetadata) -> Set<String> {
         let keys = Set(metadata.hooks.filter {
-            !isOwnedSource($0) && !($0.origin == "plugin" && $0.source == CopilotPluginManifest.name)
+            !isOwnedSource($0) && !CopilotRestoreHooks.isSource($0, providerHome: providerHome)
+                && !($0.origin == "plugin" && $0.source == CopilotPluginManifest.name)
                 && ["user", "plugin"].contains($0.origin) && !$0.enabled
         }.compactMap(\.disableKey).filter(CopilotObserverKeyEvidence.validKey))
         return Set(keys.sorted().prefix(128))

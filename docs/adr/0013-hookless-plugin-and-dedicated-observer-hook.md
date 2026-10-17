@@ -7,3 +7,5 @@ Why: plugin hooks cannot be disabled or migrated per key safely. One owned file 
 Rejected: legacy plugin-hook registration, guessing disable hashes, enabling duplicates to read keys.
 
 Consequence: some safe-looking migrations stay blocked. Cached hooks in running sessions need a restart.
+
+Amendment (2026-10-17, #252): setup also owns a second hook file, `~/.copilot/hooks/cmux-maestro-restore.json`, holding CMUX 0.65.1's exact Copilot restore hooks. It is written and removed with the other owned resources, recognized only by its exact bytes, and never replaces a file Maestro did not write. Validation builds never install it ([ADR 0015](0015-isolated-validation-identities.md)).
