@@ -255,7 +255,9 @@ Use **Remove Copilot Integration…**, then explicitly confirm. After ownership
 and metadata checks, this disables and removes only the recognized dedicated
 file, runs `copilot --no-auto-update plugin uninstall cmux-maestro-native`
 when installed, verifies removal, then removes Maestro's native loader entry
-point and launch configuration. Foreign or modified observer files are refused.
+point and launch configuration. It removes the owned CMUX restore hooks
+(`cmux-maestro-restore.json`) only when its bytes are exactly Maestro's.
+Foreign or modified observer files are refused.
 Global settings and disable keys are not removed. Do not touch live route bindings,
 sockets and in-memory adapters. Close those sessions normally.
 Restart/resume existing CLI
