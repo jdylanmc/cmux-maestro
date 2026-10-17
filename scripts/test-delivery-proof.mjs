@@ -589,7 +589,7 @@ for (const [hintCase, workspaceId, surfaceId] of [
   assert.ok(await f.exists(ordinary.stage), "Ordinary own-session extension must join for diagnostics");
   // Born-managed tools are declared at join and refuse: no provider PID, so no enrollment.
   assert.deepEqual(JSON.parse(await fs.readFile(ordinary.stage, "utf8")), {
-    options: ["tools"], tools: [...managedToolSpecs().map(spec => spec.name), "maestro_readiness"],
+    options: ["tools", "hooks"], tools: [...managedToolSpecs().map(spec => spec.name), "maestro_readiness"],
   });
   assert.equal(await f.exists(f.endpoint), null);
 });
@@ -606,7 +606,7 @@ test("actual ordinary loader sanitizes join failure without managed fallback", a
   });
   assert.deepEqual(await f.exited(failed), [1, null]);
   assert.deepEqual(JSON.parse(await fs.readFile(failed.stage, "utf8")), {
-    options: ["tools"], tools: [...managedToolSpecs().map(spec => spec.name), "maestro_readiness"],
+    options: ["tools", "hooks"], tools: [...managedToolSpecs().map(spec => spec.name), "maestro_readiness"],
   });
   assert.match(failed.stderr, /\(INITIALIZATION_FAILED\)/);
   assert.ok(failed.stderr.length < 200);
@@ -2409,8 +2409,9 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     SESSION_ID: own.sessionId, CMUX_WORKSPACE_ID: own.workspaceId.toUpperCase(),
     CMUX_SURFACE_ID: randomUUID(), COPILOT_EXTENSION_PARENT_PID: String(parentPid), ...environment,
   };
-  const calls = { enroll: [], auth: 0 };
+  const calls = { enroll: [], auth: 0, ended: [] };
   let tools;
+  let hooks;
   const session = {
     sessionId: own.sessionId,
     send: async () => {},
@@ -2423,8 +2424,10 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     environment: env, parentPid, controller: "/synthetic/controller",
     ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
     ...(startManagedRuntime === undefined ? {} : { startManagedRuntime }),
+    endSession: async (request, controller) => { calls.ended.push({ request, controller }); },
     joinSession: async (options) => {
-      assert.deepEqual(Object.keys(options), ["tools"]);
+      assert.deepEqual(Object.keys(options), ["tools", "hooks"]);
+      hooks = options.hooks;
       tools = Object.fromEntries(options.tools.map((tool) =>
         [tool.name, (args, invocation = { sessionId: own.sessionId }) => tool.handler(args, invocation)]));
       tools.declared = options.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
@@ -2438,7 +2441,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     },
   });
   if (born?.listener) f.adapters.push(born.listener);
-  return { ...f, own, env, born, tools, calls, session };
+  return { ...f, own, env, born, tools, hooks, calls, session };
 }
 
 const readiness = async (f) => JSON.parse(await f.tools.maestro_readiness({}));
@@ -2526,6 +2529,9 @@ test("born managed: the controller transport keeps only known refusal reasons", 
   for (const [error, reason] of [
     ["enrollment refused: surface-owned", "surface-owned"],
     ["enrollment refused: made-up", "enrollment-failed"],
+    ["enrollment refused: session-live-or-uncertain", "session-live-or-uncertain"],
+    ["enrollment refused: account-mismatch: work-account", "account-mismatch"],
+    ["enrollment refused: account-mismatch: bad/name", "enrollment-failed"],
     ["Traceback /private/path", "enrollment-failed"],
   ]) {
     const controller = path.join(directory, `controller-${reason}-${randomUUID()}`);
@@ -2541,6 +2547,14 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     const tool = tools.find((item) => item.name === "maestro_readiness");
     const report = JSON.parse(await tool.handler({}, { sessionId: f.own.sessionId }));
     assert.equal(report.managed.reason, reason);
+    if (reason === "account-mismatch") {
+      // The diagnostic names the recorded account so the human can sign in to it.
+      assert.deepEqual(report.managed.recordedAccount, { login: "work-account", host: "github.com" });
+      const spawn = tools.find((item) => item.name === "maestro_spawn");
+      assert.match((await spawn.handler({}, { sessionId: f.own.sessionId })).textResultForLlm, /work-account/);
+    } else {
+      assert.equal("recordedAccount" in report.managed, false);
+    }
   }
 });
 
@@ -2569,4 +2583,18 @@ test("born managed: a runtime that joined then failed never hands managed tools 
     assert.match(result.textResultForLlm, /enrolled-runtime-unavailable/);
   }
   assert.equal(called, 0);
+});
+
+test("born managed: only this session's user exit reaches the SessionEnd record, by identifiers", async (t) => {
+  const f = await bornFixture(t);
+  await f.hooks.onSessionEnd({ reason: "abort" }, { sessionId: f.own.sessionId });
+  await f.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: randomUUID() });
+  assert.equal(f.calls.ended.length, 0);
+  await f.hooks.onSessionEnd({ reason: "user_exit", finalMessage: "PRIVATE" }, { sessionId: f.own.sessionId });
+  assert.deepEqual(f.calls.ended, [{ controller: "/synthetic/controller", request: { identity: {
+    nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId, generation: 1,
+    capability: f.own.capability } } }]);
+  const refused = await bornFixture(t, { enroll: async () => { throw Object.assign(new Error("x"), { reason: "surface-owned" }); } });
+  await refused.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: refused.own.sessionId });
+  assert.equal(refused.calls.ended.length, 0);
 });
