@@ -1549,6 +1549,21 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
         #expect(try asideCopies().isEmpty)
         try FileManager.default.removeItem(at: messaging)
+        // A foreign file put back whose directory sync fails says where it is back, and that durability is unconfirmed.
+        try foreign.write(to: restoreHooks)
+        let putBackSyncs = SyncCounter()
+        var unsyncedPutBack = local
+        unsyncedPutBack.syncDirectory = { descriptor in putBackSyncs.next() >= 2 ? -1 : Darwin.fsync(descriptor) }
+        do {
+            _ = try unsyncedPutBack.removeMessaging(root: integration)
+            Issue.record("A put-back of a foreign file that cannot be made durable must be reported")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains("put back at \(restoreHooks.path)"))
+            #expect(conflict.message.contains("durable"))
+        }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try asideCopies().isEmpty)
+        try CopilotCMUXHooks.manifest().write(to: restoreHooks)
         // Publish whose directory sync fails names the written file, separately from the rename.
         var unsyncedInstall = local
         unsyncedInstall.syncDirectory = { _ in -1 }

@@ -656,19 +656,21 @@ nonisolated final class CopilotObserverRegistration: Sendable {
             if name == CopilotCMUXHooks.filename {
                 // Maestro's own CMUX hooks file is checked by its bytes in the resource transaction.
                 // Anything else there that cannot even be read as a hook file is named, not generic.
+                // That includes malformed JSON: only the helper-reference conflict below is generic.
+                let state: CopilotSetupFileState
+                let object: [String: Any]
                 do {
-                    let state = try CopilotSetupFileState.read(url)
+                    state = try CopilotSetupFileState.read(url)
                     guard let data = state.data else { throw CopilotFileError.changed }
                     if CopilotCMUXHooks.isOwned(data) { return nil }
-                    if try containsHelper(CopilotSetupJSON.object(data)) {
-                        throw CopilotRegistrationConflict("Another user hook file refers to the observer helper. No duplicate is installed or removed.")
-                    }
-                    return state
-                } catch let conflict as CopilotRegistrationConflict {
-                    throw conflict
+                    object = try CopilotSetupJSON.object(data)
                 } catch {
                     throw CopilotRegistrationConflict(CopilotCMUXHooks.Conflict(path: url.path).message)
                 }
+                if try containsHelper(object) {
+                    throw CopilotRegistrationConflict("Another user hook file refers to the observer helper. No duplicate is installed or removed.")
+                }
+                return state
             }
             let state = try CopilotSetupFileState.read(url)
             guard let data = state.data else { throw CopilotFileError.changed }

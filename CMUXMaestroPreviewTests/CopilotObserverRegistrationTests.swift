@@ -660,7 +660,7 @@ struct CopilotInstallCheckpointTests {
         #expect(!FileManager.default.fileExists(atPath: hooks.appendingPathComponent(CopilotCMUXHooks.filename).path))
     }
 
-    @Test(arguments: ["symlink", "empty", "oversized"])
+    @Test(arguments: ["symlink", "empty", "oversized", "malformed", "array", "duplicate-key"])
     func coordinatedPrepareNamesAnUnreadableCMUXHooksOccupant(occupant: String) async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
         let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
@@ -1337,7 +1337,7 @@ struct CopilotObserverRegistrationTests {
         #expect(FileManager.default.fileExists(atPath: healthy.cmuxHooksMarker.path))
     }
 
-    @Test(arguments: ["symlink", "empty", "oversized"])
+    @Test(arguments: ["symlink", "empty", "oversized", "malformed", "array", "duplicate-key"])
     func setupAndUninstallNameAnUnreadableCMUXHooksOccupant(occupant: String) async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let runner = ObserverSetupRunner(fixture)
@@ -2758,6 +2758,9 @@ func placeOccupant(_ occupant: String, at file: URL) throws {
         try FileManager.default.createSymbolicLink(at: file, withDestinationURL: file.deletingLastPathComponent()
             .appendingPathComponent("elsewhere.json"))
     case "empty": try Data().write(to: file)
+    case "malformed": try Data("{".utf8).write(to: file)
+    case "array": try Data("[]".utf8).write(to: file)
+    case "duplicate-key": try Data("{\"version\":1,\"version\":1,\"hooks\":{}}".utf8).write(to: file)
     default: try Data(repeating: 0x20, count: 70_000).write(to: file)
     }
 }

@@ -645,12 +645,16 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
                 + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path), and "
                 + "\(cmuxHooksFile.path) is taken; keep one.")
         }
+        guard syncDirectory(directory) == 0 else {
+            throw CopilotRegistrationConflict("A hook file was put back at \(cmuxHooksFile.path), but that could not "
+                + "be confirmed as durable; check that it is there.")
+        }
     }
 
     private func restoreQuarantined(_ aside: String) throws {
         let directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
         defer { close(directory) }
-        do { try putBack(aside, in: directory) } catch {
+        guard renameatx_np(directory, aside, directory, cmuxHooksFile.lastPathComponent, UInt32(RENAME_EXCL)) == 0 else {
             throw CopilotRegistrationConflict(
                 "Uninstall stopped and could not put Maestro's CMUX Copilot hooks back: rename "
                     + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path) "
