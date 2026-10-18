@@ -2652,6 +2652,38 @@ test("born managed: the controller transport keeps only known refusal reasons", 
   }
 });
 
+test("born managed: a user exit is recorded even when the runtime failed after enrolling", async (t) => {
+  const f = await bornFixture(t, { startManagedRuntime: async ({ joinSession, endSession }) => {
+    await joinSession({ tools: [], hooks: { onSessionEnd: async (input, invocation) =>
+      endSession({ identity: { sessionId: invocation.sessionId } }, "/synthetic/controller") } });
+    throw Object.assign(new Error("listen failed"), { code: "EADDRINUSE" });
+  } });
+  assert.equal((await readiness(f)).managed.reason, "enrolled-runtime-unavailable");
+  await f.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: f.own.sessionId });
+  assert.deepEqual(f.calls.ended.map(call => call.request.identity.sessionId), [f.own.sessionId]);
+  // Tools stay refused.
+  assert.equal((await f.tools.maestro_send({})).resultType, "failure");
+});
+
+test("born managed: a failed exit record is retried once, then reported", async (t) => {
+  let attempts = 0;
+  const flaky = await bornFixture(t, { endSession: async () => { if (++attempts === 1) throw new Error("lock busy"); } });
+  await flaky.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: flaky.own.sessionId });
+  assert.equal(attempts, 2);
+  assert.equal(flaky.calls.ended.length, 1);
+  const errors = [];
+  const original = console.error;
+  console.error = (...args) => errors.push(args.join(" "));
+  t.after(() => { console.error = original; });
+  let failures = 0;
+  const broken = await bornFixture(t, { endSession: async () => { failures++; throw new Error("io"); } });
+  await broken.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: broken.own.sessionId });
+  console.error = original;
+  assert.equal(failures, 2);
+  assert.equal(broken.calls.ended.length, 0);
+  assert.match(errors.join("\n"), /could not record this session's exit/);
+});
+
 test("born managed: a SessionEnd after a hangup is never recorded (quit, close, or signal)", async (t) => {
   // Copilot 1.0.98 reports user_exit for all of these; only the SIGHUP that precedes them differs.
   const f = await bornFixture(t);

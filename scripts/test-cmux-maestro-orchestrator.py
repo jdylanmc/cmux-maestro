@@ -9,6 +9,7 @@ import secrets
 import shlex
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -2392,6 +2393,84 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
             with self.subTest(holder=holder):
                 first = self.first()
                 self.refused_leaving_routes(first, "session-live-or-uncertain", env={"FAKE_HOLD_SESSION_LOCK": holder})
+
+    def test_a_provider_started_before_install_is_not_resumed(self):
+        first = self.first()
+        self.install(age=-30)  # the integration is newer than the resumed provider
+        before, routes = self.h.state(), sorted(self.routes.iterdir())
+        self.refused(self.resume(first), "session-started-before-install")
+        self.unchanged(before)
+        self.assertEqual(sorted(self.routes.iterdir()), routes)
+
+    def orphan(self, first):
+        node = self.h.state()["nodes"][first["nodeId"]]
+        orphan = {**node, "generation": node["generation"] + 1}
+        CONTROLLER_API["bind_messaging"](orphan)
+        return self.routes / f"{CONTROLLER_API['message_peer'](orphan)}"
+
+    def test_a_route_left_by_a_crash_before_commit_does_not_block_resume(self):
+        first = self.first()
+        orphan = self.orphan(first)
+        stale = json.loads(orphan.with_suffix(".json").read_text())
+        resumed = self.resume(first)
+        self.assertTrue(resumed["ok"], resumed)
+        self.assertEqual(resumed["generation"], 2)
+        binding = json.loads(orphan.with_suffix(".json").read_text())
+        self.assertEqual(binding["generation"], 2)
+        self.assertNotEqual(binding["capability"], stale["capability"])  # rebound by this resume
+
+    def test_a_listening_socket_on_the_next_route_is_never_removed(self):
+        first = self.first()
+        orphan = self.orphan(first)
+        listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(listener.close)
+        listener.bind(str(orphan.with_suffix(".sock")))
+        before = orphan.with_suffix(".json").read_bytes()
+        self.refused(self.resume(first), "session-live-or-uncertain")
+        self.assertEqual(orphan.with_suffix(".json").read_bytes(), before)
+
+    def test_account_mismatch_names_the_login_on_every_reload(self):
+        first = self.first()
+        refusals = self.resume(first, login="other-account", repeat=2)
+        for refusal in refusals:
+            self.refused(refusal, "account-mismatch: human-account")
+
+    def test_a_commit_that_reports_failure_after_landing_keeps_its_route(self):
+        first = self.first()
+        resumed, reload = self.resume(first, repeat=2, env={"FAKE_FAIL_STATE_FSYNC_AT": "2"})
+        self.assertTrue(resumed["ok"], resumed)
+        self.assertEqual((resumed["generation"], resumed.get("projection")), (2, "deferred"))
+        self.assertTrue((self.routes / f"{resumed['peer']}.json").exists())
+        self.assertTrue(reload["ok"], reload)
+        self.assertEqual((reload["nodeId"], reload["generation"], reload["peer"]),
+                         (resumed["nodeId"], 2, resumed["peer"]))
+
+    def test_reviving_a_retired_root_needs_a_free_workspace_slot(self):
+        first = self.first()
+        self.h.change_state(lambda state: (
+            state["nodes"][first["nodeId"]].update(phase="resource-retired", availability="unavailable"),
+            state.setdefault("workspaceCapacity", {}).update({self.h.workspace: 1})))
+        before, routes = self.h.state(), sorted(self.routes.iterdir())
+        self.refused(self.resume(first), "capacity-unavailable")
+        self.unchanged(before)
+        self.assertEqual(sorted(self.routes.iterdir()), routes)
+        self.h.change_state(lambda state: state["workspaceCapacity"].update({self.h.workspace: 2}))
+        for marker in self.session_state(first["session"]).glob("inuse.*.lock"):
+            marker.unlink()  # the refused provider has exited; Copilot removes its marker
+        resumed = self.resume(first)
+        self.assertTrue(resumed["ok"], resumed)
+
+    def test_session_end_evidence_with_a_malformed_generation_is_a_structured_refusal(self):
+        first = self.first()
+        path = self.h.root / "control" / "state.json"
+        original = path.read_bytes()
+        self.addCleanup(path.write_bytes, original)
+        for generation in ("1", None):
+            state = json.loads(path.read_text())
+            state["nodes"][first["nodeId"]].update(sessionEndedGeneration=1, generation=generation)
+            path.write_text(json.dumps(state))
+            with self.subTest(generation=generation), self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                CONTROLLER_API["read_state"](self.h.root)
 
     def test_resume_refreshes_the_provider_launch_context(self):
         first = self.first()

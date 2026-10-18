@@ -547,9 +547,17 @@ export async function start({ root, peer, joinSession, managed = false, expected
     try {
       if (endGate.hungUp || input?.reason !== "user_exit" || session?.sessionId !== own.sessionId ||
         invocation?.sessionId !== own.sessionId) return;
-      await endSession({ identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability } },
-        expected.controller);
-    } catch { /* Fail open: the end stays unrecorded. */ } finally { endGate.finish(); }
+      const request = { identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability } };
+      // One retry covers a transient lock or I/O failure; after that the gap is reported.
+      for (let attempt = 1; ; attempt++) {
+        try { await endSession(request, expected.controller); break; } catch {
+          if (attempt === 2) {
+            console.error("Maestro could not record this session's exit; a manual resume may come back managed.");
+            break;
+          }
+        }
+      }
+    } finally { endGate.finish(); }
   } } : undefined;
   if (hooks) endGate.armed = true;
   session = await joinSession(hooks ? { tools, hooks } : { tools });
@@ -759,9 +767,11 @@ export async function startBornManaged({ joinSession, environment = process.env,
     },
   });
   signal?.throwIfAborted();
-  // Hooks are declared at join too; SessionEnd reaches the runtime once enrolled.
+  // Hooks are declared at join too. SessionEnd reaches the runtime's observer as soon as a
+  // validated enrollment installed it, even if the runtime then failed: the human's exit must
+  // still be recorded. Tools stay gated on a fully enrolled runtime.
   session = await joinSession({ tools, hooks: { onSessionEnd: async (input, invocation) =>
-    state.status === "enrolled" && delegates.onSessionEnd ? delegates.onSessionEnd(input, invocation) : undefined } });
+    delegates.onSessionEnd?.(input, invocation) } });
   signal?.throwIfAborted();
   requireCondition(session?.sessionId === sessionId);
   onJoined?.(session);  // Beats need only the joined session, not enrollment.
