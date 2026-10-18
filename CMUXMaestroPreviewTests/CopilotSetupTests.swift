@@ -1379,10 +1379,17 @@ struct CopilotSetupTests {
         try CopilotCMUXHooks.manifest().write(to: strandedOwned)
         let strandedForeign = hooksDirectory.appendingPathComponent(".\(restoreHooks.lastPathComponent).removing-foreign")
         try foreign.write(to: strandedForeign)
-        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
-        try local.removeMessaging(root: integration)
+        // Setup recovers them first too: the human's file goes back and is refused by name.
+        #expect(throws: CopilotResourcePreparationFailure.self) {
+            try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        }
         #expect(!FileManager.default.fileExists(atPath: strandedOwned.path))
         #expect(try Data(contentsOf: restoreHooks) == foreign)  // the human's file is back under its name
+        try CopilotCMUXHooks.manifest().write(to: strandedOwned)
+        try FileManager.default.moveItem(at: restoreHooks, to: strandedForeign)
+        try local.removeMessaging(root: integration)
+        #expect(!FileManager.default.fileExists(atPath: strandedOwned.path))
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
         try foreign.write(to: strandedForeign)
         do {
             try local.removeMessaging(root: integration)
@@ -1515,6 +1522,74 @@ struct CopilotSetupTests {
         #expect(try pendingCopies().isEmpty)
         try FileManager.default.removeItem(at: restoreHooks)
 
+        // Publish rechecks the copy it moved aside before deleting it, and names a failed delete.
+        try CopilotCMUXHooks.manifest().write(to: restoreHooks)
+        var rewritten = local
+        let hooksPath = hooksDirectory
+        rewritten.beforeCMUXHooksAsideCleanup = {
+            for name in (try? FileManager.default.contentsOfDirectory(atPath: hooksPath.path)) ?? []
+            where name.contains(".removing-") { try? foreign.write(to: hooksPath.appendingPathComponent(name)) }
+        }
+        do {
+            try rewritten.installCMUXHooks()
+            Issue.record("A moved copy changed before cleanup must be kept and named")
+        } catch let conflict as CopilotRegistrationConflict {
+            let aside = try #require(try asideCopies().first)
+            #expect(conflict.message.contains(hooksDirectory.appendingPathComponent(aside).path))
+            #expect(try Data(contentsOf: hooksDirectory.appendingPathComponent(aside)) == foreign)
+            try FileManager.default.removeItem(at: hooksDirectory.appendingPathComponent(aside))
+        }
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        var undeletable = local
+        undeletable.removeEntry = { _, _ in -1 }
+        do {
+            try undeletable.installCMUXHooks()
+            Issue.record("A failed cleanup of the moved copy must be named")
+        } catch let conflict as CopilotRegistrationConflict {
+            let aside = try #require(try asideCopies().first)
+            #expect(conflict.message.contains(hooksDirectory.appendingPathComponent(aside).path))
+            try FileManager.default.removeItem(at: hooksDirectory.appendingPathComponent(aside))
+        }
+        #expect(try asideCopies().isEmpty)
+
+        // Rollback goes through the same ownership-bound path: a file swapped in survives, named.
+        let earlierManifest = Data("{\"maestro\":{\"cmux\":\"0.64.0\"},\"version\":1}".utf8)
+        for before in [nil, earlierManifest] as [Data?] {
+            try CopilotCMUXHooks.manifest().write(to: restoreHooks)
+            var rolling = local
+            rolling.beforeCMUXHooksPublish = { try? foreign.write(to: swapped) }
+            do {
+                try rolling.restoreCMUXHooks(to: before, permissions: 0o600, recorded: [try CopilotCMUXHooks.manifest()])
+                Issue.record("Rollback must not replace a file swapped in")
+            } catch let conflict as CopilotRegistrationConflict {
+                #expect(conflict.message.contains(restoreHooks.path))
+            }
+            #expect(try Data(contentsOf: restoreHooks) == foreign)
+            #expect(try asideCopies().isEmpty)
+            #expect(try pendingCopies().isEmpty)
+            try CopilotCMUXHooks.manifest().write(to: restoreHooks)
+            try local.restoreCMUXHooks(to: before, permissions: 0o600, recorded: [try CopilotCMUXHooks.manifest()])
+            #expect((try? Data(contentsOf: restoreHooks)) == before)
+        }
+        try? FileManager.default.removeItem(at: restoreHooks)
+
+        // A file an interrupted uninstall left aside goes back before install, which then refuses it by name.
+        try foreign.write(to: hooksDirectory.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)crash"))
+        do {
+            _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+            Issue.record("A recovered foreign file must refuse setup by name")
+        } catch let failure as CopilotResourcePreparationFailure {
+            #expect(failure.detail?.contains(restoreHooks.path) == true)
+        }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try asideCopies().isEmpty)
+        try foreign.write(to: hooksDirectory.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)crash"))
+        try FileManager.default.removeItem(at: restoreHooks)
+        #expect(throws: CopilotResourcePreparationFailure.self) { try local.installCMUXHooks() }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try asideCopies().isEmpty)
+        try FileManager.default.removeItem(at: restoreHooks)
+
         // The moved copy is rechecked right before deletion: bytes changed after the move go back.
         _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
         try local.installCMUXHooks()
@@ -1536,9 +1611,8 @@ struct CopilotSetupTests {
         try local.installCMUXHooks()
         try FileManager.default.removeItem(at: messaging)
         try FileManager.default.createDirectory(at: messaging.appendingPathComponent("blocker"), withIntermediateDirectories: true)
-        let syncs = SyncCounter()
         var unsynced = local
-        unsynced.syncDirectory = { descriptor in syncs.next() >= 2 ? -1 : Darwin.fsync(descriptor) }
+        unsynced.syncDirectory = { _ in -1 }
         do {
             _ = try unsynced.removeMessaging(root: integration)
             Issue.record("A put-back that cannot be made durable must be reported")
@@ -1551,9 +1625,8 @@ struct CopilotSetupTests {
         try FileManager.default.removeItem(at: messaging)
         // A foreign file put back whose directory sync fails says where it is back, and that durability is unconfirmed.
         try foreign.write(to: restoreHooks)
-        let putBackSyncs = SyncCounter()
         var unsyncedPutBack = local
-        unsyncedPutBack.syncDirectory = { descriptor in putBackSyncs.next() >= 2 ? -1 : Darwin.fsync(descriptor) }
+        unsyncedPutBack.syncDirectory = { _ in -1 }
         do {
             _ = try unsyncedPutBack.removeMessaging(root: integration)
             Issue.record("A put-back of a foreign file that cannot be made durable must be reported")
@@ -1571,7 +1644,7 @@ struct CopilotSetupTests {
             try unsyncedInstall.installCMUXHooks()
             Issue.record("A publish that cannot be made durable must be reported")
         } catch let conflict as CopilotRegistrationConflict {
-            #expect(conflict.message.contains("were written to \(restoreHooks.path)"))
+            #expect(conflict.message.contains("were updated at \(restoreHooks.path)"))
         }
         #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
         #expect(try asideCopies().isEmpty)
@@ -1689,15 +1762,4 @@ struct CopilotProcessQuiescenceTests {
 private final class Box<Value>: @unchecked Sendable {
     var value: Value
     init(_ value: Value) { self.value = value }
-}
-
-private final class SyncCounter: @unchecked Sendable {
-    private let lock = NSLock()
-    private var count = 0
-    func next() -> Int {
-        lock.lock()
-        defer { lock.unlock() }
-        count += 1
-        return count
-    }
 }

@@ -384,9 +384,10 @@ nonisolated final class CopilotObserverRegistration: Sendable {
     /// changes, reserve the rows of each owned file not yet reported, and refuse if discovery would
     /// pass the rows Maestro can read (later reads, restore, and uninstall would all fail).
     func requireHookRowRoom(_ metadata: CopilotSetupMetadata) throws {
-        let observer = metadata.hooks.contains(where: isOwnedSource) ? 0 : CopilotPluginManifest.events.count
-        let cmux = metadata.hooks.contains { CopilotCMUXHooks.isSource($0, providerHome: providerHome) }
-            ? 0 : CopilotCMUXHooks.events.count
+        // Reserve each missing row, so a partly reported owned file still reserves the rest.
+        let observer = max(0, CopilotPluginManifest.events.count - metadata.hooks.filter(isOwnedSource).count)
+        let cmux = max(0, CopilotCMUXHooks.events.count
+            - metadata.hooks.filter { CopilotCMUXHooks.isSource($0, providerHome: providerHome) }.count)
         let total = metadata.hooks.count + observer + cmux
         guard total <= CopilotSetupMetadata.maximumHooks else {
             throw CopilotRegistrationConflict("Copilot reports \(metadata.hooks.count) hooks, and Maestro's would bring "

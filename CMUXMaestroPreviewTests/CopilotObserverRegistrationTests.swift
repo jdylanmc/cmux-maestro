@@ -1948,6 +1948,60 @@ struct CopilotObserverRegistrationTests {
         }
     }
 
+    @Test func aPartlyReportedOwnedFileStillReservesItsMissingRows() async throws {
+        let partial = CopilotSetupMetadata.Hook(hookType: "SessionStart", origin: "user",
+            source: "hooks/\(CopilotCMUXHooks.filename)", enabled: true, disableKey: "cmux-partial")
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        // 250 others + 3 observer + 1 CMUX row reported: the 3 missing CMUX rows make 257.
+        await runner.supplyMetadata(unrelated: try unrelatedRows(250, fixture: fixture) + [partial])
+        let observer = try Data(contentsOf: fixture.file)
+        let calls = await runner.calls
+        guard case .conflict(let reason) = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("A partly reported owned file must still reserve its missing rows"); return
+        }
+        #expect(reason.contains("257"))
+        #expect(try Data(contentsOf: fixture.file) == observer)
+        #expect(await runner.calls == calls)
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        await value.runner.supplyMetadata(unrelated: try unrelatedRows(250, fixture: value.fixture) + [partial])
+        do {
+            _ = try await value.checkpoint().perform("prepare")
+            Issue.record("Coordinated prepare must reserve the missing rows too")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains("257"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: CopilotInstallCheckpoint.location(root: value.fixture.root).path))
+    }
+
+    @Test func checkpointRestoreFinishesACMUXHooksPublishInterruptedAfterTheMoveAside() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        let hooks = file.deletingLastPathComponent()
+        #expect(try Data(contentsOf: file) == CopilotCMUXHooks.manifest())
+        try value.fixture.write(Data("#!/usr/bin/env python3\n# updated fixture\n".utf8),
+                                to: value.resources.appendingPathComponent("controller.py"))
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        // The process died inside publish: phase applying, the file moved aside, a staged copy left.
+        let journal = CopilotInstallCheckpoint.location(root: value.fixture.root)
+        var saved = try CopilotSetupJSON.object(Data(contentsOf: journal))
+        saved["phase"] = "applying"
+        try value.fixture.write(saved, to: journal)
+        try FileManager.default.moveItem(at: file, to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)crash"))
+        try CopilotCMUXHooks.manifest().write(to: hooks.appendingPathComponent(".\(CopilotCMUXHooks.filename).pending-crash"))
+        _ = try await value.checkpoint(id: id).perform("restore")
+        _ = try await value.checkpoint(id: id).perform("release")
+        #expect(try Data(contentsOf: file) == CopilotCMUXHooks.manifest())
+        #expect(try FileManager.default.contentsOfDirectory(atPath: hooks.path)
+            .filter { $0.contains(".removing-") || $0.contains(".pending-") }.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: journal.path))
+    }
+
     @Test func strandedAsideCopiesDoNotCountAgainstTheHooksDirectoryBudget() async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let runner = ObserverSetupRunner(fixture)
