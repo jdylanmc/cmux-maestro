@@ -117,6 +117,11 @@ struct ObserverSetupFiles: CopilotSetupFileSystem {
         if failRemoval { throw CopilotFileError.io }
         return foreignCMUXHooks
     }
+    /// The real recovery, against the fixture's provider home.
+    func reconcileCMUXHooks() throws {
+        try LocalCopilotSetupFiles(nativeExtensions: fixture.provider.appendingPathComponent("extensions"))
+            .reconcileCMUXHooks()
+    }
 }
 
 struct FailingResourceSetupFiles: CopilotSetupFileSystem {
@@ -133,6 +138,7 @@ struct FailingResourceSetupFiles: CopilotSetupFileSystem {
         return fixture.source
     }
     func removeMessaging(root: URL) throws -> String? { nil }  // resource failure double: no CMUX hooks file
+    func reconcileCMUXHooks() throws {}  // resource failure double: no CMUX hooks leftovers
     func installCMUXHooks() throws {}
 }
 
@@ -2013,13 +2019,51 @@ struct CopilotObserverRegistrationTests {
         let aside = hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)stranded")
         try fixture.write(try CopilotCMUXHooks.manifest(), to: aside)
         #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) == .uninstalled)
-        // More stranded copies than an interrupted uninstall can leave are refused as too many entries.
+        // More stranded copies than an interrupted uninstall can leave are too many entries for
+        // validation, but setup recovers Maestro's own copies under its lease before validating.
         #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
-        for index in 0..<2 {
+        for index in 0..<3 {
             try fixture.write(try CopilotCMUXHooks.manifest(),
                               to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)extra-\(index)"))
         }
-        #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) != .uninstalled)
+        #expect(throws: CopilotFileError.tooLarge) { try fixture.registration.validateLocal() }
+        #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) == .uninstalled)
+    }
+
+    @Test func setupRecoversInterruptedCMUXHooksWorkBeforeValidatingAFullHooksDirectory() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        let hooks = fixture.file.deletingLastPathComponent()
+        let cmux = hooks.appendingPathComponent(CopilotCMUXHooks.filename)
+        for index in 0..<128 {
+            try fixture.write(Data("note".utf8), to: hooks.appendingPathComponent("note-\(index).txt"))
+        }
+        func leftovers() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: hooks.path)
+                .filter { $0.hasPrefix(CopilotObserverRegistration.asidePrefix) || $0.hasPrefix(CopilotObserverRegistration.pendingPrefix) }
+        }
+        // A staged copy a crash left is transaction state, not one of the 128 other entries.
+        let pending = hooks.appendingPathComponent("\(CopilotObserverRegistration.pendingPrefix)crash")
+        try fixture.write(try CopilotCMUXHooks.manifest(), to: pending)
+        try fixture.registration.validateLocal()
+        for action in [CopilotSetupAction.install, .uninstall] {
+            try fixture.write(try CopilotCMUXHooks.manifest(), to: pending)
+            let result = await perform(setup(fixture, runner: runner), fixture, action: action)
+            #expect(result == (action == .install ? .installed : .uninstalled))
+            #expect(try leftovers().isEmpty)
+        }
+        // A foreign file an interrupted uninstall hid goes back before validation and the rollback
+        // baseline are read, at the bound, for setup and uninstall alike.
+        let foreign = Data("{\"version\":1,\"hooks\":{}}".utf8)
+        for action in [CopilotSetupAction.install, .uninstall] {
+            try? FileManager.default.removeItem(at: cmux)
+            try fixture.write(foreign, to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)crash"))
+            let result = await perform(setup(fixture, runner: runner), fixture, action: action)
+            #expect(!result.message.contains("A required file is unsafe"))
+            #expect(try Data(contentsOf: cmux) == foreign)
+            #expect(try leftovers().isEmpty)
+        }
     }
 
     @Test func aForeignCMUXHooksFileAppearingDuringSetupIsANamedIncomplete() async throws {

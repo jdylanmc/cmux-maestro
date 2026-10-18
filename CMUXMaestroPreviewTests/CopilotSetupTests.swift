@@ -31,6 +31,7 @@ private struct SetupFileStub: CopilotSetupFileSystem {
         root.appendingPathComponent("plugin")
     }
     func removeMessaging(root: URL) throws -> String? { nil }  // no CMUX hooks file in this stub
+    func reconcileCMUXHooks() throws {}  // this stub models no hooks directory
     func installCMUXHooks() throws {}  // this stub models no CMUX hooks file
 }
 
@@ -54,6 +55,7 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
         return root.appendingPathComponent("plugin")
     }
     func removeMessaging(root: URL) throws -> String? { record(); return nil }
+    func reconcileCMUXHooks() throws { record() }
     func installCMUXHooks() throws { record() }
 
     private func record() {
@@ -1589,6 +1591,30 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: restoreHooks) == foreign)
         #expect(try asideCopies().isEmpty)
         try FileManager.default.removeItem(at: restoreHooks)
+
+        // Recovery deletes only Maestro's own bytes: a stranded copy rewritten before deletion is
+        // named, and a failed probe of the public name never leads to deleting the only copy.
+        try CopilotCMUXHooks.manifest().write(to: restoreHooks)
+        let stranded = hooksDirectory.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)stranded")
+        try CopilotCMUXHooks.manifest().write(to: stranded)
+        var reread = local
+        let strandedPath = stranded
+        reread.beforeReconcileDelete = { try? foreign.write(to: strandedPath) }
+        do {
+            try reread.reconcileCMUXHooks()
+            Issue.record("A stranded copy rewritten before deletion must be named, not deleted")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains(stranded.path))
+            #expect(conflict.message.contains(restoreHooks.path))
+        }
+        #expect(try Data(contentsOf: stranded) == foreign)
+        try FileManager.default.removeItem(at: restoreHooks)
+        try CopilotCMUXHooks.manifest().write(to: stranded)
+        var blind = local
+        blind.probeEntry = { _, _ in EIO }
+        #expect(throws: (any Error).self) { try blind.reconcileCMUXHooks() }
+        #expect(try Data(contentsOf: stranded) == CopilotCMUXHooks.manifest())
+        try FileManager.default.removeItem(at: stranded)
 
         // The moved copy is rechecked right before deletion: bytes changed after the move go back.
         _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)

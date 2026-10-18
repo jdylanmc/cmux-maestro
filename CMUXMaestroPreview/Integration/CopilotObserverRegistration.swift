@@ -377,8 +377,25 @@ nonisolated final class CopilotObserverRegistration: Sendable {
     /// Every foreign-hook inventory and checkpoint continuity check excludes exactly these.
     /// Hook-directory entries read at most: 128 others, Maestro's two owned files, and up to two
     /// copies an interrupted uninstall set aside (transaction state, recovered by the next one).
-    static let hookListingLimit = 132
+    static let hookListingLimit = 134
     static let asidePrefix = ".\(CopilotCMUXHooks.filename).removing-"
+    static let pendingPrefix = ".\(CopilotCMUXHooks.filename).pending-"
+
+    /// Runs body holding the explicit setup lease that staging later takes, released afterwards.
+    func withSetupLease<T>(_ body: () throws -> T) throws -> T {
+        let directory = try HookFiles.directory(root, create: true)
+        defer { close(directory) }
+        _ = try HookFiles.metadata(directory, directory: true)
+        let lock = openat(directory, ".observer-setup.lock", O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
+        guard lock >= 0 else { throw CopilotFileError.current() }
+        defer { close(lock) }
+        _ = try HookFiles.metadata(lock)
+        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else {
+            throw CopilotRegistrationConflict("Another explicit observer setup is already running.")
+        }
+        defer { flock(lock, LOCK_UN) }
+        return try body()
+    }
 
     /// Setup writes Maestro's owned hook files, whose rows Copilot then reports. Before anything
     /// changes, reserve the rows of each owned file not yet reported, and refuse if discovery would
@@ -645,11 +662,14 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         // Maestro's two owned hook files do not count against the 128-entry bound, so writing the
         // CMUX hooks file can never push a checkpoint's own discovery over it.
         let listing = try CopilotFileAccess.names(at: directory, limit: Self.hookListingLimit)
+        // Copies an interrupted publish or uninstall left (at most two of each) are transaction state.
         let asides = listing.names.filter { $0.hasPrefix(Self.asidePrefix) }.count
+        let pending = listing.names.filter { $0.hasPrefix(Self.pendingPrefix) }.count
         let foreignCount = listing.names.filter {
-            $0 != Self.filename && $0 != CopilotCMUXHooks.filename && !$0.hasPrefix(Self.asidePrefix)
+            $0 != Self.filename && $0 != CopilotCMUXHooks.filename
+                && !$0.hasPrefix(Self.asidePrefix) && !$0.hasPrefix(Self.pendingPrefix)
         }.count
-        guard !listing.limited, foreignCount <= 128, asides <= 2 else { throw CopilotFileError.tooLarge }
+        guard !listing.limited, foreignCount <= 128, asides <= 2, pending <= 2 else { throw CopilotFileError.tooLarge }
         return try listing.names.filter {
             $0.lowercased().hasSuffix(".json") && $0 != Self.filename
         }.compactMap { name in

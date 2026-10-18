@@ -218,6 +218,8 @@ nonisolated protocol CopilotSetupFileSystem: Sendable {
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL
     /// Returns the path of a file Maestro did not write that it left at the CMUX hooks name.
     func removeMessaging(root: URL) throws -> String?
+    /// Finishes a CMUX hooks publish or uninstall a crash interrupted; setup runs it under its lease first.
+    func reconcileCMUXHooks() throws
     /// Standalone setup writes the CMUX hooks file only after the plugin is verified and published.
     func installCMUXHooks() throws
 }
@@ -575,12 +577,20 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
                 at: directory, filename: aside, owner: getuid(), maximum: 65_536)).map(ownsCMUXHooks) == true)
         }.sorted { !$0.1 && $1.1 }
         for (aside, owned) in asides {
-            var info = stat()
-            let nameFree = fstatat(directory, cmuxHooksFile.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) != 0
-                && errno == ENOENT
-            if nameFree {
+            // Only ENOENT means the name is free; any other probe failure stops before anything is deleted.
+            let probe = probeEntry(directory, cmuxHooksFile.lastPathComponent)
+            guard probe == 0 || probe == ENOENT else { throw HookFiles.Failure.unavailable }
+            if probe == ENOENT {
                 try putBack(aside, in: directory)
             } else if owned {
+                // Re-read right before deleting: only bytes still Maestro's are removed.
+                beforeReconcileDelete?()
+                let current = try? CopilotFileAccess.readStableRegular(
+                    at: directory, filename: aside, owner: getuid(), maximum: 65_536)
+                guard let current, ownsCMUXHooks(current) else {
+                    try putBack(aside, in: directory)  // name taken: throws, naming both paths
+                    continue
+                }
                 guard removeEntry(directory, aside) == 0 || errno == ENOENT else { throw HookFiles.Failure.unavailable }
             } else {
                 try putBack(aside, in: directory)  // name taken: throws, naming both paths
@@ -601,6 +611,13 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     var beforeCMUXHooksRename: (@Sendable () -> Void)? = nil
     /// Test seam: runs after the new file is in place, before the moved-aside copy is rechecked and deleted.
     var beforeCMUXHooksAsideCleanup: (@Sendable () -> Void)? = nil
+    /// Test seam: runs in recovery right before a copy Maestro owns is re-read and deleted.
+    var beforeReconcileDelete: (@Sendable () -> Void)? = nil
+    /// Test seam: probes a hooks-directory name without following links; 0 if present, else errno.
+    var probeEntry: @Sendable (Int32, String) -> Int32 = { directory, name in
+        var info = stat()
+        return fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : errno
+    }
     /// Test seam: unlinks a hooks-directory entry Maestro created.
     var removeEntry: @Sendable (Int32, String) -> Int32 = { unlinkat($0, $1, 0) }
     /// Test seam: the directory sync used to make hooks-directory changes durable.
@@ -613,7 +630,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         return shippedCMUXManifests.contains(data)
     }
 
-    private static var pendingPrefix: String { ".\(CopilotCMUXHooks.filename).pending-" }
+    private static var pendingPrefix: String { CopilotObserverRegistration.pendingPrefix }
 
     private static func asideName() -> String {
         "\(CopilotObserverRegistration.asidePrefix)\(UUID().uuidString)"
@@ -2268,6 +2285,9 @@ nonisolated struct CopilotSetup: Sendable {
             let (registration, executable) = try await CopilotSetupFileWork.run {
                 let registration = try self.registration ?? CopilotObserverRegistration(
                     home: CopilotPaths.realUserHome(), root: root, helper: helper)
+                // Before anything reads the hooks directory: finish an interrupted CMUX hooks publish or
+                // uninstall under the setup lease, so validation and the rollback baseline see the result.
+                try registration.withSetupLease { try self.files.reconcileCMUXHooks() }
                 try registration.validateLocal()
                 return (registration, try self.files.executable(selected: selected, path: path))
             }
