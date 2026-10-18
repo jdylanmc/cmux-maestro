@@ -1243,40 +1243,6 @@ enum SidebarPresentation {
         return managedSession(for: node, in: tree, now: now)
     }
 
-    /// ADR 0022 eligibility for one exact session's observation: a ready or partial, fresh,
-    /// readable tree; that session UUID observed once, alive, fresh, in this workspace and surface.
-    static func exactLiveSession(
-        id: UUID, workspaceID: UUID, surfaceID: UUID, in tree: SidebarCopilotTree, now: Date
-    ) -> SidebarCopilotSession? {
-        guard tree.availability == .ready || tree.availability == .partial,
-              !tree.issues.contains(.permissionDenied),
-              let generatedAt = tree.generatedAt, SidebarCopilotTree.isFresh(generatedAt, now: now) else { return nil }
-        let matches = tree.sessions.filter { $0.id == id }
-        guard matches.count == 1, let session = matches.first,
-              session.workspaceID == workspaceID, session.surfaceID == surfaceID,
-              session.liveness == .alive, SidebarCopilotTree.isFresh(session.observedAt, now: now),
-              session.observedAt <= generatedAt.addingTimeInterval(1) else { return nil }
-        return session
-    }
-
-    /// The name a row for this exact session shows (ADR 0022): the live observation's name, or,
-    /// during observation loss, the last name read while its status grace lasts. Dead, stale,
-    /// ambiguous, misplaced or permission-denied evidence names nothing.
-    static func eligibleSessionName(
-        id: UUID, workspaceID: UUID, surfaceID: UUID, tree: SidebarCopilotTree, now: Date
-    ) -> String? {
-        guard !tree.issues.contains(.permissionDenied) else { return nil }
-        if let live = exactLiveSession(id: id, workspaceID: workspaceID, surfaceID: surfaceID, in: tree, now: now) {
-            return live.sessionName
-        }
-        guard !tree.sessions.contains(where: { $0.id == id }) else { return nil }
-        let retained = tree.statusSessions.filter { $0.id == id }
-        guard retained.count == 1, let lost = retained.first,
-              lost.workspaceID == workspaceID, lost.surfaceID == surfaceID,
-              lost.lastKnownLiveness == .alive else { return nil }
-        return lost.sessionName
-    }
-
     private static func managedSession(
         for node: SidebarOrchestrationNode, in tree: SidebarCopilotTree, now: Date
     ) -> SidebarCopilotSession? {
@@ -1288,8 +1254,8 @@ enum SidebarPresentation {
         }
         let matches: [SidebarCopilotSession]
         if let sessionID = node.copilotSessionId {
-            return exactLiveSession(id: sessionID, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
-                                    in: tree, now: now)
+            return tree.exactLiveSession(id: sessionID, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
+                                         now: now)
         } else if node.role == "coordinator", node.phase == "registered" {
             matches = tree.sessions.filter {
                 $0.surfaceID == node.surfaceId

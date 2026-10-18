@@ -180,7 +180,7 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
 
 extension SidebarOrchestrationSnapshot {
     /// A born-managed root has no launch label. Its row shows its exact session's Copilot
-    /// name under ADR 0022's rules (`SidebarPresentation.eligibleSessionName`); launched rows
+    /// name under ADR 0022's rules (`SidebarCopilotTree.eligibleSessionName`); launched rows
     /// and every other node keep their projected label.
     @MainActor func namingBornRoots(from tree: SidebarCopilotTree, now: Date) -> Self {
         guard nodes.contains(where: { $0.enrollment == "born" }) else { return self }
@@ -188,8 +188,8 @@ extension SidebarOrchestrationSnapshot {
             var updated = node
             updated.sessionTitle = nil
             guard node.enrollment == "born", let session = node.copilotSessionId else { return updated }
-            updated.sessionTitle = SidebarPresentation.eligibleSessionName(
-                id: session, workspaceID: node.workspaceId, surfaceID: node.surfaceId, tree: tree, now: now)
+            updated.sessionTitle = tree.eligibleSessionName(
+                id: session, workspaceID: node.workspaceId, surfaceID: node.surfaceId, now: now)
             return updated
         }
         return .init(version: version, generatedAt: generatedAt, complete: complete,
