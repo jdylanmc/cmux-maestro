@@ -590,3 +590,34 @@ struct SidebarCopilotTree: Equatable {
         ), false)
     }
 }
+
+extension SidebarCopilotTree {
+    /// ADR 0022 eligibility for one exact session's observation: a ready or partial, fresh,
+    /// readable tree; that session UUID observed once, alive, fresh, in this workspace and surface.
+    func exactLiveSession(id: UUID, workspaceID: UUID, surfaceID: UUID, now: Date) -> SidebarCopilotSession? {
+        guard availability == .ready || availability == .partial, !issues.contains(.permissionDenied),
+              let generatedAt, Self.isFresh(generatedAt, now: now) else { return nil }
+        let matches = sessions.filter { $0.id == id }
+        guard matches.count == 1, let session = matches.first,
+              session.workspaceID == workspaceID, session.surfaceID == surfaceID,
+              session.liveness == .alive, Self.isFresh(session.observedAt, now: now),
+              session.observedAt <= generatedAt.addingTimeInterval(1) else { return nil }
+        return session
+    }
+
+    /// The name a row for this exact session shows (ADR 0022): the live observation's name, or,
+    /// during observation loss, the last name read while its status grace lasts. Dead, stale,
+    /// ambiguous, misplaced or permission-denied evidence names nothing.
+    func eligibleSessionName(id: UUID, workspaceID: UUID, surfaceID: UUID, now: Date) -> String? {
+        guard !issues.contains(.permissionDenied) else { return nil }
+        if let live = exactLiveSession(id: id, workspaceID: workspaceID, surfaceID: surfaceID, now: now) {
+            return live.sessionName
+        }
+        guard !sessions.contains(where: { $0.id == id }) else { return nil }
+        let retained = statusSessions.filter { $0.id == id }
+        guard retained.count == 1, let lost = retained.first,
+              lost.workspaceID == workspaceID, lost.surfaceID == surfaceID,
+              lost.lastKnownLiveness == .alive else { return nil }
+        return lost.sessionName
+    }
+}

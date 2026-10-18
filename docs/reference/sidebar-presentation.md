@@ -47,9 +47,13 @@ variant. Blocked and failed states are red. Words and symbols distinguish attent
 successful outcomes. Short IDs no longer lead outline rows. A row for exactly
 one Copilot session leads with its **session name** (ADR 0022) and state; when
 the name is unavailable, the CMUX surface title shows unchanged. The title is
-never split on " - ". Managed rows keep their launch label; plain terminals,
+never split on " - ". Managed rows keep their launch label, except a
+born-managed root, which has none and uses its exact session's name; plain terminals,
 browsers and other surfaces keep the CMUX title. Hover cards, details, the
 Active window footer, Taskboard cards and Beat targets use the same name.
+During observation loss a row keeps its last name for the grace period, but
+the Active window footer shows only a live, confirmed session (otherwise the
+CMUX title), for unmanaged and born-managed rows alike.
 Work-context session rows keep "Session context". Exact session identity stays
 in details.
 

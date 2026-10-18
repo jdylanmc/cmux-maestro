@@ -82,6 +82,8 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let availability: String
     let copilotSessionId: UUID?
     let executionMode: SidebarWorkerMode?
+    /// `born` for a session that enrolled itself at start (ADR 0025); nil for launches.
+    var enrollment: String? = nil
     var iconId: String?
     var iconColor: SidebarAvatarColor?
     let worktreeLabel: String?
@@ -93,6 +95,17 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let gitChangesAt: Date?
     let createdAt: Date
     let updatedAt: Date
+    /// Presentation only, never decoded: a born root's exact session name (ADR 0022).
+    var sessionTitle: String? = nil
+
+    /// The row title: a born root's eligible session name, otherwise its projected label.
+    var title: String { sessionTitle ?? label }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, runId, parentId, role, label, workspaceId, surfaceId, generation, phase, availability
+        case copilotSessionId, executionMode, enrollment, iconId, iconColor, worktreeLabel, branchLabel
+        case gitEvidenceStatus, gitEvidenceAt, gitChangesStatus, gitChanges, gitChangesAt, createdAt, updatedAt
+    }
 
     init(
         id: UUID, runId: UUID, parentId: UUID?, role: String, label: String,
@@ -163,6 +176,25 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
     static let empty = Self(
         version: 1, generatedAt: .distantPast, complete: true, omittedCount: 0, nodes: []
     )
+}
+
+extension SidebarOrchestrationSnapshot {
+    /// A born-managed root has no launch label. Its row shows its exact session's Copilot
+    /// name under ADR 0022's rules (`SidebarCopilotTree.eligibleSessionName`); launched rows
+    /// and every other node keep their projected label.
+    @MainActor func namingBornRoots(from tree: SidebarCopilotTree, now: Date) -> Self {
+        guard nodes.contains(where: { $0.enrollment == "born" }) else { return self }
+        let named = nodes.map { node -> SidebarOrchestrationNode in
+            var updated = node
+            updated.sessionTitle = nil
+            guard node.enrollment == "born", let session = node.copilotSessionId else { return updated }
+            updated.sessionTitle = tree.eligibleSessionName(
+                id: session, workspaceID: node.workspaceId, surfaceID: node.surfaceId, now: now)
+            return updated
+        }
+        return .init(version: version, generatedAt: generatedAt, complete: complete,
+                     omittedCount: omittedCount, nodes: named)
+    }
 }
 
 nonisolated enum SidebarOrchestrationAvailability: Equatable, Sendable {
@@ -287,7 +319,11 @@ nonisolated enum SidebarOrchestrationReader {
             }
             guard validGitEvidence(node, generatedAt: snapshot.generatedAt),
                   node.role == "worker" || node.executionMode == .interactive
-                    || node.copilotSessionId == nil else {
+                    || node.copilotSessionId == nil,
+                  // Born: an interactive root. A root must be a coordinator (below), and an
+                  // interactive coordinator carries its session (validState and the clause above).
+                  node.enrollment == nil || (node.enrollment == "born" && node.parentId == nil
+                    && node.executionMode == .interactive) else {
                 throw CopilotFileError.unsafePath
             }
 
@@ -401,6 +437,9 @@ final class SidebarOrchestrationPolling {
 
     private(set) var availability: SidebarOrchestrationAvailability = .waiting
     private(set) var snapshot = SidebarOrchestrationSnapshot.empty
+    // The filtered projection before born-root naming; names come from Copilot observations.
+    private var projected = SidebarOrchestrationSnapshot.empty
+    private var observedTree: SidebarCopilotTree?
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
@@ -431,6 +470,18 @@ final class SidebarOrchestrationPolling {
         }
     }
 
+    /// Re-titles born-managed roots from the latest Copilot observations (ADR 0022).
+    func updateObservedSessions(_ tree: SidebarCopilotTree, now: Date = Date()) {
+        observedTree = tree
+        retitle(now: now)
+    }
+
+    private func retitle(now: Date = Date()) {
+        let named = observedTree.map { projected.namingBornRoots(from: $0, now: now) }
+            ?? projected.namingBornRoots(from: .waiting, now: now)
+        if named != snapshot { snapshot = named }
+    }
+
     func children(of id: UUID) -> [SidebarOrchestrationNode] {
         snapshot.nodes.filter { $0.parentId == id }
     }
@@ -453,6 +504,7 @@ final class SidebarOrchestrationPolling {
         worker?.cancel()
         worker = nil
         snapshot = .empty
+        projected = .empty
         availability = !visible ? .hidden : !connected ? .disconnected : .loading
         startIfNeeded()
     }
@@ -482,20 +534,24 @@ final class SidebarOrchestrationPolling {
                         }
                         return true
                     }
-                    self.snapshot = SidebarOrchestrationSnapshot(
+                    self.projected = SidebarOrchestrationSnapshot(
                         version: raw.version, generatedAt: raw.generatedAt,
                         complete: raw.complete, omittedCount: raw.omittedCount,
                         nodes: nodes
                     )
+                    self.snapshot = self.projected
+                    self.retitle()
                     self.availability = SidebarOrchestrationReader.isStale(raw)
                         ? .stale : self.snapshot.complete ? .ready : .partial
                 } catch CopilotFileError.missing {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     self.snapshot = .empty
+                    self.projected = .empty
                     self.availability = .waiting
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     self.snapshot = .empty
+                    self.projected = .empty
                     self.availability = .unavailable
                 }
                 do { try await pause() } catch { break }

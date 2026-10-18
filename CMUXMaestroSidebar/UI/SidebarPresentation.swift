@@ -549,8 +549,8 @@ enum SidebarPresentation {
            (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt)),
            (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt)),
            managedSession(for: node, in: tree, now: now)?.id == session.id {
-            result.title = node.label
-            result.titleIsSessionName = false
+            result.title = node.title
+            result.titleIsSessionName = node.sessionTitle != nil
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
             let fields = Set([
                 "Model", "Branch", "Worktree", "Git evidence", "Git changes",
@@ -665,7 +665,7 @@ enum SidebarPresentation {
                 && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt))
                 && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(node.updatedAt))
             return .init(
-                title: node.label, visual: managedState(node, availability: availability, now: now, tree: tree),
+                title: node.title, visual: managedState(node, availability: availability, now: now, tree: tree),
                 lines: managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now),
                 notice: retained ? "Work context. \(retainedFocusUnavailable)"
                     : current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
@@ -1254,12 +1254,8 @@ enum SidebarPresentation {
         }
         let matches: [SidebarCopilotSession]
         if let sessionID = node.copilotSessionId {
-            matches = tree.sessions.filter {
-                $0.id == sessionID && $0.surfaceID == node.surfaceId
-                    && $0.workspaceID == node.workspaceId
-                    && $0.liveness == .alive
-                    && SidebarCopilotTree.isFresh($0.observedAt, now: now)
-            }
+            return tree.exactLiveSession(id: sessionID, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
+                                         now: now)
         } else if node.role == "coordinator", node.phase == "registered" {
             matches = tree.sessions.filter {
                 $0.surfaceID == node.surfaceId
