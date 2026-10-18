@@ -4100,7 +4100,8 @@ class RootCustodyTests(unittest.TestCase):
                 if index == 0:
                     self.assertNotIn("Coordinator return address:", context)
                 else:
-                    address = context.split("Coordinator return address: ", 1)[1].strip()
+                    address = context.split("Coordinator return address: ", 1)[1].split("\n", 1)[0]
+                    self.assertIn("find the coordinator's current address with maestro_peers", context)
                     self.assertEqual(json.loads(address), {
                         key: identity[key] for key in ("workspaceId", "sessionId", "generation")
                     })

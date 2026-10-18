@@ -3027,6 +3027,96 @@ class ChildResumeTests(unittest.TestCase):
             marker.chmod(0o666)
             self.assertTrue(CONTROLLER_API["session_has_live_owner"](session))  # unowned shape: uncertain
 
+    def test_a_resume_that_lands_but_reports_failure_still_starts_copilot(self):
+        for env in ({"FAKE_FAIL_STATE_FSYNC_AT": "2"}, {"FAKE_FAIL_PROJECTION_AT": "2"}):
+            with self.subTest(env=env):
+                _, child = self.ended_child()
+                calls = len(self.h.calls())
+                completed = self.resume(child, env=env)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(len(self.h.calls()), calls + 1)
+                node = self.h.state()["nodes"][child["id"]]
+                self.assertEqual((node["generation"], node["phase"]), (2, "turn-running"))
+                self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+
+    def test_resume_removes_the_earlier_generation_launch_script(self):
+        _, child = self.ended_child()
+        script = self.h.root / "control" / f"direct-{child['id']}-1.sh"
+        self.assertTrue(script.exists())
+        self.assertEqual(self.resume(child).returncode, 0)
+        self.assertFalse(script.exists())
+
+    def test_a_route_left_by_a_killed_resume_does_not_block_the_next(self):
+        _, child = self.ended_child()
+        orphan = {**child, "generation": child["generation"] + 1}
+        CONTROLLER_API["bind_messaging"](orphan)
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.h.state()["nodes"][child["id"]]["generation"], 2)
+
+    def test_an_exit_recorded_before_the_binding_lands_clears_it(self):
+        race = ("for node in state['nodes'].values():\n"
+                "    if node.get('launchMethod') == 'direct' and node.get('role') == 'worker':\n"
+                "        node['sessionEndedGeneration'] = node['generation']\n")
+        receipt = self.h.spawn_native("Synthetic child task", "Fast exit", env={**self.h.env, "FAKE_AFTER_RESUME_SET": race})
+        self.assertEqual(receipt["resumeBinding"], "unavailable")
+        self.assertNotIn(receipt["surfaceId"], self.h.cmux_data().get("resumeBindings", {}))
+        os.write(self.h.terminal_master, b"exit\n")
+        self.h.wait_node(receipt["workerId"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_a_resumed_launch_root_keeps_its_receipt_token_for_archive(self):
+        source = str(uuid.uuid4())
+        self.h.add_surface(source)
+        launched = self.h.run("launch-coordinator", "--workspace", self.h.workspace, "--surface", source,
+                              "--cwd", str(REPO), "--task", "Coordinate.", "--account", "synthetic-account",
+                              env={**self.h.env, "CMUX_SURFACE_ID": source})
+        root = self.h.wait_node(launched["coordinatorId"], lambda item: item.get("providerProcess") is not None)
+        os.write(self.h.terminal_master, b"exit\n")
+        root = self.h.wait_node(root["id"], lambda item: item["phase"] == "process-disappeared")
+        self.assertEqual(self.resume(root).returncode, 0)
+        resumed = self.h.state()["nodes"][root["id"]]
+        self.assertNotEqual(resumed["tokenHash"], root["tokenHash"])
+        self.assertEqual(resumed["ownerTokenHash"], root["tokenHash"])
+        self.assertFalse(CONTROLLER_API["process_observation"](resumed["providerProcess"]))
+        archived = self.h.run("archive", "--actor-id", root["id"], "--token", launched["controlToken"])
+        self.assertTrue(archived["archived"])
+        # Archive clears the launch's binding and keeps its surface owned; no token reached CMUX.
+        data = self.h.cmux_data()
+        self.assertNotIn(root["surfaceId"], data.get("resumeBindings", {}))
+        self.assertIn(["surface", "resume", "clear", "--workspace", self.h.workspace, "--surface", root["surfaceId"]],
+                      data["calls"])
+        self.assertTrue(any(item["surfaceId"] == root["surfaceId"] for item in self.h.state()["retainedResources"]))
+        self.assertNotIn(launched["controlToken"], json.dumps(data["calls"]))
+
+    def test_only_messaging_launches_get_or_honor_a_binding(self):
+        eligible = CONTROLLER_API["resume_binding_eligible"]
+        base = {"launchMethod": "direct", "messaging": {"version": 1, "routes": "/r", "extension": "/e"}}
+        self.assertTrue(eligible(base))
+        for change in ({"messaging": None}, {"deliveryProof": {"fixture": "x"}}, {"enrollment": "born"},
+                       {"launchMethod": None}):
+            self.assertFalse(eligible({**base, **change}), change)
+
+    def test_session_end_whose_projection_fails_still_clears_the_binding(self):
+        receipt = self.h.spawn_native("Synthetic child task", "Projection lag")
+        child = self.h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess") is not None)
+        result = self.session_end(child, env={"FAKE_FAIL_PROJECTION_AT": "1"})
+        self.assertEqual((result["returncode"], result.get("projection"), result["cleared"]), (0, "deferred", True))
+        self.assertNotIn(child["surfaceId"], self.h.cmux_data()["resumeBindings"])
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual(node["sessionEndedGeneration"], node["generation"])
+        os.write(self.h.terminal_master, b"exit\n")
+        self.h.wait_node(child["id"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_copilot_removed_during_the_credential_lookup_is_abandoned_cleanly(self):
+        _, child = self.ended_child()
+        removed = self.h.path / "copilot-removed"
+        self.h.gh.write_text(f"#!/bin/sh\nmv {self.h.copilot} {removed}\nprintf '%s\\n' synthetic-work-token\n")
+        self.addCleanup(lambda: removed.exists() and removed.rename(self.h.copilot))
+        self.refused(self.resume(child, env={"PATH": f"{self.h.bin}:/usr/bin:/bin"}), "Copilot could not start")
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node.get("runtimeNotStarted"), node["providerProcess"]), (2, True, None))
+        self.assertEqual(self.route_names(), [])
+
     def test_unrecorded_account_refuses(self):
         _, child = self.ended_child()
         self.h.change_state(lambda state: state["nodes"][child["id"]]["launchSettings"].pop("copilotAccount"))

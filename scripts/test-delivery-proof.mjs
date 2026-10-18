@@ -2135,6 +2135,41 @@ test("a resumed root's new generation messages its retained child; the old gener
   assert.deepEqual(f.sends.map(item => item.index), [1, 0]);
 });
 
+for (const [during, observed] of [["join", true], ["observe", true], ["observe", false]]) {
+  test(`a launch's exit during ${during} is ${observed ? "recorded after observation" : "dropped when observation fails"}`, async (t) => {
+    const f = await managedFixture(t, { owners: [0, 0] });
+    const own = f.bindings[0];
+    const ended = [];
+    let release;
+    const blocked = new Promise(resolve => { release = resolve; });
+    let exit;
+    const deliver = (hooks) => { exit = hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: own.sessionId }); };
+    let hooks;
+    const starting = start({
+      root: f.root, peer: own.peer, managed: true, endGate: createSessionEndGate(),
+      expected: { ...own, controller: "/synthetic/controller" },
+      endSession: async (request) => { ended.push(request); },
+      observe: async () => {
+        if (during === "observe") deliver(hooks);
+        await blocked;
+        if (!observed) throw new Error("observation refused");
+      },
+      joinSession: async (options) => {
+        hooks = options.hooks;
+        if (during === "join") deliver(hooks);
+        return { sessionId: own.sessionId };
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(ended.length, 0);
+    release();
+    if (observed) f.adapters.push(await starting);
+    else await assert.rejects(starting, /observation refused/);
+    await exit;
+    assert.equal(ended.length, observed ? 1 : 0);
+  });
+}
+
 test("native close supplies private invoking identity and one explicit target without account or observation calls", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];

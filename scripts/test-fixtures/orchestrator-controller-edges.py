@@ -23,8 +23,18 @@ def configure_fixture_controller(api, driver):
     controller = api["main"].__globals__
     controller.update(fixture_edges(os.environ, driver))
     controller["launch_reserved_session"] = legacy_fixture_launcher(controller["launch_reserved_session"], api)
-    if "FAKE_FAIL_STATE_FSYNC_AT" in os.environ:
+    if "FAKE_FAIL_STATE_FSYNC_AT" in os.environ or "FAKE_FAIL_PROJECTION_AT" in os.environ:
         controller["Store"]._atomic = staticmethod(failing_after_replace(controller["Store"]._atomic))
+    if "FAKE_AFTER_RESUME_SET" in os.environ:
+        cmux_type = controller["Cmux"]
+        original_set = cmux_type.set_resume_binding
+
+        def set_then_race(self, *args, **kwargs):
+            result = original_set(self, *args, **kwargs)
+            api["mutate"](controller["default_root"](),
+                          lambda state: exec(os.environ["FAKE_AFTER_RESUME_SET"], {"state": state}))
+            return result
+        cmux_type.set_resume_binding = set_then_race
     if "FAKE_RESUME_RACE" in os.environ:
         controller["mutate_retiring_routes"] = racing_resume(controller["mutate_retiring_routes"], api)
 
@@ -52,13 +62,15 @@ def legacy_fixture_launcher(original, api):
 
 
 def failing_after_replace(original):
-    """The Nth state.json write lands, then reports a failure (as a directory fsync error would)."""
-    count = [0]
+    """The Nth state.json (or current.json projection) write lands, then reports a failure."""
+    counts = {"state.json": 0, "current.json": 0}
+    limits = {"state.json": os.environ.get("FAKE_FAIL_STATE_FSYNC_AT"),
+              "current.json": os.environ.get("FAKE_FAIL_PROJECTION_AT")}
 
     def atomic(directory, name, data):
         original(directory, name, data)
-        if name == "state.json":
-            count[0] += 1
-            if count[0] == int(os.environ["FAKE_FAIL_STATE_FSYNC_AT"]):
+        if name in counts:
+            counts[name] += 1
+            if limits[name] is not None and counts[name] == int(limits[name]):
                 raise OSError("synthetic directory fsync failure after replace")
     return atomic
