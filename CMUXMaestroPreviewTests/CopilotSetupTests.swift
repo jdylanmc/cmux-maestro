@@ -1354,6 +1354,24 @@ struct CopilotSetupTests {
         #expect(throws: (any Error).self) { try local.removeMessaging(root: integration) }
         #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
         #expect(try asideCopies().isEmpty)
+        // If the file cannot be put back (something took its name), uninstall says where it is.
+        let squatter = Data("{\"version\":1,\"hooks\":{}}".utf8)
+        var blocked = local
+        blocked.afterCMUXHooksMovedAside = { try? squatter.write(to: swapped) }
+        do {
+            try blocked.removeMessaging(root: integration)
+            Issue.record("A failed put-back must be reported")
+        } catch let conflict as CopilotRegistrationConflict {
+            let aside = try #require(try asideCopies().first)
+            #expect(conflict.message.contains(restoreHooks.deletingLastPathComponent().appendingPathComponent(aside).path))
+            #expect(conflict.message.contains("to \(restoreHooks.path)."))
+            #expect(try Data(contentsOf: restoreHooks.deletingLastPathComponent().appendingPathComponent(aside))
+                == CopilotCMUXHooks.manifest())
+            try FileManager.default.removeItem(at: restoreHooks)
+            try FileManager.default.moveItem(at: restoreHooks.deletingLastPathComponent().appendingPathComponent(aside),
+                                             to: restoreHooks)
+        }
+        #expect(try asideCopies().isEmpty)
         try FileManager.default.removeItem(at: messaging)
         try local.removeMessaging(root: integration)
         #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))

@@ -431,6 +431,8 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
 
     /// Test seam: runs just before the CMUX hooks file is moved aside for removal.
     var beforeCMUXHooksRemoval: (@Sendable () -> Void)? = nil
+    /// Test seam: runs after the CMUX hooks file is moved aside, before the other removals.
+    var afterCMUXHooksMovedAside: (@Sendable () -> Void)? = nil
     /// Test seam: the shipped CMUX hooks manifests; nil means every manifest a release shipped.
     var shippedCMUXManifests: [Data]? = nil
 
@@ -444,6 +446,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         // file swapped in at that name is never deleted. It is deleted only after every other
         // removal succeeds; otherwise it goes back.
         let quarantine = try quarantineCMUXHooks()
+        if quarantine != nil { afterCMUXHooksMovedAside?() }
         do {
             // Remove only the installed entry point/configuration. Do not touch live
             // route bindings, sockets, cached children, or other extensions.
