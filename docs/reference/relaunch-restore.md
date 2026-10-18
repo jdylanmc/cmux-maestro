@@ -103,4 +103,4 @@ Cases (quit CMUX with ⌘Q and reopen it unless noted):
 9. Sign in to a different account than the born root recorded, then relaunch: it stays unmanaged with `account-mismatch` naming the recorded login.
 10. `/exit` a child, then relaunch: it does not come back.
 11. A live session: running its resume command refuses. A signed-out recorded account: one line naming it.
-12. No managed tab appears in `~/.cmuxterm/copilot-hook-sessions.json`, and `cmux surface resume show --json` holds no token.
+12. No Maestro-launched tab (`maestro_spawn` child or `launch-coordinator` root, which run with `CMUX_COPILOT_HOOKS_DISABLED=1`) appears in `~/.cmuxterm/copilot-hook-sessions.json`, while each born root does have its CMUX restore record there. `cmux surface resume show --json` holds no token.
