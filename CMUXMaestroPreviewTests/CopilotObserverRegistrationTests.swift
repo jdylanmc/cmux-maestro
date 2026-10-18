@@ -14,6 +14,7 @@ final class ObserverFixture: Sendable {
     var file: URL { provider.appendingPathComponent("hooks/\(CopilotObserverRegistration.filename)") }
     var settings: URL { provider.appendingPathComponent("settings.json") }
     var helperRecord: URL { root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/identity-helper.json") }
+    var cmuxHooksMarker: URL { home.appendingPathComponent("cmux-hooks-installed") }
     var registration: CopilotObserverRegistration {
         CopilotObserverRegistration(home: home, root: root, helper: helper,
                                     alternateHome: nil, processHome: home.path)
@@ -98,14 +99,28 @@ struct ObserverSetupFiles: CopilotSetupFileSystem {
     let fixture: ObserverFixture
     var failPrepare = false
     var failRemoval = false
+    var foreignCMUXHooks: String?
+    /// A foreign file that appeared at the CMUX hooks name after preflight: publish refuses it by name.
+    var cmuxInstallRefusal: String?
     func executable(selected: URL?, path: String) throws -> URL { fixture.helper }
+    /// Records that standalone setup wrote the CMUX hooks (only after the plugin is published).
+    func installCMUXHooks() throws {
+        if let cmuxInstallRefusal { throw CopilotResourcePreparationFailure(outcome: .untouched, detail: cmuxInstallRefusal) }
+        try fixture.write(Data("written".utf8), to: fixture.cmuxHooksMarker)
+    }
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         if failPrepare { throw CopilotFileError.io }
         try fixture.write(["helper": helper.path], to: fixture.helperRecord)
         return fixture.source
     }
-    func removeMessaging(root: URL) throws {
+    func removeMessaging(root: URL) throws -> String? {
         if failRemoval { throw CopilotFileError.io }
+        return foreignCMUXHooks
+    }
+    /// The real recovery, against the fixture's provider home.
+    func reconcileCMUXHooks() throws {
+        try LocalCopilotSetupFiles(nativeExtensions: fixture.provider.appendingPathComponent("extensions"))
+            .reconcileCMUXHooks()
     }
 }
 
@@ -122,7 +137,9 @@ struct FailingResourceSetupFiles: CopilotSetupFileSystem {
         try plan.publish()
         return fixture.source
     }
-    func removeMessaging(root: URL) throws {}
+    func removeMessaging(root: URL) throws -> String? { nil }  // resource failure double: no CMUX hooks file
+    func reconcileCMUXHooks() throws {}  // resource failure double: no CMUX hooks leftovers
+    func installCMUXHooks() throws {}
 }
 
 actor ObserverSetupRunner: CopilotSetupProcessRunner {
@@ -152,6 +169,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
     private var writtenSettings: CopilotSetupFileState?
     private var ownedRowsOverride: [CopilotSetupMetadata.Hook]?
     private var unrelatedRows: [CopilotSetupMetadata.Hook] = []
+    private var cmuxRows: (fromCall: Int, rows: [CopilotSetupMetadata.Hook])?
+    private var cmuxRowsWhenWritten = false
     private var unrelatedPlugins: [CopilotSetupMetadata.Plugin] = []
     private var suppliedVersion: String?
 
@@ -173,6 +192,20 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         unrelatedRows = unrelated
         unrelatedPlugins = plugins
         suppliedVersion = version
+    }
+    /// Copilot discovery starts reporting Maestro's CMUX hooks file once setup has written it.
+    func reportCMUXHooks(fromMetadataCall call: Int, enabled: Bool, absolute: Bool = false) {
+        let source = absolute ? fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)").path
+            : "hooks/\(CopilotCMUXHooks.filename)"
+        cmuxRows = (call, CopilotCMUXHooks.events.map { item in
+            .init(hookType: item.event, origin: "user", source: source, enabled: enabled,
+                  disableKey: "cmux-hooks-\(item.event)")
+        })
+    }
+    /// Like real discovery: rows appear exactly while the CMUX hooks file exists on disk.
+    func reportCMUXHooksWhenWritten(absolute: Bool = false) {
+        reportCMUXHooks(fromMetadataCall: 1, enabled: true, absolute: absolute)
+        cmuxRowsWhenWritten = true
     }
     func nativePlugin(enabled: Bool = true, loseReceipt: Bool = false,
                       receiptIdentity: String = "opaque-provider-source") {
@@ -283,7 +316,13 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
                 rows = ownedRowsOverride
             }
             value = CopilotSetupMetadata(version: suppliedVersion ?? value.version, protocolVersion: value.protocolVersion,
-                                        hooks: rows + unrelatedRows, plugins: value.plugins + unrelatedPlugins)
+                                        hooks: rows + unrelatedRows
+                                            + (cmuxRows.map { metadataCalls >= $0.fromCall
+                                                && (!cmuxRowsWhenWritten || FileManager.default.fileExists(
+                                                    atPath: fixture.provider.appendingPathComponent(
+                                                        "hooks/\(CopilotCMUXHooks.filename)").path))
+                                                ? $0.rows : [] } ?? []),
+                                        plugins: value.plugins + unrelatedPlugins)
             return .value(value)
         } catch { return .failed(.unavailable) }
     }
@@ -440,8 +479,11 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
             let keys = settings["disabledHooks"] as? [String] ?? []
             let global = settings["disableAllHooks"] as? Bool ?? false
             var hooks: [CopilotSetupMetadata.Hook] = []
-            for (url, origin, source) in [
-                (provider.appendingPathComponent("hooks/cmux-maestro-observer.json"), "user", "hooks/cmux-maestro-observer.json"),
+            // Like Copilot discovery: every user hook file, including Maestro's CMUX hooks file.
+            let hookDirectory = provider.appendingPathComponent("hooks")
+            let userFiles = ((try? FileManager.default.contentsOfDirectory(atPath: hookDirectory.path)) ?? [])
+                .filter { $0.hasSuffix(".json") }.sorted()
+            for (url, origin, source) in userFiles.map({ (hookDirectory.appendingPathComponent($0), "user", "hooks/\($0)") }) + [
                 (cache.appendingPathComponent("hooks.json"), "plugin", CopilotPluginManifest.name),
             ] {
                 if origin == "plugin" && !installed { continue }
@@ -449,7 +491,8 @@ private actor CheckpointProcessProvider: CopilotSetupProcessRunner {
                 let value = try CopilotSetupJSON.object(Data(contentsOf: url))
                 let disabled = value["disableAllHooks"] as? Bool ?? false
                 for event in (value["hooks"] as? [String: Any] ?? [:]).keys {
-                    let key = "fixture-key-\(event)"
+                    let key = source == "hooks/cmux-maestro-observer.json" || origin == "plugin"
+                        ? "fixture-key-\(event)" : "\(source):\(event)"
                     hooks.append(.init(hookType: event, origin: origin, source: source,
                         enabled: !disabled && !global && !keys.contains(key), disableKey: disabled ? nil : key))
                 }
@@ -581,6 +624,86 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: [false, true])
+    func resourceOnlyRestoreRemovesTheCMUXHooksItWrote(absolute: Bool) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try FileManager.default.removeItem(at: file)  // an install from before this file existed
+        await value.runner.nativePlugin(enabled: false)
+        await value.runner.reportCMUXHooksWhenWritten(absolute: absolute)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        let before = try value.record()
+        _ = try await value.checkpoint(id: id).perform("apply")
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        _ = try await value.checkpoint(id: id).perform("restore")
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        try value.verifyRestored(before)
+        _ = try await value.checkpoint(id: id).perform("release")
+    }
+
+    @Test func resourceOnlyCheckpointAtTheHookListingBoundStillRestoresAndReleases() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let hooks = value.fixture.provider.appendingPathComponent("hooks")
+        try FileManager.default.removeItem(at: hooks.appendingPathComponent(CopilotCMUXHooks.filename))
+        let present = try FileManager.default.contentsOfDirectory(atPath: hooks.path).count
+        for index in 0..<(128 - present) {
+            try Data("note".utf8).write(to: hooks.appendingPathComponent("note-\(index).txt"))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: hooks.path).count == 128)
+        await value.runner.nativePlugin(enabled: false)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        _ = try await value.checkpoint(id: id).perform("apply")  // 129 entries with Maestro's file
+        _ = try await value.checkpoint(id: id).perform("restore")
+        _ = try await value.checkpoint(id: id).perform("release")
+        #expect(!FileManager.default.fileExists(atPath: hooks.appendingPathComponent(CopilotCMUXHooks.filename).path))
+    }
+
+    @Test(arguments: ["symlink", "empty", "oversized", "malformed", "array", "duplicate-key"])
+    func coordinatedPrepareNamesAnUnreadableCMUXHooksOccupant(occupant: String) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try placeOccupant(occupant, at: file)
+        do {
+            _ = try await value.checkpoint().perform("prepare")
+            Issue.record("An unreadable CMUX hooks occupant must refuse coordinated prepare by name")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains(file.path))
+        }
+        #expect(try CopilotSetupFileState.read(value.fixture.file).data == nil)
+    }
+
+    @Test func coordinatedPrepareNamesAForeignCMUXHooksFile() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try value.fixture.write(Data("{\"version\":1,\"hooks\":{}}".utf8), to: file)
+        do {
+            _ = try await value.checkpoint().perform("prepare")
+            Issue.record("A foreign CMUX hooks file must refuse coordinated prepare")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains(file.path))
+        }
+        #expect(try Data(contentsOf: file) == Data("{\"version\":1,\"hooks\":{}}".utf8))
+    }
+
+    @Test func checkpointTreatsCMUXHooksWrittenDuringApplyAsMaestroOwned() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        await value.runner.reportCMUXHooksWhenWritten()
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        #expect(try Data(contentsOf: file) == CopilotCMUXHooks.manifest())
+    }
+
     @Test(arguments: [false, true])
     func deletedExistingReceiptIsNotAnAuthorizedNilPlaceholder(durableAfter: Bool) async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
@@ -1195,6 +1318,100 @@ struct CopilotObserverRegistrationTests {
         #expect(await runner.providerHomes.allSatisfy { $0?.path == fixture.provider.path })
     }
 
+    @Test func cmuxHooksAppearingDuringSetupAreMaestroOwnedNotForeign() async throws {
+        // Real discovery reports the CMUX hooks file's rows once resources are published, enabled
+        // or disabled, by relative or absolute source; install and reinstall still verify.
+        for (enabled, absolute) in [(true, false), (false, false), (true, true), (false, true)] {
+            let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+            let runner = ObserverSetupRunner(fixture)
+            await runner.reportCMUXHooks(fromMetadataCall: 2, enabled: enabled, absolute: absolute)
+            #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+            #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        }
+    }
+
+    @Test func standaloneSetupWritesCMUXHooksOnlyAfterThePluginIsPublished() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.configure(result: .exited(1))
+        guard case .incomplete = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("A failed plugin command must leave setup incomplete"); return
+        }
+        #expect(!FileManager.default.fileExists(atPath: fixture.cmuxHooksMarker.path))
+        let healthy = try ObserverFixture(); defer { try? healthy.clean() }
+        #expect(await perform(setup(healthy, runner: ObserverSetupRunner(healthy)), healthy) == .installed)
+        #expect(FileManager.default.fileExists(atPath: healthy.cmuxHooksMarker.path))
+    }
+
+    @Test(arguments: ["symlink", "empty", "oversized", "malformed", "array", "duplicate-key"])
+    func setupAndUninstallNameAnUnreadableCMUXHooksOccupant(occupant: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        let file = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try placeOccupant(occupant, at: file)
+        for action in [CopilotSetupAction.install, .uninstall] {
+            guard case .conflict(let reason) = await perform(setup(fixture, runner: runner), fixture, action: action) else {
+                Issue.record("\(action) must refuse an unreadable CMUX hooks occupant by name"); continue
+            }
+            #expect(reason.contains(file.path))
+        }
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+        #expect(await runner.calls.isEmpty)
+    }
+
+    @Test func cmuxHookRowsAreMaestroOwnedOnlyWhileTheFileIsNotForeign() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let row = CopilotSetupMetadata.Hook(hookType: "SessionStart", origin: "user",
+                                            source: "hooks/\(CopilotCMUXHooks.filename)", enabled: true, disableKey: nil)
+        let file = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        #expect(fixture.registration.isMaestroHookSource(row))  // absent
+        try fixture.write(try CopilotCMUXHooks.manifest(), to: file)
+        #expect(fixture.registration.isMaestroHookSource(row))  // Maestro's bytes
+        try fixture.write(Data("{\"version\":1,\"hooks\":{}}".utf8), to: file)
+        #expect(!fixture.registration.isMaestroHookSource(row))  // someone else's file at the name
+    }
+
+    @Test func aForeignFileAtTheCMUXHooksNameIsScannedForTheHelper() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        let file = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try fixture.write(try CopilotSetupJSON.data(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)]),
+                          to: file)
+        guard case .conflict(let reason) = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("A foreign file calling the helper must refuse setup"); return
+        }
+        #expect(reason.contains("refers to the observer helper"))
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)  // no owned observer file written
+    }
+
+    @Test func aDisabledCMUXHookIsAnAccountedDisableKeyNotAnUnresolvedOne() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.reportCMUXHooks(fromMetadataCall: 1, enabled: false)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        // The human disables one CMUX Copilot hook in Copilot settings, then setup runs again.
+        try fixture.write(["disabledHooks": ["cmux-hooks-SessionStart"]], to: fixture.settings)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+    }
+
+    @Test func oneMaestroHookSourcePredicateCoversEveryOwnedSource() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let registration = fixture.registration
+        func row(_ origin: String, _ source: String) -> CopilotSetupMetadata.Hook {
+            .init(hookType: "sessionStart", origin: origin, source: source, enabled: true, disableKey: nil)
+        }
+        for owned in [row("user", "hooks/\(CopilotObserverRegistration.filename)"), row("user", registration.file.path),
+                      row("user", "hooks/\(CopilotCMUXHooks.filename)"),
+                      row("user", fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)").path),
+                      row("plugin", CopilotPluginManifest.name)] {
+            #expect(registration.isMaestroHookSource(owned))
+        }
+        for foreign in [row("user", "hooks/other.json"), row("plugin", "hooks/\(CopilotCMUXHooks.filename)"),
+                        row("project", "hooks/\(CopilotCMUXHooks.filename)"), row("plugin", "other@community")] {
+            #expect(!registration.isMaestroHookSource(foreign))
+        }
+    }
+
     @Test func legacyMigrationHasNoEnabledDuplicateAndPreservesWrapper() async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         try fixture.legacy()
@@ -1657,6 +1874,223 @@ struct CopilotObserverRegistrationTests {
                                       helper: moved, controller: fixture.helper, skill: fixture.helper) == .installed)
         #expect(registration.health() == .currentOnDisk)
         #expect(try String(contentsOf: fixture.file, encoding: .utf8).contains("Moved.app"))
+    }
+
+    private func unrelatedRows(_ count: Int, fixture: ObserverFixture) throws -> [CopilotSetupMetadata.Hook] {
+        try fixture.write(["version": 1, "hooks": ["sessionStart": [["type": "command", "bash": ":"]]]],
+            to: fixture.file.deletingLastPathComponent().appendingPathComponent("unrelated.json"))
+        return (0..<count).map {
+            .init(hookType: "sessionStart", origin: "user", source: "hooks/unrelated.json",
+                  enabled: true, disableKey: "unrelated-\($0)")
+        }
+    }
+
+    @Test func metadataParserSharesTheHookRowBound() throws {
+        for (count, accepted) in [(CopilotSetupMetadata.maximumHooks, true), (CopilotSetupMetadata.maximumHooks + 1, false)] {
+            let exchange = try CopilotMetadataExchange()
+            defer { exchange.closeAll() }
+            let rows = (0..<count).map {
+                ["hookType": "sessionStart", "origin": "user", "source": "hooks/h.json", "enabled": true, "disableKey": "k\($0)"]
+            }
+            let responses: [[String: Any]] = [
+                ["jsonrpc": "2.0", "id": 1, "result": ["version": "1.0.89", "protocolVersion": 3]],
+                ["jsonrpc": "2.0", "id": 2, "result": ["hooks": rows, "warnings": [], "errors": []]],
+                ["jsonrpc": "2.0", "id": 3, "result": ["plugins": []]],
+            ]
+            var failed = false
+            for object in responses {
+                let body = try JSONSerialization.data(withJSONObject: object)
+                let framed = Data("Content-Length: \(body.count)\r\n\r\n".utf8) + body
+                var offset = 0
+                while offset < framed.count, !failed {
+                    let chunk = framed.subdata(in: offset..<min(offset + 8192, framed.count))
+                    #expect(chunk.withUnsafeBytes { Darwin.write(exchange.output[1], $0.baseAddress, $0.count) } == chunk.count)
+                    offset += chunk.count
+                    do { try exchange.poll() } catch { failed = true }
+                }
+            }
+            #expect(failed == !accepted)
+            #expect((exchange.snapshot?.hooks.count == count) == accepted)
+        }
+    }
+
+    @Test func setupReservesOwnedHookRowsBeforeChangingAnything() async throws {
+        // Installed: observer rows reported, CMUX hooks file not yet. 252 rows + 4 CMUX rows fit; 253 do not.
+        for (unrelated, fits) in [(249, true), (250, false)] {
+            let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+            let runner = ObserverSetupRunner(fixture)
+            #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+            try? FileManager.default.removeItem(at: fixture.cmuxHooksMarker)
+            await runner.supplyMetadata(unrelated: try unrelatedRows(unrelated, fixture: fixture))
+            let observer = try Data(contentsOf: fixture.file)
+            let calls = await runner.calls
+            let result = await perform(setup(fixture, runner: runner), fixture)
+            if fits {
+                #expect(result == .installed)
+                #expect(FileManager.default.fileExists(atPath: fixture.cmuxHooksMarker.path))
+            } else {
+                guard case .conflict(let reason) = result else {
+                    Issue.record("Rows past the bound must refuse before any change, got \(result)"); continue
+                }
+                #expect(reason.contains("257"))
+                #expect(!FileManager.default.fileExists(atPath: fixture.cmuxHooksMarker.path))
+                #expect(try Data(contentsOf: fixture.file) == observer)
+                #expect(await runner.calls == calls)
+            }
+        }
+        // The coordinated checkpoint reserves the same rows before it records anything.
+        for (unrelated, fits) in [(249, true), (250, false)] {
+            let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+            await value.runner.supplyMetadata(unrelated: try unrelatedRows(unrelated, fixture: value.fixture))
+            let journal = CopilotInstallCheckpoint.location(root: value.fixture.root)
+            do {
+                _ = try await value.checkpoint().perform("prepare")
+                #expect(fits)
+            } catch let conflict as CopilotRegistrationConflict {
+                #expect(!fits)
+                #expect(conflict.message.contains("256"))
+                #expect(!FileManager.default.fileExists(atPath: journal.path))
+            }
+        }
+    }
+
+    @Test func aPartlyReportedOwnedFileStillReservesItsMissingRows() async throws {
+        let partial = CopilotSetupMetadata.Hook(hookType: "SessionStart", origin: "user",
+            source: "hooks/\(CopilotCMUXHooks.filename)", enabled: true, disableKey: "cmux-partial")
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        // 250 others + 3 observer + 1 CMUX row reported: the 3 missing CMUX rows make 257.
+        await runner.supplyMetadata(unrelated: try unrelatedRows(250, fixture: fixture) + [partial])
+        let observer = try Data(contentsOf: fixture.file)
+        let calls = await runner.calls
+        guard case .conflict(let reason) = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("A partly reported owned file must still reserve its missing rows"); return
+        }
+        #expect(reason.contains("257"))
+        #expect(try Data(contentsOf: fixture.file) == observer)
+        #expect(await runner.calls == calls)
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        await value.runner.supplyMetadata(unrelated: try unrelatedRows(250, fixture: value.fixture) + [partial])
+        do {
+            _ = try await value.checkpoint().perform("prepare")
+            Issue.record("Coordinated prepare must reserve the missing rows too")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains("257"))
+        }
+        #expect(!FileManager.default.fileExists(atPath: CopilotInstallCheckpoint.location(root: value.fixture.root).path))
+    }
+
+    @Test func checkpointRestoreFinishesACMUXHooksPublishInterruptedAfterTheMoveAside() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        let hooks = file.deletingLastPathComponent()
+        #expect(try Data(contentsOf: file) == CopilotCMUXHooks.manifest())
+        try value.fixture.write(Data("#!/usr/bin/env python3\n# updated fixture\n".utf8),
+                                to: value.resources.appendingPathComponent("controller.py"))
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        // The process died inside publish: phase applying, the file moved aside, a staged copy left.
+        let journal = CopilotInstallCheckpoint.location(root: value.fixture.root)
+        var saved = try CopilotSetupJSON.object(Data(contentsOf: journal))
+        saved["phase"] = "applying"
+        try value.fixture.write(saved, to: journal)
+        try FileManager.default.moveItem(at: file, to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)crash"))
+        try CopilotCMUXHooks.manifest().write(to: hooks.appendingPathComponent(".\(CopilotCMUXHooks.filename).pending-crash"))
+        _ = try await value.checkpoint(id: id).perform("restore")
+        _ = try await value.checkpoint(id: id).perform("release")
+        #expect(try Data(contentsOf: file) == CopilotCMUXHooks.manifest())
+        #expect(try FileManager.default.contentsOfDirectory(atPath: hooks.path)
+            .filter { $0.contains(".removing-") || $0.contains(".pending-") }.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: journal.path))
+    }
+
+    @Test func strandedAsideCopiesDoNotCountAgainstTheHooksDirectoryBudget() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        let hooks = fixture.file.deletingLastPathComponent()
+        for index in 0..<128 {
+            try fixture.write(Data("note".utf8), to: hooks.appendingPathComponent("note-\(index).txt"))
+        }
+        let aside = hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)stranded")
+        try fixture.write(try CopilotCMUXHooks.manifest(), to: aside)
+        #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) == .uninstalled)
+        // More stranded copies than an interrupted uninstall can leave are too many entries for
+        // validation, but setup recovers Maestro's own copies under its lease before validating.
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        for index in 0..<3 {
+            try fixture.write(try CopilotCMUXHooks.manifest(),
+                              to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)extra-\(index)"))
+        }
+        #expect(throws: CMUXMaestroPreview.CopilotFileError.tooLarge) { try fixture.registration.validateLocal() }
+        #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) == .uninstalled)
+    }
+
+    @Test func setupRecoversInterruptedCMUXHooksWorkBeforeValidatingAFullHooksDirectory() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        let hooks = fixture.file.deletingLastPathComponent()
+        let cmux = hooks.appendingPathComponent(CopilotCMUXHooks.filename)
+        for index in 0..<128 {
+            try fixture.write(Data("note".utf8), to: hooks.appendingPathComponent("note-\(index).txt"))
+        }
+        func leftovers() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: hooks.path)
+                .filter { $0.hasPrefix(CopilotObserverRegistration.asidePrefix) || $0.hasPrefix(CopilotObserverRegistration.pendingPrefix) }
+        }
+        // A staged copy a crash left is transaction state, not one of the 128 other entries.
+        let pending = hooks.appendingPathComponent("\(CopilotObserverRegistration.pendingPrefix)crash")
+        try fixture.write(try CopilotCMUXHooks.manifest(), to: pending)
+        try fixture.registration.validateLocal()
+        for action in [CopilotSetupAction.install, .uninstall] {
+            try fixture.write(try CopilotCMUXHooks.manifest(), to: pending)
+            let result = await perform(setup(fixture, runner: runner), fixture, action: action)
+            #expect(result == (action == .install ? .installed : .uninstalled))
+            #expect(try leftovers().isEmpty)
+        }
+        // A foreign file an interrupted uninstall hid goes back before validation and the rollback
+        // baseline are read, at the bound, for setup and uninstall alike.
+        let foreign = Data("{\"version\":1,\"hooks\":{}}".utf8)
+        for action in [CopilotSetupAction.install, .uninstall] {
+            try? FileManager.default.removeItem(at: cmux)
+            try fixture.write(foreign, to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)crash"))
+            let result = await perform(setup(fixture, runner: runner), fixture, action: action)
+            #expect(!result.message.contains("A required file is unsafe"))
+            #expect(try Data(contentsOf: cmux) == foreign)
+            #expect(try leftovers().isEmpty)
+        }
+    }
+
+    @Test func aForeignCMUXHooksFileAppearingDuringSetupIsANamedIncomplete() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        var files = ObserverSetupFiles(fixture: fixture)
+        let path = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)").path
+        files.cmuxInstallRefusal = CopilotCMUXHooks.Conflict(path: path).message
+        guard case .incomplete(_, let reason) = await perform(setup(fixture, runner: runner, files: files), fixture) else {
+            Issue.record("A foreign file found at publish must leave a named incomplete setup"); return
+        }
+        #expect(reason.contains(path))
+        #expect(!FileManager.default.fileExists(atPath: fixture.cmuxHooksMarker.path))
+        // Once the file is moved away, rerunning setup completes.
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        #expect(FileManager.default.fileExists(atPath: fixture.cmuxHooksMarker.path))
+    }
+
+    @Test func uninstallNamesACMUXHooksFileItLeftInPlace() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
+        var files = ObserverSetupFiles(fixture: fixture)
+        files.foreignCMUXHooks = "/synthetic/.copilot/hooks/\(CopilotCMUXHooks.filename)"
+        let result = await perform(setup(fixture, runner: runner, files: files), fixture, action: .uninstall)
+        #expect(result == .uninstalledKeeping("/synthetic/.copilot/hooks/\(CopilotCMUXHooks.filename)"))
+        #expect(result.message.contains("was not written by Maestro and was left in place"))
     }
 
     @Test func interruptedRemovalRetainsOtherStateAndCanRetry() async throws {
@@ -2411,5 +2845,20 @@ struct CopilotObserverRegistrationTests {
         gate.signal()
         #expect(await task.value)
         #expect(try String(contentsOf: file, encoding: .utf8) == "writer-finished")
+    }
+}
+
+/// Puts something at the CMUX hooks name that cannot be read as Maestro's bytes.
+func placeOccupant(_ occupant: String, at file: URL) throws {
+    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    switch occupant {
+    case "symlink":
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: file.deletingLastPathComponent()
+            .appendingPathComponent("elsewhere.json"))
+    case "empty": try Data().write(to: file)
+    case "malformed": try Data("{".utf8).write(to: file)
+    case "array": try Data("[]".utf8).write(to: file)
+    case "duplicate-key": try Data("{\"version\":1,\"version\":1,\"hooks\":{}}".utf8).write(to: file)
+    default: try Data(repeating: 0x20, count: 70_000).write(to: file)
     }
 }

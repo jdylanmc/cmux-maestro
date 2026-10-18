@@ -138,6 +138,10 @@ _Avoid_: restart, reboot
 Managed session with no live or uncertain process: the recorded process is observed ended and no live `inuse.<PID>.lock` owner exists.
 _Avoid_: dead session, stale session
 
+**CMUX Copilot hooks**:
+CMUX's own Copilot hook commands (session start, stop, notification, session end), which setup installs in Maestro's owned `~/.copilot/hooks/cmux-maestro-cmux-hooks.json` so CMUX's restore can find sessions you start. Not a resume binding.
+_Avoid_: restore hook
+
 **Resume binding**:
 CMUX restart command (`<controller> resume <session-id>`) Maestro attaches to a launched session's exact surface. Identifiers only. Cleared when that session ends with `/exit` (a `SessionEnd` with no hangup before it).
 _Avoid_: restore hook

@@ -20,6 +20,7 @@ nonisolated enum CopilotSetupAccess {
 
 nonisolated enum CopilotSetupResult: Equatable, Sendable {
     case installed, uninstalled, unavailable, failed(Int32), timedOut, cancelled, validationOnly
+    case uninstalledKeeping(String)
     case installedDisabled
     case installedPartiallyDisabled, installedDisableUnresolved
     case conflict(String)
@@ -37,6 +38,8 @@ nonisolated enum CopilotSetupResult: Equatable, Sendable {
             "Owned registration is verified on disk, but applicability of configured disable keys is unresolved. No keys were changed; loaded behavior is not verified."
         case .uninstalled:
             "Owned observer registration and the native plugin are removed, and new messaging entry points are disabled. Existing sessions may retain cached hooks and adapters; close them normally."
+        case .uninstalledKeeping(let path):
+            "Owned observer registration and the native plugin are removed, and new messaging entry points are disabled. \(path) was not written by Maestro and was left in place. Existing sessions may retain cached hooks and adapters; close them normally."
         case .unavailable:
             "Setup could not access the selected executable, bundled helper, or integration directory. Choose a trusted Copilot CLI executable and retry."
         case .failed(let status):
@@ -213,12 +216,20 @@ nonisolated enum CopilotPluginManifest {
 nonisolated protocol CopilotSetupFileSystem: Sendable {
     func executable(selected: URL?, path: String) throws -> URL
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL
-    func removeMessaging(root: URL) throws
+    /// Returns the path of a file Maestro did not write that it left at the CMUX hooks name.
+    func removeMessaging(root: URL) throws -> String?
+    /// Finishes a CMUX hooks publish or uninstall a crash interrupted; setup runs it under its lease first.
+    func reconcileCMUXHooks() throws
+    /// Standalone setup writes the CMUX hooks file only after the plugin is verified and published.
+    func installCMUXHooks() throws
 }
+
 
 nonisolated struct CopilotResourcePreparationFailure: Error {
     enum Outcome { case untouched, restored, unverified }
     let outcome: Outcome
+    /// A named, user-actionable cause, such as a hook file Maestro did not write.
+    var detail: String? = nil
     var restored: Bool { outcome == .restored }
 }
 
@@ -228,10 +239,14 @@ nonisolated struct CopilotPluginResources {
         let data: Data?
         var permissions: UInt16 = 0o600
         var maximum: Int = 65_536
+        /// The bytes this write may replace (absent included); checked against publish's own snapshot.
+        var replaces: (@Sendable (Data?) -> Bool)? = nil
+        var refusal: String? = nil
     }
 
     let writes: [Write]
-    let routes: URL
+    /// The private route directory these resources configure; nil when they configure none.
+    let routes: URL?
 
     func publish() throws {
         let before: [CopilotSetupFileState]
@@ -243,10 +258,19 @@ nonisolated struct CopilotPluginResources {
                   })
             else { throw CopilotFileError.tooLarge }
             before = try writes.map { try CopilotSetupFileState.read($0.file, maximum: $0.maximum) }
-            let routeDirectory = try HookFiles.directory(routes, create: true)
-            defer { close(routeDirectory) }
-            let info = try HookFiles.metadata(routeDirectory, directory: true)
-            guard info.st_mode & 0o777 == 0o700 else { throw CopilotFileError.unsafePath }
+            if let refused = zip(writes, before).first(where: { write, state in
+                write.replaces.map { !$0(state.data) } ?? false
+            }) {
+                throw CopilotResourcePreparationFailure(outcome: .untouched, detail: refused.0.refusal)
+            }
+            if let routes {
+                let routeDirectory = try HookFiles.directory(routes, create: true)
+                defer { close(routeDirectory) }
+                let info = try HookFiles.metadata(routeDirectory, directory: true)
+                guard info.st_mode & 0o777 == 0o700 else { throw CopilotFileError.unsafePath }
+            }
+        } catch let failure as CopilotResourcePreparationFailure {
+            throw failure
         } catch {
             throw CopilotResourcePreparationFailure(outcome: .untouched)
         }
@@ -319,15 +343,19 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
     }
 
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
+        // Finish an interrupted publish or uninstall first, so a hidden file is back and checked.
+        try reconcileCMUXHooks()
         let plan: CopilotPluginResources
-        do { plan = try resources(root: root, helper: helper, controller: controller, skill: skill) }
-        catch { throw CopilotResourcePreparationFailure(outcome: .untouched) }
+        do { plan = try resources(root: root, helper: helper, controller: controller, skill: skill, includeCMUXHooks: false) }
+        catch let conflict as CopilotCMUXHooks.Conflict {
+            throw CopilotResourcePreparationFailure(outcome: .untouched, detail: conflict.message)
+        } catch { throw CopilotResourcePreparationFailure(outcome: .untouched) }
         try plan.publish()
         return root.appendingPathComponent("plugin", isDirectory: true)
     }
 
     func resources(root: URL, helper: URL, controller: URL, skill: URL,
-                   helperExecutable: URL? = nil) throws -> CopilotPluginResources {
+                   helperExecutable: URL? = nil, includeCMUXHooks: Bool = true) throws -> CopilotPluginResources {
         let iconSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-icon/SKILL.md")
         let petSkill = skill.deletingLastPathComponent().appendingPathComponent("maestro-pet/SKILL.md")
         let petKit = skill.deletingLastPathComponent().appendingPathComponent("maestro-pet/pet_kit.py")
@@ -360,6 +388,8 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         guard routes.appendingPathComponent(String(repeating: "0", count: 16) + ".sock").path.utf8.count <= 100 else {
             throw HookFiles.Failure.unavailable
         }
+        // Never replace a hook file Maestro did not write; preserve every other hook.
+        if try cmuxHooksOccupant() == .foreign { throw CopilotCMUXHooks.Conflict(path: cmuxHooksFile.path) }
         let plugin = root.appendingPathComponent("plugin", isDirectory: true)
         let orchestration = root.deletingLastPathComponent()
             .appendingPathComponent("Orchestration", isDirectory: true)
@@ -379,6 +409,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
             ], options: [.sortedKeys])),
         ]
+        if includeCMUXHooks { writes.append(try cmuxHooksWrite()) }
         for (index, resource) in glyphData.enumerated() {
             writes.append(.init(file: bin.appendingPathComponent("NerdFonts/\(resource.0)"),
                                 data: resource.1, maximum: glyphFiles[index].1))
@@ -405,22 +436,312 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         return plugin.appendingPathComponent("skills/maestro/SKILL.md")
     }
 
-    func removeMessaging(root: URL) throws {
-        // Remove only the installed entry point/configuration. Do not touch live
-        // route bindings, sockets, cached children, or other extensions.
-        let targets = [
-            nativeExtensions.appendingPathComponent("maestro/extension.mjs"),
-            root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/messaging.json"),
-        ]
-        for target in targets {
-            let directory: Int32
-            do {
-                directory = try CopilotFileAccess.openDirectory(target.deletingLastPathComponent(), owner: getuid())
-            } catch CopilotFileError.missing { continue }
-            defer { close(directory) }
-            if unlinkat(directory, target.lastPathComponent, 0) != 0, errno != ENOENT {
-                throw HookFiles.Failure.unavailable
+    var cmuxHooksFile: URL {
+        nativeExtensions.deletingLastPathComponent().appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+    }
+
+    enum CMUXHooksOccupant { case absent, owned, foreign }
+
+    /// What sits at the CMUX hooks name, without following links. Anything present that is not a
+    /// readable shipped manifest (a link, an empty or oversized file, other bytes) is foreign.
+    /// An unsafe or unreadable hooks directory stays a generic failure.
+    func cmuxHooksOccupant() throws -> CMUXHooksOccupant {
+        let directory: Int32
+        do {
+            directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+        } catch CopilotFileError.missing { return .absent }
+        defer { close(directory) }
+        var info = stat()
+        guard fstatat(directory, cmuxHooksFile.lastPathComponent, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
+            if errno == ENOENT { return .absent }
+            throw CopilotFileError.current()
+        }
+        let data = try? CopilotFileAccess.readStableRegular(
+            at: directory, filename: cmuxHooksFile.lastPathComponent, owner: getuid(), maximum: 65_536)
+        return data.map(ownsCMUXHooks) == true ? .owned : .foreign
+    }
+
+    private func cmuxHooksWrite() throws -> CopilotPluginResources.Write {
+        let shipped = try shippedCMUXManifests ?? CopilotCMUXHooks.shippedManifests()
+        return .init(file: cmuxHooksFile, data: try CopilotCMUXHooks.manifest(),
+                     replaces: { data in data.map(shipped.contains) ?? true },
+                     refusal: CopilotCMUXHooks.Conflict(path: cmuxHooksFile.path).message)
+    }
+
+    func installCMUXHooks() throws {
+        try reconcileCMUXHooks()
+        try replaceCMUXHooks(with: try CopilotCMUXHooks.manifest(), permissions: 0o600, replaces: ownsCMUXHooks,
+            refusal: CopilotResourcePreparationFailure(
+                outcome: .untouched, detail: CopilotCMUXHooks.Conflict(path: cmuxHooksFile.path).message))
+    }
+
+    /// Checkpoint rollback of the CMUX hooks file through the same ownership-bound path as publish:
+    /// the current file must be the recorded desired or before image, or a shipped manifest.
+    func restoreCMUXHooks(to before: Data?, permissions: UInt16?, recorded: [Data]) throws {
+        try replaceCMUXHooks(with: before, permissions: mode_t(permissions ?? 0o600),
+            replaces: { recorded.contains($0) || self.ownsCMUXHooks($0) },
+            refusal: CopilotRegistrationConflict(CopilotCMUXHooks.Conflict(path: cmuxHooksFile.path).message))
+    }
+
+    /// Replace (or remove, when data is nil) the CMUX hooks file so the ownership check binds to the
+    /// bytes actually replaced: the current file is moved aside first and must pass `replaces`, the
+    /// new one goes in only onto a free name, and the moved copy is deleted only if still unchanged.
+    private func replaceCMUXHooks(with data: Data?, permissions: mode_t, replaces: (Data) -> Bool,
+                                  refusal: any Error) throws {
+        let hooks = cmuxHooksFile.deletingLastPathComponent()
+        if data != nil {
+            try FileManager.default.createDirectory(at: hooks, withIntermediateDirectories: true,
+                                                    attributes: [.posixPermissions: 0o700])
+        }
+        let directory: Int32
+        do { directory = try CopilotFileAccess.openDirectory(hooks, owner: getuid()) }
+        catch CopilotFileError.missing where data == nil { return }
+        defer { close(directory) }
+        let name = cmuxHooksFile.lastPathComponent
+        var pending: String?
+        defer { if let pending { unlinkat(directory, pending, 0) } }
+        if let data {
+            let staged = "\(Self.pendingPrefix)\(UUID().uuidString)"
+            let descriptor = openat(directory, staged, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard descriptor >= 0 else { throw CopilotFileError.current() }
+            pending = staged
+            let written = data.withUnsafeBytes { Darwin.write(descriptor, $0.baseAddress, $0.count) }
+            guard written == data.count, fchmod(descriptor, permissions) == 0, fsync(descriptor) == 0 else {
+                close(descriptor)
+                throw CopilotFileError.io
             }
+            close(descriptor)
+        }
+        beforeCMUXHooksPublish?()
+        var aside: (name: String, bytes: Data)?
+        let candidate = Self.asideName()
+        if renameatx_np(directory, name, directory, candidate, UInt32(RENAME_EXCL)) == 0 {
+            let moved = try? CopilotFileAccess.readStableRegular(
+                at: directory, filename: candidate, owner: getuid(), maximum: 65_536)
+            guard let moved, replaces(moved) else {
+                try putBack(candidate, in: directory)
+                throw refusal
+            }
+            aside = (candidate, moved)
+        } else if errno != ENOENT {
+            throw CopilotFileError.current()
+        }
+        beforeCMUXHooksRename?()
+        if let staged = pending {
+            guard renameatx_np(directory, staged, directory, name, UInt32(RENAME_EXCL)) == 0 else {
+                // Something took the name meanwhile: keep it, and return Maestro's earlier copy if any.
+                if let aside { try putBack(aside.name, in: directory) }
+                throw refusal
+            }
+            pending = nil
+        }
+        if let aside {
+            beforeCMUXHooksAsideCleanup?()
+            let path = hooks.appendingPathComponent(aside.name).path
+            let current = try? CopilotFileAccess.readStableRegular(
+                at: directory, filename: aside.name, owner: getuid(), maximum: 65_536)
+            guard current == aside.bytes else {
+                throw CopilotRegistrationConflict("The hook file set aside at \(path) changed after Maestro checked it, "
+                    + "so it was kept; review it, then delete it or move it back to \(cmuxHooksFile.path).")
+            }
+            guard removeEntry(directory, aside.name) == 0 else {
+                throw CopilotRegistrationConflict("Maestro could not delete its earlier CMUX Copilot hooks at \(path); "
+                    + "delete it, then run setup again.")
+            }
+        }
+        guard syncDirectory(directory) == 0 else {
+            throw CopilotRegistrationConflict("Maestro's CMUX Copilot hooks were updated at \(cmuxHooksFile.path), "
+                + "but the change could not be confirmed as durable; run setup again to confirm.")
+        }
+    }
+
+    /// Finish what an interrupted publish or uninstall left in the hooks directory: delete stale
+    /// staged copies; return a set-aside file to the free name (a file Maestro did not write first);
+    /// delete Maestro's own copies once the name is taken; name both paths for any other copy.
+    func reconcileCMUXHooks() throws {
+        let directory: Int32
+        do {
+            directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+        } catch CopilotFileError.missing { return }
+        defer { close(directory) }
+        let listing = try CopilotFileAccess.names(at: directory, limit: CopilotObserverRegistration.hookListingLimit)
+        let leftovers = listing.names.filter {
+            $0.hasPrefix(Self.pendingPrefix) || $0.hasPrefix(CopilotObserverRegistration.asidePrefix)
+        }
+        guard !leftovers.isEmpty else { return }
+        for staged in listing.names where staged.hasPrefix(Self.pendingPrefix) {
+            guard removeEntry(directory, staged) == 0 || errno == ENOENT else { throw HookFiles.Failure.unavailable }
+        }
+        let asides = listing.names.filter { $0.hasPrefix(CopilotObserverRegistration.asidePrefix) }.map { aside in
+            (aside, (try? CopilotFileAccess.readStableRegular(
+                at: directory, filename: aside, owner: getuid(), maximum: 65_536)).map(ownsCMUXHooks) == true)
+        }.sorted { !$0.1 && $1.1 }
+        for (aside, owned) in asides {
+            // Only ENOENT means the name is free; any other probe failure stops before anything is deleted.
+            let probe = probeEntry(directory, cmuxHooksFile.lastPathComponent)
+            guard probe == 0 || probe == ENOENT else { throw HookFiles.Failure.unavailable }
+            if probe == ENOENT {
+                try putBack(aside, in: directory)
+            } else if owned {
+                // Re-read right before deleting: only bytes still Maestro's are removed.
+                beforeReconcileDelete?()
+                let current = try? CopilotFileAccess.readStableRegular(
+                    at: directory, filename: aside, owner: getuid(), maximum: 65_536)
+                guard let current, ownsCMUXHooks(current) else {
+                    try putBack(aside, in: directory)  // name taken: throws, naming both paths
+                    continue
+                }
+                guard removeEntry(directory, aside) == 0 || errno == ENOENT else { throw HookFiles.Failure.unavailable }
+            } else {
+                try putBack(aside, in: directory)  // name taken: throws, naming both paths
+            }
+        }
+        guard syncDirectory(directory) == 0 else { throw HookFiles.Failure.unavailable }
+    }
+
+    /// Test seam: runs just before the CMUX hooks file is moved aside for removal.
+    var beforeCMUXHooksRemoval: (@Sendable () -> Void)? = nil
+    /// Test seam: runs before a moved-aside file Maestro did not write is put back.
+    var beforeForeignCMUXHooksPutBack: (@Sendable () -> Void)? = nil
+    /// Test seam: runs after the CMUX hooks file is moved aside, before the other removals.
+    var afterCMUXHooksMovedAside: (@Sendable () -> Void)? = nil
+    /// Test seam: runs after the new manifest is staged, before the current file is moved aside.
+    var beforeCMUXHooksPublish: (@Sendable () -> Void)? = nil
+    /// Test seam: runs after the current file is moved aside and verified, before the new one is renamed in.
+    var beforeCMUXHooksRename: (@Sendable () -> Void)? = nil
+    /// Test seam: runs after the new file is in place, before the moved-aside copy is rechecked and deleted.
+    var beforeCMUXHooksAsideCleanup: (@Sendable () -> Void)? = nil
+    /// Test seam: runs in recovery right before a copy Maestro owns is re-read and deleted.
+    var beforeReconcileDelete: (@Sendable () -> Void)? = nil
+    /// Test seam: probes a hooks-directory name without following links; 0 if present, else errno.
+    var probeEntry: @Sendable (Int32, String) -> Int32 = { directory, name in
+        var info = stat()
+        return fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 ? 0 : errno
+    }
+    /// Test seam: unlinks a hooks-directory entry Maestro created.
+    var removeEntry: @Sendable (Int32, String) -> Int32 = { unlinkat($0, $1, 0) }
+    /// Test seam: the directory sync used to make hooks-directory changes durable.
+    var syncDirectory: @Sendable (Int32) -> Int32 = { Darwin.fsync($0) }
+    /// Test seam: the shipped CMUX hooks manifests; nil means every manifest a release shipped.
+    var shippedCMUXManifests: [Data]? = nil
+
+    private func ownsCMUXHooks(_ data: Data) -> Bool {
+        guard let shippedCMUXManifests else { return CopilotCMUXHooks.isOwned(data) }
+        return shippedCMUXManifests.contains(data)
+    }
+
+    private static var pendingPrefix: String { CopilotObserverRegistration.pendingPrefix }
+
+    private static func asideName() -> String {
+        "\(CopilotObserverRegistration.asidePrefix)\(UUID().uuidString)"
+    }
+
+    private enum Quarantine { case absent, keptForeign, moved(aside: String, bytes: Data) }
+
+    @discardableResult
+    func removeMessaging(root: URL) throws -> String? {
+        // The CMUX hooks file is moved aside first, then verified by the bytes actually moved, so a
+        // file swapped in at that name is never deleted. It is deleted only after every other
+        // removal succeeds, and only if the moved bytes are still Maestro's; otherwise it goes back.
+        try reconcileCMUXHooks()
+        let quarantine = try quarantineCMUXHooks()
+        if case .moved = quarantine { afterCMUXHooksMovedAside?() }
+        do {
+            // Remove only the installed entry point/configuration. Do not touch live
+            // route bindings, sockets, cached children, or other extensions.
+            let targets = [
+                nativeExtensions.appendingPathComponent("maestro/extension.mjs"),
+                root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/messaging.json"),
+            ]
+            for target in targets {
+                let directory: Int32
+                do {
+                    directory = try CopilotFileAccess.openDirectory(target.deletingLastPathComponent(), owner: getuid())
+                } catch CopilotFileError.missing { continue }
+                defer { close(directory) }
+                if unlinkat(directory, target.lastPathComponent, 0) != 0, errno != ENOENT {
+                    throw HookFiles.Failure.unavailable
+                }
+            }
+        } catch {
+            if case .moved(let aside, _) = quarantine { try restoreQuarantined(aside) }
+            throw error
+        }
+        switch quarantine {
+        case .absent: return nil
+        case .keptForeign: return cmuxHooksFile.path
+        case .moved(let aside, let bytes):
+            let directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+            defer { close(directory) }
+            // Recheck right before deleting: the moved file must still hold the bytes verified.
+            let current = try? CopilotFileAccess.readStableRegular(
+                at: directory, filename: aside, owner: getuid(), maximum: 65_536)
+            guard current == bytes, ownsCMUXHooks(bytes) else {
+                try putBack(aside, in: directory)
+                return cmuxHooksFile.path
+            }
+            guard unlinkat(directory, aside, 0) == 0 else {
+                throw CopilotRegistrationConflict("Uninstall could not delete Maestro's CMUX Copilot hooks at "
+                    + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path); "
+                    + "run uninstall again or delete it.")
+            }
+            guard syncDirectory(directory) == 0 else {
+                throw CopilotRegistrationConflict("Maestro's CMUX Copilot hooks were deleted, but the removal "
+                    + "could not be confirmed as durable; run uninstall again to confirm.")
+            }
+            return nil
+        }
+    }
+
+    private func quarantineCMUXHooks() throws -> Quarantine {
+        let directory: Int32
+        do {
+            directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+        } catch CopilotFileError.missing { return .absent }
+        defer { close(directory) }
+        beforeCMUXHooksRemoval?()
+        let name = cmuxHooksFile.lastPathComponent
+        let aside = Self.asideName()
+        guard renameatx_np(directory, name, directory, aside, UInt32(RENAME_EXCL)) == 0 else {
+            if errno == ENOENT { return .absent }
+            throw HookFiles.Failure.unavailable
+        }
+        let moved = try? CopilotFileAccess.readStableRegular(
+            at: directory, filename: aside, owner: getuid(), maximum: 65_536)
+        guard let moved, ownsCMUXHooks(moved) else {
+            // Not Maestro's: put it back exactly as found and leave it.
+            beforeForeignCMUXHooksPutBack?()
+            try putBack(aside, in: directory)
+            return .keptForeign
+        }
+        return .moved(aside: aside, bytes: moved)
+    }
+
+    /// Return a moved hook file to its name; if the name was taken meanwhile, name both paths.
+    private func putBack(_ aside: String, in directory: Int32) throws {
+        guard renameatx_np(directory, aside, directory, cmuxHooksFile.lastPathComponent, UInt32(RENAME_EXCL)) == 0 else {
+            throw CopilotRegistrationConflict("A hook file was set aside at "
+                + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path), and "
+                + "\(cmuxHooksFile.path) is taken; keep one.")
+        }
+        guard syncDirectory(directory) == 0 else {
+            throw CopilotRegistrationConflict("A hook file was put back at \(cmuxHooksFile.path), but that could not "
+                + "be confirmed as durable; check that it is there.")
+        }
+    }
+
+    private func restoreQuarantined(_ aside: String) throws {
+        let directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
+        defer { close(directory) }
+        guard renameatx_np(directory, aside, directory, cmuxHooksFile.lastPathComponent, UInt32(RENAME_EXCL)) == 0 else {
+            throw CopilotRegistrationConflict(
+                "Uninstall stopped and could not put Maestro's CMUX Copilot hooks back: rename "
+                    + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path) "
+                    + "to \(cmuxHooksFile.path).")
+        }
+        guard syncDirectory(directory) == 0 else {
+            throw CopilotRegistrationConflict("Uninstall stopped; Maestro's CMUX Copilot hooks were put back at "
+                + "\(cmuxHooksFile.path), but that could not be confirmed as durable.")
         }
     }
 
@@ -583,6 +904,10 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         try await CopilotSetupFileWork.run { try self.load() }
         // An unknown action still takes the leases and validates the journal first.
         guard let requested else { throw CopilotFileError.io }
+        if [.prepare, .apply, .restore].contains(requested) {
+            // Under the lease, finish an interrupted CMUX hooks publish before entries are checked.
+            try await CopilotSetupFileWork.run { try self.files.reconcileCMUXHooks() }
+        }
         switch requested {
         case .prepare: return try await prepareCheckpoint()
         case .apply: return try await applyCheckpoint()
@@ -640,6 +965,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             try await CopilotSetupFileWork.run {
                 _ = try self.files.preparePlugin(root: self.root, helper: self.helper,
                                                 controller: self.controller, skill: self.skill)
+                try self.files.installCMUXHooks()
             }
             return
         }
@@ -731,7 +1057,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
               value.generation.helper == helper.path, value.metadata.supported,
               value.executable.hasPrefix("/"),
               !value.executable.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains),
-              value.metadata.hooks.count <= 256, value.metadata.plugins.count <= 128,
+              value.metadata.hooks.count <= CopilotSetupMetadata.maximumHooks, value.metadata.plugins.count <= 128,
               value.stage != nil,
               value.entries.count <= 32,
               value.settings.valid(maximum: 65_536), value.cache.allSatisfy({ $0.valid(maximum: 65_536) }),
@@ -809,8 +1135,13 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
     }
 
     private func targets(disabled: Bool) throws -> [CopilotPluginResources.Write] {
-        var values = try files.resources(root: root, helper: helper, controller: controller, skill: skill,
-            helperExecutable: bundle.appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook")).writes
+        var values: [CopilotPluginResources.Write]
+        do {
+            values = try files.resources(root: root, helper: helper, controller: controller, skill: skill,
+                helperExecutable: bundle.appendingPathComponent("Contents/Helpers/CMUXMaestroCopilotHook")).writes
+        } catch let conflict as CopilotCMUXHooks.Conflict {
+            throw CopilotRegistrationConflict(conflict.message)
+        }
         let manifest = try CopilotPluginManifest.files(helper: helper)
         var hooks = try CopilotSetupJSON.object(manifest["hooks.json"] ?? Data())
         if disabled { hooks["disableAllHooks"] = true }
@@ -829,6 +1160,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             return try self.files.executable(selected: self.selected, path: self.path)
         }
         let observed = try await metadata(executable: executable)
+        try registration.requireHookRowRoom(observed)
         let operation = try await CopilotSetupFileWork.run { try self.registration.begin(.install, metadata: observed) }
         if operation.hasBootstrapSource {
             let identity = try await CopilotSetup.bootstrap(runner: runner, executable: executable,
@@ -940,11 +1272,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         let before = try record.metadata.plugins.filter { $0.name != CopilotPluginManifest.name }.map { try encoder.encode($0).base64EncodedString() }.sorted()
         let after = try observed.plugins.filter { $0.name != CopilotPluginManifest.name }.map { try encoder.encode($0).base64EncodedString() }.sorted()
         guard before == after else { throw CopilotFileError.changed }
-        func foreign(_ hook: CopilotSetupMetadata.Hook) -> Bool {
-            !(hook.origin == "plugin" && hook.source == CopilotPluginManifest.name)
-                && !(hook.origin == "user" && [registration.file.path,
-                    "hooks/\(CopilotObserverRegistration.filename)"].contains(hook.source))
-        }
+        func foreign(_ hook: CopilotSetupMetadata.Hook) -> Bool { !registration.isMaestroHookSource(hook) }
         let beforeHooks = try record.metadata.hooks.filter(foreign).map { try encoder.encode($0).base64EncodedString() }.sorted()
         let afterHooks = try observed.hooks.filter(foreign).map { try encoder.encode($0).base64EncodedString() }.sorted()
         guard beforeHooks == afterHooks else { throw CopilotFileError.changed }
@@ -1028,8 +1356,11 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         let original = record.metadata.plugins.filter { $0.name == CopilotPluginManifest.name }
         guard own == original else { return false }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
-        let beforeHooks = try record.metadata.hooks.map { try encoder.encode($0).base64EncodedString() }.sorted()
-        let afterHooks = try observed.hooks.map { try encoder.encode($0).base64EncodedString() }.sorted()
+        // Maestro's own CMUX hooks file appears and disappears with this transaction.
+        let beforeHooks = try record.metadata.hooks.filter { !CopilotCMUXHooks.isSource($0, providerHome: registration.providerHome) }
+            .map { try encoder.encode($0).base64EncodedString() }.sorted()
+        let afterHooks = try observed.hooks.filter { !CopilotCMUXHooks.isSource($0, providerHome: registration.providerHome) }
+            .map { try encoder.encode($0).base64EncodedString() }.sorted()
         guard beforeHooks == afterHooks else { return false }
         if !original.isEmpty {
             for (entry, image) in zip(pluginEntries(), record.cache) {
@@ -1184,6 +1515,14 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         return try await metadata()
     }
 
+    /// The CMUX hooks entry rolls back through its ownership-bound path; returns whether it was that entry.
+    private func restoreCMUXHooksEntry(_ entry: Entry) throws -> Bool {
+        guard entry.path == files.cmuxHooksFile.path else { return false }
+        try files.restoreCMUXHooks(to: entry.before.data, permissions: entry.before.permissions,
+                                   recorded: [entry.desired, entry.before.data].compactMap { $0 })
+        return true
+    }
+
     private func restoreResources(_ record: Record, observed: CopilotSetupMetadata) throws {
         let settings = try verifyForeign(observed)
         try verifyProvider(observed)
@@ -1191,6 +1530,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         try verifyAllowed(states)
         try phase(.restoring)
         for (entry, state) in zip(record.entries, states) {
+            if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
         }
         _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
@@ -1239,6 +1579,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         for (entry, state) in zip(record.entries, states) where
             entry.path != registration.file.path && entry.path != registration.receiptFile.path {
             if !plan.priorInstalled && installed && entry.path.hasPrefix(registration.plugin.path + "/") { continue }
+            if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
         }
         if replaceProvider {
@@ -1944,6 +2285,9 @@ nonisolated struct CopilotSetup: Sendable {
             let (registration, executable) = try await CopilotSetupFileWork.run {
                 let registration = try self.registration ?? CopilotObserverRegistration(
                     home: CopilotPaths.realUserHome(), root: root, helper: helper)
+                // Before anything reads the hooks directory: finish an interrupted CMUX hooks publish or
+                // uninstall under the setup lease, so validation and the rollback baseline see the result.
+                try registration.withSetupLease { try self.files.reconcileCMUXHooks() }
                 try registration.validateLocal()
                 return (registration, try self.files.executable(selected: selected, path: path))
             }
@@ -1952,6 +2296,7 @@ nonisolated struct CopilotSetup: Sendable {
             case .value(let value): initial = value
             case .failed(let failure): return Self.processFailure(failure)
             }
+            if action == .install { try registration.requireHookRowRoom(initial) }
             let operation = try await CopilotSetupFileWork.run {
                 try registration.begin(action, metadata: initial, isCancelled: { cancellation.isCancelled })
             }
@@ -2028,15 +2373,19 @@ nonisolated struct CopilotSetup: Sendable {
             case .failed(let failure): return .incomplete(operation.phase, Self.processFailure(failure).message)
             }
             if action == .uninstall {
-                try await CopilotSetupFileWork.run {
+                let kept = try await CopilotSetupFileWork.run { () -> String? in
                     try operation.verifyRemoval(changed)
-                    try self.files.removeMessaging(root: root)
+                    return try self.files.removeMessaging(root: root)
                 }
-                return .uninstalled
+                return kept.map(CopilotSetupResult.uninstalledKeeping) ?? .uninstalled
             }
             try await CopilotSetupFileWork.run {
                 try operation.verifyPlugin(changed)
                 try operation.publish()
+                // The active CMUX hooks go live only once the plugin is verified and published.
+                do { try self.files.installCMUXHooks() } catch let failure as CopilotResourcePreparationFailure {
+                    throw CopilotRegistrationConflict(failure.detail ?? "Maestro's CMUX Copilot hooks could not be written.")
+                }
             }
             switch await runner.metadata(executable: executable, path: path, providerHome: registration.providerHome) {
             case .value(let value): try await CopilotSetupFileWork.run { try operation.verifyPublished(value) }
@@ -2060,6 +2409,7 @@ nonisolated struct CopilotSetup: Sendable {
                 }
                 switch resources.outcome {
                 case .untouched: reason = "Resource preparation refused before changing resource files."
+                    + (resources.detail.map { " " + $0 } ?? "")
                 case .restored: reason = "Resource preparation failed; previous owned resource files were restored and verified."
                 case .unverified: reason = "Resource preparation failed and previous owned resources could not be restored and verified."
                 }

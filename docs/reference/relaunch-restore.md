@@ -29,7 +29,7 @@ Policy: CMUX's own restore replays the session's original command line, so the b
 
 Any refusal leaves the session running but unmanaged. Maestro does not retry.
 
-CMUX's own restore needs its Copilot hooks. `cmux hooks copilot install` fails on Copilot 1.0.98 because Copilot writes comments in `config.json`. See [Known gaps](#known-gaps).
+CMUX's own restore needs its Copilot hooks. `cmux hooks copilot install` fails on Copilot 1.0.98 because Copilot writes comments in `config.json`. Maestro's setup therefore installs `~/.copilot/hooks/cmux-maestro-cmux-hooks.json`. It declares `SessionStart`, `Stop`, `Notification`, and `SessionEnd` with CMUX 0.65.1's exact `cmux hooks enqueue copilot <event>` commands and guards: they run only inside a CMUX surface, and never when `CMUX_COPILOT_HOOKS_DISABLED=1`. Setup writes it only once the plugin is verified (or in the same checkpointed transaction as the other owned files for a coordinated install), refuses (and names) a file at that name that Maestro did not write, and leaves every other hook alone. A file that appears at that name while setup runs, after the plugin is already published, is still never replaced: setup reports a named incomplete result, and running setup again (once the file is moved away) finishes. Setup also refuses before changing anything when the four CMUX hook rows (and the observer's three, if not yet reported) would push Copilot's hook discovery past the 256 rows Maestro can verify. Uninstall removes it only when its bytes are a manifest Maestro shipped; a file it did not write stays and is named. CMUX's `PreToolUse` Feed bridge is not included; restore needs only these four events. Setup checks the file on disk; Copilot loading it is a live check. Sessions started before setup are not recorded; restart them once.
 
 ## Maestro-launched sessions
 
@@ -71,7 +71,7 @@ A born-managed or resumed managed session is expected not to wait for the hook: 
 
 ## Known gaps
 
-- Maestro setup does not yet install CMUX's Copilot hooks (#252 follow-up). Without them CMUX has no record to restore, and the tab stays a plain shell.
+- If you also installed CMUX's Copilot hooks yourself (in `config.json` or another hook file), both sets run and CMUX receives each event twice. Remove your copy and keep Maestro's file, which setup maintains.
 - CMUX's Copilot restore keeps `--name` and adds `--resume`. Copilot 1.0.98 refuses that pair. A session started with `--name` does not come back through CMUX's restore. Rename the session inside Copilot instead.
 - Sessions launched through wrappers such as Agency are not covered.
 - Launches made before this change have no binding and do not resume.
@@ -85,7 +85,7 @@ Nothing in this document has been verified in a live CMUX yet. Run these before 
 
 Prerequisites:
 
-- Maestro production setup has run, including CMUX's Copilot hooks (installed by setup once #252's last change lands). Remove any CMUX Copilot hook file you installed yourself, so CMUX does not receive each event twice.
+- Maestro production setup has run, including CMUX's Copilot hooks file. Remove any CMUX Copilot hooks you installed yourself, so CMUX does not receive each event twice. Confirm Copilot lists the four hooks from `cmux-maestro-cmux-hooks.json` as enabled.
 - **Resume agent sessions** (`terminal.autoResumeAgentSessions`) is on.
 - The prefix `<controller> resume` is approved once in **CMUX Settings > Terminal > Resume Commands**.
 - Copilot sessions are restarted once after setup.

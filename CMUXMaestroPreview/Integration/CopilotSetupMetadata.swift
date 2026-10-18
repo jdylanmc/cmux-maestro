@@ -34,6 +34,9 @@ nonisolated struct CopilotSetupMetadata: Codable, Equatable, Sendable {
         var isUnmanagedDirectInstall: Bool { usesInstalledCache && marketplace.isEmpty && managed != true }
     }
 
+    /// Copilot discovery output Maestro accepts; more hook rows than this is an unreadable snapshot.
+    static let maximumHooks = 256
+
     let version: String
     let protocolVersion: Int
     let hooks: [Hook]
@@ -216,7 +219,7 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
         let hooks = try decoder.decode(Hooks.self, from: hookData)
         let plugins = try decoder.decode(Plugins.self, from: pluginData)
         guard hooks.errors.isEmpty, hooks.warnings.isEmpty,
-              hooks.hooks.count <= 256, plugins.plugins.count <= 128 else { throw CopilotFileError.io }
+              hooks.hooks.count <= CopilotSetupMetadata.maximumHooks, plugins.plugins.count <= 128 else { throw CopilotFileError.io }
         snapshot = CopilotSetupMetadata(version: status.version, protocolVersion: status.protocolVersion,
                                         hooks: hooks.hooks, plugins: plugins.plugins)
         // Keep stdin open until every asynchronous response arrives. EOF then

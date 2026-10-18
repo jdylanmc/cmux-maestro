@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Setup installs CMUX's Copilot hooks in a separate owned file,
+  `~/.copilot/hooks/cmux-maestro-cmux-hooks.json`, with CMUX 0.65.1's exact commands (#252), so
+  CMUX's own restore can bring back sessions you start. CMUX's own installer fails on Copilot's
+  commented `config.json`. Setup refuses, by name, a file there that Maestro did not write.
+  Uninstall removes the file in the same transaction as the other entry points, only when its
+  bytes are a manifest Maestro shipped, and names a file it left in place.
 - Born-managed rows in the sidebar show their Copilot session name, from the exact observed
   session, instead of `Copilot session` (#252, ADR 0022 amendment). The controller projects
   `enrollment: "born"`; the sidebar refuses that value on any other node.
