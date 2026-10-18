@@ -52,6 +52,17 @@ GitHub.com login, or, for a session that reported its own account, that
 observed account. One store only; it holds no credential. Older launched nodes
 derive it from their launch settings. A resume after relaunch must use it or
 refuse ([ADR 0024](../adr/0024-resume-ended-managed-sessions-after-relaunch.md)).
+A session the human starts in CMUX is **born managed** as its own root
+([ADR 0025](../adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md)).
+Its node has `enrollment: "born"`, generation 1, the label `Copilot session`,
+the account its own session reports, and a default policy with no grants.
+It has no control token: it acts only through its native tools. Its children
+use the normal `maestro_spawn` path.
+A new session in a surface held by a **proven-ended** born run archives that
+run first. Children's surfaces become retained resources; the root's surface
+goes to the new root. To free capacity by hand, run
+`cmux-maestro-orchestrator archive-ended --workspace <id>`. It archives only
+proven-ended born runs and reports `archivedRuns`, `keptRuns`, and capacity.
 Ordinary shell `spawn` cannot establish that evidence and refuses. Source-only
 disposable proof compatibility is not production fallback. **New workers are
 interactive Copilot sessions**, launched with `--interactive` and initial

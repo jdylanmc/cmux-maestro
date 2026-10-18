@@ -98,6 +98,10 @@ _Avoid_: event log
 Interactive Copilot session Maestro launched and owns. Accepted only with a matching session UUID, surface, and fresh live observation.
 _Avoid_: bot, background job
 
+**Born managed**:
+A Copilot session that a human starts in CMUX and that enrolls itself, at its start, as its own root coordinator. (ADR 0025)
+_Avoid_: adopted, auto-managed, in-place enrollment (that is enrolling a running session, which never happens)
+
 **Coordinator**:
 Managed top-level worker that may own nested workers.
 _Avoid_: supervisor, orchestrator
