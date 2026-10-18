@@ -1004,6 +1004,9 @@ def _validate_state_header(state):
             and value.get("outcome") in {"refused", "enrolled"}
             and (value["outcome"] == "enrolled") == ("nodeId" in value)
             and (value["outcome"] == "refused") == isinstance(value.get("reason"), str)
+            and ("recordedAccount" not in value or (
+                value.get("reason") == "account-mismatch" and isinstance(value["recordedAccount"], str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,99}", value["recordedAccount"]) is not None))
             for key, value in attempts.items()):
         raise OrchestrationError("Stored enrollment attempts are invalid.")
     marks = state.get("bornGenerations", {})
@@ -1086,6 +1089,11 @@ def _validate_node_launch_configuration(node, mode):
         or mode != "interactive" or not is_direct_launch(node)
     ):
         raise OrchestrationError("Stored enrollment origin is invalid.")
+    ended = node.get("sessionEndedGeneration")
+    if ended is not None and (type(ended) is not int or type(node.get("generation")) is not int
+                              or not 1 <= ended <= node["generation"]
+                              or mode != "interactive" or not is_direct_launch(node)):
+        raise OrchestrationError("Stored session end evidence is invalid.")
     if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
         raise OrchestrationError("Stored permission policy provenance is invalid.")
 
@@ -2582,9 +2590,11 @@ BORN_LAUNCHER_INPUTS = (
 class EnrollmentRefused(OrchestrationError):
     """A born-managed refusal with one stable reason; the session stays unmanaged."""
 
-    def __init__(self, reason):
-        super().__init__(f"enrollment refused: {reason}")
+    def __init__(self, reason, account=None):
+        # Only a validated recorded login may follow the reason, never a credential.
+        super().__init__(f"enrollment refused: {reason}" + (f": {account}" if account else ""))
         self.reason = reason
+        self.account = account
 
 
 def normalized_tty(value):
@@ -2778,12 +2788,15 @@ def prune_attempts(state):
             pass
 
 
-def record_refusal(root, key, reason):
-    """A refusal at a session's start is final for that provider process (no later reload enrolls)."""
+def record_refusal(root, key, reason, account=None):
+    """A refusal at a session's start is final for that provider process (no later reload enrolls).
+    An account mismatch keeps the recorded login, so a reload names it too."""
     def record(state):
         prune_attempts(state)
         if key not in state["enrollmentAttempts"] and len(state["enrollmentAttempts"]) < MAX_HOST_NODES:
-            state["enrollmentAttempts"][key] = {"outcome": "refused", "reason": reason, "at": now()}
+            state["enrollmentAttempts"][key] = {
+                "outcome": "refused", "reason": reason, "at": now(),
+                **({"recordedAccount": account} if reason == "account-mismatch" and account else {})}
     try:
         mutate(root, record)
     except (OrchestrationError, OSError):
@@ -2829,13 +2842,18 @@ def command_native_enroll(root, cmux):
     previous = snapshot.get("enrollmentAttempts", {}).get(key)
     if previous is not None:
         # The decision made at this session's start stands; a reload never retries it.
-        raise EnrollmentRefused(previous.get("reason", "provider-already-enrolled"))
+        raise EnrollmentRefused(previous.get("reason", "provider-already-enrolled"), previous.get("recordedAccount"))
     try:
+        recorded = next((node for node in snapshot["nodes"].values()
+                         if node.get("copilotSessionId") == session), None)
+        if recorded is not None:
+            return resume_born_root(root, cmux, snapshot, recorded, workspace, surface, session, anchor,
+                                    login, key, receipt)
         return enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anchor, login,
                                     key, receipt, reload_match)
     except EnrollmentRefused as error:
         if not getattr(error, "committed", False):
-            record_refusal(root, key, error.reason)
+            record_refusal(root, key, error.reason, error.account)
         raise
 
 
@@ -2887,13 +2905,12 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         "phase": "turn-running", "availability": "busy",
     })
     archived = []
+    stale_routes = []
 
     def enroll(state, retiring):
         if reload_match(state) is not None or key in state.get("enrollmentAttempts", {}):
             raise EnrollmentRefused("provider-already-enrolled")
         conflicts(state)
-        if node["generation"] != born_generation(state, session):
-            raise EnrollmentRefused("session-previously-managed")
         holder = next((item for item in state["nodes"].values() if item.get("surfaceId") == surface), None)
         # A new session in a surface whose earlier born run is proven ended supersedes it.
         # Uncertain or live runs keep the surface; nothing is guessed.
@@ -2912,6 +2929,12 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         prune_attempts(state)
         if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
             raise EnrollmentRefused("capacity-unavailable")
+        # Decide the generation under the lock, after any archive above moved the floor.
+        generation = born_generation(state, session)
+        if generation != node["generation"]:
+            stale_routes.append(dict(node))
+            node["generation"] = generation
+            bind_messaging(node)
         state["nodes"][node["id"]] = node
         state["enrollmentAttempts"][key] = {"outcome": "enrolled", "nodeId": node["id"], "at": now()}
         return receipt(node)
@@ -2928,15 +2951,186 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
                                 **({"routesNotRetired": error.routesNotRetired}
                                    if hasattr(error, "routesNotRetired") else {})})
     except (OrchestrationError, OSError) as error:
-        try:
-            retire_messaging(node)
-        except (OrchestrationError, OSError):
-            pass  # A route whose identity cannot be proven stays in place.
+        for route in [node, *stale_routes]:
+            try:
+                retire_messaging(route)
+            except (OrchestrationError, OSError):
+                pass  # A route whose identity cannot be proven stays in place.
         if isinstance(error, EnrollmentRefused):
             raise
         raise EnrollmentRefused("enrollment-failed") from error
+    retire_committed_routes(stale_routes)  # routes bound for a generation the lock replaced
     remove_direct_scripts(root, archived)
     return result
+
+
+def command_native_session_end(root, cmux=None):
+    """The exact managed session reported its own Copilot SessionEnd (user exit).
+
+    Recorded for its current generation, so a later manual resume is not mistaken for a relaunch
+    restore (ADR 0024). Identifiers and the end reason only; the hook input is never stored.
+    """
+    try:
+        raw = sys.stdin.buffer.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {"identity"}:
+            raise ValueError()
+    except (UnicodeError, ValueError) as error:
+        raise OrchestrationError("Session end request is invalid.") from error
+    identity = request["identity"]
+
+    def actor_of(state):
+        actor = authorize_native_actor(state, identity)
+        if actor["copilotSessionId"] != os.environ.get("SESSION_ID"):
+            raise OrchestrationError("Session end does not match the invoking native session.")
+        if actor.get("enrollment") == "born":
+            if (str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
+                    or not process_matches(actor)):
+                raise OrchestrationError("Session end does not match the invoking native session.")
+        elif not is_direct_launch(actor):
+            raise OrchestrationError("Session end does not match a Maestro session.")
+        require_current_surface(actor["workspaceId"], actor["surfaceId"])
+        return actor
+
+    def record(state):
+        actor = actor_of(state)
+        actor["sessionEndedGeneration"] = actor["generation"]
+        actor["updatedAt"] = now()
+        return dict(actor)
+    mutate(root, record)
+    return {"recorded": True}
+
+
+def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session, anchor, login, key, receipt):
+    """CMUX restarted a born root's recorded session in its own surface: same node, next generation.
+
+    ADR 0024 re-enrollment: exact session, workspace and surface; the provider's own terminal;
+    the recorded account; the prior process ended without an observed SessionEnd; the new
+    provider (or its direct child) the session's only lock owner, rechecked inside the lock.
+    """
+    if login is None:
+        raise EnrollmentRefused("account-unverified")
+    try:
+        messaging = messaging_configuration(root)
+    except OrchestrationError as error:
+        raise EnrollmentRefused("integration-not-installed") from error
+    if messaging is None:
+        raise EnrollmentRefused("integration-not-installed")
+    # Like a new enrollment: a provider running before the integration was installed is never managed.
+    if not started_after_install(process_start_epoch(anchor["start"]), integration_installed_at(messaging)):
+        raise EnrollmentRefused("session-started-before-install")
+
+    def require_resumable(node, state):
+        if node.get("enrollment") != "born":
+            raise EnrollmentRefused("session-previously-managed")
+        # Unresolved records are uncertain before anything else: an unknown surface is never a mismatch.
+        # A launch lease is loaded only for a launching node, so phase covers it.
+        if (node["phase"] == "launching" or node.get("surfaceUnknown")
+                or process_observation(node.get("providerProcess")) is not False):
+            raise EnrollmentRefused("session-live-or-uncertain")
+        if (node["workspaceId"], node.get("surfaceId")) != (workspace, surface):
+            raise EnrollmentRefused("surface-mismatch")
+        recorded = recorded_account(node)
+        if recorded is None:
+            raise EnrollmentRefused("account-unrecorded")
+        if recorded != {"login": login, "host": RECORDED_ACCOUNT_HOST}:
+            raise EnrollmentRefused("account-mismatch", recorded["login"])
+        if node.get("sessionEndedGeneration") == node["generation"]:
+            # The human ended this session; a later manual resume is not a relaunch restore.
+            raise EnrollmentRefused("session-ended")
+        # Loaded state already proves the surface has one owner; the new provider must have none.
+        if any(item["id"] != node["id"] and item.get("providerProcess") == anchor
+               for item in state["nodes"].values()):
+            raise EnrollmentRefused("surface-owned")
+        try:
+            verify_session_custody(session, anchor)
+        except OrchestrationError as error:
+            raise EnrollmentRefused("session-live-or-uncertain") from error
+
+    started = process_start_epoch(anchor["start"])
+    if started is None or time.time() - started > BORN_ENROLL_WINDOW_SECONDS:
+        raise EnrollmentRefused("enrollment-window-passed")
+    require_resumable(previous, snapshot)
+    try:
+        cmux.validate_surface(workspace, surface)
+        provider_tty = process_tty(anchor["pid"])
+        if provider_tty is None or cmux.surface_tty(workspace, surface) != provider_tty:
+            raise OrchestrationError("Provider terminal is not the claimed surface.")
+        copilot, launch_path = provider_launch_context()
+    except (OrchestrationError, OSError) as error:
+        raise EnrollmentRefused("cmux-identity-unverified") from error
+    identity_keys = ("runId", "role", "workspaceId", "surfaceId", "copilotSessionId", "generation",
+                     "providerProcess", "copilotAccount", "enrollment", "sessionEndedGeneration")
+    resumed = {**previous, "generation": previous["generation"] + 1, "messaging": messaging,
+               "providerProcess": anchor}
+
+    def clear_orphan(state):
+        # A controller that died between binding and committing left the next generation's route.
+        # With custody proven under the lock, no other provider can own it: remove exactly that
+        # binding (same node, session and generation) when no socket shows a listener.
+        current = state["nodes"].get(previous["id"])
+        if current is None or current["generation"] != previous["generation"]:
+            raise EnrollmentRefused("session-live-or-uncertain")
+        require_resumable(current, state)
+        endpoint = Path(messaging["routes"]) / f"{message_peer(resumed)}.sock"
+        if endpoint.exists() or endpoint.is_symlink():
+            raise EnrollmentRefused("session-live-or-uncertain")
+        retire_messaging(resumed)
+    try:
+        mutate(root, clear_orphan)
+        bind_messaging(resumed)
+    except EnrollmentRefused:
+        raise
+    except (OrchestrationError, OSError) as error:
+        raise EnrollmentRefused("enrollment-failed") from error
+
+    def resume(state, retiring):
+        current = state["nodes"].get(previous["id"])
+        if (current is None or key in state.get("enrollmentAttempts", {})
+                or any(current.get(field) != previous.get(field) for field in identity_keys)):
+            raise EnrollmentRefused("session-live-or-uncertain")
+        require_resumable(current, state)  # includes the lock rescan at the commit boundary
+        prune_attempts(state)
+        if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
+            raise EnrollmentRefused("capacity-unavailable")
+        if current["phase"] == "resource-retired":
+            # A retired root no longer holds a workspace slot; reviving it takes one.
+            try:
+                require_workspace_capacity(state, workspace)
+            except OrchestrationError as error:
+                raise EnrollmentRefused("capacity-unavailable") from error
+        retiring.append(dict(current))
+        current.update(generation=resumed["generation"], providerProcess=anchor, messaging=messaging,
+                       copilotExecutable=copilot, launchPath=launch_path,
+                       phase="turn-running", availability="busy", result=None, updatedAt=now())
+        state["enrollmentAttempts"][key] = {"outcome": "enrolled", "nodeId": current["id"], "at": now()}
+        return receipt(current)
+    try:
+        return mutate_retiring_routes(root, resume)
+    except CommittedProjectionError as error:
+        return receipt(resumed, {"projection": "deferred",
+                                 **({"routesNotRetired": error.routesNotRetired}
+                                    if hasattr(error, "routesNotRetired") else {})})
+    except (OrchestrationError, OSError) as error:
+        # A write can fail after state.json was replaced (for example its directory fsync). Retire the
+        # new route only when state provably still holds the previous generation.
+        try:
+            stored = read_state(root)["nodes"].get(previous["id"]) or {}
+        except (OrchestrationError, OSError):
+            stored = None
+        if (stored is not None and stored.get("generation") == resumed["generation"]
+                and stored.get("providerProcess") == anchor):
+            return receipt(resumed, {"projection": "deferred"})
+        if stored is not None and stored.get("generation") == previous["generation"]:
+            try:
+                retire_messaging(resumed)
+            except (OrchestrationError, OSError):
+                pass
+        if isinstance(error, EnrollmentRefused):
+            raise
+        raise EnrollmentRefused("enrollment-failed") from error
 
 
 def close_process_is_live(process):
@@ -2980,10 +3174,18 @@ def close_source_owner(pid, launch):
 
 def require_close_source(node):
     """Inspect only the exact session's ownership marker, never its transcript."""
-    provider = node.get("providerProcess")
+    verify_session_custody(node["copilotSessionId"], node.get("providerProcess"))
+
+
+def verify_session_custody(session, provider):
+    """The session's only inuse.<PID>.lock belongs to this live provider or its direct child.
+
+    Shared by close admission and resume re-enrollment: owner, mode, link count, marker birth
+    after the owner's start, owner start after the provider's, and a stable re-read.
+    """
     if not close_process_is_live(provider):
         raise OrchestrationError("Close requires a current provider process anchor.")
-    source = Path.home() / ".copilot/session-state" / node["copilotSessionId"]
+    source = Path.home() / ".copilot/session-state" / session
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
         for component in source.parts[1:]:
@@ -5693,6 +5895,7 @@ def parser():
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
     commands.add_parser("native-enroll", help="Private born-managed enrollment ingress; used by the native adapter")
+    commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
     ended.add_argument("--workspace", required=True)
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
@@ -5851,6 +6054,7 @@ def main(argv=None):
             return 0
         cmux = None if args.command in {
             "launch-settings", "capacity", "runtime", "report", "native-observe", "archive-ended",
+            "native-session-end",
         } else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
@@ -5872,6 +6076,8 @@ def main(argv=None):
             output = command_native_observe(root)
         elif args.command == "native-enroll":
             output = command_native_enroll(root, cmux)
+        elif args.command == "native-session-end":
+            output = command_native_session_end(root, cmux)
         elif args.command == "archive-ended":
             output = command_archive_ended(args, root)
         elif args.command == "runtime":

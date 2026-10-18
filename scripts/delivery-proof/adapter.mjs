@@ -237,6 +237,24 @@ async function invokeController(command, request, controller, signal) {
 
 const launchNative = (request, controller) => invokeController("native-spawn", request, controller);
 
+// Copilot 1.0.98 reports user_exit for /exit, a terminal hangup, and a signal alike; only /exit
+// reaches the extension without a SIGHUP first, so a hung-up provider never records an end.
+export function createSessionEndGate() {
+  let finish;
+  const settled = new Promise(resolve => { finish = resolve; });
+  return { hungUp: false, armed: false, finish,
+    async drain(ms) {
+      if (!this.armed || this.hungUp) return;
+      let timer;
+      await Promise.race([settled, new Promise(resolve => { timer = setTimeout(resolve, ms); })]);
+      clearTimeout(timer);
+    } };
+}
+export const sessionEndGate = createSessionEndGate();
+// The record outlives the extension's shutdown signal; the gate bounds how long exit waits.
+const recordSessionEnd = (request, controller) =>
+  invokeController("native-session-end", request, controller, AbortSignal.timeout(3000));
+
 function toolSpecs(managed) {
   const specs = {
     maestro_peers: {
@@ -324,7 +342,7 @@ export function managedToolSpecs() {
 
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
   closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
-  observe, signal, onListener, diagnostic = () => {
+  endSession, endGate = sessionEndGate, observe, signal, onListener, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
 } }) {
   signal?.throwIfAborted();
@@ -523,7 +541,26 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   // Join only the CLI-owned session; do not supply account, model, or permission handlers.
   signal?.throwIfAborted();
-  session = await joinSession({ tools });
+  // Maestro's own SessionEnd observer (ADR 0024): only a user exit of this exact session, with no
+  // hangup first, is reported, by identifiers; nothing else from the hook input is read or kept.
+  const hooks = managed && endSession ? { onSessionEnd: async (input, invocation) => {
+    try {
+      if (endGate.hungUp || input?.reason !== "user_exit" || session?.sessionId !== own.sessionId ||
+        invocation?.sessionId !== own.sessionId) return;
+      const request = { identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability } };
+      // One retry covers a transient lock or I/O failure; after that the gap is reported.
+      for (let attempt = 1; ; attempt++) {
+        try { await endSession(request, expected.controller); break; } catch {
+          if (attempt === 2) {
+            console.error("Maestro could not record this session's exit; a manual resume may come back managed.");
+            break;
+          }
+        }
+      }
+    } finally { endGate.finish(); }
+  } } : undefined;
+  if (hooks) endGate.armed = true;
+  session = await joinSession(hooks ? { tools, hooks } : { tools });
   signal?.throwIfAborted();
   requireCondition(session.sessionId === own.sessionId);
   if (observe) {
@@ -646,6 +683,7 @@ export const ENROLLMENT_REASONS = new Set([
   "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
   "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
   "enrolled-runtime-unavailable", "enrollment-window-passed",
+  "surface-mismatch", "account-mismatch", "account-unrecorded", "session-live-or-uncertain", "session-ended",
 ]);
 const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
 
@@ -663,9 +701,11 @@ async function invokeEnroll(request, controller, signal) {
     return await invokeController("native-enroll", request, controller, signal);
   } catch (error) {
     signal?.throwIfAborted();
-    const reason = /^enrollment refused: ([a-z-]+)$/.exec(error?.message ?? "")?.[1];
-    throw Object.assign(new Error("Maestro enrollment refused."),
-      { reason: ENROLLMENT_REASONS.has(reason) ? reason : "enrollment-failed" });
+    const [, reason, account] =
+      /^enrollment refused: ([a-z-]+)(?:: ([A-Za-z0-9][A-Za-z0-9_-]{0,99}))?$/.exec(error?.message ?? "") ?? [];
+    const known = ENROLLMENT_REASONS.has(reason) ? reason : "enrollment-failed";
+    throw Object.assign(new Error("Maestro enrollment refused."), { reason: known,
+      ...(known === "account-mismatch" && account ? { recordedAccount: account } : {}) });
   }
 }
 
@@ -674,6 +714,7 @@ async function invokeEnroll(request, controller, signal) {
 // Tools are declared at join, so managed tools refuse until enrollment succeeds.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
   diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
+  endSession = recordSessionEnd, endGate = sessionEndGate,
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -686,7 +727,9 @@ export async function startBornManaged({ joinSession, environment = process.env,
   const delegates = {};
   let session;
   const refusal = () => ({ resultType: "failure",
-    textResultForLlm: `Maestro management is unavailable for this session (${state.reason}). No fallback was used.` });
+    textResultForLlm: `Maestro management is unavailable for this session (${state.reason}).` +
+      (state.recordedAccount ? ` It was recorded with account ${state.recordedAccount}; sign in to that account and restart.` : "") +
+      " No fallback was used." });
   const tools = managedToolSpecs().map(spec => ({ ...spec,
     handler: async (args, invocation) => {
       const delegate = delegates[spec.name];
@@ -709,7 +752,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
           managed: enrolled
             ? { status: "enrolled", origin: "born-managed", nodeId: state.nodeId, generation: state.generation }
             : { status: state.status === "pending" ? "pending" : "unavailable", origin: "born-managed",
-              reason: state.reason },
+              reason: state.reason,
+              ...(state.recordedAccount ? { recordedAccount: { login: state.recordedAccount, host: "github.com" } } : {}) },
           capabilities: {
             scope: "this-extension", readiness: true, selfSessionIdentity: true,
             managedIdentity: enrolled, peerDiscovery: enrolled, peerMessaging: enrolled,
@@ -723,7 +767,11 @@ export async function startBornManaged({ joinSession, environment = process.env,
     },
   });
   signal?.throwIfAborted();
-  session = await joinSession({ tools });
+  // Hooks are declared at join too. SessionEnd reaches the runtime's observer as soon as a
+  // validated enrollment installed it, even if the runtime then failed: the human's exit must
+  // still be recorded. Tools stay gated on a fully enrolled runtime.
+  session = await joinSession({ tools, hooks: { onSessionEnd: async (input, invocation) =>
+    delegates.onSessionEnd?.(input, invocation) } });
   signal?.throwIfAborted();
   requireCondition(session?.sessionId === sessionId);
   onJoined?.(session);  // Beats need only the joined session, not enrollment.
@@ -753,8 +801,10 @@ export async function startBornManaged({ joinSession, environment = process.env,
       enrolled.generation > 0 && typeof enrolled.routes === "string" && MANAGED_PEER.test(enrolled.peer));
   } catch (error) {
     signal?.throwIfAborted();
+    // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
     state = { status: "unavailable", reason: account.login === null ? "account-unverified"
-      : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed" };
+      : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed",
+      ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };
     return { session };
   }
   let listener;
@@ -763,8 +813,10 @@ export async function startBornManaged({ joinSession, environment = process.env,
       root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener,
       expected: { workspaceId: enrolled.workspaceId, sessionId, generation: enrolled.generation,
         nodeId: enrolled.nodeId, controller },
+      endSession, endGate,
       joinSession: async (config) => {
         for (const tool of config.tools) delegates[tool.name] = tool.handler;
+        if (config.hooks?.onSessionEnd) delegates.onSessionEnd = config.hooks.onSessionEnd;
         return session;
       },
     });

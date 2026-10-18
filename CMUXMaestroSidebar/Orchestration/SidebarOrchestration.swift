@@ -367,7 +367,7 @@ nonisolated enum SidebarOrchestrationReader {
                 && node.phase == "registered" && node.availability == "active"
         }
         let managedCoordinator = node.role == "coordinator" && node.parentId == nil
-            && node.executionMode == .interactive && node.generation == 1
+            && node.executionMode == .interactive && node.generation >= 1  // >1 after a relaunch resume
             && node.copilotSessionId != nil
         guard managedCoordinator || (node.role == "worker" && node.parentId != nil
                                      && node.generation > 0) else {

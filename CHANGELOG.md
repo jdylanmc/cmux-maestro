@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- A born-managed root resumes as managed after a CMUX relaunch (#252). When CMUX restarts its
+  session in the same surface, the controller resumes the same node as its next generation, in
+  the same run, with its children. It refuses a session the human ended with `/exit`, a live or
+  uncertain session, a different surface, or a different account; for an account mismatch,
+  `maestro_readiness` names the recorded login. A quit, hangup, or signal is not an `/exit`. See
+  `docs/reference/relaunch-restore.md`.
 - Copilot sessions you start in a CMUX terminal are born managed (#252, ADR 0025). After setup,
   each new session enrolls itself as its own root: it can see and message its workspace peers
   and spawn and close its own children. It records your session's account, with no credential,
@@ -13,7 +19,6 @@ Notable changes are recorded using Keep a Changelog categories.
   At capacity, or if any identity check fails, the session stays unmanaged and
   `maestro_readiness` says why. A new session in a tab whose earlier born run has fully ended
   archives that run first; `archive-ended --workspace <id>` archives every such run by hand.
-  Until born-root re-enrollment ships (#255), a born root comes back unmanaged after a relaunch.
 - Managed nodes have one recorded account `{login, host}` (#252): the launch's pinned login, or
   the account a session reported itself. No credential is stored. ADR 0024 sets one restore owner
   per node and the rules for resuming an ended managed session after a CMUX relaunch; ADR 0004

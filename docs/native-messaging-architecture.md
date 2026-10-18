@@ -179,8 +179,11 @@ observation already occurred. Legacy bindings and loaders keep their existing
 path; existing sessions are not converted or restarted.
 
 The CLI may stop and reload an extension within the same owned session. On
-SIGTERM, the loader cancels its pending local observation and closes only its
-own listener/connections before exiting, including during initialization.
+SIGTERM or SIGHUP, the loader cancels its pending local observation and closes only its
+own listener/connections before exiting, including during initialization. On
+SIGTERM it first waits up to one second for an in-flight `/exit` SessionEnd
+record; after SIGHUP it records no SessionEnd (see
+[Relaunch restore](reference/relaunch-restore.md)).
 The private session binding stays intact for the CLI's replacement extension.
 There is no timer, messaging retry or startup acknowledgement. An occupied
 socket, or one left behind by forced termination, still fails closed; startup
@@ -215,6 +218,10 @@ Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrollment-windo
 `integration-not-installed`, `session-started-before-install`,
 `cmux-identity-unverified`, `surface-owned`, `provider-already-enrolled`,
 `session-previously-managed`, `capacity-unavailable`, `enrollment-failed`.
+A resumed session also uses `surface-mismatch`, `account-mismatch` (with the
+recorded login), `account-unrecorded`, `session-ended` and
+`session-live-or-uncertain`; see
+[Relaunch restore](reference/relaunch-restore.md).
 Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
 
 The readiness-only branch below now applies only when launcher inputs are

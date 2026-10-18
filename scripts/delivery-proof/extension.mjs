@@ -1,5 +1,5 @@
 import { joinSession } from "@github/copilot-sdk/extension";
-import { startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
+import { sessionEndGate, startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
 
 const shutdown = new AbortController();
 const diagnosticCodes = new Set([
@@ -16,9 +16,11 @@ function fail(context, error) {
   process.exit(1);
 }
 
-process.on("SIGTERM", async () => {
+async function stop() {
   if (stopping) return;
   stopping = true;
+  // /exit sends SIGTERM just before SessionEnd; give that record up to a second to land.
+  await sessionEndGate.drain(1000);
   shutdown.abort();
   try {
     // Let a Beats sync in flight record what it created; never wait more than two seconds.
@@ -28,7 +30,10 @@ process.on("SIGTERM", async () => {
   } catch (error) {
     fail("shutdown failed", error);
   }
-});
+}
+process.on("SIGTERM", stop);
+// A hangup means the terminal or a signal ended the session, never the user (see adapter).
+process.on("SIGHUP", () => { sessionEndGate.hungUp = true; stop(); });
 
 startManaged({
   joinSession, signal: shutdown.signal, onListener: value => { listener = value; },
