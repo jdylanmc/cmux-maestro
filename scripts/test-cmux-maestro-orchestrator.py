@@ -3193,6 +3193,10 @@ class ChildResumeTests(unittest.TestCase):
         self.assertFalse(marker.exists())
         status = self.h.run("status", "--actor-id", root["id"], "--token", launched["controlToken"])
         self.assertEqual(status.get("returncode", 0), 0)
+        # The installed skill pairs status with focus under the same token.
+        focused = self.h.run("focus", "--actor-id", root["id"], "--token", launched["controlToken"],
+                             "--worker-id", root["id"])
+        self.assertEqual((focused["workerId"], focused["focused"]), (root["id"], True))
 
     def test_archive_whose_projection_fails_still_clears_bindings_and_scripts(self):
         launched, root = self.launched_root()

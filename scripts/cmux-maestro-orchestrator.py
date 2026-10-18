@@ -3437,9 +3437,15 @@ def command_resume_managed(args, root, cmux):
             except (OrchestrationError, OSError):
                 pass
         if not committed:
-            if stored is not None and stored.get("generation") == node["generation"]:
-                try:
+            def retire_if_still_previous(store):
+                # Under the state lock: retire the new route only while state still holds the
+                # previous generation, so a later successful resume's route is never removed.
+                current = store.read()["nodes"].get(worker_id) or {}
+                if current.get("generation") == node["generation"]:
                     retire_messaging(resumed)
+            if stored is not None:
+                try:
+                    with_store(root, retire_if_still_previous)
                 except (OrchestrationError, OSError):
                     pass
             if isinstance(error, ResumeRefused):
@@ -6084,14 +6090,15 @@ def command_status(args, root, cmux):
 
 def command_focus(args, root, cmux):
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token)
+    # Focus only moves visual focus to an owned session, so the owner token may use it with status.
+    actor = authorize(snapshot, args.actor_id, args.token, allow_owner=True)
     target = ensure_owned(snapshot, actor, args.worker_id)
     if not has_managed_runtime(target):
         raise OrchestrationError("Focus requires an owned managed session.")
     cmux.focus(target["workspaceId"], target["surfaceId"])
 
     def touched(state):
-        current = authorize(state, args.actor_id, args.token)
+        current = authorize(state, args.actor_id, args.token, allow_owner=True)
         ensure_owned(state, current, args.worker_id)
         current["lastControlAt"] = now()
     mutate(root, touched)
