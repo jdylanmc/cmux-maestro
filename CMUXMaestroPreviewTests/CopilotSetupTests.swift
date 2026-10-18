@@ -30,8 +30,7 @@ private struct SetupFileStub: CopilotSetupFileSystem {
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         root.appendingPathComponent("plugin")
     }
-    func removeMessaging(root: URL) throws {}
-    func foreignCMUXHooksRemaining() -> String? { nil }  // no CMUX hooks file in this stub
+    func removeMessaging(root: URL) throws -> String? { nil }  // no CMUX hooks file in this stub
     func installCMUXHooks() throws {}  // this stub models no CMUX hooks file
 }
 
@@ -54,8 +53,7 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
         record()
         return root.appendingPathComponent("plugin")
     }
-    func removeMessaging(root: URL) throws { record() }
-    func foreignCMUXHooksRemaining() -> String? { record(); return nil }
+    func removeMessaging(root: URL) throws -> String? { record(); return nil }
     func installCMUXHooks() throws { record() }
 
     private func record() {
@@ -1307,13 +1305,12 @@ struct CopilotSetupTests {
         try Data("live route must survive uninstall".utf8).write(to: retained)
         let unrelatedHook = restoreHooks.deletingLastPathComponent().appendingPathComponent("unrelated.json")
         try Data("{\"version\":1,\"hooks\":{}}".utf8).write(to: unrelatedHook)
-        try local.removeMessaging(root: integration)
+        #expect(try local.removeMessaging(root: integration) == nil)
         #expect(!FileManager.default.fileExists(atPath: native.appendingPathComponent("extension.mjs").path))
         #expect(!FileManager.default.fileExists(atPath: installed.deletingLastPathComponent().appendingPathComponent("messaging.json").path))
         #expect(FileManager.default.fileExists(atPath: retained.path))
         #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
         #expect(try Data(contentsOf: unrelatedHook) == Data("{\"version\":1,\"hooks\":{}}".utf8))
-        #expect(local.foreignCMUXHooksRemaining() == nil)
         // Clean fixture: only the CMUX hooks file can make the next preparations refuse.
         try FileManager.default.removeItem(at: obsolete)
         try FileManager.default.moveItem(at: savedObsolete, to: obsolete)
@@ -1334,9 +1331,8 @@ struct CopilotSetupTests {
         }
         #expect(try Data(contentsOf: restoreHooks) == foreign)
         #expect(try Data(contentsOf: extensionFile) == installedExtension)
-        try local.removeMessaging(root: integration)
+        #expect(try local.removeMessaging(root: integration) == restoreHooks.path)
         #expect(try Data(contentsOf: restoreHooks) == foreign)
-        #expect(local.foreignCMUXHooksRemaining() == restoreHooks.path)
         func asideCopies() throws -> [String] {
             try FileManager.default.contentsOfDirectory(atPath: restoreHooks.deletingLastPathComponent().path)
                 .filter { $0.contains(".removing-") }
@@ -1373,7 +1369,7 @@ struct CopilotSetupTests {
             } catch let failure as CopilotResourcePreparationFailure {
                 #expect(failure.detail?.contains(restoreHooks.path) == true)
             }
-            #expect(local.foreignCMUXHooksRemaining() == restoreHooks.path)
+            #expect(try local.removeMessaging(root: integration) == restoreHooks.path)
         }
         try FileManager.default.removeItem(at: restoreHooks)
 
@@ -1470,6 +1466,101 @@ struct CopilotSetupTests {
         try upgrading.removeMessaging(root: integration)
         #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
         #expect(try asideCopies().isEmpty)
+
+        // Publishing binds the ownership check to the bytes it replaces: a file swapped in after
+        // the new manifest is staged survives, whether the name was empty or held Maestro's copy.
+        func pendingCopies() throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: hooksDirectory.path).filter { $0.contains(".pending-") }
+        }
+        for existing in [nil, try CopilotCMUXHooks.manifest()] as [Data?] {
+            if let existing { try existing.write(to: restoreHooks) }
+            var publishing = local
+            publishing.beforeCMUXHooksPublish = { try? foreign.write(to: swapped) }
+            do {
+                try publishing.installCMUXHooks()
+                Issue.record("A file swapped in before publish must not be replaced")
+            } catch let failure as CopilotResourcePreparationFailure {
+                #expect(failure.outcome == .untouched)
+                #expect(failure.detail?.contains(restoreHooks.path) == true)
+            }
+            #expect(try Data(contentsOf: restoreHooks) == foreign)
+            #expect(try asideCopies().isEmpty)
+            #expect(try pendingCopies().isEmpty)
+            try FileManager.default.removeItem(at: restoreHooks)
+        }
+
+        // A file that takes the name after the current one is moved aside is not replaced either.
+        var late = local
+        late.beforeCMUXHooksRename = { try? foreign.write(to: swapped) }
+        do {
+            try late.installCMUXHooks()
+            Issue.record("A file that takes the free name before the rename must not be replaced")
+        } catch let failure as CopilotResourcePreparationFailure {
+            #expect(failure.detail?.contains(restoreHooks.path) == true)
+        }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try pendingCopies().isEmpty)
+        try CopilotCMUXHooks.manifest().write(to: restoreHooks)
+        do {
+            try late.installCMUXHooks()
+            Issue.record("Maestro's earlier copy cannot go back over the late file; both must be named")
+        } catch let conflict as CopilotRegistrationConflict {
+            let aside = try #require(try asideCopies().first)
+            #expect(conflict.message.contains(hooksDirectory.appendingPathComponent(aside).path))
+            #expect(conflict.message.contains(restoreHooks.path))
+            #expect(try Data(contentsOf: hooksDirectory.appendingPathComponent(aside)) == CopilotCMUXHooks.manifest())
+            try FileManager.default.removeItem(at: hooksDirectory.appendingPathComponent(aside))
+        }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try pendingCopies().isEmpty)
+        try FileManager.default.removeItem(at: restoreHooks)
+
+        // The moved copy is rechecked right before deletion: bytes changed after the move go back.
+        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try local.installCMUXHooks()
+        var rewriting = local
+        let directoryPath = hooksDirectory
+        rewriting.afterCMUXHooksMovedAside = {
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: directoryPath.path)) ?? []
+            for name in names where name.contains(".removing-") {
+                try? foreign.write(to: directoryPath.appendingPathComponent(name))
+            }
+        }
+        #expect(try rewriting.removeMessaging(root: integration) == restoreHooks.path)
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(try asideCopies().isEmpty)
+        try FileManager.default.removeItem(at: restoreHooks)
+
+        // A put-back whose directory sync fails says the file is back but durability is unconfirmed.
+        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try local.installCMUXHooks()
+        try FileManager.default.removeItem(at: messaging)
+        try FileManager.default.createDirectory(at: messaging.appendingPathComponent("blocker"), withIntermediateDirectories: true)
+        let syncs = SyncCounter()
+        var unsynced = local
+        unsynced.syncDirectory = { descriptor in syncs.next() >= 2 ? -1 : Darwin.fsync(descriptor) }
+        do {
+            _ = try unsynced.removeMessaging(root: integration)
+            Issue.record("A put-back that cannot be made durable must be reported")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains("were put back at \(restoreHooks.path)"))
+            #expect(conflict.message.contains("durable"))
+        }
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        #expect(try asideCopies().isEmpty)
+        try FileManager.default.removeItem(at: messaging)
+        // Publish whose directory sync fails names the written file, separately from the rename.
+        var unsyncedInstall = local
+        unsyncedInstall.syncDirectory = { _ in -1 }
+        do {
+            try unsyncedInstall.installCMUXHooks()
+            Issue.record("A publish that cannot be made durable must be reported")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains("were written to \(restoreHooks.path)"))
+        }
+        #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
+        #expect(try asideCopies().isEmpty)
+        #expect(try pendingCopies().isEmpty)
     }
 
     @Test func everyShippedCMUXHooksManifestIsOwnedAndLookAlikesAreNot() throws {
@@ -1583,4 +1674,15 @@ struct CopilotProcessQuiescenceTests {
 private final class Box<Value>: @unchecked Sendable {
     var value: Value
     init(_ value: Value) { self.value = value }
+}
+
+private final class SyncCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        count += 1
+        return count
+    }
 }

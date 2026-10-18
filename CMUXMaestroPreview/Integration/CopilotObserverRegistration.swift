@@ -375,8 +375,25 @@ nonisolated final class CopilotObserverRegistration: Sendable {
 
     /// A hook row Maestro owns: its observer file, its CMUX hooks file, or its native plugin.
     /// Every foreign-hook inventory and checkpoint continuity check excludes exactly these.
-    /// Hook-directory entries read at most; Maestro's two owned files come on top of 128 others.
-    static let hookListingLimit = 130
+    /// Hook-directory entries read at most: 128 others, Maestro's two owned files, and up to two
+    /// copies an interrupted uninstall set aside (transaction state, recovered by the next one).
+    static let hookListingLimit = 132
+    static let asidePrefix = ".\(CopilotCMUXHooks.filename).removing-"
+
+    /// Setup writes Maestro's owned hook files, whose rows Copilot then reports. Before anything
+    /// changes, reserve the rows of each owned file not yet reported, and refuse if discovery would
+    /// pass the rows Maestro can read (later reads, restore, and uninstall would all fail).
+    func requireHookRowRoom(_ metadata: CopilotSetupMetadata) throws {
+        let observer = metadata.hooks.contains(where: isOwnedSource) ? 0 : CopilotPluginManifest.events.count
+        let cmux = metadata.hooks.contains { CopilotCMUXHooks.isSource($0, providerHome: providerHome) }
+            ? 0 : CopilotCMUXHooks.events.count
+        let total = metadata.hooks.count + observer + cmux
+        guard total <= CopilotSetupMetadata.maximumHooks else {
+            throw CopilotRegistrationConflict("Copilot reports \(metadata.hooks.count) hooks, and Maestro's would bring "
+                + "that to \(total), past the \(CopilotSetupMetadata.maximumHooks) setup can verify. "
+                + "Remove some hooks and run setup again.")
+        }
+    }
 
     func isMaestroHookSource(_ hook: CopilotSetupMetadata.Hook) -> Bool {
         isObserverHookSource(hook)
@@ -627,8 +644,11 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         // Maestro's two owned hook files do not count against the 128-entry bound, so writing the
         // CMUX hooks file can never push a checkpoint's own discovery over it.
         let listing = try CopilotFileAccess.names(at: directory, limit: Self.hookListingLimit)
-        let foreignCount = listing.names.filter { $0 != Self.filename && $0 != CopilotCMUXHooks.filename }.count
-        guard !listing.limited, foreignCount <= 128 else { throw CopilotFileError.tooLarge }
+        let asides = listing.names.filter { $0.hasPrefix(Self.asidePrefix) }.count
+        let foreignCount = listing.names.filter {
+            $0 != Self.filename && $0 != CopilotCMUXHooks.filename && !$0.hasPrefix(Self.asidePrefix)
+        }.count
+        guard !listing.limited, foreignCount <= 128, asides <= 2 else { throw CopilotFileError.tooLarge }
         return try listing.names.filter {
             $0.lowercased().hasSuffix(".json") && $0 != Self.filename
         }.compactMap { name in
