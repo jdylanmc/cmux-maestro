@@ -51,6 +51,9 @@ never split on " - ". Managed rows keep their launch label, except a
 born-managed root, which has none and uses its exact session's name; plain terminals,
 browsers and other surfaces keep the CMUX title. Hover cards, details, the
 Active window footer, Taskboard cards and Beat targets use the same name.
+During observation loss a row keeps its last name for the grace period, but
+the Active window footer shows only a live, confirmed session (otherwise the
+CMUX title), for unmanaged and born-managed rows alike.
 Work-context session rows keep "Session context". Exact session identity stays
 in details.
 
