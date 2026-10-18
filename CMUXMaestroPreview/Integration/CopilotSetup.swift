@@ -223,10 +223,6 @@ nonisolated protocol CopilotSetupFileSystem: Sendable {
     func installCMUXHooks() throws
 }
 
-extension CopilotSetupFileSystem {
-    func foreignCMUXHooksRemaining() -> String? { nil }
-    func installCMUXHooks() throws {}
-}
 
 nonisolated struct CopilotResourcePreparationFailure: Error {
     enum Outcome { case untouched, restored, unverified }
@@ -476,6 +472,8 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
 
     /// Test seam: runs just before the CMUX hooks file is moved aside for removal.
     var beforeCMUXHooksRemoval: (@Sendable () -> Void)? = nil
+    /// Test seam: runs before a moved-aside file Maestro did not write is put back.
+    var beforeForeignCMUXHooksPutBack: (@Sendable () -> Void)? = nil
     /// Test seam: runs after the CMUX hooks file is moved aside, before the other removals.
     var afterCMUXHooksMovedAside: (@Sendable () -> Void)? = nil
     /// Test seam: the shipped CMUX hooks manifests; nil means every manifest a release shipped.
@@ -524,10 +522,14 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         if let quarantine {
             let directory = try CopilotFileAccess.openDirectory(cmuxHooksFile.deletingLastPathComponent(), owner: getuid())
             defer { close(directory) }
-            guard unlinkat(directory, quarantine, 0) == 0, fsync(directory) == 0 else {
+            guard unlinkat(directory, quarantine, 0) == 0 else {
                 throw CopilotRegistrationConflict("Uninstall could not delete Maestro's CMUX Copilot hooks at "
                     + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(quarantine).path); "
                     + "run uninstall again or delete it.")
+            }
+            guard fsync(directory) == 0 else {
+                throw CopilotRegistrationConflict("Maestro's CMUX Copilot hooks were deleted, but the removal "
+                    + "could not be confirmed as durable; run uninstall again to confirm.")
             }
         }
     }
@@ -541,15 +543,13 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         } catch CopilotFileError.missing { return }
         defer { close(directory) }
         let prefix = ".\(cmuxHooksFile.lastPathComponent).removing-"
-        let listing = try CopilotFileAccess.names(at: directory, limit: 128)
+        let listing = try CopilotFileAccess.names(at: directory, limit: CopilotObserverRegistration.hookListingLimit)
         for aside in listing.names where aside.hasPrefix(prefix) {
             let data = try? CopilotFileAccess.readStableRegular(at: directory, filename: aside, owner: getuid(), maximum: 65_536)
             if let data, ownsCMUXHooks(data) {
                 guard unlinkat(directory, aside, 0) == 0 || errno == ENOENT else { throw HookFiles.Failure.unavailable }
-            } else if renameatx_np(directory, aside, directory, cmuxHooksFile.lastPathComponent, UInt32(RENAME_EXCL)) != 0 {
-                throw CopilotRegistrationConflict("A hook file set aside by an interrupted uninstall is at "
-                    + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path), and "
-                    + "\(cmuxHooksFile.path) is taken; keep one.")
+            } else {
+                try putBack(aside, in: directory)
             }
         }
         guard fsync(directory) == 0 else { throw HookFiles.Failure.unavailable }
@@ -576,12 +576,20 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             at: directory, filename: aside, owner: getuid(), maximum: 65_536)
         guard let moved, ownsCMUXHooks(moved) else {
             // Not Maestro's: put it back exactly as found and leave it.
-            guard renameatx_np(directory, aside, directory, name, UInt32(RENAME_EXCL)) == 0 else {
-                throw HookFiles.Failure.unavailable
-            }
+            beforeForeignCMUXHooksPutBack?()
+            try putBack(aside, in: directory)
             return nil
         }
         return aside
+    }
+
+    /// Return a hook file Maestro did not write to its name; if the name was taken meanwhile, name both.
+    private func putBack(_ aside: String, in directory: Int32) throws {
+        guard renameatx_np(directory, aside, directory, cmuxHooksFile.lastPathComponent, UInt32(RENAME_EXCL)) == 0 else {
+            throw CopilotRegistrationConflict("A hook file Maestro did not write was set aside at "
+                + "\(cmuxHooksFile.deletingLastPathComponent().appendingPathComponent(aside).path), and "
+                + "\(cmuxHooksFile.path) is taken; keep one.")
+        }
     }
 
     private func restoreQuarantined(_ aside: String) throws {

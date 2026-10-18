@@ -375,6 +375,9 @@ nonisolated final class CopilotObserverRegistration: Sendable {
 
     /// A hook row Maestro owns: its observer file, its CMUX hooks file, or its native plugin.
     /// Every foreign-hook inventory and checkpoint continuity check excludes exactly these.
+    /// Hook-directory entries read at most; Maestro's two owned files come on top of 128 others.
+    static let hookListingLimit = 130
+
     func isMaestroHookSource(_ hook: CopilotSetupMetadata.Hook) -> Bool {
         isObserverHookSource(hook)
             || (CopilotCMUXHooks.isSource(hook, providerHome: providerHome) && !cmuxHooksForeignOnDisk())
@@ -621,15 +624,34 @@ nonisolated final class CopilotObserverRegistration: Sendable {
         } catch CopilotFileError.missing { return [] }
         defer { close(directory) }
         _ = try HookFiles.metadata(directory, directory: true)
-        let listing = try CopilotFileAccess.names(at: directory, limit: 128)
-        guard !listing.limited else { throw CopilotFileError.tooLarge }
+        // Maestro's two owned hook files do not count against the 128-entry bound, so writing the
+        // CMUX hooks file can never push a checkpoint's own discovery over it.
+        let listing = try CopilotFileAccess.names(at: directory, limit: Self.hookListingLimit)
+        let foreignCount = listing.names.filter { $0 != Self.filename && $0 != CopilotCMUXHooks.filename }.count
+        guard !listing.limited, foreignCount <= 128 else { throw CopilotFileError.tooLarge }
         return try listing.names.filter {
             $0.lowercased().hasSuffix(".json") && $0 != Self.filename
         }.compactMap { name in
-            let state = try CopilotSetupFileState.read(file.deletingLastPathComponent().appendingPathComponent(name))
+            let url = file.deletingLastPathComponent().appendingPathComponent(name)
+            if name == CopilotCMUXHooks.filename {
+                // Maestro's own CMUX hooks file is checked by its bytes in the resource transaction.
+                // Anything else there that cannot even be read as a hook file is named, not generic.
+                do {
+                    let state = try CopilotSetupFileState.read(url)
+                    guard let data = state.data else { throw CopilotFileError.changed }
+                    if CopilotCMUXHooks.isOwned(data) { return nil }
+                    if try containsHelper(CopilotSetupJSON.object(data)) {
+                        throw CopilotRegistrationConflict("Another user hook file refers to the observer helper. No duplicate is installed or removed.")
+                    }
+                    return state
+                } catch let conflict as CopilotRegistrationConflict {
+                    throw conflict
+                } catch {
+                    throw CopilotRegistrationConflict(CopilotCMUXHooks.Conflict(path: url.path).message)
+                }
+            }
+            let state = try CopilotSetupFileState.read(url)
             guard let data = state.data else { throw CopilotFileError.changed }
-            // Maestro's own CMUX hooks file is checked by its bytes in the resource transaction.
-            if name == CopilotCMUXHooks.filename, CopilotCMUXHooks.isOwned(data) { return nil }
             if try containsHelper(CopilotSetupJSON.object(data)) {
                 throw CopilotRegistrationConflict("Another user hook file refers to the observer helper. No duplicate is installed or removed.")
             }

@@ -31,6 +31,8 @@ private struct SetupFileStub: CopilotSetupFileSystem {
         root.appendingPathComponent("plugin")
     }
     func removeMessaging(root: URL) throws {}
+    func foreignCMUXHooksRemaining() -> String? { nil }  // no CMUX hooks file in this stub
+    func installCMUXHooks() throws {}  // this stub models no CMUX hooks file
 }
 
 private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable {
@@ -53,6 +55,8 @@ private final class SetupAccessSpy: CopilotSetupFileSystem, @unchecked Sendable 
         return root.appendingPathComponent("plugin")
     }
     func removeMessaging(root: URL) throws { record() }
+    func foreignCMUXHooksRemaining() -> String? { record(); return nil }
+    func installCMUXHooks() throws { record() }
 
     private func record() {
         lock.lock()
@@ -1392,6 +1396,23 @@ struct CopilotSetupTests {
             #expect(conflict.message.contains(restoreHooks.path))
         }
         try FileManager.default.removeItem(at: strandedForeign)
+        #expect(try asideCopies().isEmpty)
+
+        // A foreign file set aside, whose name is taken before it goes back, is named (both paths).
+        try foreign.write(to: restoreHooks)
+        var squatted = local
+        let squatterPath = restoreHooks
+        squatted.beforeForeignCMUXHooksPutBack = { try? Data("{}".utf8).write(to: squatterPath) }
+        do {
+            try squatted.removeMessaging(root: integration)
+            Issue.record("A failed put-back of a foreign file must be named")
+        } catch let conflict as CopilotRegistrationConflict {
+            let aside = try #require(try asideCopies().first)
+            #expect(conflict.message.contains(hooksDirectory.appendingPathComponent(aside).path))
+            #expect(conflict.message.contains(restoreHooks.path))
+            #expect(try Data(contentsOf: hooksDirectory.appendingPathComponent(aside)) == foreign)
+            try FileManager.default.removeItem(at: hooksDirectory.appendingPathComponent(aside))
+        }
         #expect(try asideCopies().isEmpty)
 
         // A file swapped in between any check and the removal is the one verified, and kept.

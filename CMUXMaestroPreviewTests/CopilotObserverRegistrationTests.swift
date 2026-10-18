@@ -128,6 +128,8 @@ struct FailingResourceSetupFiles: CopilotSetupFileSystem {
         return fixture.source
     }
     func removeMessaging(root: URL) throws {}
+    func foreignCMUXHooksRemaining() -> String? { nil }  // resource failure double: no CMUX hooks file
+    func installCMUXHooks() throws {}
 }
 
 actor ObserverSetupRunner: CopilotSetupProcessRunner {
@@ -631,6 +633,41 @@ struct CopilotInstallCheckpointTests {
         #expect(!FileManager.default.fileExists(atPath: file.path))
         try value.verifyRestored(before)
         _ = try await value.checkpoint(id: id).perform("release")
+    }
+
+    @Test func resourceOnlyCheckpointAtTheHookListingBoundStillRestoresAndReleases() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let hooks = value.fixture.provider.appendingPathComponent("hooks")
+        try FileManager.default.removeItem(at: hooks.appendingPathComponent(CopilotCMUXHooks.filename))
+        let present = try FileManager.default.contentsOfDirectory(atPath: hooks.path).count
+        for index in 0..<(128 - present) {
+            try Data("note".utf8).write(to: hooks.appendingPathComponent("note-\(index).txt"))
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: hooks.path).count == 128)
+        await value.runner.nativePlugin(enabled: false)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        _ = try await value.checkpoint(id: id).perform("apply")  // 129 entries with Maestro's file
+        _ = try await value.checkpoint(id: id).perform("restore")
+        _ = try await value.checkpoint(id: id).perform("release")
+        #expect(!FileManager.default.fileExists(atPath: hooks.appendingPathComponent(CopilotCMUXHooks.filename).path))
+    }
+
+    @Test(arguments: ["symlink", "empty", "oversized"])
+    func coordinatedPrepareNamesAnUnreadableCMUXHooksOccupant(occupant: String) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try placeOccupant(occupant, at: file)
+        do {
+            _ = try await value.checkpoint().perform("prepare")
+            Issue.record("An unreadable CMUX hooks occupant must refuse coordinated prepare by name")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains(file.path))
+        }
+        #expect(try CopilotSetupFileState.read(value.fixture.file).data == nil)
     }
 
     @Test func coordinatedPrepareNamesAForeignCMUXHooksFile() async throws {
@@ -1294,6 +1331,34 @@ struct CopilotObserverRegistrationTests {
         let healthy = try ObserverFixture(); defer { try? healthy.clean() }
         #expect(await perform(setup(healthy, runner: ObserverSetupRunner(healthy)), healthy) == .installed)
         #expect(FileManager.default.fileExists(atPath: healthy.cmuxHooksMarker.path))
+    }
+
+    @Test(arguments: ["symlink", "empty", "oversized"])
+    func setupAndUninstallNameAnUnreadableCMUXHooksOccupant(occupant: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        let file = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try placeOccupant(occupant, at: file)
+        for action in [CopilotSetupAction.install, .uninstall] {
+            guard case .conflict(let reason) = await perform(setup(fixture, runner: runner), fixture, action: action) else {
+                Issue.record("\(action) must refuse an unreadable CMUX hooks occupant by name"); continue
+            }
+            #expect(reason.contains(file.path))
+        }
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)
+        #expect(await runner.calls.isEmpty)
+    }
+
+    @Test func cmuxHookRowsAreMaestroOwnedOnlyWhileTheFileIsNotForeign() throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let row = CopilotSetupMetadata.Hook(hookType: "SessionStart", origin: "user",
+                                            source: "hooks/\(CopilotCMUXHooks.filename)", enabled: true, disableKey: nil)
+        let file = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        #expect(fixture.registration.isMaestroHookSource(row))  // absent
+        try fixture.write(try CopilotCMUXHooks.manifest(), to: file)
+        #expect(fixture.registration.isMaestroHookSource(row))  // Maestro's bytes
+        try fixture.write(Data("{\"version\":1,\"hooks\":{}}".utf8), to: file)
+        #expect(!fixture.registration.isMaestroHookSource(row))  // someone else's file at the name
     }
 
     @Test func aForeignFileAtTheCMUXHooksNameIsScannedForTheHelper() async throws {
@@ -2564,5 +2629,17 @@ struct CopilotObserverRegistrationTests {
         gate.signal()
         #expect(await task.value)
         #expect(try String(contentsOf: file, encoding: .utf8) == "writer-finished")
+    }
+}
+
+/// Puts something at the CMUX hooks name that cannot be read as Maestro's bytes.
+func placeOccupant(_ occupant: String, at file: URL) throws {
+    try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+    switch occupant {
+    case "symlink":
+        try FileManager.default.createSymbolicLink(at: file, withDestinationURL: file.deletingLastPathComponent()
+            .appendingPathComponent("elsewhere.json"))
+    case "empty": try Data().write(to: file)
+    default: try Data(repeating: 0x20, count: 70_000).write(to: file)
     }
 }
