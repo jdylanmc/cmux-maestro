@@ -25,6 +25,8 @@ def configure_fixture_controller(api, driver):
     controller["launch_reserved_session"] = legacy_fixture_launcher(controller["launch_reserved_session"], api)
     if "FAKE_FAIL_STATE_FSYNC_AT" in os.environ or "FAKE_FAIL_PROJECTION_AT" in os.environ:
         controller["Store"]._atomic = staticmethod(failing_after_replace(controller["Store"]._atomic))
+    if "FAKE_PAUSE_AFTER_BIND" in os.environ:
+        controller["bind_messaging"] = pausing_after(controller["bind_messaging"], os.environ["FAKE_PAUSE_AFTER_BIND"])
     if "FAKE_AFTER_RESUME_SET" in os.environ:
         cmux_type = controller["Cmux"]
         original_set = cmux_type.set_resume_binding
@@ -74,3 +76,17 @@ def failing_after_replace(original):
             if limits[name] is not None and counts[name] == int(limits[name]):
                 raise OSError("synthetic directory fsync failure after replace")
     return atomic
+
+
+def pausing_after(original, marker):
+    """Hold the caller right after the wrapped step until the test releases it."""
+    import time
+
+    def wrapped(*args, **kwargs):
+        result = original(*args, **kwargs)
+        Path(marker + ".ready").write_text("ready")
+        deadline = time.monotonic() + 10
+        while not Path(marker + ".release").exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        return result
+    return wrapped

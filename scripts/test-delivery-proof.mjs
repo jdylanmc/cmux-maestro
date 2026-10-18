@@ -2135,6 +2135,30 @@ test("a resumed root's new generation messages its retained child; the old gener
   assert.deepEqual(f.sends.map(item => item.index), [1, 0]);
 });
 
+test("a launch's held exit settles at once when joining fails", async (t) => {
+  const f = await managedFixture(t, { owners: [0, 0] });
+  const own = f.bindings[0];
+  const ended = [];
+  const endGate = createSessionEndGate();
+  let exit;
+  await assert.rejects(start({
+    root: f.root, peer: own.peer, managed: true, endGate,
+    expected: { ...own, controller: "/synthetic/controller" },
+    endSession: async (request) => { ended.push(request); },
+    observe: async () => {},
+    joinSession: async (options) => {
+      exit = options.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: own.sessionId });
+      throw new Error("join refused");
+    },
+  }), /join refused/);
+  const settled = await Promise.race([exit.then(() => true), delay(2000).then(() => false)]);
+  assert.ok(settled, "a held exit must settle when startup fails");
+  const started = Date.now();
+  await endGate.drain(5000);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(ended.length, 0);
+});
+
 for (const [during, observed] of [["join", true], ["observe", true], ["observe", false]]) {
   test(`a launch's exit during ${during} is ${observed ? "recorded after observation" : "dropped when observation fails"}`, async (t) => {
     const f = await managedFixture(t, { owners: [0, 0] });

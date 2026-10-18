@@ -2193,6 +2193,13 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         return int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
                                   capture_output=True, text=True, check=True).stdout)
 
+    def test_archive_ended_whose_projection_fails_still_reports_and_cleans_up(self):
+        first = self.enroll()
+        result = self.h.run("archive-ended", "--workspace", self.h.workspace,
+                            env={**self.h.env, "FAKE_FAIL_PROJECTION_AT": "1"})
+        self.assertEqual((len(result["archivedRuns"]), result.get("projection")), (1, "deferred"))
+        self.assertNotIn(first["nodeId"], self.h.state()["nodes"])
+
     def test_generation_marks_at_the_cap_evict_into_a_floor(self):
         first = self.enroll()
         cap = CONTROLLER_API["MAX_HOST_NODES"]
@@ -3028,9 +3035,11 @@ class ChildResumeTests(unittest.TestCase):
             self.assertTrue(CONTROLLER_API["session_has_live_owner"](session))  # unowned shape: uncertain
 
     def test_a_resume_that_lands_but_reports_failure_still_starts_copilot(self):
-        for env in ({"FAKE_FAIL_STATE_FSYNC_AT": "2"}, {"FAKE_FAIL_PROJECTION_AT": "2"}):
+        for env in ({"FAKE_FAIL_STATE_FSYNC_AT": "1"}, {"FAKE_FAIL_PROJECTION_AT": "1"}):
             with self.subTest(env=env):
                 _, child = self.ended_child()
+                old = self.routes / f"{CONTROLLER_API['message_peer'](child)}.json"
+                CONTROLLER_API["bind_messaging"](child)  # the previous generation's route
                 calls = len(self.h.calls())
                 completed = self.resume(child, env=env)
                 self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -3038,6 +3047,7 @@ class ChildResumeTests(unittest.TestCase):
                 node = self.h.state()["nodes"][child["id"]]
                 self.assertEqual((node["generation"], node["phase"]), (2, "turn-running"))
                 self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+                self.assertFalse(old.exists())
 
     def test_resume_removes_the_earlier_generation_launch_script(self):
         _, child = self.ended_child()
@@ -3116,6 +3126,86 @@ class ChildResumeTests(unittest.TestCase):
         node = self.h.state()["nodes"][child["id"]]
         self.assertEqual((node["generation"], node.get("runtimeNotStarted"), node["providerProcess"]), (2, True, None))
         self.assertEqual(self.route_names(), [])
+
+    def test_reviving_a_retired_launch_needs_a_free_workspace_slot(self):
+        _, child = self.ended_child()
+        self.h.change_state(lambda state: state["nodes"][child["id"]].update(
+            phase="resource-retired", availability="unavailable"))
+        used = CONTROLLER_API["workspace_capacity"](self.h.state(), self.h.workspace)["used"]
+        self.h.change_state(lambda state: state.setdefault("workspaceCapacity", {}).update({self.h.workspace: used}))
+        before, routes = self.h.state(), self.route_names()
+        self.refused(self.resume(child), "no free workspace slot")
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual(self.route_names(), routes)
+        self.h.change_state(lambda state: state["workspaceCapacity"].update({self.h.workspace: used + 1}))
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_route_publication_and_reservation_are_one_locked_step(self):
+        _, child = self.ended_child()
+        marker = str(self.h.path / "after-bind")
+        wrapper = self.h.path / "restored-terminal.py"
+        wrapper.write_text(RESTORED_TERMINAL)
+        with open(self.h.lifetime.name, "rb") as lifetime:
+            fcntl.flock(lifetime, fcntl.LOCK_SH)
+            running = subprocess.Popen(
+                [sys.executable, str(wrapper), "match", child["surfaceId"],
+                 sys.executable, str(self.h.driver), "resume", child["copilotSessionId"]],
+                env={**self.h.env, "CMUX_SURFACE_ID": child["surfaceId"], "FAKE_PAUSE_AFTER_BIND": marker,
+                     "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
+                pass_fds=(lifetime.fileno(),), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 10
+            while not Path(marker + ".ready").exists():
+                self.assertLess(time.monotonic(), deadline, "resume never published its route")
+                time.sleep(0.01)
+            # The route exists, and the state lock is still held: no other resume can act on it.
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                CONTROLLER_API["mutate"](self.h.root, lambda state: None, wait=0)
+        finally:
+            Path(marker + ".release").write_text("go")
+            stdout, stderr = running.communicate(timeout=20)
+        self.assertEqual(running.returncode, 0, stderr)
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual(node["generation"], 2)
+        self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+
+    def launched_root(self):
+        source = str(uuid.uuid4())
+        self.h.add_surface(source)
+        launched = self.h.run("launch-coordinator", "--workspace", self.h.workspace, "--surface", source,
+                              "--cwd", str(REPO), "--task", "Coordinate.", "--account", "synthetic-account",
+                              env={**self.h.env, "CMUX_SURFACE_ID": source})
+        root = self.h.wait_node(launched["coordinatorId"], lambda item: item.get("providerProcess") is not None)
+        os.write(self.h.terminal_master, b"exit\n")
+        return launched, self.h.wait_node(root["id"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_the_receipt_token_is_owner_authority_only(self):
+        launched, root = self.launched_root()
+        self.assertEqual(self.resume(root).returncode, 0)
+        marker = self.credential_spy()
+        resumed = self.h.state()["nodes"][root["id"]]
+        refused = self.h.run("launch-credential", check=False, env={
+            **self.h.env, "CMUX_MAESTRO_WORKER_ID": root["id"], "CMUX_MAESTRO_CONTROL_TOKEN": launched["controlToken"],
+            "CMUX_MAESTRO_SESSION_ID": root["copilotSessionId"], "CMUX_MAESTRO_GENERATION": str(resumed["generation"])})
+        self.assertNotEqual(refused["returncode"], 0)
+        self.assertFalse(marker.exists())
+        status = self.h.run("status", "--actor-id", root["id"], "--token", launched["controlToken"])
+        self.assertEqual(status.get("returncode", 0), 0)
+
+    def test_archive_whose_projection_fails_still_clears_bindings_and_scripts(self):
+        launched, root = self.launched_root()
+        self.assertEqual(self.resume(root).returncode, 0)
+        script = self.h.root / "control" / f"direct-{root['id']}-2.sh"
+        script.write_text("")  # a current-generation launch script
+        archived = self.h.run("archive", "--actor-id", root["id"], "--token", launched["controlToken"],
+                              env={**self.h.env, "FAKE_FAIL_PROJECTION_AT": "2"})
+        self.assertEqual((archived["archived"], archived.get("projection")), (True, "deferred"))
+        self.assertNotIn(root["id"], self.h.state()["nodes"])
+        self.assertIn(["surface", "resume", "clear", "--workspace", self.h.workspace, "--surface", root["surfaceId"]],
+                      self.h.cmux_data()["calls"])
+        self.assertFalse(script.exists())
 
     def test_unrecorded_account_refuses(self):
         _, child = self.ended_child()

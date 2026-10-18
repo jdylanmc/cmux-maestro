@@ -342,7 +342,7 @@ class ProofTests(unittest.TestCase):
             "worker_environment": lambda *a: {"SYNTHETIC_PINNED_ENV": "preserved"},
             "process_start": lambda _: "synthetic-start",
             "mutate": lambda root, callback, **kw: callback({}),
-            "authorize": lambda *a: self.node,
+            "authorize": lambda *a, **k: self.node,
         }), mock.patch("os.isatty", return_value=True), mock.patch("signal.signal"), \
                 mock.patch("subprocess.Popen", popen):
             run(self.root, "synthetic-worker", "synthetic-token", self.node)
@@ -426,7 +426,7 @@ class ProofTests(unittest.TestCase):
                 with mock.patch.dict(spawn.__globals__, {
                     "read_state": lambda _: state,
                     "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
-                    "authorize": lambda *a: state["nodes"][actor["id"]],
+                    "authorize": lambda *a, **k: state["nodes"][actor["id"]],
                     "worker_launch_settings": lambda _: {
                         "version": 1, "copilotAccount": "synthetic-account", "model": "synthetic-pinned-model",
                     },
@@ -474,7 +474,7 @@ class ProofTests(unittest.TestCase):
             forbidden = mock.Mock(side_effect=AssertionError("must refuse before external effects"))
             with mock.patch.dict(spawn.__globals__, {
                 "read_state": lambda _: {},
-                "authorize": lambda *a: {"role": "worker", "toolPolicy": {"allow": ["read"], "deny": ["web"]}},
+                "authorize": lambda *a, **k: {"role": "worker", "toolPolicy": {"allow": ["read"], "deny": ["web"]}},
                 "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
                 "messaging_configuration": forbidden, "mutate": forbidden,
             }):
@@ -569,7 +569,7 @@ class ProofTests(unittest.TestCase):
         cmux = mock.Mock()
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda _: {"nodes": {}},
-            "authorize": lambda *a: {"role": "coordinator", "workspaceId": str(uuid.uuid4())},
+            "authorize": lambda *a, **k: {"role": "coordinator", "workspaceId": str(uuid.uuid4())},
             "authorize_native_spawn": lambda *a: {"role": "coordinator", "workspaceId": str(uuid.uuid4())},
             "git_display_metadata": lambda _: {},
             "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden, "mutate": forbidden,
@@ -717,7 +717,7 @@ class ProofTests(unittest.TestCase):
         forbidden = mock.Mock(side_effect=AssertionError("must refuse before launch effects"))
         with mock.patch.dict(spawn.__globals__, {
             "read_state": lambda _: state,
-            "authorize": lambda *a: self.node,
+            "authorize": lambda *a, **k: self.node,
             "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
             "mutate": forbidden,
         }):
@@ -735,7 +735,7 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"CMUX_MAESTRO_TESTING": "1"}), \
                 mock.patch.dict(spawn.__globals__, {
                     "read_state": lambda _: state,
-                    "authorize": lambda *a: actor,
+                    "authorize": lambda *a, **k: actor,
                     "worker_launch_settings": forbidden, "resolve_copilot_token": forbidden,
                     "mutate": forbidden,
                 }):
@@ -933,7 +933,7 @@ class ProofTests(unittest.TestCase):
         cmux.surface_exists.return_value = True
         with mock.patch.dict(status.__globals__, {
             "read_state": lambda _: snapshot,
-            "authorize": lambda state, *a: state["nodes"][actor["id"]],
+            "authorize": lambda state, *a, **k: state["nodes"][actor["id"]],
             "mutate": lambda root, callback, **_kw: callback(state),
             "collect_git_evidence": lambda *a: {},
             "apply_git_evidence": lambda *a: None,
@@ -1190,7 +1190,7 @@ class ProofTests(unittest.TestCase):
             raise Reserved()
 
         with mock.patch.dict(spawn.__globals__, {
-            "read_state": lambda _: state, "authorize": lambda *a: actor,
+            "read_state": lambda _: state, "authorize": lambda *a, **k: actor,
             "authorize_native_spawn": lambda *a: actor,
             "provider_launch_context": lambda *_: ("/synthetic/copilot", "/usr/bin:/bin"),
             "worker_launch_settings": lambda _: {},

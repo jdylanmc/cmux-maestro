@@ -564,12 +564,17 @@ export async function start({ root, peer, joinSession, managed = false, expected
     } finally { endGate.finish(); }
   } } : undefined;
   if (hooks) endGate.armed = true;
-  session = await joinSession(hooks ? { tools, hooks } : { tools });
-  signal?.throwIfAborted();
-  requireCondition(session.sessionId === own.sessionId);
-  if (observe) {
-    observation = observe();
-    try { await observation; } catch (error) { settleObserved(false); throw error; }
+  try {
+    session = await joinSession(hooks ? { tools, hooks } : { tools });
+    signal?.throwIfAborted();
+    requireCondition(session.sessionId === own.sessionId);
+    if (observe) {
+      observation = observe();
+      await observation;
+    }
+  } catch (error) {
+    settleObserved(false);  // a held exit is dropped, never left waiting
+    throw error;
   }
   settleObserved(true);
   signal?.throwIfAborted();

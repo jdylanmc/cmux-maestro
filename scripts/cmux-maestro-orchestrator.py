@@ -1999,14 +1999,14 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def authorize(state, actor_id, token, *, allow_archiving=False):
+def authorize(state, actor_id, token, *, allow_archiving=False, allow_owner=False):
     actor_id = canonical_uuid(actor_id, "actor ID")
     actor = state["nodes"].get(actor_id)
     digest = token_hash(token or "")
-    # A resumed launch root keeps its launch receipt's token as owner authority; each resumed
-    # provider gets its own token.
+    # A resumed launch root keeps its launch receipt's token as owner authority for owner
+    # commands only (status, archive); every other caller needs this generation's token.
     if not actor or not (secrets.compare_digest(actor["tokenHash"], digest)
-                         or secrets.compare_digest(actor.get("ownerTokenHash") or "", digest)):
+                         or allow_owner and secrets.compare_digest(actor.get("ownerTokenHash") or "", digest)):
         raise OrchestrationError("Actor identity or control token is invalid.")
     if actor.get("archiving") and not allow_archiving:
         raise OrchestrationError("The orchestration run is ending; retry archive instead.")
@@ -2796,9 +2796,15 @@ def command_archive_ended(args, root):
                 runs.append(node["runId"])
             else:
                 kept += 1
-        return {"workspaceId": workspace, "archivedRuns": runs, "keptRuns": kept,
-                "capacity": workspace_capacity(state, workspace)}
-    result = mutate_retiring_routes(root, archive)
+        summary.update(workspaceId=workspace, archivedRuns=runs, keptRuns=kept,
+                       capacity=workspace_capacity(state, workspace))
+        return dict(summary)
+    summary = {}
+    try:
+        result = mutate_retiring_routes(root, archive)
+    except CommittedProjectionError:
+        # The archive is committed; scripts and bindings are still cleaned up.
+        result = {**summary, "projection": "deferred"}
     remove_direct_scripts(root, archived)
     return result
 
@@ -3336,6 +3342,12 @@ def command_resume_managed(args, root, cmux):
             raise ResumeRefused("Maestro integration is not installed")
         if messaging != current["messaging"]:
             raise ResumeRefused("Maestro integration changed since launch; start a new session")
+        if current["phase"] == "resource-retired":
+            # A retired launch no longer holds a workspace slot; reviving it takes one.
+            try:
+                require_workspace_capacity(state, workspace)
+            except OrchestrationError as error:
+                raise ResumeRefused("no free workspace slot") from error
 
     def require_placement():
         """This process runs in the recorded surface's own terminal, as CMUX reports it now."""
@@ -3383,9 +3395,9 @@ def command_resume_managed(args, root, cmux):
     identity_keys = ("id", "runId", "parentId", "role", "workspaceId", "surfaceId", "copilotSessionId",
                      "generation", "providerProcess", "tokenHash", "messaging", "toolPolicy",
                      "permissionMode", "launchSettings", "copilotAccount")
-    def clear_orphan(state):
-        # A resume killed between binding and committing left the next generation's route. With
-        # every eligibility fact rechecked under the lock (no live owner), it is that crash's.
+    def resume(state, retiring):
+        # One locked step: recheck, clear a route a killed resume left, publish this generation's
+        # route, and reserve it. No other resume can see the route before the reservation.
         current = state["nodes"].get(worker_id)
         if current is None or any(current.get(key) != node.get(key) for key in identity_keys):
             raise ResumeRefused("the session's record changed")
@@ -3393,20 +3405,11 @@ def command_resume_managed(args, root, cmux):
         endpoint = Path(messaging["routes"]) / f"{message_peer(resumed)}.sock"
         if endpoint.exists() or endpoint.is_symlink():
             raise ResumeRefused("the session may still be running")
-        retire_messaging(resumed)
-    try:
-        mutate(root, clear_orphan)
-        bind_messaging(resumed)
-    except ResumeRefused:
-        raise
-    except (OrchestrationError, OSError) as error:
-        raise ResumeRefused("the session's peer route could not be published") from error
-
-    def resume(state, retiring):
-        current = state["nodes"].get(worker_id)
-        if current is None or any(current.get(key) != node.get(key) for key in identity_keys):
-            raise ResumeRefused("the session's record changed")
-        require_resumable(current, state)
+        try:
+            retire_messaging(resumed)
+            bind_messaging(resumed)
+        except (OrchestrationError, OSError) as error:
+            raise ResumeRefused("the session's peer route could not be published") from error
         retiring.append(dict(current))
         # The provider is this process from here on, so an early Copilot exit reads as ended.
         if current["role"] == "coordinator":
@@ -3427,6 +3430,12 @@ def command_resume_managed(args, root, cmux):
             stored = None
         committed = (stored is not None and stored.get("generation") == resumed["generation"]
                      and stored.get("providerProcess") == anchor)
+        if committed:
+            # The commit landed but routes were not retired; retire the previous generation's here.
+            try:
+                retire_messaging(node)
+            except (OrchestrationError, OSError):
+                pass
         if not committed:
             if stored is not None and stored.get("generation") == node["generation"]:
                 try:
@@ -5968,7 +5977,7 @@ def command_icon(args, root, cmux):
 
 def command_status(args, root, cmux):
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token)
+    actor = authorize(snapshot, args.actor_id, args.token, allow_owner=True)
     targets = descendants(snapshot, actor)
     if args.worker_id:
         targets = [ensure_owned(snapshot, actor, args.worker_id)]
@@ -5995,7 +6004,7 @@ def command_status(args, root, cmux):
     cancelled = []
 
     def refresh(state, retiring):
-        current_actor = authorize(state, args.actor_id, args.token)
+        current_actor = authorize(state, args.actor_id, args.token, allow_owner=True)
         current_actor["lastControlAt"] = now()
         current_targets = descendants(state, current_actor)
         if args.worker_id:
@@ -6101,7 +6110,7 @@ def archive_summary(state, run_id):
 
 def command_archive(args, root, cmux):
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token, allow_archiving=True)
+    actor = authorize(snapshot, args.actor_id, args.token, allow_archiving=True, allow_owner=True)
     if actor["role"] != "coordinator":
         raise OrchestrationError("Only a coordinator can archive its run.")
     if actor.get("executionMode") != "interactive":
@@ -6114,7 +6123,7 @@ def command_archive(args, root, cmux):
     identity = tuple(actor.get(key) for key in identity_keys)
 
     def begin(state):
-        current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        current = authorize(state, args.actor_id, args.token, allow_archiving=True, allow_owner=True)
         if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         if any(
@@ -6155,7 +6164,7 @@ def command_archive(args, root, cmux):
         )
 
     def finish(state, retiring):
-        current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        current = authorize(state, args.actor_id, args.token, allow_archiving=True, allow_owner=True)
         if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
@@ -6182,7 +6191,11 @@ def command_archive(args, root, cmux):
         if len(state["retainedResources"]) > MAX_HOST_NODES:
             raise OrchestrationError("Host retained-resource safety limit reached; archived terminals remain owned.")
         return {"runId": run_id, "archived": True}
-    result = mutate_retiring_routes(root, finish, wait=1)
+    try:
+        result = mutate_retiring_routes(root, finish, wait=1)
+    except CommittedProjectionError:
+        # The run is archived in state.json; scripts and bindings are still cleaned up.
+        result = {"runId": run_id, "archived": True, "projection": "deferred"}
     remove_direct_scripts(root, [node for node in snapshot["nodes"].values() if node["runId"] == run_id], cmux)
     return result
 
