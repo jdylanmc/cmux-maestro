@@ -2026,7 +2026,7 @@ struct CopilotObserverRegistrationTests {
             try fixture.write(try CopilotCMUXHooks.manifest(),
                               to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)extra-\(index)"))
         }
-        #expect(throws: CopilotFileError.tooLarge) { try fixture.registration.validateLocal() }
+        #expect(throws: CMUXMaestroPreview.CopilotFileError.tooLarge) { try fixture.registration.validateLocal() }
         #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) == .uninstalled)
     }
 
