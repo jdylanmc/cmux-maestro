@@ -84,6 +84,26 @@ try:
         ]}]}]}]}
         print(json.dumps(result))
         raise SystemExit(0)
+    if args[:3] == ["surface", "resume", "clear"]:
+        if os.environ.get("FAKE_RESUME_CLEAR_FAILS"):
+            raise SystemExit("synthetic clear failure")
+        state.setdefault("resumeBindings", {}).pop(args[args.index("--surface") + 1], None)
+        temporary = state_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state))
+        os.replace(temporary, state_path)
+        print("OK")
+        raise SystemExit(0)
+    if args[:3] == ["surface", "resume", "set"]:
+        # Restart metadata for one exact surface; recorded for inspection only.
+        surface = args[args.index("--surface") + 1]
+        if args[args.index("--workspace") + 1] != state["workspace"] or surface not in state["surfaces"]:
+            raise SystemExit("invalid resume binding target")
+        state.setdefault("resumeBindings", {})[surface] = args[3:]
+        temporary = state_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(state))
+        os.replace(temporary, state_path)
+        print("OK")
+        raise SystemExit(0)
     command = next((item for item in args if item in {
         "identify", "list-panes", "rpc", "list-pane-surfaces",
         "send", "send-key", "rename-tab", "reorder-surface"
@@ -265,7 +285,8 @@ from pathlib import Path
 args = sys.argv[1:]
 def value(flag):
     return args[args.index(flag) + 1] if flag in args else None
-session = value("--session-id") or value("--resume")
+resumed = next((item[len("--resume="):] for item in args if item.startswith("--resume=")), None)
+session = value("--session-id") or value("--resume") or resumed
 prompt = value("-p") or value("--interactive") or ""
 record = {
     "args": args,
@@ -277,13 +298,34 @@ record = {
     "gitTokenUnchanged": os.environ.get("GH_TOKEN") == "synthetic-personal-token",
     "maestroKeys": sorted(key for key in os.environ if key.startswith("CMUX_MAESTRO_")),
     "pid": os.getpid(),
+    "cmuxHooksDisabled": os.environ.get("CMUX_COPILOT_HOOKS_DISABLED"),
     "start": subprocess.run(
         ["/bin/ps", "-o", "lstart=", "-p", str(os.getpid())],
         capture_output=True, text=True, check=True,
     ).stdout.strip(),
 }
+if resumed and os.environ.get("FAKE_SURFACE_TTY_AFTER_EXEC"):
+    import fcntl
+    state_path = os.environ["FAKE_CMUX_STATE"]
+    with open(os.path.splitext(state_path)[0] + ".lock", "a+") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+        data = json.load(open(state_path))
+        data["ttys"][os.environ["CMUX_SURFACE_ID"]] = os.environ["FAKE_SURFACE_TTY_AFTER_EXEC"]
+        with open(state_path + ".tmp", "w") as stream:
+            json.dump(data, stream)
+        os.replace(state_path + ".tmp", state_path)
+if resumed and os.environ.get("CMUX_MAESTRO_DIRECT_LAUNCH") == "1" and not os.environ.get("FAKE_NO_OBSERVATION"):
+    # A resumed session's extension observes its provider, like a fresh direct launch.
+    observed = subprocess.run([os.environ["CMUX_MAESTRO_ORCHESTRATOR"], "native-observe"], input=json.dumps({
+        "nodeId": os.environ["CMUX_MAESTRO_WORKER_ID"], "workspaceId": os.environ["CMUX_WORKSPACE_ID"],
+        "sessionId": session, "generation": int(os.environ["CMUX_MAESTRO_GENERATION"]),
+        "surfaceId": os.environ["CMUX_SURFACE_ID"], "pid": os.getpid()}),
+        env={**os.environ, "SESSION_ID": session}, text=True, capture_output=True)
+    record["observed"] = [observed.returncode, observed.stderr]
 with open(os.environ["FAKE_COPILOT_CALLS"], "a") as stream:
     stream.write(json.dumps(record) + "\n")
+if resumed:
+    raise SystemExit(0)
 if os.environ.get("FAKE_WRITER_GATE"):
     subprocess.run(
         [sys.executable, str(Path(os.environ["FAKE_CMUX_STATE"]).parent / "fixture-writer.py")],
@@ -2151,6 +2193,13 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         return int(subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"],
                                   capture_output=True, text=True, check=True).stdout)
 
+    def test_archive_ended_whose_projection_fails_still_reports_and_cleans_up(self):
+        first = self.enroll()
+        result = self.h.run("archive-ended", "--workspace", self.h.workspace,
+                            env={**self.h.env, "FAKE_FAIL_PROJECTION_AT": "1"})
+        self.assertEqual((len(result["archivedRuns"]), result.get("projection")), (1, "deferred"))
+        self.assertNotIn(first["nodeId"], self.h.state()["nodes"])
+
     def test_generation_marks_at_the_cap_evict_into_a_floor(self):
         first = self.enroll()
         cap = CONTROLLER_API["MAX_HOST_NODES"]
@@ -2308,6 +2357,8 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
         enrolled, ended = self.enroll(env={"FAKE_THEN": self.session_end_then()})
         self.assertTrue(ended["ok"], ended)
         self.assertEqual(self.h.state()["nodes"][enrolled["nodeId"]]["sessionEndedGeneration"], 1)
+        # CMUX's own restore owns a born root's tab; Maestro never clears that surface's record.
+        self.assertFalse(any(call[:3] == ["surface", "resume", "clear"] for call in self.h.cmux_data()["calls"]))
         # Ended by the human: a later resume of that session is not a relaunch restore.
         self.refused(self.resume(enrolled), "session-ended")
 
@@ -2572,6 +2623,598 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
         surface = str(uuid.uuid4())
         self.refused(self.enroll(surface=surface, session=self.h.identity["sessionId"],
                                  env={"FAKE_HOLD_SESSION_LOCK": "1"}), "session-previously-managed")
+
+
+RESTORED_TERMINAL = r"""
+import fcntl, json, os, pty, sys, termios
+# CMUX types the binding into the restored surface's login shell: the command runs as that
+# terminal's process. The fake CMUX reports the surface's TTY as this one, another, or none.
+mode, surface, command = sys.argv[1], sys.argv[2], sys.argv[3:]
+master, slave = pty.openpty()
+os.setsid()
+fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+os.set_inheritable(master, True)
+os.set_inheritable(slave, True)
+own = os.ttyname(slave)[len("/dev/"):]
+state_path = os.environ["FAKE_CMUX_STATE"]
+with open(os.path.splitext(state_path)[0] + ".lock", "a+") as lock:
+    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
+    data = json.load(open(state_path))
+    data.setdefault("ttys", {})[surface] = {"match": own, "other": "ttys999", "none": None}[mode]
+    with open(state_path + ".tmp", "w") as stream:
+        json.dump(data, stream)
+    os.replace(state_path + ".tmp", state_path)
+os.execv(command[0], command)
+"""
+
+
+class ChildResumeTests(unittest.TestCase):
+    """Maestro-launched sessions resume through their own surface binding (ADR 0024)."""
+
+    def setUp(self):
+        self.h = Harness(interactive=True)
+        self.addCleanup(self.h.close)
+        self.routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, self.routes, True)
+        extension = self.h.path / "installed-extension"
+        extension.mkdir(mode=0o700)
+        for name in ("adapter.mjs", "extension.mjs"):
+            shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
+            (extension / name).chmod(0o600)
+        (self.h.root / "bin").mkdir(mode=0o700, exist_ok=True)
+        config = self.h.root / "bin" / "messaging.json"
+        config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(extension)}))
+        config.chmod(0o600)
+
+    def ended_child(self, deny=("shell(rm)",)):
+        receipt = self.h.spawn_native("Synthetic child task", "Resumable child", deny=deny)
+        child = self.h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess") is not None)
+        os.write(self.h.terminal_master, b"exit\n")
+        child = self.h.wait_node(child["id"], lambda item: item["phase"] == "process-disappeared")
+        return receipt, child
+
+    def resume(self, child, *, surface=None, session=None, env=None, terminal="match"):
+        surface = surface or child["surfaceId"]
+        environment = {**self.h.env, "CMUX_SURFACE_ID": surface, **(env or {})}
+        wrapper = self.h.path / "restored-terminal.py"
+        wrapper.write_text(RESTORED_TERMINAL)
+        with open(self.h.lifetime.name, "rb") as lifetime:
+            fcntl.flock(lifetime, fcntl.LOCK_SH)
+            return subprocess.run(
+                [sys.executable, str(wrapper), terminal, surface,
+                 sys.executable, str(self.h.driver), "resume", session or child["copilotSessionId"]],
+                env={**environment, "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
+                pass_fds=(lifetime.fileno(),), stdin=subprocess.DEVNULL,
+                capture_output=True, text=True, timeout=20,
+            )
+
+    def refused(self, completed, reason):
+        self.assertEqual(completed.returncode, 2, completed.stdout + completed.stderr)
+        self.assertEqual(completed.stderr, f"Maestro did not resume this session: {reason}.\n")
+        self.assertNotIn("synthetic-work-token", completed.stderr + completed.stdout)
+
+    def test_launch_disables_cmux_restore_and_binds_identifiers_only(self):
+        receipt = self.h.spawn_native("Synthetic child task", "Bound child")
+        self.assertEqual(receipt["resumeBinding"], "set")
+        node = self.h.state()["nodes"][receipt["workerId"]]
+        binding = self.h.cmux_data()["resumeBindings"][receipt["surfaceId"]]
+        # The stable installed entrypoint runs itself; no resolved interpreter path is persisted.
+        # One varying trailing session ID: CMUX can approve `<controller> resume` once as a prefix.
+        self.assertEqual(binding[binding.index("--") + 1:], [str(self.h.driver), "resume", node["copilotSessionId"]])
+        self.assertFalse(any("Cellar" in item or "/python3." in item or item == sys.executable
+                             or item == os.path.realpath(sys.executable) for item in binding))
+        flags = binding[:binding.index("--")]
+        self.assertEqual(flags, ["--workspace", self.h.workspace, "--surface", receipt["surfaceId"],
+                                 "--cwd", node["workingDirectory"], "--kind", "agent",
+                                 "--checkpoint", node["copilotSessionId"]])
+        self.assertNotIn("synthetic-work-token", json.dumps(binding))
+        self.assertFalse(any(str(self.h.root) in item for item in binding))
+        script = (self.h.root / "control" / f"direct-{node['id']}-1.sh").read_text()
+        self.assertIn("export CMUX_COPILOT_HOOKS_DISABLED=1\n", script)
+        os.write(self.h.terminal_master, b"exit\n")
+        self.h.wait_node(node["id"], lambda item: item["phase"] == "process-disappeared")
+
+    def session_end(self, child, *, capability=None, env=None):
+        binding = json.loads((self.routes / f"{CONTROLLER_API['message_peer'](child)}.json").read_text())
+        identity = {key: binding[key] for key in ("nodeId", "workspaceId", "sessionId", "generation", "capability")}
+        if capability:
+            identity["capability"] = capability
+        # A Maestro launch carries CMUX's restore switch; Maestro's own SessionEnd path ignores it.
+        environment = {**self.h.env, "CMUX_SURFACE_ID": child["surfaceId"], "CMUX_COPILOT_HOOKS_DISABLED": "1",
+                       "SESSION_ID": child["copilotSessionId"], **(env or {})}
+        return self.h.run("native-session-end", input=json.dumps({"identity": identity}),
+                          env=environment, check=False)
+
+    def test_session_end_clears_only_its_exact_binding(self):
+        receipt = self.h.spawn_native("Synthetic child task", "Ending child")
+        child = self.h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess") is not None)
+        other = self.h.spawn_native("Synthetic child task", "Other child")
+        self.h.wait_node(other["workerId"], lambda item: item.get("providerProcess") is not None)
+        refused = self.session_end(child, capability="0" * 64)
+        self.assertNotEqual(refused["returncode"], 0)
+        self.assertNotEqual(self.session_end(child, env={"CMUX_SURFACE_ID": other["surfaceId"]})["returncode"], 0)
+        self.assertNotEqual(self.session_end(child, env={"SESSION_ID": str(uuid.uuid4())})["returncode"], 0)
+        self.assertIn(child["surfaceId"], self.h.cmux_data()["resumeBindings"])
+        failed = self.session_end(child, env={"FAKE_RESUME_CLEAR_FAILS": "1"})
+        self.assertEqual((failed["returncode"], failed["cleared"]), (0, False))
+        self.assertIn(child["surfaceId"], self.h.cmux_data()["resumeBindings"])
+        cleared = self.session_end(child)
+        self.assertTrue(cleared["cleared"])
+        bindings = self.h.cmux_data()["resumeBindings"]
+        self.assertNotIn(child["surfaceId"], bindings)
+        self.assertIn(other["surfaceId"], bindings)
+        for _ in range(2):
+            os.write(self.h.terminal_master, b"exit\n")
+        for identifier in (child["id"], other["workerId"]):
+            self.h.wait_node(identifier, lambda item: item["phase"] == "process-disappeared")
+        # Even if a binding survived a failed clear, a user-ended session never resumes.
+        ended = self.h.state()["nodes"][child["id"]]
+        self.assertEqual(ended["sessionEndedGeneration"], ended["generation"])
+        self.refused(self.resume(ended), "the session was ended by its user")
+
+    def test_ended_child_resumes_its_exact_session_with_recorded_policy(self):
+        receipt, child = self.ended_child()
+        old_peer = CONTROLLER_API["message_peer"](child)
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        call = self.h.calls()[-1]
+        self.assertEqual(call["args"][:4], ["--no-auto-update", f"--resume={child['copilotSessionId']}",
+                                            "-C", child["workingDirectory"]])
+        for absent in ("--name", "--session-id", "--interactive", "--allow-all"):
+            self.assertNotIn(absent, call["args"])
+        self.assertIn("--deny-tool", call["args"])
+        self.assertEqual(call["args"][call["args"].index("--deny-tool") + 1], "shell(rm)")
+        self.assertTrue(call["pinnedSubscription"])
+        self.assertEqual(call["generation"], "2")
+        self.assertIn("CMUX_MAESTRO_DIRECT_LAUNCH", call["maestroKeys"])
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node["runId"], node["parentId"], node["surfaceId"]),
+                         (2, child["runId"], child["parentId"], child["surfaceId"]))
+        self.assertNotEqual(node["tokenHash"], child["tokenHash"])
+        self.assertEqual(node["toolPolicy"], child["toolPolicy"])
+        # The resumed provider is the process the resume command became; its extension observed it.
+        self.assertEqual(call["observed"][0], 0, call["observed"][1])
+        self.assertEqual((node["phase"], node["providerProcess"]),
+                         ("turn-running", {"pid": call["pid"], "start": call["start"]}))
+        self.assertFalse((self.routes / f"{old_peer}.json").exists())
+        self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+        self.assertNotIn("synthetic-work-token", json.dumps(self.h.state()))
+
+    def test_live_session_refuses_and_changes_nothing(self):
+        receipt = self.h.spawn_native("Synthetic child task", "Live child")
+        child = self.h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess") is not None)
+        before = self.h.state()
+        self.refused(self.resume(child), "the session may still be running")
+        self.assertEqual(self.h.state(), before)
+        os.write(self.h.terminal_master, b"exit\n")
+        self.h.wait_node(child["id"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_live_session_lock_refuses(self):
+        _, child = self.ended_child()
+        state = self.h.home / ".copilot" / "session-state" / child["copilotSessionId"]
+        state.mkdir(parents=True)
+        (state / f"inuse.{os.getpid()}.lock").write_text("")
+        self.refused(self.resume(child), "the session may still be running")
+
+    def test_identity_mismatch_refuses(self):
+        _, child = self.ended_child()
+        before = self.h.state()
+        other = str(uuid.uuid4())
+        self.h.add_surface(other)
+        self.refused(self.resume(child, surface=other), "this is not the session's recorded surface")
+        self.refused(self.resume(child, session=str(uuid.uuid4())), "Maestro has no record of this session")
+        self.refused(self.resume(child, env={"CMUX_MAESTRO_WORKER_ID": child["id"]}),
+                     "this terminal already carries Maestro launcher inputs")
+        self.assertEqual(self.h.state(), before)
+
+    def credential_spy(self):
+        marker = self.h.path / "credential-read"
+        self.h.gh.write_text(f"#!/bin/sh\ntouch {marker}\nprintf '%s\\n' synthetic-work-token\n")
+        marker.unlink(missing_ok=True)
+        return marker
+
+    def route_names(self):
+        return sorted(path.name for path in self.routes.iterdir())
+
+    def test_signed_out_recorded_account_refuses_names_it_and_resumes_after_sign_in(self):
+        _, child = self.ended_child()
+        self.h.gh.write_text("#!/bin/sh\nexit 1\n")
+        login = CONTROLLER_API["recorded_account"](child)["login"]
+        calls = len(self.h.calls())
+        self.refused(self.resume(child), f"recorded account {login} is not signed in to GitHub CLI")
+        # The credential is read only after the reservation: that generation is recorded as never run.
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node["phase"], node.get("runtimeNotStarted"), node["providerProcess"]),
+                         (2, "launch-failed", True, None))
+        self.assertEqual(self.route_names(), [])
+        self.assertEqual(len(self.h.calls()), calls)
+        self.h.gh.write_text("#!/bin/sh\nprintf '%s\\n' synthetic-work-token\n")
+        completed = self.resume(node)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.h.state()["nodes"][child["id"]]["generation"], 3)
+
+    def test_resume_runs_only_in_the_recorded_surfaces_own_terminal(self):
+        _, child = self.ended_child()
+        marker = self.credential_spy()
+        before, routes, calls = self.h.state(), self.route_names(), len(self.h.calls())
+        for terminal in ("other", "none"):
+            with self.subTest(terminal=terminal):
+                self.refused(self.resume(child, terminal=terminal),
+                             "this terminal is not the session's recorded surface")
+                self.assertEqual(self.h.state(), before)
+                self.assertEqual(self.route_names(), routes)
+                self.assertFalse(marker.exists())
+                self.assertEqual(len(self.h.calls()), calls)
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertTrue(marker.exists())
+
+    def test_resumed_provider_observes_only_from_the_surfaces_terminal(self):
+        _, child = self.ended_child()
+        completed = self.resume(child, env={"FAKE_SURFACE_TTY_AFTER_EXEC": "ttys999"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotEqual(self.h.calls()[-1]["observed"][0], 0)
+        self.assertIn("terminal is not the recorded surface", self.h.calls()[-1]["observed"][1])
+
+    def test_eligibility_lost_before_the_commit_lock_refuses_without_credentials_or_exec(self):
+        for name, reason in (("live-lock", "the session may still be running"),
+                             ("user-ended", "the session was ended by its user")):
+            with self.subTest(name=name):
+                _, child = self.ended_child()
+                marker = self.credential_spy()
+                lock = self.h.home / ".copilot" / "session-state" / child["copilotSessionId"]
+                race = (f"os.makedirs({str(lock)!r}, exist_ok=True); open(os.path.join({str(lock)!r},"
+                        f" 'inuse.{os.getpid()}.lock'), 'w').close()" if name == "live-lock" else
+                        f"node = state['nodes'][{child['id']!r}]; node['sessionEndedGeneration'] = node['generation']")
+                routes, calls = self.route_names(), len(self.h.calls())
+                self.refused(self.resume(child, env={"FAKE_RESUME_RACE": race}), reason)
+                node = self.h.state()["nodes"][child["id"]]
+                self.assertEqual((node["generation"], node["tokenHash"]), (child["generation"], child["tokenHash"]))
+                self.assertEqual(self.route_names(), routes)  # the provisional next-generation route was retired
+                self.assertFalse(marker.exists())
+                self.assertEqual(len(self.h.calls()), calls)
+                for item in lock.glob("inuse.*.lock"):
+                    item.unlink()
+
+    def test_a_live_owner_appearing_after_the_reservation_stops_the_exec(self):
+        _, child = self.ended_child()
+        lock = self.h.home / ".copilot" / "session-state" / child["copilotSessionId"]
+        # The credential lookup runs between the reservation and the final pre-exec checks.
+        self.h.gh.write_text(f"#!/bin/sh\nmkdir -p {lock}\ntouch {lock}/inuse.{os.getpid()}.lock\n"
+                             "printf '%s\\n' synthetic-work-token\n")
+        calls = len(self.h.calls())
+        self.refused(self.resume(child), "the session may still be running")
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node["phase"], node["providerProcess"]), (2, "launch-failed", None))
+        self.assertEqual(self.route_names(), [])
+        self.assertEqual(len(self.h.calls()), calls)
+
+    def test_copilot_that_exits_before_observing_leaves_an_ended_resumable_node(self):
+        _, child = self.ended_child()
+        completed = self.resume(child, env={"FAKE_NO_OBSERVATION": "1"})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        call = self.h.calls()[-1]
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertNotIn("observed", call)
+        self.assertEqual(node["providerProcess"], {"pid": call["pid"], "start": call["start"]})
+        self.assertFalse(CONTROLLER_API["process_observation"](node["providerProcess"]))
+        # Not stuck in launching: the next relaunch decides again.
+        again = self.resume(node)
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.h.state()["nodes"][child["id"]]["generation"], 3)
+
+    def test_upgraded_copilot_resolves_from_the_terminal_path_or_refuses_by_name(self):
+        _, child = self.ended_child()
+        missing = str(self.h.path / "old-version" / "copilot")
+        self.h.change_state(lambda state: state["nodes"][child["id"]].update(copilotExecutable=missing))
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.h.state()["nodes"][child["id"]]["copilotExecutable"], str(self.h.copilot.resolve()))
+        self.h.change_state(lambda state: state["nodes"][child["id"]].update(copilotExecutable=missing))
+        removed = self.h.path / "copilot-removed"
+        self.h.copilot.rename(removed)
+        self.addCleanup(lambda: removed.exists() and removed.rename(self.h.copilot))
+        before = self.h.state()
+        # Only the fixture's own tools on PATH: no real Copilot can be found or run.
+        self.refused(self.resume(before["nodes"][child["id"]], env={"PATH": f"{self.h.bin}:/usr/bin:/bin"}),
+                     "Copilot is not installed on this terminal's PATH")
+        self.assertEqual(self.h.state(), before)
+
+    def test_copilot_that_cannot_start_retires_its_route_and_stays_resumable(self):
+        _, child = self.ended_child()
+        original = self.h.copilot.read_text()
+        self.h.copilot.write_text("#!/nonexistent/interpreter\n")
+        self.refused(self.resume(child), "Copilot could not start")
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node["phase"], node.get("runtimeNotStarted")),
+                         (2, "launch-failed", True))
+        self.assertEqual(self.route_names(), [])
+        self.h.copilot.write_text(original)
+        completed = self.resume(node)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_launch_coordinator_root_resumes_with_its_recorded_policy(self):
+        source = str(uuid.uuid4())
+        self.h.add_surface(source)
+        launched = self.h.run("launch-coordinator", "--workspace", self.h.workspace, "--surface", source,
+                              "--cwd", str(REPO), "--task", "Coordinate.", "--account", "synthetic-account",
+                              "--deny-tool", "shell(rm)", env={**self.h.env, "CMUX_SURFACE_ID": source})
+        root = self.h.wait_node(launched["workerId"], lambda item: item.get("providerProcess") is not None)
+        self.assertEqual((root["role"], root["parentId"]), ("coordinator", None))
+        self.assertIn(root["surfaceId"], self.h.cmux_data()["resumeBindings"])
+        os.write(self.h.terminal_master, b"exit\n")
+        root = self.h.wait_node(root["id"], lambda item: item["phase"] == "process-disappeared")
+        completed = self.resume(root)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        call = self.h.calls()[-1]
+        self.assertEqual(call["args"][1], f"--resume={root['copilotSessionId']}")
+        self.assertNotIn("--name", call["args"])
+        self.assertEqual(call["args"][call["args"].index("--deny-tool") + 1], "shell(rm)")
+        self.assertEqual(self.h.state()["nodes"][root["id"]]["generation"], 2)
+
+    def test_resumed_provider_keeps_cmux_hooks_disabled(self):
+        _, child = self.ended_child()
+        self.assertEqual(self.resume(child).returncode, 0)
+        self.assertEqual(self.h.calls()[-1]["cmuxHooksDisabled"], "1")
+
+    def test_unverified_recorded_policy_refuses(self):
+        _, child = self.ended_child()
+        self.h.change_state(lambda state: state["nodes"][child["id"]].update(permissionPolicyUnverified=True))
+        before = self.h.state()
+        self.refused(self.resume(child), "the recorded launch policy is unavailable")
+        self.assertEqual(self.h.state(), before)
+
+    def test_surface_cmux_no_longer_lists_refuses(self):
+        _, child = self.ended_child()
+        data = self.h.cmux_data()
+        data["surfaces"].remove(child["surfaceId"])
+        self.h.cmux_state.write_text(json.dumps(data))
+        before = self.h.state()
+        self.refused(self.resume(child), "CMUX did not confirm this surface")
+        self.assertEqual(self.h.state(), before)
+
+    def test_sessions_maestro_did_not_launch_are_never_resumed_here(self):
+        for name, change in (
+            ("not-direct", lambda node: [node.pop("launchMethod"), node.pop("launchAccepted")]),
+            ("not-accepted", lambda node: node.pop("launchAccepted")),
+            ("launch-error", lambda node: node.update(launchError="launch-failed")),
+        ):
+            with self.subTest(name=name):
+                _, child = self.ended_child()
+                self.h.change_state(lambda state: change(state["nodes"][child["id"]]))
+                before = self.h.state()
+                self.refused(self.resume(child), "this session was not launched by Maestro as a managed session")
+                self.assertEqual(self.h.state(), before)
+
+    def test_changed_integration_refuses(self):
+        _, child = self.ended_child()
+        config = self.h.root / "bin" / "messaging.json"
+        other = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, other, True)
+        config.write_text(json.dumps({**json.loads(config.read_text()), "routes": str(other)}))
+        before = self.h.state()
+        self.refused(self.resume(child), "Maestro integration changed since launch; start a new session")
+        self.assertEqual(self.h.state(), before)
+
+    def test_record_changed_before_the_commit_lock_refuses(self):
+        _, child = self.ended_child()
+        routes = self.route_names()
+        race = f"state['nodes'][{child['id']!r}]['tokenHash'] = '0' * 64"
+        self.refused(self.resume(child, env={"FAKE_RESUME_RACE": race}), "the session's record changed")
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node["tokenHash"]), (child["generation"], "0" * 64))
+        self.assertEqual(self.route_names(), routes)
+
+    def test_resume_retires_the_previous_generations_route(self):
+        _, child = self.ended_child()
+        old = self.routes / f"{CONTROLLER_API['message_peer'](child)}.json"
+        CONTROLLER_API["bind_messaging"](child)
+        self.assertTrue(old.exists())
+        self.assertEqual(self.resume(child).returncode, 0)
+        self.assertFalse(old.exists())
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+
+    def test_a_reused_pid_on_a_stale_lock_is_not_a_live_owner(self):
+        session = str(uuid.uuid4())
+        state = self.h.home / ".copilot" / "session-state" / session
+        state.mkdir(parents=True)
+        placeholder = state / "placeholder"
+        placeholder.write_text("")
+        time.sleep(2.1)  # the marker predates the process that now has its PID
+        live = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+        self.addCleanup(lambda: (live.stdin.close(), live.wait(timeout=5)))
+        marker = state / f"inuse.{live.pid}.lock"
+        placeholder.rename(marker)  # rename keeps the marker's birth time
+        with patch.dict(os.environ, {"HOME": str(self.h.home)}):
+            self.assertFalse(CONTROLLER_API["session_has_live_owner"](session))
+            marker.unlink()
+            marker.write_text("")
+            self.assertTrue(CONTROLLER_API["session_has_live_owner"](session))
+            marker.chmod(0o666)
+            self.assertTrue(CONTROLLER_API["session_has_live_owner"](session))  # unowned shape: uncertain
+
+    def test_a_resume_that_lands_but_reports_failure_still_starts_copilot(self):
+        for env in ({"FAKE_FAIL_STATE_FSYNC_AT": "1"}, {"FAKE_FAIL_PROJECTION_AT": "1"}):
+            with self.subTest(env=env):
+                _, child = self.ended_child()
+                old = self.routes / f"{CONTROLLER_API['message_peer'](child)}.json"
+                CONTROLLER_API["bind_messaging"](child)  # the previous generation's route
+                calls = len(self.h.calls())
+                completed = self.resume(child, env=env)
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertEqual(len(self.h.calls()), calls + 1)
+                node = self.h.state()["nodes"][child["id"]]
+                self.assertEqual((node["generation"], node["phase"]), (2, "turn-running"))
+                self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+                self.assertFalse(old.exists())
+
+    def test_resume_removes_the_earlier_generation_launch_script(self):
+        _, child = self.ended_child()
+        script = self.h.root / "control" / f"direct-{child['id']}-1.sh"
+        self.assertTrue(script.exists())
+        self.assertEqual(self.resume(child).returncode, 0)
+        self.assertFalse(script.exists())
+
+    def test_a_route_left_by_a_killed_resume_does_not_block_the_next(self):
+        _, child = self.ended_child()
+        orphan = {**child, "generation": child["generation"] + 1}
+        CONTROLLER_API["bind_messaging"](orphan)
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(self.h.state()["nodes"][child["id"]]["generation"], 2)
+
+    def test_an_exit_recorded_before_the_binding_lands_clears_it(self):
+        race = ("for node in state['nodes'].values():\n"
+                "    if node.get('launchMethod') == 'direct' and node.get('role') == 'worker':\n"
+                "        node['sessionEndedGeneration'] = node['generation']\n")
+        receipt = self.h.spawn_native("Synthetic child task", "Fast exit", env={**self.h.env, "FAKE_AFTER_RESUME_SET": race})
+        self.assertEqual(receipt["resumeBinding"], "unavailable")
+        self.assertNotIn(receipt["surfaceId"], self.h.cmux_data().get("resumeBindings", {}))
+        os.write(self.h.terminal_master, b"exit\n")
+        self.h.wait_node(receipt["workerId"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_a_resumed_launch_root_keeps_its_receipt_token_for_archive(self):
+        source = str(uuid.uuid4())
+        self.h.add_surface(source)
+        launched = self.h.run("launch-coordinator", "--workspace", self.h.workspace, "--surface", source,
+                              "--cwd", str(REPO), "--task", "Coordinate.", "--account", "synthetic-account",
+                              env={**self.h.env, "CMUX_SURFACE_ID": source})
+        root = self.h.wait_node(launched["coordinatorId"], lambda item: item.get("providerProcess") is not None)
+        os.write(self.h.terminal_master, b"exit\n")
+        root = self.h.wait_node(root["id"], lambda item: item["phase"] == "process-disappeared")
+        self.assertEqual(self.resume(root).returncode, 0)
+        resumed = self.h.state()["nodes"][root["id"]]
+        self.assertNotEqual(resumed["tokenHash"], root["tokenHash"])
+        self.assertEqual(resumed["ownerTokenHash"], root["tokenHash"])
+        self.assertFalse(CONTROLLER_API["process_observation"](resumed["providerProcess"]))
+        archived = self.h.run("archive", "--actor-id", root["id"], "--token", launched["controlToken"])
+        self.assertTrue(archived["archived"])
+        # Archive clears the launch's binding and keeps its surface owned; no token reached CMUX.
+        data = self.h.cmux_data()
+        self.assertNotIn(root["surfaceId"], data.get("resumeBindings", {}))
+        self.assertIn(["surface", "resume", "clear", "--workspace", self.h.workspace, "--surface", root["surfaceId"]],
+                      data["calls"])
+        self.assertTrue(any(item["surfaceId"] == root["surfaceId"] for item in self.h.state()["retainedResources"]))
+        self.assertNotIn(launched["controlToken"], json.dumps(data["calls"]))
+
+    def test_only_messaging_launches_get_or_honor_a_binding(self):
+        eligible = CONTROLLER_API["resume_binding_eligible"]
+        base = {"launchMethod": "direct", "messaging": {"version": 1, "routes": "/r", "extension": "/e"}}
+        self.assertTrue(eligible(base))
+        for change in ({"messaging": None}, {"deliveryProof": {"fixture": "x"}}, {"enrollment": "born"},
+                       {"launchMethod": None}):
+            self.assertFalse(eligible({**base, **change}), change)
+
+    def test_session_end_whose_projection_fails_still_clears_the_binding(self):
+        receipt = self.h.spawn_native("Synthetic child task", "Projection lag")
+        child = self.h.wait_node(receipt["workerId"], lambda item: item.get("providerProcess") is not None)
+        result = self.session_end(child, env={"FAKE_FAIL_PROJECTION_AT": "1"})
+        self.assertEqual((result["returncode"], result.get("projection"), result["cleared"]), (0, "deferred", True))
+        self.assertNotIn(child["surfaceId"], self.h.cmux_data()["resumeBindings"])
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual(node["sessionEndedGeneration"], node["generation"])
+        os.write(self.h.terminal_master, b"exit\n")
+        self.h.wait_node(child["id"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_copilot_removed_during_the_credential_lookup_is_abandoned_cleanly(self):
+        _, child = self.ended_child()
+        removed = self.h.path / "copilot-removed"
+        self.h.gh.write_text(f"#!/bin/sh\nmv {self.h.copilot} {removed}\nprintf '%s\\n' synthetic-work-token\n")
+        self.addCleanup(lambda: removed.exists() and removed.rename(self.h.copilot))
+        self.refused(self.resume(child, env={"PATH": f"{self.h.bin}:/usr/bin:/bin"}), "Copilot could not start")
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node.get("runtimeNotStarted"), node["providerProcess"]), (2, True, None))
+        self.assertEqual(self.route_names(), [])
+
+    def test_reviving_a_retired_launch_needs_a_free_workspace_slot(self):
+        _, child = self.ended_child()
+        self.h.change_state(lambda state: state["nodes"][child["id"]].update(
+            phase="resource-retired", availability="unavailable"))
+        used = CONTROLLER_API["workspace_capacity"](self.h.state(), self.h.workspace)["used"]
+        self.h.change_state(lambda state: state.setdefault("workspaceCapacity", {}).update({self.h.workspace: used}))
+        before, routes = self.h.state(), self.route_names()
+        self.refused(self.resume(child), "no free workspace slot")
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual(self.route_names(), routes)
+        self.h.change_state(lambda state: state["workspaceCapacity"].update({self.h.workspace: used + 1}))
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_route_publication_and_reservation_are_one_locked_step(self):
+        _, child = self.ended_child()
+        marker = str(self.h.path / "after-bind")
+        wrapper = self.h.path / "restored-terminal.py"
+        wrapper.write_text(RESTORED_TERMINAL)
+        with open(self.h.lifetime.name, "rb") as lifetime:
+            fcntl.flock(lifetime, fcntl.LOCK_SH)
+            running = subprocess.Popen(
+                [sys.executable, str(wrapper), "match", child["surfaceId"],
+                 sys.executable, str(self.h.driver), "resume", child["copilotSessionId"]],
+                env={**self.h.env, "CMUX_SURFACE_ID": child["surfaceId"], "FAKE_PAUSE_AFTER_BIND": marker,
+                     "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
+                pass_fds=(lifetime.fileno(),), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 10
+            while not Path(marker + ".ready").exists():
+                self.assertLess(time.monotonic(), deadline, "resume never published its route")
+                time.sleep(0.01)
+            # The route exists, and the state lock is still held: no other resume can act on it.
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                CONTROLLER_API["mutate"](self.h.root, lambda state: None, wait=0)
+        finally:
+            Path(marker + ".release").write_text("go")
+            stdout, stderr = running.communicate(timeout=20)
+        self.assertEqual(running.returncode, 0, stderr)
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual(node["generation"], 2)
+        self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
+
+    def launched_root(self):
+        source = str(uuid.uuid4())
+        self.h.add_surface(source)
+        launched = self.h.run("launch-coordinator", "--workspace", self.h.workspace, "--surface", source,
+                              "--cwd", str(REPO), "--task", "Coordinate.", "--account", "synthetic-account",
+                              env={**self.h.env, "CMUX_SURFACE_ID": source})
+        root = self.h.wait_node(launched["coordinatorId"], lambda item: item.get("providerProcess") is not None)
+        os.write(self.h.terminal_master, b"exit\n")
+        return launched, self.h.wait_node(root["id"], lambda item: item["phase"] == "process-disappeared")
+
+    def test_the_receipt_token_is_owner_authority_only(self):
+        launched, root = self.launched_root()
+        self.assertEqual(self.resume(root).returncode, 0)
+        marker = self.credential_spy()
+        resumed = self.h.state()["nodes"][root["id"]]
+        refused = self.h.run("launch-credential", check=False, env={
+            **self.h.env, "CMUX_MAESTRO_WORKER_ID": root["id"], "CMUX_MAESTRO_CONTROL_TOKEN": launched["controlToken"],
+            "CMUX_MAESTRO_SESSION_ID": root["copilotSessionId"], "CMUX_MAESTRO_GENERATION": str(resumed["generation"])})
+        self.assertNotEqual(refused["returncode"], 0)
+        self.assertFalse(marker.exists())
+        status = self.h.run("status", "--actor-id", root["id"], "--token", launched["controlToken"])
+        self.assertEqual(status.get("returncode", 0), 0)
+        # The installed skill pairs status with focus under the same token.
+        focused = self.h.run("focus", "--actor-id", root["id"], "--token", launched["controlToken"],
+                             "--worker-id", root["id"])
+        self.assertEqual((focused["workerId"], focused["focused"]), (root["id"], True))
+
+    def test_archive_whose_projection_fails_still_clears_bindings_and_scripts(self):
+        launched, root = self.launched_root()
+        self.assertEqual(self.resume(root).returncode, 0)
+        script = self.h.root / "control" / f"direct-{root['id']}-2.sh"
+        script.write_text("")  # a current-generation launch script
+        archived = self.h.run("archive", "--actor-id", root["id"], "--token", launched["controlToken"],
+                              env={**self.h.env, "FAKE_FAIL_PROJECTION_AT": "2"})
+        self.assertEqual((archived["archived"], archived.get("projection")), (True, "deferred"))
+        self.assertNotIn(root["id"], self.h.state()["nodes"])
+        self.assertIn(["surface", "resume", "clear", "--workspace", self.h.workspace, "--surface", root["surfaceId"]],
+                      self.h.cmux_data()["calls"])
+        self.assertFalse(script.exists())
+
+    def test_unrecorded_account_refuses(self):
+        _, child = self.ended_child()
+        self.h.change_state(lambda state: state["nodes"][child["id"]]["launchSettings"].pop("copilotAccount"))
+        self.refused(self.resume(child), "the session has no recorded account")
 
 
 class OrchestratorTests(unittest.TestCase):

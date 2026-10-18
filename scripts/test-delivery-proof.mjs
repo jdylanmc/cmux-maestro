@@ -2135,6 +2135,65 @@ test("a resumed root's new generation messages its retained child; the old gener
   assert.deepEqual(f.sends.map(item => item.index), [1, 0]);
 });
 
+test("a launch's held exit settles at once when joining fails", async (t) => {
+  const f = await managedFixture(t, { owners: [0, 0] });
+  const own = f.bindings[0];
+  const ended = [];
+  const endGate = createSessionEndGate();
+  let exit;
+  await assert.rejects(start({
+    root: f.root, peer: own.peer, managed: true, endGate,
+    expected: { ...own, controller: "/synthetic/controller" },
+    endSession: async (request) => { ended.push(request); },
+    observe: async () => {},
+    joinSession: async (options) => {
+      exit = options.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: own.sessionId });
+      throw new Error("join refused");
+    },
+  }), /join refused/);
+  const settled = await Promise.race([exit.then(() => true), delay(2000).then(() => false)]);
+  assert.ok(settled, "a held exit must settle when startup fails");
+  const started = Date.now();
+  await endGate.drain(5000);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(ended.length, 0);
+});
+
+for (const [during, observed] of [["join", true], ["observe", true], ["observe", false]]) {
+  test(`a launch's exit during ${during} is ${observed ? "recorded after observation" : "dropped when observation fails"}`, async (t) => {
+    const f = await managedFixture(t, { owners: [0, 0] });
+    const own = f.bindings[0];
+    const ended = [];
+    let release;
+    const blocked = new Promise(resolve => { release = resolve; });
+    let exit;
+    const deliver = (hooks) => { exit = hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: own.sessionId }); };
+    let hooks;
+    const starting = start({
+      root: f.root, peer: own.peer, managed: true, endGate: createSessionEndGate(),
+      expected: { ...own, controller: "/synthetic/controller" },
+      endSession: async (request) => { ended.push(request); },
+      observe: async () => {
+        if (during === "observe") deliver(hooks);
+        await blocked;
+        if (!observed) throw new Error("observation refused");
+      },
+      joinSession: async (options) => {
+        hooks = options.hooks;
+        if (during === "join") deliver(hooks);
+        return { sessionId: own.sessionId };
+      },
+    });
+    await new Promise(resolve => setTimeout(resolve, 20));
+    assert.equal(ended.length, 0);
+    release();
+    if (observed) f.adapters.push(await starting);
+    else await assert.rejects(starting, /observation refused/);
+    await exit;
+    assert.equal(ended.length, observed ? 1 : 0);
+  });
+}
+
 test("native close supplies private invoking identity and one explicit target without account or observation calls", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
@@ -2756,4 +2815,38 @@ test("born managed: only this session's user exit reaches the SessionEnd record,
   const refused = await bornFixture(t, { enroll: async () => { throw Object.assign(new Error("x"), { reason: "surface-owned" }); } });
   await refused.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: refused.own.sessionId });
   assert.equal(refused.calls.ended.length, 0);
+});
+
+test("a Maestro launch clears its resume binding on its own SessionEnd only, failing open", async (t) => {
+  const f = await managedFixture(t, { owners: [0, 0] });
+  const own = f.bindings[0];
+  let config;
+  const ended = [];
+  let fail = false;
+  const environment = { ...f.environment(0), CMUX_MAESTRO_DIRECT_LAUNCH: "1", CMUX_MAESTRO_LAUNCH_PID: "4242",
+    CMUX_COPILOT_HOOKS_DISABLED: "1",
+    CMUX_SURFACE_ID: randomUUID(), CMUX_MAESTRO_ORCHESTRATOR: "/synthetic/controller" };
+  const adapter = await startManaged({
+    environment, observe: async () => {},
+    sessionEnd: async (request, controller) => {
+      ended.push({ request, controller });
+      if (fail) throw new Error("private failure");
+    },
+    joinSession: async (options) => { config = options; return { sessionId: own.sessionId, send: async () => {} }; },
+  });
+  f.adapters.push(adapter);
+  assert.deepEqual(Object.keys(config), ["tools", "hooks"]);
+  assert.deepEqual(Object.keys(config.hooks), ["onSessionEnd"]);
+  await config.hooks.onSessionEnd({ reason: "user_exit", finalMessage: "PRIVATE" }, { sessionId: randomUUID() });
+  assert.equal(ended.length, 0);
+  assert.equal(await config.hooks.onSessionEnd({ reason: "user_exit", finalMessage: "PRIVATE" },
+    { sessionId: own.sessionId }), undefined);
+  assert.deepEqual(ended, [{ controller: "/synthetic/controller", request: { identity: {
+    nodeId: own.nodeId, workspaceId: own.workspaceId, sessionId: own.sessionId, generation: 1,
+    capability: own.capability } } }]);
+  assert.equal(JSON.stringify(ended).includes("PRIVATE"), false);
+  await config.hooks.onSessionEnd({ reason: "abort" }, { sessionId: own.sessionId });
+  assert.equal(ended.length, 1, "only a user exit is trusted; a CMUX quit may report other reasons");
+  fail = true;
+  assert.equal(await config.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: own.sessionId }), undefined);
 });

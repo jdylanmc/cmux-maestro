@@ -263,6 +263,7 @@ sessions to unload their cached hooks. Disable this sidebar in CMUX separately
 if desired. Uninstall does not select or remove any other provider.
 It also leaves the separately installed global guide untouched.
 
-For individual future CLI launches, either `CMUX_COPILOT_HOOKS_DISABLED=1` or
-`MAESTRO_NATIVE_DISABLED=1` suppresses identity hooks. This integration does not change or use the
-legacy `MAESTRO_DISABLED` flag.
+For individual future CLI launches, `MAESTRO_NATIVE_DISABLED=1` suppresses identity hooks.
+`CMUX_COPILOT_HOOKS_DISABLED=1` silences only CMUX's own hooks; Maestro launches set it so CMUX's
+restore never claims them (ADR 0024), and Maestro keeps observing them. This integration does not
+change or use the legacy `MAESTRO_DISABLED` flag.

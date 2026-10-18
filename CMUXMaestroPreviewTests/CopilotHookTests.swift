@@ -280,12 +280,22 @@ struct CopilotHookTests: Sendable {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }
         try marker(root)
-        for key in ["CMUX_COPILOT_HOOKS_DISABLED", "MAESTRO_NATIVE_DISABLED"] {
-            #expect(recorder(root).bind(payload: payload, environment: environment.merging([key: "1"]) { _, new in new }) == .disabled)
-        }
+        #expect(recorder(root).bind(payload: payload,
+            environment: environment.merging(["MAESTRO_NATIVE_DISABLED": "1"]) { _, new in new }) == .disabled)
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("integration").path))
         #expect(recorder(root).bind(payload: payload,
             environment: environment.merging(["MAESTRO_DISABLED": "1"]) { _, new in new }) == .recorded)
+    }
+
+    /// Maestro launches set CMUX_COPILOT_HOOKS_DISABLED=1 so CMUX's own restore never claims them
+    /// (ADR 0024). That switch belongs to CMUX; Maestro keeps observing the session.
+    @Test func cmuxRestoreSwitchDoesNotSilenceMaestroObservation() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(!CopilotHookRecorder.isDisabled(["CMUX_COPILOT_HOOKS_DISABLED": "1"]))
+        #expect(recorder(root).bind(payload: payload,
+            environment: environment.merging(["CMUX_COPILOT_HOOKS_DISABLED": "1"]) { _, new in new }) == .recorded)
     }
 
     @Test func absentMarkerNeverGuessesAndLaterHookCanRecord() throws {

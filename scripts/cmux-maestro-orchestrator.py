@@ -1094,6 +1094,11 @@ def _validate_node_launch_configuration(node, mode):
                               or not 1 <= ended <= node["generation"]
                               or mode != "interactive" or not is_direct_launch(node)):
         raise OrchestrationError("Stored session end evidence is invalid.")
+    if "ownerTokenHash" in node and (
+        not isinstance(node["ownerTokenHash"], str) or re.fullmatch(r"[0-9a-f]{64}", node["ownerTokenHash"]) is None
+        or node.get("role") != "coordinator" or not is_direct_launch(node) or node.get("enrollment")
+    ):
+        raise OrchestrationError("Stored owner token evidence is invalid.")
     if "permissionPolicyUnverified" in node and node["permissionPolicyUnverified"] is not True:
         raise OrchestrationError("Stored permission policy provenance is invalid.")
 
@@ -1184,8 +1189,8 @@ def _validate_node_session_claim(node, role, mode, runtime_version):
         canonical_uuid(session_id, "stored Copilot session ID")
     if role == "coordinator":
         if mode == "interactive":
-            # A born root's generation continues across enrollments of its session.
-            resumable = node.get("enrollment") == "born" and node["generation"] >= 1
+            # Born roots and direct launches resume as later generations (ADR 0024).
+            resumable = (node.get("enrollment") == "born" or is_direct_launch(node)) and node["generation"] >= 1
             if (session_id is None or (node["generation"] != 1 and not resumable)
                     or node.get("launchSettings") is None or runtime_version != 2):
                 raise OrchestrationError("Managed coordinator requires an exact launch identity.")
@@ -1912,6 +1917,26 @@ class Cmux:
         walk(report)
         return normalized_tty(found[0]) if len(found) == 1 else None
 
+    def set_resume_binding(self, workspace, surface, cwd, session, argv):
+        """Attach Maestro's restart command to one exact surface. Identifiers only, no secrets."""
+        invocation = [self.executable, "surface", "resume", "set", "--workspace", workspace,
+                      "--surface", surface, "--cwd", cwd, "--kind", "agent", "--checkpoint", session,
+                      "--", *argv]
+        try:
+            result = subprocess.run(invocation, capture_output=True, text=True, timeout=close_timeout(15))
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        return result.returncode == 0
+
+    def clear_resume_binding(self, workspace, surface):
+        invocation = [self.executable, "surface", "resume", "clear", "--workspace", workspace, "--surface", surface]
+        try:
+            # Runs inside the extension's bounded shutdown wait, after the end is recorded.
+            result = subprocess.run(invocation, capture_output=True, text=True, timeout=1)
+        except (subprocess.TimeoutExpired, OSError):
+            return False
+        return result.returncode == 0
+
     def workspace_surfaces(self, workspace):
         # surface.list takes one host main-actor snapshot. Separate pane reads
         # can miss a live surface moved into an already-read pane.
@@ -1974,10 +1999,14 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def authorize(state, actor_id, token, *, allow_archiving=False):
+def authorize(state, actor_id, token, *, allow_archiving=False, allow_owner=False):
     actor_id = canonical_uuid(actor_id, "actor ID")
     actor = state["nodes"].get(actor_id)
-    if not actor or not secrets.compare_digest(actor["tokenHash"], token_hash(token or "")):
+    digest = token_hash(token or "")
+    # A resumed launch root keeps its launch receipt's token as owner authority for owner
+    # commands only (status, archive); every other caller needs this generation's token.
+    if not actor or not (secrets.compare_digest(actor["tokenHash"], digest)
+                         or allow_owner and secrets.compare_digest(actor.get("ownerTokenHash") or "", digest)):
         raise OrchestrationError("Actor identity or control token is invalid.")
     if actor.get("archiving") and not allow_archiving:
         raise OrchestrationError("The orchestration run is ending; retry archive instead.")
@@ -2551,6 +2580,12 @@ def command_native_observe(root):
     surface = canonical_uuid(identity["surfaceId"], "native surface")
     require_current_surface(identity["workspaceId"], surface)
     anchor = direct_process_identity(identity["pid"])
+    recorded = read_state(root)["nodes"].get(identity["nodeId"])
+    if recorded is not None and recorded.get("providerProcess") == anchor:
+        # The resume command recorded this provider before exec; it is still on its surface's terminal.
+        terminal = process_tty(anchor["pid"])
+        if terminal is None or Cmux().surface_tty(identity["workspaceId"], surface) != terminal:
+            raise OrchestrationError("Direct observation terminal is not the recorded surface.")
 
     def observe(state):
         node = authorize(state, identity["nodeId"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
@@ -2716,18 +2751,33 @@ def archive_born_run(state, run_id, retiring):
     return nodes
 
 
-def remove_direct_scripts(root, nodes):
+def resume_binding_eligible(node):
+    """One rule for setting, honoring and clearing a Maestro resume binding: a messaging launch."""
+    return (is_direct_launch(node) and not node.get("enrollment") and bool(node.get("messaging"))
+            and node.get("deliveryProof") is None)
+
+
+def remove_direct_scripts(root, nodes, cmux=None):
+    """After archive: remove every generation's launch script, and clear resume bindings
+    (best effort; a binding left behind refuses with "no record")."""
     direct = [node for node in nodes if is_direct_launch(node) and node.get("enrollment") != "born"]
     if not direct:
         return
 
     def cleanup(store):
         for node in direct:
-            try:
-                os.unlink(f"direct-{node['id']}-{node['generation']}.sh", dir_fd=store.control_fd)
-            except FileNotFoundError:
-                pass
+            for generation in range(1, node["generation"] + 1):
+                try:
+                    os.unlink(f"direct-{node['id']}-{generation}.sh", dir_fd=store.control_fd)
+                except FileNotFoundError:
+                    pass
     with_store(root, cleanup)
+    for node in direct:
+        if resume_binding_eligible(node) and node.get("surfaceId"):
+            try:
+                (cmux or Cmux()).clear_resume_binding(node["workspaceId"], node["surfaceId"])
+            except (OrchestrationError, OSError):
+                pass
 
 
 def command_archive_ended(args, root):
@@ -2746,9 +2796,15 @@ def command_archive_ended(args, root):
                 runs.append(node["runId"])
             else:
                 kept += 1
-        return {"workspaceId": workspace, "archivedRuns": runs, "keptRuns": kept,
-                "capacity": workspace_capacity(state, workspace)}
-    result = mutate_retiring_routes(root, archive)
+        summary.update(workspaceId=workspace, archivedRuns=runs, keptRuns=kept,
+                       capacity=workspace_capacity(state, workspace))
+        return dict(summary)
+    summary = {}
+    try:
+        result = mutate_retiring_routes(root, archive)
+    except CommittedProjectionError:
+        # The archive is committed; scripts and bindings are still cleaned up.
+        result = {**summary, "projection": "deferred"}
     remove_direct_scripts(root, archived)
     return result
 
@@ -2994,13 +3050,33 @@ def command_native_session_end(root, cmux=None):
         require_current_surface(actor["workspaceId"], actor["surfaceId"])
         return actor
 
+    recorded = {}
+
     def record(state):
         actor = actor_of(state)
         actor["sessionEndedGeneration"] = actor["generation"]
         actor["updatedAt"] = now()
+        recorded.update(actor)
         return dict(actor)
-    mutate(root, record)
-    return {"recorded": True}
+    try:
+        actor = mutate(root, record)
+        deferred = {}
+    except CommittedProjectionError:
+        # state.json holds the end; only the projection lagged. The binding clear still applies.
+        actor, deferred = dict(recorded), {"projection": "deferred"}
+    return {"recorded": True, **deferred, **session_end_effects(cmux, actor)}
+
+
+def session_end_effects(cmux, actor):
+    """A Maestro launch's observed user exit also clears its CMUX resume binding, like CMUX's own
+    restore. Identifiers only. Fail open: if CMUX cannot clear it, the binding remains."""
+    if actor.get("enrollment") == "born":
+        return {}
+    try:
+        cmux = cmux or Cmux()
+    except OrchestrationError:
+        return {"cleared": False}
+    return {"cleared": cmux.clear_resume_binding(actor["workspaceId"], actor["surfaceId"])}
 
 
 def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session, anchor, login, key, receipt):
@@ -3133,6 +3209,307 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
         raise EnrollmentRefused("enrollment-failed") from error
 
 
+class ResumeRefused(OrchestrationError):
+    """One plain diagnostic line; the restored tab stays a plain shell."""
+
+
+def resume_binding_argv(node):
+    # The installed controller path is stable across Python and app upgrades and runs through its
+    # own `#!/usr/bin/env python3`. Never persist a resolved, version-pinned interpreter path.
+    # `<controller> resume <session-id>` is a shape CMUX can approve once as a command prefix:
+    # only the trailing session ID varies. The node is found by that unique session ID.
+    return [str(CONTROLLER_ENTRYPOINT), "resume", node["copilotSessionId"]]
+
+
+def session_has_live_owner(session):
+    """True when any inuse.<PID>.lock owner may be alive, or ownership cannot be read.
+
+    Reads markers through the same anchored scan as session custody. A live process that
+    started after a marker was written cannot own it (a PID reused after a restart).
+    """
+    try:
+        markers = session_lock_markers(session)
+    except OrchestrationError:
+        return True
+    for name, marker in markers:
+        pid = int(name.split(".")[1])
+        start = process_start(pid)
+        if start is None:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            except OSError:
+                pass
+            return True
+        started = process_start_epoch(start)
+        if started is None or started <= getattr(marker, "st_birthtime", marker.st_mtime) + 1:
+            return True
+    return False
+
+
+def open_session_source(session):
+    """A descriptor for the session's state directory, opened without following links, or None."""
+    source = Path.home() / ".copilot/session-state" / session
+    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in source.parts[1:]:
+            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        info = os.fstat(descriptor)
+        if info.st_uid != os.getuid() or info.st_mode & 0o022:
+            raise OrchestrationError("Close session source ownership is unavailable.")
+        return descriptor
+    except FileNotFoundError:
+        os.close(descriptor)
+        return None
+    except (OSError, OrchestrationError):
+        os.close(descriptor)
+        raise
+
+
+def session_markers(descriptor):
+    """Every inuse.<PID>.lock in an opened session directory, each an owned plain file."""
+    found = []
+    with os.scandir(descriptor) as entries:
+        for index, entry in enumerate(entries):
+            if index >= 512:
+                raise OrchestrationError("Close session source exceeds its inspection bound.")
+            if entry.name.startswith("inuse.") and entry.name.endswith(".lock"):
+                if not re.fullmatch(r"inuse\.[1-9][0-9]{0,9}\.lock", entry.name):
+                    raise OrchestrationError("Close session source is missing or ambiguous.")
+                marker = os.stat(entry.name, dir_fd=descriptor, follow_symlinks=False)
+                if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
+                        or marker.st_mode & 0o022 or marker.st_nlink != 1):
+                    raise OrchestrationError("Close session source or provider generation changed.")
+                found.append((entry.name, marker))
+    return found
+
+
+def session_lock_markers(session):
+    try:
+        descriptor = open_session_source(session)
+    except OSError as error:
+        raise OrchestrationError("Session source is unavailable.") from error
+    if descriptor is None:
+        return []
+    try:
+        return session_markers(descriptor)
+    except OSError as error:
+        raise OrchestrationError("Session source is unavailable.") from error
+    finally:
+        os.close(descriptor)
+
+
+def command_resume_managed(args, root, cmux):
+    """Run by CMUX in a restored surface: resume one ended managed session there (ADR 0024)."""
+    try:
+        session = canonical_uuid(args.session_id, "session ID")
+        workspace = canonical_uuid(os.environ.get("CMUX_WORKSPACE_ID"), "current workspace ID")
+        surface = canonical_uuid(os.environ.get("CMUX_SURFACE_ID"), "current surface ID")
+    except OrchestrationError as error:
+        raise ResumeRefused("this terminal's CMUX workspace or surface is unknown") from error
+    if any(os.environ.get(key) for key in BORN_LAUNCHER_INPUTS):
+        raise ResumeRefused("this terminal already carries Maestro launcher inputs")
+    snapshot = read_state(root)
+    recorded = [item for item in snapshot["nodes"].values() if item.get("copilotSessionId") == session]
+    if len(recorded) != 1:
+        raise ResumeRefused("Maestro has no record of this session")
+    node = recorded[0]
+    worker_id = node["id"]
+    try:
+        messaging = messaging_configuration(root)
+    except OrchestrationError as error:
+        raise ResumeRefused("Maestro integration is not installed") from error
+
+    def require_resumable(current, state):
+        """Every mutable fact the resume depends on; checked again inside the commit lock."""
+        if (not resume_binding_eligible(current) or current.get("launchError")
+                or not current.get("launchAccepted")):
+            raise ResumeRefused("this session was not launched by Maestro as a managed session")
+        if (current["workspaceId"], current.get("surfaceId")) != (workspace, surface):
+            raise ResumeRefused("this is not the session's recorded surface")
+        if current.get("sessionEndedGeneration") == current["generation"]:
+            raise ResumeRefused("the session was ended by its user")
+        # A runtime that verifiably never started has no process to wait for.
+        if (current["id"] in state["launches"] or current.get("surfaceUnknown") or current.get("archiving")
+                or (process_observation(current.get("providerProcess")) is not False
+                    and not current.get("runtimeNotStarted"))
+                or session_has_live_owner(session)):
+            raise ResumeRefused("the session may still be running")
+        if messaging is None:
+            raise ResumeRefused("Maestro integration is not installed")
+        if messaging != current["messaging"]:
+            raise ResumeRefused("Maestro integration changed since launch; start a new session")
+        if current["phase"] == "resource-retired":
+            # A retired launch no longer holds a workspace slot; reviving it takes one.
+            try:
+                require_workspace_capacity(state, workspace)
+            except OrchestrationError as error:
+                raise ResumeRefused("no free workspace slot") from error
+
+    def require_placement():
+        """This process runs in the recorded surface's own terminal, as CMUX reports it now."""
+        try:
+            cmux.validate_surface(workspace, surface)
+            if surface not in cmux.workspace_surfaces(workspace):
+                raise OrchestrationError("Surface is not listed.")
+        except OrchestrationError as error:
+            raise ResumeRefused("CMUX did not confirm this surface") from error
+        terminal = process_tty(os.getpid())
+        try:
+            placed = terminal is not None and cmux.surface_tty(workspace, surface) == terminal
+        except OrchestrationError:
+            placed = False
+        if not placed:
+            raise ResumeRefused("this terminal is not the session's recorded surface")
+
+    require_resumable(node, snapshot)
+    account = recorded_account(node)
+    if account is None:
+        raise ResumeRefused("the session has no recorded account")
+    try:
+        recorded_native_permissions(node)
+    except OrchestrationError as error:
+        raise ResumeRefused("the recorded launch policy is unavailable") from error
+    require_placement()
+    # The recorded executable may be gone after an upgrade; this terminal's PATH is current.
+    launch_path = os.environ.get("PATH", "/usr/bin:/bin")
+    executable = None
+    for candidate in (node.get("copilotExecutable"), "copilot"):
+        try:
+            if candidate and len(launch_path) <= MAX_LAUNCH_PATH:
+                executable = trusted_executable(candidate)
+                break
+        except OrchestrationError:
+            continue
+    if executable is None:
+        raise ResumeRefused("Copilot is not installed on this terminal's PATH")
+    anchor = {"pid": os.getpid(), "start": process_start(os.getpid())}  # execve keeps both
+    if anchor["start"] is None:
+        raise ResumeRefused("this terminal's process could not be identified")
+    token = secrets.token_hex(32)
+    resumed = {**node, "generation": node["generation"] + 1, "tokenHash": token_hash(token),
+               "providerProcess": anchor, "copilotExecutable": executable, "launchPath": launch_path}
+    identity_keys = ("id", "runId", "parentId", "role", "workspaceId", "surfaceId", "copilotSessionId",
+                     "generation", "providerProcess", "tokenHash", "messaging", "toolPolicy",
+                     "permissionMode", "launchSettings", "copilotAccount")
+    def resume(state, retiring):
+        # One locked step: recheck, clear a route a killed resume left, publish this generation's
+        # route, and reserve it. No other resume can see the route before the reservation.
+        current = state["nodes"].get(worker_id)
+        if current is None or any(current.get(key) != node.get(key) for key in identity_keys):
+            raise ResumeRefused("the session's record changed")
+        require_resumable(current, state)
+        endpoint = Path(messaging["routes"]) / f"{message_peer(resumed)}.sock"
+        if endpoint.exists() or endpoint.is_symlink():
+            raise ResumeRefused("the session may still be running")
+        try:
+            retire_messaging(resumed)
+            bind_messaging(resumed)
+        except (OrchestrationError, OSError) as error:
+            raise ResumeRefused("the session's peer route could not be published") from error
+        retiring.append(dict(current))
+        # The provider is this process from here on, so an early Copilot exit reads as ended.
+        if current["role"] == "coordinator":
+            current.setdefault("ownerTokenHash", current["tokenHash"])
+        current.update(generation=resumed["generation"], tokenHash=resumed["tokenHash"],
+                       providerProcess=anchor, copilotExecutable=executable, launchPath=launch_path,
+                       phase="turn-running", availability="busy", result=None, updatedAt=now())
+        current.pop("runtimeNotStarted", None)
+    try:
+        mutate_retiring_routes(root, resume)
+    except (OrchestrationError, OSError) as error:
+        # A commit can land and still report failure (projection, or the directory fsync after
+        # state.json was replaced). Continue when state holds this reservation; retire only
+        # when it provably does not.
+        try:
+            stored = read_state(root)["nodes"].get(worker_id) or {}
+        except (OrchestrationError, OSError):
+            stored = None
+        committed = (stored is not None and stored.get("generation") == resumed["generation"]
+                     and stored.get("providerProcess") == anchor)
+        if committed:
+            # The commit landed but routes were not retired; retire the previous generation's here.
+            try:
+                retire_messaging(node)
+            except (OrchestrationError, OSError):
+                pass
+        if not committed:
+            def retire_if_still_previous(store):
+                # Under the state lock: retire the new route only while state still holds the
+                # previous generation, so a later successful resume's route is never removed.
+                current = store.read()["nodes"].get(worker_id) or {}
+                if current.get("generation") == node["generation"]:
+                    retire_messaging(resumed)
+            if stored is not None:
+                try:
+                    with_store(root, retire_if_still_previous)
+                except (OrchestrationError, OSError):
+                    pass
+            if isinstance(error, ResumeRefused):
+                raise
+            raise ResumeRefused("the session's record could not be updated") from error
+
+    def remove_old_script(store):
+        # The earlier generation's launch script holds its task text; it is no longer needed.
+        for generation in range(1, resumed["generation"]):
+            try:
+                os.unlink(f"direct-{worker_id}-{generation}.sh", dir_fd=store.control_fd)
+            except FileNotFoundError:
+                pass
+    try:
+        with_store(root, remove_old_script)
+    except (OrchestrationError, OSError):
+        pass
+
+    def abandon(refusal, cause=None):
+        """The reserved generation never ran: record that, retire its route, refuse."""
+        def failed(state):
+            current = state["nodes"].get(worker_id)
+            if (current is not None and current["generation"] == resumed["generation"]
+                    and current.get("providerProcess") == anchor):
+                current.update(phase="launch-failed", availability="unavailable", providerProcess=None,
+                               runtimeNotStarted=True, updatedAt=now())
+        try:
+            mutate(root, failed)
+        except (OrchestrationError, OSError):
+            pass
+        try:
+            retire_messaging(resumed)
+        except (OrchestrationError, OSError):
+            pass
+        raise refusal from cause
+
+    # The credential is read only after the reservation; placement and custody are checked
+    # once more right before Copilot starts.
+    try:
+        subscription = resolve_copilot_token(account["login"])
+    except OrchestrationError as error:
+        abandon(ResumeRefused(f"recorded account {account['login']} is not signed in to GitHub CLI"), error)
+    try:
+        require_placement()
+        if session_has_live_owner(session):
+            raise ResumeRefused("the session may still be running")
+    except ResumeRefused as refusal:
+        abandon(refusal)
+    environment = worker_environment(worker_id, token, resumed, credentials=False)
+    environment = {key: value for key, value in environment.items()
+                   if not key.startswith("CMUX_MAESTRO_") or key in DIRECT_ENVIRONMENT_KEYS}
+    environment.update({
+        "CMUX_WORKSPACE_ID": workspace, "CMUX_SURFACE_ID": surface,
+        "CMUX_MAESTRO_LAUNCH_PID": str(os.getpid()), "CMUX_MAESTRO_DIRECT_LAUNCH": "1",
+        "CMUX_COPILOT_HOOKS_DISABLED": "1", "COPILOT_GITHUB_TOKEN": subscription,
+    })
+    arguments = resume_arguments(resumed, executable)  # no I/O: nothing here can fail late
+    try:
+        os.chdir(node["workingDirectory"])
+        os.execve(arguments[0], arguments, environment)
+    except OSError as error:
+        abandon(ResumeRefused("Copilot could not start"), error)
+
+
 def close_process_is_live(process):
     """Affirmative close admission, not conservative resource retention."""
     if not process:
@@ -3185,32 +3562,18 @@ def verify_session_custody(session, provider):
     """
     if not close_process_is_live(provider):
         raise OrchestrationError("Close requires a current provider process anchor.")
-    source = Path.home() / ".copilot/session-state" / session
-    descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
     try:
-        for component in source.parts[1:]:
-            child = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-                            dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        info = os.fstat(descriptor)
-        if info.st_uid != os.getuid() or info.st_mode & 0o022:
-            raise OrchestrationError("Close session source ownership is unavailable.")
+        descriptor = open_session_source(session)
+    except (OSError, OrchestrationError) as error:
+        raise OrchestrationError("Close session source is unavailable; no close request was made.") from error
+    if descriptor is None:
+        raise OrchestrationError("Close session source is missing or ambiguous.")
+    try:
         def inspect_marker():
-            markers = []
-            with os.scandir(descriptor) as entries:
-                for index, entry in enumerate(entries):
-                    if index >= 512:
-                        raise OrchestrationError("Close session source exceeds its inspection bound.")
-                    if entry.name.startswith("inuse.") and entry.name.endswith(".lock"):
-                        markers.append(entry.name)
-            if len(markers) != 1 or not re.fullmatch(r"inuse\.[1-9][0-9]*\.lock", markers[0]):
+            markers = session_markers(descriptor)
+            if len(markers) != 1:
                 raise OrchestrationError("Close session source is missing or ambiguous.")
-            marker = os.stat(markers[0], dir_fd=descriptor, follow_symlinks=False)
-            if (not stat.S_ISREG(marker.st_mode) or marker.st_uid != os.getuid()
-                    or marker.st_mode & 0o022 or marker.st_nlink != 1):
-                raise OrchestrationError("Close session source or provider generation changed.")
-            return markers[0], marker
+            return markers[0]
 
         name, marker = inspect_marker()
         owner_pid = int(name.split(".")[1])
@@ -3657,16 +4020,32 @@ def maestro_task(task, coordinator=None):
     )
     if coordinator is not None:
         context += "Coordinator return address: " + json.dumps(coordinator, separators=(",", ":")) + "\n"
+        context += ("That address is exact for the coordinator's current generation; if a send to it "
+                    "fails after a CMUX relaunch, find the coordinator's current address with maestro_peers.\n")
     return context + "\nOriginal task (verbatim):\n" + task
 
 
 def interactive_arguments(node, prompt):
-    arguments = [
+    return [
         trusted_executable(node.get("copilotExecutable") or "copilot"),
         "--no-auto-update", "--interactive", prompt,
         "--session-id", node["copilotSessionId"], "--name", node["label"],
         "-C", node["workingDirectory"],
-    ]
+    ] + recorded_launch_flags(node)
+
+
+def resume_arguments(node, executable):
+    # Copilot rejects --name with --resume; the session keeps its name. No new prompt or ID.
+    # The executable was validated before the reservation and is used as is.
+    return [
+        executable,
+        "--no-auto-update", f"--resume={node['copilotSessionId']}", "-C", node["workingDirectory"],
+    ] + recorded_launch_flags(node)
+
+
+def recorded_launch_flags(node):
+    """The node's recorded model and tool policy, replayed exactly; denies always included."""
+    arguments = []
     model = (node.get("launchSettings") or {}).get("model")
     if model is not None:
         arguments += ["--model", model]
@@ -3721,6 +4100,8 @@ def prepare_direct_launch(root, node, token):
     script += "".join(f"export {key}={shlex.quote(environment[key])}\n"
                       for key in sorted(keys) if key in environment)
     script += 'export CMUX_MAESTRO_LAUNCH_PID=$$\nexport CMUX_MAESTRO_DIRECT_LAUNCH=1\n'
+    # CMUX's own Copilot restore never claims a managed tab; Maestro's binding does (ADR 0024).
+    script += "export CMUX_COPILOT_HOOKS_DISABLED=1\n"
     script += "unset CMUX_MAESTRO_INITIAL_TASK\n"
     script += f"CMUX_MAESTRO_INITIAL_TASK={shlex.quote(arguments[3])}\n"
     if (node.get("launchSettings") or {}).get("copilotAccount"):
@@ -3797,7 +4178,27 @@ def launch_direct_session(root, cmux, node, token, pane):
                 "surfaceId": surface, "workspaceId": workspace, "generation": current["generation"],
                 "phase": current["phase"], **startup_observation(current, True),
             }
-        return mutate(root, attach)
+        receipt = mutate(root, attach)
+        try:
+            attached = read_state(root)["nodes"].get(identifier)
+        except (OrchestrationError, OSError):
+            attached = None
+        if attached is None or not resume_binding_eligible(attached):
+            return {**receipt, "resumeBinding": "unavailable"}
+        # Best effort: a missing binding only means this tab cannot be resumed after a relaunch.
+        bound = cmux.set_resume_binding(workspace, surface, node["workingDirectory"],
+                                        node["copilotSessionId"], resume_binding_argv(node))
+        if bound:
+            # A fast /exit may have recorded its end (and cleared nothing) before this set landed.
+            try:
+                after = read_state(root)["nodes"].get(identifier)
+            except (OrchestrationError, OSError):
+                after = None
+            if (after is None or after.get("surfaceId") != surface
+                    or after.get("generation") != node["generation"]
+                    or after.get("sessionEndedGeneration") == after.get("generation")):
+                bound = not cmux.clear_resume_binding(workspace, surface) and bound
+        return {**receipt, "resumeBinding": "set" if bound else "unavailable"}
     except (OrchestrationError, OSError) as error:
         def failed(state, retiring):
             current = state["nodes"].get(identifier)
@@ -5582,7 +5983,7 @@ def command_icon(args, root, cmux):
 
 def command_status(args, root, cmux):
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token)
+    actor = authorize(snapshot, args.actor_id, args.token, allow_owner=True)
     targets = descendants(snapshot, actor)
     if args.worker_id:
         targets = [ensure_owned(snapshot, actor, args.worker_id)]
@@ -5609,7 +6010,7 @@ def command_status(args, root, cmux):
     cancelled = []
 
     def refresh(state, retiring):
-        current_actor = authorize(state, args.actor_id, args.token)
+        current_actor = authorize(state, args.actor_id, args.token, allow_owner=True)
         current_actor["lastControlAt"] = now()
         current_targets = descendants(state, current_actor)
         if args.worker_id:
@@ -5689,14 +6090,15 @@ def command_status(args, root, cmux):
 
 def command_focus(args, root, cmux):
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token)
+    # Focus only moves visual focus to an owned session, so the owner token may use it with status.
+    actor = authorize(snapshot, args.actor_id, args.token, allow_owner=True)
     target = ensure_owned(snapshot, actor, args.worker_id)
     if not has_managed_runtime(target):
         raise OrchestrationError("Focus requires an owned managed session.")
     cmux.focus(target["workspaceId"], target["surfaceId"])
 
     def touched(state):
-        current = authorize(state, args.actor_id, args.token)
+        current = authorize(state, args.actor_id, args.token, allow_owner=True)
         ensure_owned(state, current, args.worker_id)
         current["lastControlAt"] = now()
     mutate(root, touched)
@@ -5715,7 +6117,7 @@ def archive_summary(state, run_id):
 
 def command_archive(args, root, cmux):
     snapshot = read_state(root)
-    actor = authorize(snapshot, args.actor_id, args.token, allow_archiving=True)
+    actor = authorize(snapshot, args.actor_id, args.token, allow_archiving=True, allow_owner=True)
     if actor["role"] != "coordinator":
         raise OrchestrationError("Only a coordinator can archive its run.")
     if actor.get("executionMode") != "interactive":
@@ -5728,7 +6130,7 @@ def command_archive(args, root, cmux):
     identity = tuple(actor.get(key) for key in identity_keys)
 
     def begin(state):
-        current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        current = authorize(state, args.actor_id, args.token, allow_archiving=True, allow_owner=True)
         if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         if any(
@@ -5769,7 +6171,7 @@ def command_archive(args, root, cmux):
         )
 
     def finish(state, retiring):
-        current = authorize(state, args.actor_id, args.token, allow_archiving=True)
+        current = authorize(state, args.actor_id, args.token, allow_archiving=True, allow_owner=True)
         if tuple(current.get(key) for key in identity_keys) != identity:
             raise OrchestrationError("Coordinator ownership changed during archive.")
         nodes = [node for node in state["nodes"].values() if node["runId"] == run_id]
@@ -5796,17 +6198,12 @@ def command_archive(args, root, cmux):
         if len(state["retainedResources"]) > MAX_HOST_NODES:
             raise OrchestrationError("Host retained-resource safety limit reached; archived terminals remain owned.")
         return {"runId": run_id, "archived": True}
-    result = mutate_retiring_routes(root, finish, wait=1)
-    direct_nodes = [node for node in snapshot["nodes"].values()
-                    if node["runId"] == run_id and is_direct_launch(node)]
-    if direct_nodes:
-        def cleanup(store):
-            for node in direct_nodes:
-                try:
-                    os.unlink(f"direct-{node['id']}-{node['generation']}.sh", dir_fd=store.control_fd)
-                except FileNotFoundError:
-                    pass
-        with_store(root, cleanup)
+    try:
+        result = mutate_retiring_routes(root, finish, wait=1)
+    except CommittedProjectionError:
+        # The run is archived in state.json; scripts and bindings are still cleaned up.
+        result = {"runId": run_id, "archived": True, "projection": "deferred"}
+    remove_direct_scripts(root, [node for node in snapshot["nodes"].values() if node["runId"] == run_id], cmux)
     return result
 
 
@@ -5895,9 +6292,11 @@ def parser():
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
     commands.add_parser("native-enroll", help="Private born-managed enrollment ingress; used by the native adapter")
-    commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
     ended.add_argument("--workspace", required=True)
+    commands.add_parser("native-session-end", help=argparse.SUPPRESS)
+    resume = commands.add_parser("resume", help="Resume one ended managed session in its restored CMUX surface")
+    resume.add_argument("session_id")
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
     commands.add_parser("launch-credential", help=argparse.SUPPRESS)
     commands.add_parser(
@@ -6047,6 +6446,14 @@ def main(argv=None):
             print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
             return 0
         root = default_root()
+        if args.command == "resume":
+            # Runs in the restored tab: one plain line on refusal, and the shell stays.
+            try:
+                command_resume_managed(args, root, Cmux())
+            except Exception as error:  # noqa: BLE001 - one plain line, never a traceback or raw error
+                reason = str(error) if isinstance(error, ResumeRefused) else "the session could not be verified"
+                print(f"Maestro did not resume this session: {reason}.", file=sys.stderr)
+                return 2
         if args.command == "launch-credential":
             # Captured directly into the new terminal's environment, never a
             # state file, host RPC argument, prompt, or launch receipt.

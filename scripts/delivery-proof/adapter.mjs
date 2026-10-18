@@ -543,10 +543,14 @@ export async function start({ root, peer, joinSession, managed = false, expected
   signal?.throwIfAborted();
   // Maestro's own SessionEnd observer (ADR 0024): only a user exit of this exact session, with no
   // hangup first, is reported, by identifiers; nothing else from the hook input is read or kept.
+  // An exit can arrive while joining or observing; it is held until the provider is observed, so
+  // the controller can verify it, and dropped only if observation fails.
+  let settleObserved;
+  const observed = new Promise(resolve => { settleObserved = resolve; });
   const hooks = managed && endSession ? { onSessionEnd: async (input, invocation) => {
     try {
-      if (endGate.hungUp || input?.reason !== "user_exit" || session?.sessionId !== own.sessionId ||
-        invocation?.sessionId !== own.sessionId) return;
+      if (endGate.hungUp || input?.reason !== "user_exit" || invocation?.sessionId !== own.sessionId ||
+        !await observed) return;
       const request = { identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability } };
       // One retry covers a transient lock or I/O failure; after that the gap is reported.
       for (let attempt = 1; ; attempt++) {
@@ -560,13 +564,19 @@ export async function start({ root, peer, joinSession, managed = false, expected
     } finally { endGate.finish(); }
   } } : undefined;
   if (hooks) endGate.armed = true;
-  session = await joinSession(hooks ? { tools, hooks } : { tools });
-  signal?.throwIfAborted();
-  requireCondition(session.sessionId === own.sessionId);
-  if (observe) {
-    observation = observe();
-    await observation;
+  try {
+    session = await joinSession(hooks ? { tools, hooks } : { tools });
+    signal?.throwIfAborted();
+    requireCondition(session.sessionId === own.sessionId);
+    if (observe) {
+      observation = observe();
+      await observation;
+    }
+  } catch (error) {
+    settleObserved(false);  // a held exit is dropped, never left waiting
+    throw error;
   }
+  settleObserved(true);
   signal?.throwIfAborted();
   const endpoint = path.join(root, `${peer}.sock`);
   requireCondition(Buffer.byteLength(endpoint) <= 100);
@@ -649,7 +659,8 @@ export async function start({ root, peer, joinSession, managed = false, expected
 // Inert in ordinary CLI sessions, including sessions with no launcher binding.
 // SESSION_ID is supplied by Copilot to its native extension child.
 export async function startManaged({ joinSession, environment = process.env, diagnostic, signal, onListener,
-  observe = (request, controller) => invokeController("native-observe", request, controller, signal) }) {
+  observe = (request, controller) => invokeController("native-observe", request, controller, signal),
+  sessionEnd = recordSessionEnd }) {
   const root = environment.CMUX_MAESTRO_MESSAGE_ROOT;
   const peer = environment.CMUX_MAESTRO_MESSAGE_PEER;
   if (!root || !peer || !environment.CMUX_MAESTRO_WORKER_ID ||
@@ -672,7 +683,9 @@ export async function startManaged({ joinSession, environment = process.env, dia
       generation, surfaceId, pid,
     }, expected.controller);
   }
-  return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal, onListener });
+  const endSession = environment.CMUX_MAESTRO_DIRECT_LAUNCH === "1" ? sessionEnd : undefined;
+  return start({ root, peer, joinSession, managed: true, expected, diagnostic, observe: observation, signal,
+    onListener, endSession });
 }
 
 const LAUNCHER_INPUTS = ["CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER",

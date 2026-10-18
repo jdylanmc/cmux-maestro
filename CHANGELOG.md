@@ -6,6 +6,14 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Maestro-launched sessions resume after a CMUX relaunch (#252). Each launch sets
+  `CMUX_COPILOT_HOOKS_DISABLED=1` and attaches a CMUX resume binding with identifiers only. On
+  relaunch, the new `resume <session>` command checks the exact surface and its terminal, an
+  ended session, and the recorded policy and account, then resumes `copilot --resume=<session>`
+  as the next generation. Approve the prefix `<controller> resume` once in CMUX Settings >
+  Terminal > Resume Commands. A session that ends with `/exit` clears its binding; a quit or
+  crash keeps it. The binding runs the
+  installed controller path, so Python and app upgrades do not break it.
 - A born-managed root resumes as managed after a CMUX relaunch (#252). When CMUX restarts its
   session in the same surface, the controller resumes the same node as its next generation, in
   the same run, with its children. It refuses a session the human ended with `/exit`, a live or
