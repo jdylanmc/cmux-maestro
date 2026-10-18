@@ -1239,6 +1239,9 @@ struct CopilotSetupTests {
             == Data(contentsOf: repository.appendingPathComponent("Resources/NerdFonts/glyphnames.json")))
         #expect(try String(contentsOf: configuration, encoding: .utf8) == "preserved")
         let restoreHooks = local.cmuxHooksFile
+        // Standalone setup writes the active hooks only after the plugin is published.
+        #expect(!FileManager.default.fileExists(atPath: restoreHooks.path))
+        try local.installCMUXHooks()
         #expect(restoreHooks.path == directory.appendingPathComponent("hooks/cmux-maestro-cmux-hooks.json").path)
         #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
         #expect((try FileManager.default.attributesOfItem(atPath: restoreHooks.path)[.posixPermissions] as? Int) == 0o600)
@@ -1311,6 +1314,7 @@ struct CopilotSetupTests {
         try FileManager.default.removeItem(at: obsolete)
         try FileManager.default.moveItem(at: savedObsolete, to: obsolete)
         _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try local.installCMUXHooks()
         #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
         let extensionFile = native.appendingPathComponent("extension.mjs")
         let installedExtension = try Data(contentsOf: extensionFile)
@@ -1335,9 +1339,65 @@ struct CopilotSetupTests {
         }
         #expect(try asideCopies().isEmpty)
 
+        // The ownership check binds to the write: bytes that change after planning are refused.
+        try FileManager.default.removeItem(at: restoreHooks)
+        let planned = try local.resources(root: integration, helper: executable, controller: controller, skill: skill)
+        try foreign.write(to: restoreHooks)
+        do {
+            try planned.publish()
+            Issue.record("Publishing over a file Maestro did not write must refuse")
+        } catch let failure as CopilotResourcePreparationFailure {
+            #expect(failure.outcome == .untouched)
+            #expect(failure.detail?.contains(restoreHooks.path) == true)
+        }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+        #expect(!FileManager.default.fileExists(atPath: extensionFile.path))  // nothing else was written
+        #expect(throws: CopilotResourcePreparationFailure.self) { try local.installCMUXHooks() }
+        #expect(try Data(contentsOf: restoreHooks) == foreign)
+
+        // Anything at the name that is not readable as Maestro's bytes is foreign, and named.
+        for occupant in ["symlink", "oversized"] {
+            try FileManager.default.removeItem(at: restoreHooks)
+            if occupant == "symlink" {
+                try FileManager.default.createSymbolicLink(at: restoreHooks, withDestinationURL: unrelatedHook)
+            } else {
+                try Data(repeating: 0x20, count: 70_000).write(to: restoreHooks)
+            }
+            do {
+                _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+                Issue.record("A \(occupant) at the CMUX hooks name must refuse")
+            } catch let failure as CopilotResourcePreparationFailure {
+                #expect(failure.detail?.contains(restoreHooks.path) == true)
+            }
+            #expect(local.foreignCMUXHooksRemaining() == restoreHooks.path)
+        }
+        try FileManager.default.removeItem(at: restoreHooks)
+
+        // A copy stranded by an interrupted uninstall is recovered on the next one.
+        let hooksDirectory = restoreHooks.deletingLastPathComponent()
+        let strandedOwned = hooksDirectory.appendingPathComponent(".\(restoreHooks.lastPathComponent).removing-owned")
+        try CopilotCMUXHooks.manifest().write(to: strandedOwned)
+        let strandedForeign = hooksDirectory.appendingPathComponent(".\(restoreHooks.lastPathComponent).removing-foreign")
+        try foreign.write(to: strandedForeign)
+        _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try local.removeMessaging(root: integration)
+        #expect(!FileManager.default.fileExists(atPath: strandedOwned.path))
+        #expect(try Data(contentsOf: restoreHooks) == foreign)  // the human's file is back under its name
+        try foreign.write(to: strandedForeign)
+        do {
+            try local.removeMessaging(root: integration)
+            Issue.record("A stranded foreign copy with its name taken must be named")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains(strandedForeign.path))
+            #expect(conflict.message.contains(restoreHooks.path))
+        }
+        try FileManager.default.removeItem(at: strandedForeign)
+        #expect(try asideCopies().isEmpty)
+
         // A file swapped in between any check and the removal is the one verified, and kept.
         try FileManager.default.removeItem(at: restoreHooks)
         _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try local.installCMUXHooks()
         var racing = local
         let swapped = restoreHooks
         racing.beforeCMUXHooksRemoval = { try? foreign.write(to: swapped) }
@@ -1348,6 +1408,7 @@ struct CopilotSetupTests {
         // Uninstall is one transaction: a later removal failure puts the CMUX hooks file back.
         try FileManager.default.removeItem(at: restoreHooks)
         _ = try local.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try local.installCMUXHooks()
         let messaging = installed.deletingLastPathComponent().appendingPathComponent("messaging.json")
         try FileManager.default.removeItem(at: messaging)
         try FileManager.default.createDirectory(at: messaging.appendingPathComponent("blocker"), withIntermediateDirectories: true)
@@ -1382,6 +1443,7 @@ struct CopilotSetupTests {
         upgrading.shippedCMUXManifests = [try CopilotCMUXHooks.manifest(), earlier]
         try earlier.write(to: restoreHooks)
         _ = try upgrading.preparePlugin(root: integration, helper: executable, controller: controller, skill: skill)
+        try upgrading.installCMUXHooks()
         #expect(try Data(contentsOf: restoreHooks) == CopilotCMUXHooks.manifest())
         try earlier.write(to: restoreHooks)
         try upgrading.removeMessaging(root: integration)

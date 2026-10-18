@@ -14,6 +14,7 @@ final class ObserverFixture: Sendable {
     var file: URL { provider.appendingPathComponent("hooks/\(CopilotObserverRegistration.filename)") }
     var settings: URL { provider.appendingPathComponent("settings.json") }
     var helperRecord: URL { root.deletingLastPathComponent().appendingPathComponent("Orchestration/bin/identity-helper.json") }
+    var cmuxHooksMarker: URL { home.appendingPathComponent("cmux-hooks-installed") }
     var registration: CopilotObserverRegistration {
         CopilotObserverRegistration(home: home, root: root, helper: helper,
                                     alternateHome: nil, processHome: home.path)
@@ -101,6 +102,8 @@ struct ObserverSetupFiles: CopilotSetupFileSystem {
     var foreignCMUXHooks: String?
     func executable(selected: URL?, path: String) throws -> URL { fixture.helper }
     func foreignCMUXHooksRemaining() -> String? { foreignCMUXHooks }
+    /// Records that standalone setup wrote the CMUX hooks (only after the plugin is published).
+    func installCMUXHooks() throws { try fixture.write(Data("written".utf8), to: fixture.cmuxHooksMarker) }
     func preparePlugin(root: URL, helper: URL, controller: URL, skill: URL) throws -> URL {
         if failPrepare { throw CopilotFileError.io }
         try fixture.write(["helper": helper.path], to: fixture.helperRecord)
@@ -188,8 +191,8 @@ actor ObserverSetupRunner: CopilotSetupProcessRunner {
         })
     }
     /// Like real discovery: rows appear exactly while the CMUX hooks file exists on disk.
-    func reportCMUXHooksWhenWritten() {
-        reportCMUXHooks(fromMetadataCall: 1, enabled: true)
+    func reportCMUXHooksWhenWritten(absolute: Bool = false) {
+        reportCMUXHooks(fromMetadataCall: 1, enabled: true, absolute: absolute)
         cmuxRowsWhenWritten = true
     }
     func nativePlugin(enabled: Bool = true, loseReceipt: Bool = false,
@@ -609,6 +612,40 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: [false, true])
+    func resourceOnlyRestoreRemovesTheCMUXHooksItWrote(absolute: Bool) async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try FileManager.default.removeItem(at: file)  // an install from before this file existed
+        await value.runner.nativePlugin(enabled: false)
+        await value.runner.reportCMUXHooksWhenWritten(absolute: absolute)
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        let before = try value.record()
+        _ = try await value.checkpoint(id: id).perform("apply")
+        #expect(FileManager.default.fileExists(atPath: file.path))
+        _ = try await value.checkpoint(id: id).perform("restore")
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        try value.verifyRestored(before)
+        _ = try await value.checkpoint(id: id).perform("release")
+    }
+
+    @Test func coordinatedPrepareNamesAForeignCMUXHooksFile() async throws {
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        let file = value.fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try value.fixture.write(Data("{\"version\":1,\"hooks\":{}}".utf8), to: file)
+        do {
+            _ = try await value.checkpoint().perform("prepare")
+            Issue.record("A foreign CMUX hooks file must refuse coordinated prepare")
+        } catch let conflict as CopilotRegistrationConflict {
+            #expect(conflict.message.contains(file.path))
+        }
+        #expect(try Data(contentsOf: file) == Data("{\"version\":1,\"hooks\":{}}".utf8))
+    }
+
     @Test func checkpointTreatsCMUXHooksWrittenDuringApplyAsMaestroOwned() async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }
         await value.runner.reportCMUXHooksWhenWritten()
@@ -1244,6 +1281,32 @@ struct CopilotObserverRegistrationTests {
             #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
             #expect(await perform(setup(fixture, runner: runner), fixture) == .installed)
         }
+    }
+
+    @Test func standaloneSetupWritesCMUXHooksOnlyAfterThePluginIsPublished() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        await runner.configure(result: .exited(1))
+        guard case .incomplete = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("A failed plugin command must leave setup incomplete"); return
+        }
+        #expect(!FileManager.default.fileExists(atPath: fixture.cmuxHooksMarker.path))
+        let healthy = try ObserverFixture(); defer { try? healthy.clean() }
+        #expect(await perform(setup(healthy, runner: ObserverSetupRunner(healthy)), healthy) == .installed)
+        #expect(FileManager.default.fileExists(atPath: healthy.cmuxHooksMarker.path))
+    }
+
+    @Test func aForeignFileAtTheCMUXHooksNameIsScannedForTheHelper() async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let runner = ObserverSetupRunner(fixture)
+        let file = fixture.provider.appendingPathComponent("hooks/\(CopilotCMUXHooks.filename)")
+        try fixture.write(try CopilotSetupJSON.data(["version": 1, "hooks": CopilotPluginManifest.observerHooks(helper: fixture.helper)]),
+                          to: file)
+        guard case .conflict(let reason) = await perform(setup(fixture, runner: runner), fixture) else {
+            Issue.record("A foreign file calling the helper must refuse setup"); return
+        }
+        #expect(reason.contains("refers to the observer helper"))
+        #expect(try CopilotSetupFileState.read(fixture.file).data == nil)  // no owned observer file written
     }
 
     @Test func aDisabledCMUXHookIsAnAccountedDisableKeyNotAnUnresolvedOne() async throws {
