@@ -2678,8 +2678,57 @@ test("born managed: nothing is decided until Copilot holds the session, then one
   assert.equal(f.calls.enroll.length, 1);
 });
 
-test("born managed: a second holder of the session suspends every managed operation, latched", async (t) => {
-  // Tab A enrolled as the session's sole holder; tab B later resumes the same session.
+// Tab A enrolled as the session's sole holder; tab B later resumes the same session. Each privileged
+// operation is the first call after that, on a fresh fixture, so its own custody check is what refuses.
+async function ambiguousCustody(t) {
+  let ambiguous = false;
+  const f = await bornFixture(t, { checkCustody: async () => {
+    if (ambiguous) throw new Error("Maestro session custody is ambiguous; management is unavailable.");
+  } });
+  await f.launch(1);
+  assert.equal((await readiness(f)).status, "managed");
+  ambiguous = true;
+  return { ...f, checks: f.calls.custody.length };
+}
+
+const otherTarget = (f) => ({ workerId: randomUUID(), workspaceId: f.own.workspaceId, surfaceId: randomUUID(),
+  sessionId: randomUUID(), generation: 1 });
+for (const [name, call] of [
+  ["maestro_identity", (f) => f.tools.maestro_identity({})],
+  ["maestro_peers", (f) => f.tools.maestro_peers({})],
+  ["maestro_send", (f) => f.tools.maestro_send({ destination: managedAddress(f.bindings[1]), body: "x" })],
+  ["maestro_spawn", (f) => f.tools.maestro_spawn({ name: "w", cwd: "/tmp", task: "t" })],
+  ["maestro_close", (f) => f.tools.maestro_close({ target: otherTarget(f) })],
+]) {
+  test(`born managed: ${name} first after a second session holder refuses by its own custody check`, async (t) => {
+    const f = await ambiguousCustody(t);
+    assert.equal((await call(f)).resultType, "failure");
+    assert.ok(f.calls.custody.length > f.checks, "the operation itself checked custody");
+    assert.equal(f.sends.length, 0, "nothing reached a peer");
+    assert.deepEqual((await readiness(f)).managed.reason, "session-custody-lost");
+  });
+}
+
+test("born managed: readiness first after a second session holder reports custody lost", async (t) => {
+  const f = await ambiguousCustody(t);
+  assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
+    reason: "session-custody-lost", message: ENROLLMENT_MESSAGES["session-custody-lost"] });
+  assert.ok(f.calls.custody.length > f.checks);
+});
+
+test("born managed: an inbound message first after a second session holder is not delivered", async (t) => {
+  const f = await ambiguousCustody(t);
+  let dropped = false;
+  f.events.once("drop", () => { dropped = true; });
+  await f.peerTools[1].maestro_send({ destination: managedAddress(f.own), body: "synthetic" });
+  for (let i = 0; i < 200 && !dropped && f.calls.sent.length === 0; i++) await delay(10);
+  assert.equal(f.calls.sent.length, 0);
+  assert.ok(dropped);
+  assert.ok(f.calls.custody.length > f.checks);
+  assert.equal((await readiness(f)).managed.reason, "session-custody-lost");
+});
+
+test("born managed: custody loss is latched; its end does not restore stale authority", async (t) => {
   let ambiguous = false;
   const f = await bornFixture(t, { checkCustody: async () => {
     if (ambiguous) throw new Error("Maestro session custody is ambiguous; management is unavailable.");
@@ -2688,29 +2737,17 @@ test("born managed: a second holder of the session suspends every managed operat
   const toA = { destination: managedAddress(f.own), body: "synthetic" };
   f.peerTools[1].maestro_send(toA);
   for (let i = 0; i < 200 && f.calls.sent.length === 0; i++) await delay(10);
-  assert.equal(f.calls.sent.length, 1);
+  assert.equal(f.calls.sent.length, 1, "delivered while held");
   assert.deepEqual(f.calls.custody.at(-1), { controller: "/synthetic/controller", request: { identity: {
     nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId, generation: 1,
     capability: f.own.capability } } });
   ambiguous = true;
-  for (const [name, args] of [["maestro_peers", {}], ["maestro_identity", {}],
-    ["maestro_send", { destination: managedAddress(f.bindings[1]), body: "x" }],
-    ["maestro_spawn", { name: "w", cwd: "/tmp", task: "t" }],
-    ["maestro_close", { target: { workerId: randomUUID(), workspaceId: f.own.workspaceId, surfaceId: randomUUID(),
-      sessionId: randomUUID(), generation: 1 } }]]) {
-    assert.equal((await f.tools[name](args)).resultType, "failure", name);
-  }
-  const drops = once(f.events, "drop");
-  await f.peerTools[1].maestro_send(toA);
-  await drops;
-  assert.equal(f.calls.sent.length, 1, "no inbound delivery while custody is ambiguous");
-  assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
-    reason: "session-custody-lost", message: ENROLLMENT_MESSAGES["session-custody-lost"] });
-  assert.equal(f.sends.length, 0);
-  // The ambiguity ending does not restore stale authority; only the next join re-checks it.
+  assert.equal((await f.tools.maestro_peers({})).resultType, "failure");
   ambiguous = false;
   const checks = f.calls.custody.length;
-  assert.equal((await f.tools.maestro_peers({})).resultType, "failure");
+  for (const name of ["maestro_peers", "maestro_identity"]) {
+    assert.equal((await f.tools[name]({})).resultType, "failure");
+  }
   assert.equal((await readiness(f)).status, "diagnostic-only");
   assert.equal(f.calls.custody.length, checks);
 });
