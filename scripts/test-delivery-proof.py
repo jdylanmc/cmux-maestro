@@ -3409,6 +3409,10 @@ class LifecycleFailureTests(unittest.TestCase):
             (["copilot", "--resume", "--deny-tool=unrecorded", "--yolo"], {}, "default", "parent-launch-flags"),
             (["copilot", "-n", "--yolo"], {}, "default", "parent-launch-flags"),
             (["copilot", "--yolo", "--disable-builtin-mcps"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--allow-all", "--agent", "readonly"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--agent=readonly", "--allow-all"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--allow-all", "--config-dir=/synthetic/restricted"],
+             {}, "default", "parent-launch-flags"),
         ):
             with self.subTest(argv=argv, assignment=assignment):
                 self.state = copy.deepcopy(initial)
@@ -3423,6 +3427,8 @@ class LifecycleFailureTests(unittest.TestCase):
                 child = self.state["nodes"][child_id]
                 self.assertEqual(child["permissionMode"], mode)
                 self.assertEqual(child["toolPolicy"]["deny"], ["web"])
+                if mode == "default":
+                    self.assertNotIn("--allow-all", CONTROLLER["recorded_launch_flags"](child))
                 self.assertEqual(self.state["nodes"][parent_id]["permissionMode"],
                                  "yolo" if assignment.get("yolo") is False else mode)
                 read.assert_called_once_with(12346)

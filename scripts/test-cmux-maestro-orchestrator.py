@@ -1976,6 +1976,12 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             ["--yolo", "--excluded-tools=write"], ["--yolo", "--disallow-temp-dir"],
             ["--yolo", "--disable-mcp-server", "github-mcp-server"],
             ["--yolo", "--disable-builtin-mcps"],
+            ["--allow-all", "--agent", "readonly"],
+            ["--agent=readonly", "--allow-all"],
+            ["--allow-all", "--config-dir", "/synthetic/restricted"],
+            ["--config-dir=/synthetic/restricted", "--yolo"],
+            ["--allow-all", "--profile", "readonly"],
+            ["--profile=readonly", "--allow-all"],
         ):
             with self.subTest(flags=flags):
                 self.assertFalse(parse(["copilot", *flags]))
