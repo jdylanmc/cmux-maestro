@@ -3941,7 +3941,7 @@ def process_custody(node, probe, table, uid, shared):
     try:
         markers = probe.markers(node["copilotSessionId"])
     except (OSError, OrchestrationError):
-        return "no-custody", None
+        return "scan-incomplete", None  # an unreadable session directory proves nothing either way
     live = []
     for pid, birth in markers:
         owner = probe.identity(pid)

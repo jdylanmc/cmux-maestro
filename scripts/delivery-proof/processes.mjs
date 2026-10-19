@@ -27,50 +27,107 @@ export function runProcessObserve(controller = process.env.CMUX_MAESTRO_ORCHESTR
 }
 
 // Periodic passes only matter while this session has its own work to watch: a non-helper owned
-// process, a detached one, or an incomplete or missing entry.
+// process, a retained detached or exited one (so it expires), or an incomplete or missing entry.
 export function sessionNeedsWatching(projection, sessionId) {
   const nodes = (Array.isArray(projection?.nodes) ? projection.nodes : [])
     .filter(node => node?.copilotSessionId === sessionId);
   if (nodes.length === 0) return true;
   return nodes.some(node => node.state === "scan-incomplete" || (Array.isArray(node.processes) &&
-    node.processes.some(item => item?.state === "escaped" ||
+    node.processes.some(item => item?.state === "escaped" || item?.state === "exited" ||
       (item?.state === "owned-current" && item?.group === "separate"))));
 }
+
+const MAX_PENDING_RUNS = 3;
 
 export function createProcessObserver({ run = runProcessObserve, intervalMs = SCAN_INTERVAL_MS,
   debounceMs = SCAN_DEBOUNCE_MS, now = Date.now, timers = globalThis, sessionId = process.env.SESSION_ID,
   projection = publishedProjection(), stat = file => fs.stat(file), read = file => fs.readFile(file, "utf8") } = {}) {
   let active = false;
   let timer;
+  let retry;
   let inFlight = null;
   let last = -Infinity;
-  let watched = { mtimeMs: NaN, needed: true };
-  const needed = async info => {
-    if (info.mtimeMs !== watched.mtimeMs) {
-      let value = true;
+  // The earliest event no pass has covered yet: a pass covers it only if it began after it.
+  let pendingSince = null;
+  let pendingRuns = 0;
+  let cached = { mtimeMs: NaN, observedAt: -Infinity, needed: true };
+  const load = async () => {
+    const info = await stat(projection).catch(() => null);
+    if (!info) return { mtimeMs: NaN, observedAt: -Infinity, needed: true };
+    if (info.mtimeMs !== cached.mtimeMs) {
+      let observedAt = -Infinity;
+      let needed = true;
       try {
-        if (info.size <= MAX_PROJECTION) value = sessionNeedsWatching(JSON.parse(await read(projection)), sessionId);
+        if (info.size <= MAX_PROJECTION) {
+          const value = JSON.parse(await read(projection));
+          const parsed = Date.parse(value?.observedAt);
+          if (Number.isFinite(parsed)) observedAt = parsed;
+          needed = sessionNeedsWatching(value, sessionId);
+        }
       } catch {}
-      watched = { mtimeMs: info.mtimeMs, needed: value };
+      cached = { mtimeMs: info.mtimeMs, observedAt, needed };
     }
-    return watched.needed;
+    return cached;
   };
-  const trigger = (periodic = false) => {
-    if (!active || inFlight || now() - last < debounceMs) return inFlight ?? undefined;
-    last = now();
+  const later = ms => {
+    if (retry !== undefined || !active) return;
+    retry = timers.setTimeout(() => { retry = undefined; attempt(false); }, Math.max(0, ms));
+    retry?.unref?.();
+  };
+  const settle = state => {
+    if (pendingSince !== null && state.observedAt >= pendingSince) {
+      pendingSince = null;
+      pendingRuns = 0;
+    }
+  };
+  const attempt = periodic => {
+    if (!active) return undefined;
+    if (inFlight) return inFlight;  // its finally retries anything still pending
+    if (now() - last < debounceMs) {
+      if (pendingSince !== null) later(last + debounceMs - now());
+      return undefined;
+    }
     inFlight = (async () => {
-      const info = await stat(projection).catch(() => null);
-      // Another session's pass just covered every managed node, this one included.
-      if (info && now() - info.mtimeMs < SHARED_FRESH_MS) return;
-      if (periodic && info && !await needed(info)) return;
+      const state = await load();
+      settle(state);
+      if (pendingSince === null) {
+        // Nothing pending; a periodic check runs only for its own work, and never right after
+        // another session's pass, which covered every managed node.
+        if (!periodic || !state.needed || now() - state.mtimeMs < SHARED_FRESH_MS) return;
+      } else if (now() - state.observedAt < SHARED_FRESH_MS) {
+        // The controller would refuse a pass this soon; ask once it accepts one.
+        later(state.observedAt + SHARED_FRESH_MS - now());
+        return;
+      }
+      last = now();
       await run();
-    })().catch(() => {}).finally(() => { inFlight = null; });
+      if (pendingSince !== null) {
+        settle(await load());
+        // Give up on an event after a few passes that never published, rather than spin.
+        if (pendingSince !== null && ++pendingRuns >= MAX_PENDING_RUNS) {
+          pendingSince = null;
+          pendingRuns = 0;
+        }
+      }
+    })().catch(() => {}).finally(() => {
+      inFlight = null;
+      if (pendingSince !== null) later(debounceMs);
+    });
     return inFlight;
+  };
+  // Every hook event (and becoming managed) must be covered by a pass that starts after it.
+  const trigger = () => {
+    if (!active) return undefined;
+    pendingSince ??= now();
+    return attempt(false);
   };
   const stop = () => {
     active = false;
     timers.clearInterval(timer);
+    timers.clearTimeout(retry);
     timer = undefined;
+    retry = undefined;
+    pendingSince = null;
   };
   return {
     get active() { return active; },
@@ -79,7 +136,7 @@ export function createProcessObserver({ run = runProcessObserve, intervalMs = SC
       if (active) return;
       active = true;
       trigger();
-      timer = timers.setInterval(() => trigger(true), intervalMs);
+      timer = timers.setInterval(() => attempt(true), intervalMs);
       timer?.unref?.();
     },
     stop,

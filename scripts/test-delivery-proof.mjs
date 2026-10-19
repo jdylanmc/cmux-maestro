@@ -2767,43 +2767,99 @@ function processObserverFixture() {
   let clock = 0;
   const runs = [];
   const intervals = [];
-  const f = { published: null, reads: 0 };
+  const timeouts = [];
+  const f = { published: null, reads: 0, own: [] };
+  // A pass publishes at its start time, like the controller's observedAt.
+  const publish = at => {
+    f.published = { mtimeMs: at + 100, value: { observedAt: new Date(at).toISOString(),
+      nodes: [{ copilotSessionId: "own", state: "owned-current", processes: f.own }] } };
+  };
   f.observer = createProcessObserver({
-    now: () => clock, run: async () => { runs.push(clock); }, sessionId: "own",
+    now: () => clock, run: async () => { runs.push(clock); if (!f.silent) publish(clock); }, sessionId: "own",
     stat: async () => f.published && { mtimeMs: f.published.mtimeMs, size: 10 },
     read: async () => { f.reads++; return JSON.stringify(f.published.value); },
-    timers: { setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.at(-1); },
-      clearInterval: handle => { if (handle) handle.cleared = true; } },
+    timers: {
+      setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.at(-1); },
+      clearInterval: handle => { if (handle) handle.cleared = true; },
+      setTimeout: (fn, ms) => { timeouts.push({ fn, at: clock + ms, cleared: false }); return timeouts.at(-1); },
+      clearTimeout: handle => { if (handle) handle.cleared = true; },
+    },
   });
-  return Object.assign(f, { runs, intervals, now: () => clock, advance: ms => { clock += ms; } });
+  // Advances the clock, firing due timeouts and settling each pass they start.
+  const advance = async ms => {
+    const end = clock + ms;
+    for (;;) {
+      const due = timeouts.filter(item => !item.cleared && !item.fired && item.at <= end).sort((a, b) => a.at - b.at)[0];
+      if (!due) break;
+      clock = Math.max(clock, due.at);
+      due.fired = true;
+      due.fn();
+      await settle();
+    }
+    clock = end;
+  };
+  const settle = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+  const tick = async () => { await intervals[0].fn(); await settle(); };
+  return Object.assign(f, { runs, intervals, advance, settle, tick, publish, now: () => clock });
 }
 
-test("owned-process checks skip the controller when a shared pass is fresh or this session is idle", async () => {
+test("owned-process checks skip the controller when a shared pass covered the event or this session is idle", async () => {
   const f = processObserverFixture();
-  const idle = { nodes: [{ copilotSessionId: "own", state: "owned-current", processes: [
-    { state: "owned-current", group: "provider" }] }] };
-  f.published = { mtimeMs: -500, value: idle };
+  f.publish(-1_000);  // another session's pass began before this session became managed
   f.observer.start();
-  await f.observer.trigger();
-  assert.deepEqual(f.runs, [], "another session's pass 0.5 s ago already covered this one");
-  f.advance(10_000);
-  await f.intervals[0].fn();
-  assert.deepEqual(f.runs, [], "an idle session's interval check never starts the controller");
-  f.advance(10_000);
-  await f.intervals[0].fn();
-  assert.equal(f.reads, 1, "an unchanged projection is read once");
-  f.advance(3_000);
+  await f.settle();
+  await f.advance(2_000);
+  assert.deepEqual(f.runs, [1_000], "becoming managed is covered only by a pass that starts after it");
+  await f.tick();
+  await f.advance(10_000);
+  await f.tick();
+  assert.deepEqual(f.runs, [1_000], "an idle session's interval check never starts the controller");
+  const reads = f.reads;
+  await f.advance(10_000);
+  await f.tick();
+  assert.equal(f.reads, reads, "an unchanged projection is read once");
+  f.publish(f.now() + 500);  // a later shared pass
+  await f.advance(1_000);
+  await f.tick();
+  assert.deepEqual(f.runs, [1_000], "a fresh shared pass is reused");
+  f.own = [{ state: "owned-current", group: "separate" }];
+  await f.advance(3_000);
   await f.observer.hooks({}).hooks.onPostToolUse();
-  await f.observer.trigger();
-  assert.deepEqual(f.runs, [23_000], "tool use still asks");
-  f.published = { mtimeMs: 23_000, value: { nodes: [{ copilotSessionId: "own", state: "owned-current",
-    processes: [{ state: "owned-current", group: "separate" }] }] } };
-  f.advance(10_000);
-  await f.intervals[0].fn();
-  assert.deepEqual(f.runs, [23_000, 33_000], "own background work is watched every interval");
+  await f.settle();
+  assert.equal(f.runs.length, 2, "tool use asks");
+  await f.advance(10_000);
+  await f.tick();
+  assert.equal(f.runs.length, 3, "own background work is watched every interval");
 });
 
-test("a session is watched only for its own work, detached processes or an incomplete scan", () => {
+test("a hook event inside the debounce or a fresh shared pass is never lost", async () => {
+  const f = processObserverFixture();
+  f.observer.start();
+  await f.settle();
+  assert.deepEqual(f.runs, [0]);
+  await f.advance(1_000);
+  // A tool starts a dev server; its hook lands inside the debounce, and the projection says idle.
+  await f.observer.hooks({}).hooks.onPostToolUse();
+  await f.settle();
+  assert.deepEqual(f.runs, [0]);
+  await f.advance(1_500);
+  assert.deepEqual(f.runs, [0, 2_000], "one trailing pass after the debounce");
+  // A shared pass that began before the event does not cover it.
+  f.publish(f.now() - 200);
+  await f.observer.hooks({}).hooks.onAgentStop();
+  await f.settle();
+  await f.advance(2_000);
+  assert.deepEqual(f.runs, [0, 2_000, 4_300], "asked once the controller accepts a pass");
+  // A controller that never publishes is asked a bounded number of times.
+  f.silent = true;
+  await f.advance(2_000);
+  await f.observer.trigger();
+  await f.settle();
+  await f.advance(20_000);
+  assert.equal(f.runs.length, 6);
+});
+
+test("a session is watched only for its own work, retained events or an incomplete scan", () => {
   const node = (state, processes) => ({ copilotSessionId: "own", state, processes });
   assert.equal(sessionNeedsWatching({ nodes: [] }, "own"), true);
   assert.equal(sessionNeedsWatching({ nodes: [{ ...node("owned-current", []), copilotSessionId: "other" }] }, "own"), true);
@@ -2811,35 +2867,32 @@ test("a session is watched only for its own work, detached processes or an incom
   assert.equal(sessionNeedsWatching({ nodes: [node("no-custody", [])] }, "own"), false);
   assert.equal(sessionNeedsWatching({ nodes: [node("scan-incomplete", [])] }, "own"), true);
   assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [{ state: "escaped", group: "separate" }])] }, "own"), true);
-  assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [{ state: "exited", group: "separate" }])] }, "own"), false);
+  assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [{ state: "exited", group: "separate" }])] }, "own"), true);
+  assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [{ state: "owned-current", group: "provider" }])] }, "own"), false);
 });
 
-test("owned-process passes wait for management, then run on a bounded interval and debounce", async () => {
+test("owned-process passes wait for management, then stop at session end", async () => {
   const f = processObserverFixture();
   const config = f.observer.hooks({ tools: [] });
   await config.hooks.onPostToolUse({}, {});
+  await f.settle();
   assert.deepEqual(f.runs, [], "an unmanaged session never asks for a pass");
+  f.own = [{ state: "owned-current", group: "separate" }];
   f.observer.start();
   f.observer.start();
-  await f.observer.trigger();
+  await f.settle();
   assert.deepEqual(f.runs, [0]);
   assert.deepEqual(f.intervals.map(item => item.ms), [10_000], "one bounded interval");
-  f.advance(1_000);
-  await config.hooks.onPostToolUse({}, {});
-  await config.hooks.onAgentStop({}, {});
-  assert.deepEqual(f.runs, [0], "tool use within the debounce does not ask again");
-  f.advance(1_500);
-  await config.hooks.onAgentStop({}, {});
-  await f.observer.trigger();
-  assert.deepEqual(f.runs, [0, 2_500]);
-  f.advance(10_000);
-  await f.intervals[0].fn();
-  assert.equal(f.runs.length, 3);
+  await f.advance(10_000);
+  await f.tick();
+  assert.equal(f.runs.length, 2);
   await config.hooks.onSessionEnd({ reason: "user_exit" }, {});
   assert.ok(f.intervals[0].cleared && !f.observer.active);
-  f.advance(10_000);
-  await f.intervals[0].fn();
-  assert.equal(f.runs.length, 3, "nothing runs after the session ends");
+  await f.advance(10_000);
+  await f.tick();
+  await config.hooks.onPostToolUse({}, {});
+  await f.advance(10_000);
+  assert.equal(f.runs.length, 2, "nothing runs after the session ends");
 });
 
 test("owned-process hooks keep existing handlers and their results", async () => {

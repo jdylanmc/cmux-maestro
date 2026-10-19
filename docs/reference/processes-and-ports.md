@@ -31,9 +31,9 @@ Each pass is bounded: 5 s per tool, about 100 ms in practice for one `ps`, one `
 | Node `state` | Meaning |
 | --- | --- |
 | `owned-current` | Custody verified this pass; the list is complete. |
-| `scan-incomplete` | Custody verified, but `lsof` failed or a descendant belongs to another user: the list shows what was proven. If either `ps` failed, or the provider was missing or changed during the pass, the last list is kept unchanged. Only a complete pass classifies an escape. |
+| `scan-incomplete` | Custody verified, but `lsof` failed or a descendant belongs to another user: the list shows what was proven. If either `ps` failed, the session directory could not be read, or the provider was missing or changed during the pass, the last list is kept unchanged. Only a complete pass classifies an escape. |
 | `denied` | The provider runs as another user. No list. |
-| `no-custody` | No live lock for the session, or a stale one. No list. |
+| `no-custody` | The session directory was read and holds no live lock (none, or only stale ones). No list. |
 | `ambiguous` | Another process holds the session's lock, or two nodes record one provider. No list. |
 | `exited` | The provider is gone; only retained detached or exited entries remain. |
 
@@ -49,10 +49,12 @@ Bounds per node: 32 owned processes, 16 retained `escaped` or `exited`, 8 listen
 
 ## Triggers
 
-`processes.mjs`, installed next to `adapter.mjs` and `extension.mjs`, decides when a session asks. Before it starts the controller, it checks `observer/processes.json`: if any session's pass wrote it under 2 s ago, it does nothing.
+`processes.mjs`, installed next to `adapter.mjs` and `extension.mjs`, decides when a session asks. Before it starts the controller, it checks `observer/processes.json`: a pass that began after the event already covers it, and with nothing pending a pass written under 2 s ago by any session means no request.
 - When the session becomes managed (a launched worker, or a born root once enrolled): one request.
 - After `postToolUse` and `agentStop`: one request, at most once every 2 s.
-- Every 10 s while the session runs, only while its own entry has a `separate` owned process, an `escaped` one, or `scan-incomplete`, or has no entry yet. An idle session only reads the file's metadata, and parses it again only when it changed.
+- Every 10 s while the session runs, only while its own entry has a `separate` owned process, a retained `escaped` or `exited` one (so it expires), or `scan-incomplete`, or has no entry yet. An idle session only reads the file's metadata, and parses it again only when it changed.
+
+A hook event is never dropped by the debounce or by another session's pass: it stays pending until the file's `observedAt` is at or after the event, with one trailing request once the debounce or the controller's 2 s interval allows, and at most 3 requests per event if no pass publishes.
 
 It stops at `sessionEnd` and on shutdown. Unmanaged sessions never ask. Output is ignored; a failed pass waits for the next. If the module is missing, `extension.mjs` runs without it, and `messaging_configuration` refuses the install (`processes.mjs`, at most 16 KiB).
 

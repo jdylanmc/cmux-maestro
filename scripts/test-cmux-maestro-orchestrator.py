@@ -6786,6 +6786,23 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertEqual((node["state"], [(item["pid"], item["state"]) for item in node["processes"]]),
                                  ("scan-incomplete", [(101, "owned-current")]))
 
+    def test_an_unreadable_session_directory_keeps_the_last_list(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "server")}
+        identities = {100: (int(self.start), 0), 101: (int(self.start) + 1, 3)}
+        markers = {"s-a": [(100, self.start + 5)]}
+        _, previous = self.observe(self.state(self.node()), FakeProcessProbe([table], identities, markers=markers))
+
+        class Unreadable(FakeProcessProbe):
+            def markers(self, session):
+                raise CONTROLLER_API["OrchestrationError"]("Close session source exceeds its inspection bound.")
+
+        node, failed = self.observe(self.state(self.node()), Unreadable([table], identities), previous, at=self.at + 10)
+        self.assertEqual((node["a"]["state"], [(item["pid"], item["state"]) for item in node["a"]["processes"]]),
+                         ("scan-incomplete", [(101, "owned-current")]))
+        recovered = self.observe(self.state(self.node()), FakeProcessProbe([table], identities, markers=markers),
+                                 failed, at=self.at + 20)[0]["a"]
+        self.assertEqual((recovered["state"], [item["pid"] for item in recovered["processes"]]), ("owned-current", [101]))
+
     def test_helpers_are_whole_subtrees_and_a_detached_process_is_never_reattributed(self):
         # 101 is an MCP server (provider group); 105 is the browser it started in its own group.
         table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 100, "node"),
