@@ -3415,6 +3415,12 @@ class LifecycleFailureTests(unittest.TestCase):
             (["copilot", "--agent=readonly", "--allow-all"], {}, "default", "parent-launch-flags"),
             (["copilot", "--allow-all", "--config-dir=/synthetic/restricted"],
              {}, "default", "parent-launch-flags"),
+            (["copilot", "--yolo", "--plugin-dir", "/synthetic/guard"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--plugin-dir=/synthetic/guard", "--allow-all"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--allow-all", "--extension-sdk-path=/synthetic/sdk"],
+             {}, "default", "parent-launch-flags"),
+            (["copilot", "--yolo", "--additional-mcp-config", '{"mcpServers":{}}'],
+             {}, "default", "parent-launch-flags"),
         ):
             with self.subTest(argv=argv, assignment=assignment):
                 self.state = copy.deepcopy(initial)

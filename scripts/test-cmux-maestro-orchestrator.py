@@ -1959,8 +1959,11 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             ["--yolo"], ["--allow-all"], ["--allow-all=true"], ["--yolo=true"],
             ["--allow-all-tools", "--allow-all-paths", "--allow-all-urls"],
             ["--allow-all-paths=true", "--allow-all-tools=true", "--allow-all-urls=true"],
-            ["--resume", "--yolo"], ["-r", "--allow-all"], ["--share-gist", "--yolo"],
+            ["--share", "--yolo"], ["--mouse", "--allow-all"], ["--share-gist", "--yolo"],
             ["--allow-tool", "--yolo"],
+            ["--yolo", "--model", "synthetic", "--context=default", "--reasoning-effort=low",
+             "--name", "Review", "--log-dir", "/synthetic/log", "--max-ai-credits=10",
+             "--no-auto-update", "--experimental"],
         ):
             with self.subTest(flags=flags):
                 self.assertTrue(parse(["copilot", *flags]))
@@ -1985,6 +1988,41 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
         ):
             with self.subTest(flags=flags):
                 self.assertFalse(parse(["copilot", *flags]))
+
+    def test_loading_or_selecting_unreplayed_configuration_never_proves_allow_all(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        selectors = {
+            "--plugin-dir": "/synthetic/guard",
+            "--extension-sdk-path": "/synthetic/sdk",
+            "--additional-mcp-config": '{"mcpServers":{}}',
+            "--add-dir": "/synthetic/trusted",
+            "-C": "/synthetic/workspace",
+            "--add-github-mcp-toolset": "repos",
+            "--add-github-mcp-tool": "get_file_contents",
+            "--enable-mcp-server": "guard",
+            "--mcp-github-auth": "guard=https://example.test",
+            "--dynamic-retrieval": "skills=on",
+            "--mode": "plan",
+            "--session-id": "00000000-0000-4000-8000-000000000001",
+            "--resume": "00000000-0000-4000-8000-000000000001",
+            "-r": "00000000-0000-4000-8000-000000000001",
+            "--connect": "00000000-0000-4000-8000-000000000001",
+            "--bash-env": "on",
+            "--secret-env-vars": "SYNTHETIC_SECRET",
+        }
+        for flag, value in selectors.items():
+            forms = ([flag, value], [f"{flag}={value}"]) if flag.startswith("--") else ([flag, value],)
+            for form in forms:
+                for grant in ("--allow-all", "--yolo"):
+                    with self.subTest(flag=flag, form=form, grant=grant):
+                        self.assertFalse(parse(["copilot", grant, *form]))
+        for flag in (
+            "--continue", "--fleet", "--enable-memory", "--plan", "--acp", "--remote",
+            "--remote-export", "--no-ask-user", "--no-experimental",
+            "--allow-all-mcp-server-instructions",
+        ):
+            with self.subTest(flag=flag):
+                self.assertFalse(parse(["copilot", "--yolo", flag]))
 
     def test_unrecorded_deny_flags_do_not_widen_the_parent(self):
         parse = CONTROLLER_API["launch_flags_allow_all"]
