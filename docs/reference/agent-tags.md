@@ -54,6 +54,8 @@ to the same output.
 
 ## Presentation
 
+![Synthetic expanded row with a human automatic-color tag and a human Forest-swatch tag, right-aligned beside the title.](../images/agent-tags/expanded-row-light.png)
+
 - Expanded agent rows (hierarchy, managed rows, Taskboard cards): compact chips inline with the title,
   right-aligned. The title keeps priority; chips that do not fit become `+N`, and the full set stays in
   details and in the row's tooltip and VoiceOver label.
