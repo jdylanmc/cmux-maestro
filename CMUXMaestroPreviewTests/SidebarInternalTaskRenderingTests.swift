@@ -7,7 +7,7 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
     @Test(arguments: [SidebarMode.hierarchy])
-    func review001HistoricalTasksKeepTheirOwnSessionHeading(_ mode: SidebarMode) async throws {
+    func review001EndedSessionOnManagedSurfaceHasNoRow(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
@@ -30,34 +30,21 @@ struct SidebarInternalTaskRenderingTests {
         let mounted = mount(model, preferences, width: 350, now: now, actionNow: { now })
         defer { mounted.window.contentView = nil; mounted.window.close() }
         await sidebarEventually {
-            names(mounted.host).count == 3
-                && buttons(mounted.host).contains { $0.accessibilityLabel() == "Inspect context session 20000000" }
+            names(mounted.host).count == 1
+                && buttons(mounted.host).contains { $0.accessibilityLabel() == "Focus Managed owner" }
         }
         mounted.host.layoutSubtreeIfNeeded()
         let controls = buttons(mounted.host)
         let owner = try #require(controls.first { $0.accessibilityLabel() == "Focus Managed owner" })
-        let context = try #require(controls.first { $0.accessibilityLabel() == "Inspect context session 20000000" })
         let currentTask = try #require(names(mounted.host).first { $0.identifier?.rawValue == "\(data.sessionID):same-task" })
-        let historicalTask = try #require(names(mounted.host).first { $0.identifier?.rawValue == "\(data.otherSessionID):same-task" })
         func frame(_ view: NSView) -> CGRect { mounted.host.convert(view.bounds, from: view) }
         #expect(frame(currentTask).minY > frame(owner).maxY)
-        #expect(frame(context).minY > frame(currentTask).maxY)
-        #expect(frame(historicalTask).minY > frame(context).maxY)
-        #expect(controls.filter { $0.localFocusID?.hasPrefix("task-dismiss:") == true }.count == 3)
-        #expect(model.copilot.tree.dismissibleOutcomes.count == 3)
-        #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 2)
+        #expect(!names(mounted.host).contains { $0.identifier?.rawValue.hasPrefix("\(data.otherSessionID):") == true },
+                "An ended session on another agent's surface has no row or tasks")
+        #expect(!controls.contains { $0.accessibilityLabel()?.contains("20000000") == true })
+        #expect(model.copilot.tree.dismissibleOutcomes.count == 3, "Hiding the row does not change evidence")
         #expect(model.navigation.status == .idle)
-        try capture(mounted.host, name: "review1-exact-session-context-\(mode.rawValue)")
-        let dismiss = try #require(controls.first { $0.localFocusID == "task-dismiss:\(data.otherSessionID):same-task" })
-        dismiss.performClick(nil)
-        await sidebarEventually {
-            names(mounted.host).count == 2
-                && (mounted.window.firstResponder as? SidebarTitleNativeButton)?.localFocusID == "session:\(data.otherSessionID)"
-        }
-        #expect(preferences.history.dismissed.count == 1)
-        #expect(preferences.history.dismissed.first?.sessionID == data.otherSessionID)
-        #expect(model.copilot.tree.dismissibleOutcomes.contains { $0.sessionID == data.sessionID })
-        #expect(model.navigation.status == .idle)
+        try capture(mounted.host, name: "review1-exact-session-only-\(mode.rawValue)")
     }
 
     @Test(arguments: [SidebarHistoryRetention.fifteenSeconds, .never], [SidebarMode.hierarchy])
@@ -134,10 +121,10 @@ struct SidebarInternalTaskRenderingTests {
         try capture(mounted.host, name: "review1-mixed-collapsed-owner-\(mode.rawValue)")
     }
 
-    @Test(arguments: [(280, false), (280, true), (350, false), (350, true), (460, false), (460, true)],
+    @Test(arguments: [280, 350, 460],
           [SidebarMode.hierarchy])
     func combinedProductionOwnerAndTaskDepthKeepsGeometry(
-        _ scenario: (width: Int, retained: Bool), _ mode: SidebarMode
+        _ width: Int, _ mode: SidebarMode
     ) async throws {
         let data = SidebarTreeFixtures(), now = Date(), run = UUID()
         var chain: [SidebarOrchestrationNode] = []
@@ -156,8 +143,7 @@ struct SidebarInternalTaskRenderingTests {
             CopilotChildWork(
                 id: "nested-\(depth)", parentID: depth == 0 ? nil : "nested-\(depth - 1)", kind: .subagent,
                 name: "Provider depth \(depth): " + String(repeating: "combined-long-name-", count: 8) + "suffix-\(depth)",
-                state: scenario.retained ? .completed : .working, model: nil,
-                terminalEvent: scenario.retained ? .init(id: UUID(), timestamp: now) : nil
+                state: .working, model: nil
             )
         }
         let hierarchy = HierarchySnapshot(
@@ -173,17 +159,16 @@ struct SidebarInternalTaskRenderingTests {
                 })
             )], windowID: data.windowID
         )
-        let additional = scenario.retained ? [data.session(id: data.otherSessionID, state: .working, now: now)] : []
         for density in SidebarDensity.allCases {
             let fixture = try SidebarPreferenceFixture()
             defer { fixture.cleanup() }
             let preferences = fixture.preferences()
             preferences.selectedMode = mode
             preferences.setDensity(density)
-            let model = await makeModel(data, children: children, now: now, liveness: scenario.retained ? .dead : .alive,
-                                  additional: additional, managedNodes: chain, hierarchyOverride: hierarchy)
+            let model = await makeModel(data, children: children, now: now, liveness: .alive,
+                                  managedNodes: chain, hierarchyOverride: hierarchy)
             defer { model.setVisible(false) }
-            let mounted = mount(model, preferences, width: scenario.width, reduceMotion: true, now: now)
+            let mounted = mount(model, preferences, width: width, reduceMotion: true, now: now)
             defer { mounted.window.contentView = nil; mounted.window.close() }
             await sidebarEventually {
                 model.orchestration.snapshot.nodes.count == 9 && names(mounted.host).count == 13
@@ -202,7 +187,7 @@ struct SidebarInternalTaskRenderingTests {
             #expect(model.copilot.tree.sessions.first { $0.id == data.sessionID }?.nodes.map(\.depth).max() == 12)
             #expect(chain.count == 9 && SidebarOrchestrationReader.maximumDepth == 8)
             #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 9)
-            let expectedOwner = scenario.retained ? "Inspect work context Managed depth 8" : "Focus Managed depth 8"
+            let expectedOwner = "Focus Managed depth 8"
             let ownerLabels = buttons(mounted.host).map {
                 "\($0.localFocusID ?? "none"): \($0.accessibilityLabel() ?? "none")"
             }
@@ -213,7 +198,7 @@ struct SidebarInternalTaskRenderingTests {
             let metrics = SidebarRenderingEvidence.metrics(for: mounted.host)
             #expect(metrics.documentWidth <= metrics.viewportWidth + 0.5)
             #expect(model.navigation.status == .idle && !mounted.window.isVisible)
-            let name = "review1-combined-owner8-task12-\(scenario.width)-\(mode.rawValue)-\(density.rawValue)-retained-\(scenario.retained)"
+            let name = "review1-combined-owner8-task12-\(width)-\(mode.rawValue)-\(density.rawValue)"
             print("I131 C4 \(name): ownerDepth=8 taskDepth=12 taskRows=\(frames.count) "
                   + "minNameWidth=\(frames.map(\.width).min() ?? 0) "
                   + "rightEdgeSpread=\((frames.map(\.maxX).max() ?? 0) - (frames.map(\.maxX).min() ?? 0)) "
@@ -226,78 +211,6 @@ struct SidebarInternalTaskRenderingTests {
             let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
                 .appendingPathComponent(".build/layout-validation/offscreen")
             try JSONEncoder().encode(geometry).write(to: folder.appendingPathComponent("\(name)-rows.json"))
-        }
-    }
-
-    @Test(arguments: [SidebarMode.hierarchy])
-    func controlledPresentationAgeExpiresRetainedOwnerWithoutChangingObservations(_ mode: SidebarMode) async throws {
-        let fixture = try SidebarPreferenceFixture()
-        defer { fixture.cleanup() }
-        let preferences = fixture.preferences()
-        preferences.selectedMode = mode
-        let data = SidebarTreeFixtures(), observedAt = Date(), terminalID = UUID()
-        let model = await makeModel(data, children: [
-            .init(id: "protected", parentID: nil, kind: .subagent, name: "Protected work",
-                  state: .completed, model: nil, terminalEvent: .init(id: terminalID, timestamp: observedAt))
-        ], now: observedAt, liveness: .dead, managed: true, additional: [
-            data.session(id: data.otherSessionID, state: .working, now: observedAt)
-        ])
-        defer { model.setVisible(false) }
-        await sidebarEventually { model.copilot.tree.generatedAt == observedAt }
-        let observations = model.copilot.tree
-        try #require(observations.availability == .ready && observations.generatedAt == observedAt)
-        try #require(observations.sessions.count == 2 && model.orchestration.snapshot.nodes.count == 1)
-        let originalSession = try #require(observations.sessions.first { $0.id == data.sessionID })
-        let replacement = try #require(observations.sessions.first { $0.id == data.otherSessionID })
-        let owner = try #require(model.orchestration.snapshot.nodes.first)
-        try #require(owner.copilotSessionId == originalSession.id
-                     && owner.workspaceId == data.workspaceA && owner.surfaceId == data.surfaceA)
-        try #require(originalSession.workspaceID == owner.workspaceId && originalSession.surfaceID == owner.surfaceId
-                     && originalSession.liveness == .dead && originalSession.observedAt == observedAt)
-        try #require(replacement.workspaceID == owner.workspaceId && replacement.surfaceID == owner.surfaceId
-                     && replacement.liveness == .alive && replacement.observedAt == observedAt)
-        try #require(originalSession.nodes.count == 1)
-        let child = try #require(originalSession.nodes.first)
-        try #require(child.id == "protected" && child.isInternalTask && child.state == .completed
-                     && child.terminalEvent?.id == terminalID && child.terminalTimestamp == observedAt)
-        let visible = SidebarVisibleWork(
-            tree: observations, managed: [owner], history: preferences.history,
-            showEnded: preferences.showEnded, now: observedAt
-        )
-        try #require(visible.managed.map(\.id) == [owner.id])
-        try #require(visible.tree.sessions.contains { $0.id == originalSession.id })
-        try #require(SidebarPresentation.displacedManagedNodeIDs(
-            [owner], observations: observations, now: observedAt
-        ) == [owner.id])
-        for workspace in model.hierarchy.workspaces { preferences.setIdleTasksVisible(true, in: workspace.id) }
-        let frame = NSRect(x: 0, y: 0, width: 280, height: 900)
-        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        func content(at date: Date) -> some View {
-            SidebarView(model: model, preferences: preferences)
-                .environment(\.sidebarPresentationNow, { date })
-                .environment(\._accessibilityReduceMotion, true)
-        }
-        let host = NSHostingView(rootView: content(at: observedAt))
-        window.contentView = host
-        defer { window.contentView = nil; window.close() }
-        await sidebarEventually {
-            names(host).count == 1
-                && buttons(host).contains { $0.accessibilityLabel() == "Inspect work context Managed owner" }
-        }
-        let original = model.copilot.tree
-        for (age, expected) in [(8.0, "Inspect work context Managed owner"), (8.001, "Focus Managed owner")] {
-            let date = observedAt.addingTimeInterval(age)
-            host.rootView = content(at: date)
-            host.layoutSubtreeIfNeeded()
-            await sidebarEventually { buttons(host).contains { $0.accessibilityLabel() == expected } }
-            let labels = buttons(host).map { "\($0.localFocusID ?? "none"): \($0.accessibilityLabel() ?? "none")" }
-            #expect(buttons(host).contains { $0.accessibilityLabel() == expected }, "Age \(age): \(labels)")
-            #expect(SidebarPresentation.displacedManagedNodeIDs(
-                [owner], observations: model.copilot.tree, now: date
-            ).contains(owner.id) == (age == 8))
-            #expect(model.copilot.tree == original, "Advancing presentation time must not refresh observation evidence")
-            #expect(model.navigation.status == .idle && !window.isVisible)
         }
     }
 

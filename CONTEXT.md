@@ -80,10 +80,6 @@ _Avoid_: sub-agent tab, child agent
 Passive shell, skill, and error history kept out of the outline.
 _Avoid_: noise, log
 
-**Work context**:
-Older content kept visible only because a current descendant, unresolved attention, or incomplete evidence needs it.
-_Avoid_: stale agent
-
 **Dismissal identity**:
 Session UUID, child ID, and terminal-event UUID. Names one dismissible outcome.
 _Avoid_: label match, timestamp match

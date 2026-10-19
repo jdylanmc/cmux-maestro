@@ -54,8 +54,7 @@ Active window footer, Taskboard cards and Beat targets use the same name.
 During observation loss a row keeps its last name for the grace period, but
 the Active window footer shows only a live, confirmed session (otherwise the
 CMUX title), for unmanaged and born-managed rows alike.
-Work-context session rows keep "Session context". Exact session identity stays
-in details.
+Exact session identity stays in details.
 
 Agent icons come from the bundled **Nerd Fonts Symbols 3.5.1** font and its
 pinned glyph-name catalog. No system font installation or uploaded images are

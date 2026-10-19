@@ -411,7 +411,7 @@ struct SidebarRowGroupTests {
     }
 
     private func renderManaged(
-        rootFocused: Bool, contextChildren: [CopilotChildWork]? = nil, preferences: SidebarPreferences
+        rootFocused: Bool, preferences: SidebarPreferences
     ) async throws -> Rendered {
         let now = Date()
         let root = SidebarOrchestrationNode(
@@ -424,14 +424,8 @@ struct SidebarRowGroupTests {
             workspaceId: f.workspaceA, surfaceId: f.surfaceB, generation: 1, phase: "registered", availability: "active",
             copilotSessionId: managedChildSession, executionMode: .interactive, createdAt: now, updatedAt: now
         )
-        var sessions = [f.session(id: managedRootSession, surface: f.surfaceA, state: .idle),
+        let sessions = [f.session(id: managedRootSession, surface: f.surfaceA, state: .idle),
                         f.session(id: managedChildSession, surface: f.surfaceB, state: .idle)]
-        // An earlier, ended session on the root's surface is not the root's own: it lists as a
-        // separate context session row, a top-level `CopilotSessionRow` group.
-        if let contextChildren {
-            sessions.append(f.session(id: secondSession, surface: f.surfaceA, liveness: .dead, children: contextChildren))
-            preferences.setIdleTasksVisible(true, in: f.workspaceA)
-        }
         return try await render(
             surfaces: [surface(f.surfaceA, "Synthetic managed root", focused: rootFocused),
                        surface(f.surfaceB, "Synthetic managed child", focused: !rootFocused),
@@ -440,9 +434,6 @@ struct SidebarRowGroupTests {
         ) { r in
             r.titles.contains { $0.accessibilityLabel() == "Focus Synthetic managed child" }
                 && r.titles.contains { $0.accessibilityLabel() == "Focus Synthetic managed root" }
-                && (contextChildren == nil || r.titles.contains {
-                    $0.accessibilityLabel()?.hasPrefix("Inspect context session") == true
-                })
         }
     }
 
@@ -454,7 +445,7 @@ struct SidebarRowGroupTests {
 
     /// Entering a group anywhere shows the head's actions (…) and no child's. Fails if a head
     /// row loses its `sidebarRowGroupHead` marker, or a nested or child row gains one.
-    @Test(arguments: ["surface", "managed", "context"])
+    @Test(arguments: ["surface", "managed"])
     func groupHoverShowsOnlyTheHeadActionsButton(_ kind: String) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -473,19 +464,11 @@ struct SidebarRowGroupTests {
             children = [try r.title(prefix: "Focus Copilot session Synthetic first"),
                         try r.title(prefix: "Focus Copilot session Synthetic second")]
             entry = try r.task("Synthetic nested child")
-        case "managed":
+        default:
             r = try await renderManaged(rootFocused: false, preferences: fixture.preferences())
             head = try r.title(prefix: "Focus Synthetic managed root")
             children = [try r.title(prefix: "Focus Synthetic managed child")]
             entry = children[0]
-        default:
-            let task = CopilotChildWork(id: "k1", parentID: nil, kind: .subagent, name: "Synthetic context task",
-                                        state: .completed, model: nil, terminalEvent: .init(id: UUID(), timestamp: Date()))
-            r = try await renderManaged(rootFocused: false, contextChildren: [task],
-                                        preferences: fixture.preferences())
-            head = try r.title(prefix: "Inspect context session")
-            children = []
-            entry = try r.task("Synthetic context task")
         }
         defer { r.close() }
         let group = try r.group(containing: head, entry)

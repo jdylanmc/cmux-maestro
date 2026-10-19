@@ -8,7 +8,7 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test func obsoleteRegistrationVisibilityPreservesOnlyNeededContextAndExactObservations() throws {
+    @Test func replacedRegistrationLeavesNoRowAndKeepsLiveDescendants() throws {
         let old = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Previous failed coordinator",
             workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1, phase: "turn-failed",
@@ -21,7 +21,7 @@ struct SidebarClarityTests {
             )
         }
         try validate([old])
-        var observation = managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: .dead)
+        let observation = managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: .dead)
         var current = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil)
         current.attention = [signal(.permission)]
         var tree = SidebarCopilotTree(availability: .partial, sessions: [observation, current],
@@ -35,67 +35,72 @@ struct SidebarClarityTests {
             #expect(visible(tree, showEnded: showEnded).hiddenSurfaces.isEmpty)
         }
         for liveness: AgentProcessLiveness in [.alive, .ambiguous, .unknown] {
-            var noEndProof = tree
-            noEndProof.sessions = [
+            var unverified = tree
+            unverified.sessions = [
                 managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: liveness),
                 current
             ]
-            #expect(visible(noEndProof).managed == [old], "A recorded failed turn is not process-end proof")
+            #expect(visible(unverified).managed == [old], "Two possible sessions on one surface verify no replacement")
         }
+        // A verified replacement leaves no row for the old run, whatever its own evidence still holds.
+        var replaced: [SidebarCopilotTree] = []
         for observedAt in [now.addingTimeInterval(-9), now.addingTimeInterval(2)] {
-            var noEndProof = tree
-            noEndProof.sessions = [managedSession(
+            var candidate = tree
+            candidate.sessions = [managedSession(
                 id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil, liveness: .dead, observedAt: observedAt
             ), current]
-            #expect(visible(noEndProof).managed == [old], "Original death observation must itself be fresh")
+            replaced.append(candidate)
         }
         var absentOld = tree
         absentOld.sessions = [current]
-        #expect(visible(absentOld).managed == [old], "Missing original observation is not death proof")
+        replaced.append(absentOld)
         for kind: AgentAttentionKind in [.answer, .permission, .error] {
-            observation.attention = [signal(kind)]
-            tree.sessions = [observation, current]
-            #expect(visible(tree).managed == [old] && visible(tree).tree.sessions == tree.sessions)
+            var candidate = tree
+            var asking = observation
+            asking.attention = [signal(kind)]
+            candidate.sessions = [asking, current]
+            replaced.append(candidate)
         }
-        observation.attention = []
         for state: AgentWorkState in [.working, .idle, .unknown, .blocked, .failed] {
-            observation.nodes = [node(state: state)]
-            tree.sessions = [observation, current]
-            for showEnded in [false, true] {
-                #expect(visible(tree, showEnded: showEnded).managed == [old])
-                #expect(visible(tree, showEnded: showEnded).tree.sessions.first?.nodes == observation.nodes,
-                        "Unknown/active original child context must survive the Show ended shortcut")
-            }
+            var candidate = tree
+            var busy = observation
+            busy.nodes = [node(state: state)]
+            candidate.sessions = [busy, current]
+            replaced.append(candidate)
         }
-        observation.nodes = []
-        observation.attentionDegraded = true
-        tree.sessions = [observation, current]
-        #expect(visible(tree).managed == [old])
-        observation.attentionDegraded = false
-        tree.sessions = [observation, current]
-        for (degraded, omitted) in [(true, 0), (false, 1)] {
-            var protected = tree
-            protected.sessions[0] = .init(
+        var degraded = tree
+        degraded.sessions[0].attentionDegraded = true
+        replaced.append(degraded)
+        for (treeDegraded, omitted) in [(true, 0), (false, 1)] {
+            var incomplete = tree
+            incomplete.sessions[0] = .init(
                 id: observation.id, workspaceID: observation.workspaceID, surfaceID: observation.surfaceID,
                 liveness: .dead, state: .unknown, model: nil, observedAt: now, nodes: [],
-                childrenComplete: false, treeDegraded: degraded, omittedChildrenCount: omitted, omittedActiveChildrenCount: omitted
+                childrenComplete: false, treeDegraded: treeDegraded, omittedChildrenCount: omitted,
+                omittedActiveChildrenCount: omitted
             )
-            #expect(visible(protected).managed == [old])
+            replaced.append(incomplete)
+        }
+        for candidate in replaced {
+            for showEnded in [false, true] {
+                let result = visible(candidate, showEnded: showEnded)
+                #expect(result.managed.isEmpty, "The replaced run leaves no row")
+                #expect(result.tree.sessions == [current], "Its old observation leaves no row either")
+            }
         }
         for phase in ["reported-blocked", "permission-denied", "reported-failed", "report-missing", "turn-running"] {
-            let protected = SidebarOrchestrationNode(
+            let live = SidebarOrchestrationNode(
                 id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Unresolved child",
                 workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
                 phase: phase, availability: phase == "turn-running" ? "busy" : "idle",
                 copilotSessionId: UUID(), executionMode: .bounded, createdAt: now, updatedAt: now
             )
-            try validate([old, protected])
-            var withReplacement = tree
-            withReplacement.sessions.append(managedSession(id: UUID(), surface: fixtures.surfaceB, model: nil))
-            #expect(visible(withReplacement, nodes: [old, protected]).managed == [old, protected])
+            try validate([old, live])
+            #expect(visible(tree, nodes: [old, live]).managed == [live], "The child stays, without its replaced ancestor")
+            #expect(ManagedHierarchyContent.roots(of: [live]) == [live])
         }
         let child = SidebarOrchestrationNode(
-            id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Context ancestor",
+            id: UUID(), runId: old.runId, parentId: old.id, role: "worker", label: "Ended ancestor",
             workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
             phase: "reported-completed", availability: "idle", copilotSessionId: UUID(),
             createdAt: now, updatedAt: now
@@ -103,16 +108,15 @@ struct SidebarClarityTests {
         let otherCurrent = managedSession(id: UUID(), surface: fixtures.surfaceB, model: nil)
         tree.sessions.append(otherCurrent)
         try validate([old, child])
-        #expect(visible(tree, nodes: [old, child]).managed.isEmpty,
-                "Entire obsolete branches can disappear when none of their nodes are needed")
+        #expect(visible(tree, nodes: [old, child]).managed.isEmpty)
         let grandchild = SidebarOrchestrationNode(
             id: UUID(), runId: old.runId, parentId: child.id, role: "worker", label: "Protected grandchild",
             workspaceId: fixtures.workspaceA, surfaceId: UUID(), generation: 1,
             phase: "permission-denied", availability: "idle", createdAt: now, updatedAt: now
         )
         try validate([old, child, grandchild])
-        #expect(visible(tree, nodes: [old, child, grandchild]).managed == [old, child, grandchild],
-                "A kept grandchild retains the full original managed ancestor chain")
+        #expect(visible(tree, nodes: [old, child, grandchild]).managed == [grandchild],
+                "A live grandchild stays as a root; its ended ancestors leave no rows")
         for availability: SidebarCopilotAvailability in [.waiting, .loading, .hidden, .disconnected, .unavailable] {
             var candidate = tree
             candidate.availability = availability
@@ -127,7 +131,7 @@ struct SidebarClarityTests {
         denied.issues = [.permissionDenied]
         #expect(visible(denied).managed == [old])
         for observations in [
-            [observation], [observation, current, current], [observation, observation, current],
+            [observation], [observation, current, current],
             [observation, current, managedSession(id: UUID(), surface: fixtures.surfaceA, model: nil)],
             [managedSession(id: fixtures.otherSessionID, surface: fixtures.surfaceA, model: nil)],
             [observation, managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil, liveness: .ambiguous)],
@@ -181,7 +185,7 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.rowMetadata(kind: "Agent", activity: "Reading Agent guide") == "Reading Agent guide")
     }
 
-    @Test(arguments: ["Terminal", "Browser", "Surface", "Legacy worker", "Needed context", "Blocked", "Shell", "Skill"])
+    @Test(arguments: ["Terminal", "Browser", "Surface", "Legacy worker", "Blocked", "Shell", "Skill"])
     func nonAgentSubtitleKindsKeepTheirExistingLabels(_ kind: String) {
         #expect(SidebarPresentation.rowMetadata(kind: kind) == kind)
         #expect(SidebarPresentation.rowMetadata(kind: kind, directory: "/synthetic/Agent") == "\(kind) · Agent")
@@ -610,7 +614,8 @@ struct SidebarClarityTests {
             phase: "turn-running", availability: "busy", createdAt: now, updatedAt: now
         )
         #expect(SidebarVisibleWork(tree: tree, managed: [root, failed, child], history: history,
-                                  showEnded: false).managed.count == 3)
+                                  showEnded: false).managed.map(\.id) == [root.id, child.id],
+                "A live child stays without its dismissed ancestor")
     }
 
     @Test func failedManagedRowsRequireExplicitDismissalAndLegacySeenFlagsAreIgnored() throws {
@@ -787,8 +792,8 @@ struct SidebarClarityTests {
             fixtures.snapshot(sessions: [fixtures.session(state: state, now: now)], now: now),
             onto: fixtures.topology(), now: now
         )
-        let visible = SidebarVisibleWork(tree: tree, managed: [old], history: .init(), showEnded: false)
-        #expect(visible.managed == [old])
+        let visible = SidebarVisibleWork(tree: tree, managed: [old], history: .init(), showEnded: false, now: now)
+        #expect(visible.managed.isEmpty, "A replaced registration leaves no row")
         #expect(visible.tree.sessions.first?.id == fixtures.sessionID)
         #expect(visible.tree.sessions.first?.state.rawValue == state.rawValue)
         #expect(visible.hiddenSurfaces.isEmpty)
@@ -803,9 +808,8 @@ struct SidebarClarityTests {
             surfaces: [surface], sessions: visible.tree.sessions, managed: visible.managed,
             orchestrationAvailability: .stale, countsComplete: true, now: now, observations: tree
         )
-        #expect(summary.agentCount == 2)
-        #expect(summary.agentLine.hasPrefix("2 entries · 1 needed for context"),
-                "Record totals must not claim two current sessions")
+        #expect(summary.agentCount == 1)
+        #expect(summary.agentLine.hasPrefix("1 agent"))
         #expect(summary.incomplete)
         let session = try #require(tree.sessions.first)
         #expect(SidebarPresentation.sessionState(session) == SidebarPresentation.state(try #require(AgentWorkState(rawValue: state.rawValue))))
@@ -844,14 +848,13 @@ struct SidebarClarityTests {
         )
         current.attention = [signal(.permission)]
         let tree = SidebarCopilotTree(availability: .ready, sessions: [ended, current], issues: [], generatedAt: now)
-        let visible = SidebarVisibleWork(tree: tree, managed: [old], history: .init(), showEnded: true)
+        let visible = SidebarVisibleWork(tree: tree, managed: [old], history: .init(), showEnded: true, now: now)
         let summary = SidebarPresentation.workspaceSummary(
             surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
             orchestrationAvailability: .ready, countsComplete: true, now: now, observations: tree
         )
-        #expect(summary.agentCount == 2)
-        #expect(summary.states.map { "\($0.title):\($0.count)" } ==
-                (state == .working ? ["Working:1", "Blocked:1"] : ["Blocked:1", "Idle:1"]))
+        #expect(summary.agentCount == 1)
+        #expect(summary.states.map { "\($0.title):\($0.count)" } == [state == .working ? "Working:1" : "Idle:1"])
         let attention = SidebarPresentation.workspaceAttention(
             sessions: visible.tree.sessions, managed: visible.managed,
             availability: .ready, now: now, observations: tree
@@ -859,10 +862,10 @@ struct SidebarClarityTests {
         print("R117 identity state=\(state.rawValue) agents=\(summary.agentCount) "
               + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
               + "needsInput=\(attention.needsInput) otherBlocked=\(attention.blocked)")
-        #expect(attention.needsInput == 2)
-        #expect(attention.questions == 1 && attention.approvals == 1)
-        #expect(attention.blocked == 0, "The old question belongs to the old managed block, not a third agent")
-        #expect(visible.managed == [old] && visible.tree == tree)
+        #expect(attention.needsInput == 1)
+        #expect(attention.questions == 0 && attention.approvals == 1)
+        #expect(attention.blocked == 0)
+        #expect(visible.managed.isEmpty && visible.tree.sessions == [current], "The ended run leaves no row")
     }
 
     @Test func retainedHistoryPlacementPreservesUncertainEvidenceFallbacks() {
@@ -876,8 +879,8 @@ struct SidebarClarityTests {
             SidebarPresentation.sessionPlacements([ended, current], managed: [old],
                                                    observations: observations, now: now)
         }
-        #expect(placements(tree).map(\.managedNodeID) == [old.id, nil])
-        #expect(placements(tree).map(\.retainsContents) == [true, false])
+        #expect(placements(tree).map(\.managedNodeID) == [nil, nil])
+        #expect(placements(tree).map(\.contentOwnerID) == [nil, nil])
         var cases: [(String, SidebarCopilotTree?)] = [("missing", nil)]
         for availability: SidebarCopilotAvailability in [.waiting, .loading, .hidden, .disconnected, .unavailable] {
             var unavailable = tree
@@ -923,16 +926,16 @@ struct SidebarClarityTests {
         for (name, candidate) in cases {
             let result = placements(candidate)
             #expect(result.map(\.managedNodeID) == [old.id, old.id], "Preserve surface fallback: \(name)")
-            #expect(result.allSatisfy { !$0.retainsContents }, "No new identity attachment from \(name)")
+            #expect(result[1].contentOwnerID == nil, "No new identity attachment from \(name)")
         }
         var partial = tree
         partial.availability = .partial
-        #expect(placements(partial).map(\.managedNodeID) == [old.id, nil])
+        #expect(placements(partial).map(\.managedNodeID) == [nil, nil])
         var duplicateHistory = tree
         duplicateHistory.sessions.append(managedSession(
             id: fixtures.otherSessionID, surface: fixtures.surfaceB, model: nil, liveness: .dead
         ))
-        #expect(placements(duplicateHistory).allSatisfy { $0.managedNodeID == nil && !$0.retainsContents },
+        #expect(placements(duplicateHistory).allSatisfy { $0.managedNodeID == nil && $0.contentOwnerID == nil },
                 "Do not attach a duplicated historical identity")
     }
 

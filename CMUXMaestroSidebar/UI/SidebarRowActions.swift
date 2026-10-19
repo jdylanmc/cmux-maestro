@@ -454,14 +454,13 @@ extension SidebarRowActionGroup {
 
     /// Why a row without its own place in a sibling list can't be moved.
     enum FixedPlacement {
-        case movesWithParent, movesWithParentAgent, movesWithParentSession, workContext, taskboard, listUnavailable
+        case movesWithParent, movesWithParentAgent, movesWithParentSession, taskboard, listUnavailable
 
         var reason: String {
             switch self {
             case .movesWithParent: "Moves with its surface."
             case .movesWithParentAgent: "Moves with its parent agent."
             case .movesWithParentSession: "Moves with its parent session."
-            case .workContext: "Work context stays in its own section and keeps its order."
             case .taskboard: "Taskboard groups cards by state. Reorder in the Hierarchy."
             case .listUnavailable: "Reordering isn't available in this view."
             }

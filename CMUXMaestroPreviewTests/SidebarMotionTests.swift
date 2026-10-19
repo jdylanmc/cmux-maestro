@@ -95,7 +95,7 @@ struct SidebarMotionTests {
             surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
             orchestrationAvailability: orchestration.availability, countsComplete: false, now: Date(), observations: visible.tree
         )
-        #expect(summary.agentCount == 1 && summary.retainedRecordCount == 0)
+        #expect(summary.agentCount == 1)
         #expect(orchestration.snapshot.nodes == [old] && polling.tree.sessions.count == 2)
         #expect(preferences.history == .init() && preferences.attention.acknowledged.isEmpty && model.navigation.status == .idle)
         let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: hosting.bounds))
@@ -110,11 +110,99 @@ struct SidebarMotionTests {
         print("Live-only valid gen1/interactive/turn-failed \(mode.rawValue)/ended\(showEnded): rawManaged=\(raw.nodes.count), projectedManaged=\(orchestration.snapshot.nodes.count), visibleManaged=\(visible.managed.count), observed=\(visible.tree.sessions.count), entries=\(summary.agentCount)")
     }
 
+    /// A born-managed root ended with `/exit` and its run was archived; the same tab then resumed
+    /// Copilot unmanaged. Only that tab's live session has a row. A projection that still lists the
+    /// ended root (archive not yet projected) must not leave an extra "Copilot session" row either.
+    @Test(arguments: [(archived: true, sameSession: true), (true, false), (false, false)], [false, true])
+    func archivedBornRootLeavesOnlyTheResumedSessionRow(
+        _ run: (archived: Bool, sameSession: Bool), showEnded: Bool
+    ) async throws {
+        let archived = run.archived
+        let f = SidebarTreeFixtures()
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.selectedMode = .hierarchy
+        preferences.showEnded = showEnded
+        let now = Date()
+        var born = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: f.workspaceA, surfaceId: f.surfaceA, generation: 1, phase: "process-disappeared",
+            availability: "unavailable", copilotSessionId: f.otherSessionID, executionMode: .interactive,
+            createdAt: now.addingTimeInterval(-600), updatedAt: now.addingTimeInterval(-60)
+        )
+        born.enrollment = "born"
+        let raw = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: archived ? [] : [born]
+        )
+        try SidebarOrchestrationReader.validate(raw, now: now)
+        let resumedID = run.sameSession ? f.otherSessionID : f.sessionID
+        let observed = run.sameSession ? [f.session(id: resumedID, state: .working, now: now)] : [
+            f.session(id: f.otherSessionID, liveness: .dead, state: .unknown, now: now),
+            f.session(id: resumedID, state: .working, now: now)
+        ]
+        let snapshots = SidebarMotionSnapshots(f.snapshot(sessions: observed, now: now))
+        let polling = SidebarCopilotPolling(read: neutralRead { _ in await snapshots.read() },
+                                           pause: { try await Task.sleep(for: .milliseconds(10)) })
+        let orchestration = SidebarOrchestrationPolling(read: { raw }, pause: { try await Task.sleep(for: .seconds(60)) })
+        let model = SidebarConnectionModel(copilot: polling, orchestration: orchestration)
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true, workspaceMetadataAvailable: true,
+            surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: [try #require(f.hierarchy().workspaces.first)], windowID: f.windowID
+        )
+        model.replaceHierarchy(with: hierarchy)
+        model.showConnected(workspaceCount: 1, surfaceCount: 1)
+        let topology = SidebarTopology(hierarchy)
+        polling.update(topology: topology, connected: true)
+        orchestration.update(topology: topology, connected: true)
+        var navigationCalls: [SidebarNavigationTarget] = []
+        model.navigation.update(topology: topology, connected: true, workspaceAllowed: true, surfaceAllowed: true,
+                                perform: { navigationCalls.append($0) })
+        model.setVisible(true)
+        defer { model.setVisible(false) }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 340, height: 600),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .aqua)
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences).background(Color.white))
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        await sidebarEventually {
+            polling.tree.sessions.count == observed.count && orchestration.snapshot.nodes.count == raw.nodes.count
+        }
+        func views(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + views($0) } }
+        let liveLabel = "Focus Terminal Same title"
+        await sidebarEventually {
+            hosting.layoutSubtreeIfNeeded()
+            return views(hosting).contains { $0.accessibilityLabel() == liveLabel }
+        }
+        let rows = views(hosting).compactMap { $0 as? SidebarTitleNativeButton }
+            .filter { $0.localFocusID != "taskboard" && $0.accessibilityLabel()?.hasPrefix("Focus workspace ") != true }
+        let labels = rows.map { $0.accessibilityLabel() ?? "" }
+        let visible = SidebarVisibleWork(tree: polling.tree, managed: raw.nodes, history: preferences.history,
+                                         showEnded: showEnded)
+        #expect(visible.managed.isEmpty)
+        #expect(!labels.contains { $0.hasPrefix("Inspect ") || $0 == "Focus Copilot session" })
+        if showEnded && observed.count > 1 {
+            // Show ended agents lists the ended session inside its own tab, as a normal focusable row.
+            #expect(labels.first == liveLabel && labels.dropFirst().allSatisfy { $0.hasPrefix("Focus Copilot session ") },
+                    "\(labels)")
+        } else {
+            #expect(labels == [liveLabel], "Only the tab's live session has a row: \(labels)")
+            #expect(visible.tree.sessions.map(\.id) == [resumedID])
+        }
+        let row = try #require(rows.first)
+        row.activate()
+        await sidebarEventually { model.navigation.status == .selected }
+        #expect(navigationCalls == [.surface(workspaceID: f.workspaceA, surfaceID: f.surfaceA)])
+    }
+
     @Test(arguments: [(false, true, false, false), (false, true, true, false),
                       (true, true, false, false), (true, false, false, false),
                       (true, true, true, false), (true, false, true, false),
                       (false, true, false, true)], [SidebarMode.hierarchy])
-    func retainedManagedIdentityDoesNotMaskNewWorkingObservation(
+    func replacedManagedRunLeavesNoRowAndKeepsItsLiveChild(
         _ scenario: (showEnded: Bool, expanded: Bool, protectedObservation: Bool, delayedIdle: Bool),
         mode: SidebarMode
     ) async throws {
@@ -259,44 +347,27 @@ struct SidebarMotionTests {
                 }
             }
             let rows = descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }
-            let retained = rows.filter { $0.accessibilityLabel() == "Inspect work context New observed session" }
-            let retainedRow = try #require(retained.first)
             let current = rows.filter { $0.accessibilityLabel() == currentLabel }
             let observedRow = try #require(current.first)
-            #expect(retained.count == 1 && current.count == 1)
-            #expect(retainedRow.toolTip?.contains("Work context") == true)
-            #expect(!rows.contains { $0.accessibilityLabel() == "Focus New observed session" })
-            #expect(hosting.convert(retainedRow.bounds, from: retainedRow).minY
-                    > hosting.convert(observedRow.bounds, from: observedRow).minY)
-            let retainedActions = descendants(hosting).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
-                .flatMap(\.groups).flatMap(\.actions).filter { $0.title == "Focus original session" }
-            let retainedActionCount = 1
-            #expect(retainedActions.count == retainedActionCount && retainedActions.allSatisfy { $0.unavailable != nil })
-            retainedRow.activate()
+            #expect(current.count == 1)
+            #expect(!rows.contains { $0.accessibilityLabel() == "Focus New observed session" }, "The replaced run leaves no row")
+            #expect(!rows.contains { $0.accessibilityLabel()?.hasPrefix("Inspect ") == true })
+            let actions = descendants(hosting).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
+                .flatMap(\.groups).flatMap(\.actions)
+            #expect(!actions.contains { $0.title == "Focus original session" })
             capturedPrimary?()
             if let (presenter, item) = capturedFocus {
                 #expect(item.isEnabled, "Exercise a menu captured before the surface was reused")
                 presenter.invoke(item)
             }
-            #expect(model.navigation.status == .idle && navigationCalls.isEmpty, "Retained record primary action only inspects")
+            #expect(model.navigation.status == .idle && navigationCalls.isEmpty,
+                    "An action captured before the run was replaced does not reach the new session")
             #expect(poller.tree.sessions.first { $0.id == f.sessionID }?.attention == [currentNotice])
             #expect(!rows.contains { $0.accessibilityLabel() == "Focus Copilot session 20000000" },
                     "History must not duplicate the exact managed identity")
-            #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" })
+            #expect(rows.contains { $0.accessibilityLabel() == "Focus Protected descendant" },
+                    "A live child of the replaced run stays as a normal row")
             #expect(rows.contains { $0.accessibilityLabel() == "Focus Other current root" })
-            if mode == .taskboard {
-                let independent = try #require(rows.first { $0.accessibilityLabel() == "Focus Other current root" })
-                let descendant = try #require(rows.first { $0.accessibilityLabel() == "Focus Protected descendant" })
-                #expect(hosting.convert(independent.bounds, from: independent).minY
-                        < hosting.convert(retainedRow.bounds, from: retainedRow).minY,
-                        "Independent current roots precede retained context")
-                #expect(child.parentId == old.id)
-                #expect(hosting.convert(descendant.bounds, from: descendant).minY
-                        > hosting.convert(retainedRow.bounds, from: retainedRow).minY,
-                        "A real child stays beneath its required ancestor, not in a duplicate flat session row")
-            }
-            #expect(try leadingInk(of: retainedRow, in: hosting) == 0, "Retained record has no current focus stripe")
-            #expect(try leadingInk(of: observedRow, in: hosting) > 0, "Current session keeps its focus stripe")
             if scenario.protectedObservation {
                 let childEvidence = try #require(oldObservation.children.first)
                 #expect(childEvidence.id == "protected-observed" && childEvidence.state == .blocked)
@@ -313,7 +384,6 @@ struct SidebarMotionTests {
                         "Dead-owner blocked work without child attention becomes unknown and is state-filtered")
                 #expect(original.attention.contains { $0.kind == .answer }, "The actual owner request still protects its context")
             }
-            #expect(try greenPixels(in: retainedRow) == 0, "Never borrow the new session's working state")
             let statePixels: Int
             if mode == .hierarchy { statePixels = try greenPixels(in: observedRow) }
             else {
@@ -329,7 +399,7 @@ struct SidebarMotionTests {
                         "The delayed transition must use a new observation, not the aged fixture timestamp")
             }
             let visible = SidebarVisibleWork(tree: poller.tree, managed: [old, child, otherRoot],
-                                             history: preferences.history, showEnded: preferences.showEnded)
+                                             history: preferences.history, showEnded: preferences.showEnded, now: clock.now)
             let summary = SidebarPresentation.workspaceSummary(
                 surfaces: [], sessions: visible.tree.sessions, managed: visible.managed,
                 orchestrationAvailability: orchestration.availability, countsComplete: true,
@@ -339,8 +409,8 @@ struct SidebarMotionTests {
                   + "states=\(summary.states.map { "\($0.title):\($0.count)" }) "
                   + "primaryGreenPixels=\(statePixels) "
                   + "oldObservedRows=\(rows.filter { $0.accessibilityLabel() == "Focus Copilot session 20000000" }.count)")
-            #expect(summary.agentCount == 4, "Internal tasks do not inflate real agent entries")
-            #expect(summary.retainedRecordCount == 1)
+            #expect(summary.agentCount == 3, "Internal tasks do not inflate real agent entries")
+            #expect(visible.managed == [child, otherRoot])
             #expect(summary.states.first { $0.title == (state == .working ? "Working" : "Idle") }?.count == (state == .idle ? 2 : 1))
             #expect(orchestration.snapshot.nodes == [old, child, otherRoot], "Ownership, ancestry and generations are unchanged")
             #expect(!window.isVisible && model.navigation.status == .idle)
@@ -374,219 +444,6 @@ struct SidebarMotionTests {
         await sidebarEventually { model.navigation.status == .selected }
         #expect(navigationCalls == [.surface(workspaceID: f.workspaceA, surfaceID: f.surfaceB)])
         #expect(poller.tree.sessions.first { $0.id == f.sessionID }?.attention == [currentNotice])
-    }
-
-    private func leadingInk(of row: NSView, in hosting: NSView) throws -> Int {
-        let frame = hosting.convert(row.bounds, from: row)
-        let strip = NSRect(x: 0, y: frame.midY - 2, width: 9, height: 4)
-        let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: strip))
-        hosting.cacheDisplay(in: strip, to: bitmap)
-        var count = 0
-        for x in 0..<bitmap.pixelsWide {
-            for y in 0..<bitmap.pixelsHigh {
-                if try #require(bitmap.colorAt(x: x, y: y)).alphaComponent > 0.1 { count += 1 }
-            }
-        }
-        return count
-    }
-
-    @Test(arguments: [(2, 340.0, SidebarDensity.compact), (2, 240.0, SidebarDensity.comfortable),
-                      (8, 240.0, SidebarDensity.compact), (8, 340.0, SidebarDensity.comfortable)])
-    func retainedObservedSubtreeKeepsItsManagedOwnersIndentation(
-        _ scenario: (depth: Int, width: Double, density: SidebarDensity)
-    ) async throws {
-        let f = SidebarTreeFixtures()
-        let fixture = try SidebarPreferenceFixture()
-        defer { fixture.cleanup() }
-        let preferences = fixture.preferences()
-        preferences.showEnded = true
-        preferences.setDensity(scenario.density)
-        let now = Date()
-        let oldDate = now.addingTimeInterval(-172_800)
-        let runID = UUID()
-        var chain: [SidebarOrchestrationNode] = []
-        for depth in 0...scenario.depth {
-            chain.append(.init(
-                id: UUID(), runId: runID, parentId: chain.last?.id,
-                role: depth == 0 ? "coordinator" : "worker", label: "Managed \(depth)",
-                workspaceId: f.workspaceA, surfaceId: depth == scenario.depth ? f.surfaceA : UUID(),
-                generation: 1, phase: "turn-failed", availability: "idle",
-                copilotSessionId: depth == scenario.depth ? f.otherSessionID : UUID(),
-                executionMode: .interactive, createdAt: oldDate.addingTimeInterval(Double(depth)), updatedAt: oldDate
-            ))
-        }
-        let owner = try #require(chain.last)
-        let root = chain[0]
-        let ancestor = chain[1]
-        let sibling = SidebarOrchestrationNode(
-            id: UUID(), runId: runID, parentId: root.id, role: "worker", label: "Unrelated sibling",
-            workspaceId: f.workspaceA, surfaceId: f.surfaceB, generation: 1,
-            phase: "turn-failed", availability: "idle", copilotSessionId: UUID(),
-            executionMode: .interactive, createdAt: now, updatedAt: oldDate
-        )
-        let managed = chain + [sibling]
-        let oldObservation = CopilotSessionObservation(
-            sessionID: f.otherSessionID, surfaceID: f.surfaceA, launchWorkspaceID: f.workspaceA,
-            liveness: .dead, state: .unknown, model: nil, children: [
-                .init(id: "nested-child", parentID: nil, kind: .skill, name: "Observed child",
-                      state: .blocked, model: nil, attention: [
-                        .init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
-                      ]),
-                .init(id: "nested-grandchild", parentID: "nested-child", kind: .skill, name: "Observed grandchild",
-                      state: .blocked, model: nil, attention: [
-                        .init(kind: .answer, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
-                      ])
-            ], observedAt: now
-        )
-        let snapshots = SidebarMotionSnapshots(f.snapshot(
-            sessions: [oldObservation, f.session(state: .working, now: now)], now: now
-        ))
-        let poller = SidebarCopilotPolling(read: neutralRead { _ in await snapshots.read() },
-                                          pause: { try await Task.sleep(for: .milliseconds(10)) })
-        let orchestration = SidebarOrchestrationPolling(read: {
-            .init(version: 1, generatedAt: oldDate, complete: true, omittedCount: 0, nodes: managed)
-        }, pause: { try await Task.sleep(for: .seconds(60)) })
-        let model = SidebarConnectionModel(copilot: poller, orchestration: orchestration)
-        let hierarchy = HierarchySnapshot(
-            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true, workspaceMetadataAvailable: true,
-            surfaceMetadataAvailable: true, workspacePathsAvailable: false,
-            workspaces: [.init(
-                id: f.workspaceA, title: .available("Synthetic nesting"), detail: .available(nil),
-                isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
-                rootPath: .unavailable, projectRootPath: .unavailable,
-                surfaces: .available(managed.map {
-                    .init(id: $0.surfaceId, title: "Replacement", kind: .terminal, isFocused: false,
-                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
-                })
-            )], windowID: f.windowID
-        )
-        model.showConnected(workspaceCount: 1, surfaceCount: managed.count)
-        model.replaceHierarchy(with: hierarchy)
-        model.navigation.update(topology: SidebarTopology(hierarchy), connected: true,
-                                workspaceAllowed: true, surfaceAllowed: true,
-                                perform: { _ in Issue.record("Nesting must not navigate") })
-        model.setVisible(true)
-        defer { model.setVisible(false) }
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: scenario.width, height: 1200),
-                              styleMask: .borderless, backing: .buffered, defer: false)
-        window.isReleasedWhenClosed = false
-        window.appearance = NSAppearance(named: .aqua)
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
-        window.contentView = hosting
-        defer { window.contentView = nil; window.close() }
-        await sidebarEventually { poller.tree.sessions.count == 2 && orchestration.snapshot.nodes.count == managed.count }
-        func titles(_ view: NSView) -> [SidebarTitleNativeButton] {
-            view.subviews.flatMap { child in
-                (child as? SidebarTitleNativeButton).map { $0.localFocusID == "taskboard" ? [] : [$0] } ?? titles(child)
-            }
-        }
-        for (ancestorExpanded, ownerExpanded) in [(true, true), (true, false), (false, true)] {
-            preferences.setExpanded(ancestorExpanded, for: .managed(ancestor.id))
-            preferences.setExpanded(ownerExpanded, for: .managed(owner.id))
-            await sidebarEventually {
-                hosting.layoutSubtreeIfNeeded()
-                let rows = titles(hosting)
-                return rows.contains {
-                    $0.accessibilityLabel() == "Focus Terminal Replacement" && $0.toolTip?.contains("Working") == true
-                } && rows.contains { $0.accessibilityLabel() == "Inspect work context Managed \(scenario.depth)" } == ancestorExpanded
-                    && rows.filter { $0.accessibilityLabel()?.hasPrefix("Inspect context activity Observed ") == true }.count
-                        == (ancestorExpanded && ownerExpanded ? 2 : 0)
-            }
-            let rows = titles(hosting)
-            let rootRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Managed 0" })
-            let siblingRow = try #require(rows.first { $0.accessibilityLabel() == "Focus Unrelated sibling" })
-            let ownerRow = rows.first { $0.accessibilityLabel() == "Inspect work context Managed \(scenario.depth)" }
-            let observedRows = rows.filter { $0.accessibilityLabel()?.hasPrefix("Inspect context activity Observed ") == true }
-            let replacement = try #require(rows.first { $0.accessibilityLabel() == "Focus Terminal Replacement" })
-            let origin = hosting.convert(rootRow.bounds, from: rootRow).minX
-            let step = scenario.density == .compact ? 8.0 : 10.8
-            let scale = window.backingScaleFactor
-            #expect(Double(hosting.convert(siblingRow.bounds, from: siblingRow).minX) == pixelAligned(origin + step, scale: scale))
-            #expect(observedRows.count == (ancestorExpanded && ownerExpanded ? 2 : 0))
-            #expect((ownerRow != nil) == ancestorExpanded)
-            if ancestorExpanded, let ownerRow {
-                let ownerX = hosting.convert(ownerRow.bounds, from: ownerRow).minX
-                if ownerExpanded {
-                    let child = try #require(observedRows.first { $0.accessibilityLabel()?.contains("Observed child,") == true })
-                    let grandchild = try #require(observedRows.first { $0.accessibilityLabel()?.contains("Observed grandchild,") == true })
-                    let childFrame = hosting.convert(child.bounds, from: child)
-                    let grandchildFrame = hosting.convert(grandchild.bounds, from: grandchild)
-                    let densityScale = scenario.density == .compact ? 1.0 : 1.35
-                    let cap = min(32, (scenario.width - (scenario.density == .compact ? 10 : 13.5)) * 0.12)
-                    let ownerIndent = min((scenario.depth == 2 ? 16.0 : 44.0) * densityScale, cap)
-                    let grandchildIndent = min((scenario.depth == 2 ? 24.0 : 48.0) * densityScale, cap)
-                    print("R117 nesting \(scenario) scale=\(scale) originX=\(origin) ownerX=\(ownerX) "
-                          + "childX=\(childFrame.minX) grandchildX=\(grandchildFrame.minX) "
-                          + "expectedOwner=\(pixelAligned(origin + ownerIndent, scale: scale)) "
-                          + "expectedChild=\(pixelAligned(origin + step + ownerIndent, scale: scale))")
-                    #expect(Double(ownerX) == pixelAligned(origin + ownerIndent, scale: scale))
-                    #expect(Double(childFrame.minX) == pixelAligned(origin + step + ownerIndent, scale: scale))
-                    #expect(Double(grandchildFrame.minX) == pixelAligned(origin + step + grandchildIndent, scale: scale))
-                    #expect(grandchildFrame.minX >= childFrame.minX)
-                    let renderedCap = ceil((step + cap) * window.backingScaleFactor) / window.backingScaleFactor
-                    #expect(grandchildFrame.minX - origin <= renderedCap,
-                            "Combined managed/session depth must be capped once, not accumulated")
-                } else {
-                    let ownerFrame = hosting.convert(ownerRow.bounds, from: ownerRow)
-                    let siblingFrame = hosting.convert(siblingRow.bounds, from: siblingRow)
-                    let rowPadding = (scenario.density.rowHeight - ownerFrame.height) / 2
-                    let top = ownerFrame.maxY + rowPadding
-                    let strip = NSRect(x: 0, y: top, width: scenario.width,
-                                       height: siblingFrame.minY - rowPadding - top)
-                    try #require(strip.height > 0, "The collapsed retained summary occupies its own row")
-                    let bitmap = try #require(hosting.bitmapImageRepForCachingDisplay(in: strip))
-                    hosting.cacheDisplay(in: strip, to: bitmap)
-                    var ink: [Int] = []
-                    for x in 0..<bitmap.pixelsWide {
-                        for y in 0..<bitmap.pixelsHigh {
-                            let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
-                            if color.alphaComponent > 0.2
-                                && max(color.redComponent, color.greenComponent, color.blueComponent) < 0.75 {
-                                ink.append(x)
-                                break
-                            }
-                        }
-                    }
-                    let summaryX = Double(try #require(ink.first)) * strip.width / Double(bitmap.pixelsWide)
-                    print("R117 nesting collapsed \(scenario) ownerX=\(ownerX) summaryInkX=\(summaryX)")
-                    #expect((ownerX - 28 - 0.5...ownerX - 28 + 4).contains(summaryX),
-                            "Collapsed summary ink stays aligned with its owner, allowing glyph inset")
-                }
-            }
-            #expect(rows.allSatisfy {
-                let frame = hosting.convert($0.bounds, from: $0)
-                return frame.minX >= 0 && frame.maxX <= scenario.width && frame.width >= 80
-            })
-            #expect(try greenPixels(in: replacement) > 0)
-            let summary = SidebarPresentation.workspaceSummary(
-                surfaces: [], sessions: poller.tree.sessions, managed: managed,
-                orchestrationAvailability: orchestration.availability, countsComplete: true, now: Date(),
-                observations: poller.tree
-            )
-            let attention = SidebarPresentation.workspaceAttention(
-                sessions: poller.tree.sessions, managed: managed, availability: orchestration.availability,
-                now: Date(), observations: poller.tree
-            )
-            #expect(summary.agentCount == scenario.depth + 3)
-            #expect(attention.needsInput == 2 && attention.questions == 1 && attention.approvals == 1)
-            #expect(orchestration.snapshot.nodes == managed && preferences.attention.acknowledged.isEmpty)
-            #expect(model.navigation.status == .idle && !window.isVisible)
-        }
-    }
-
-    @Test(arguments: [(1.0, 85.0, 95.0), (2.0, 84.5, 95.5)])
-    func retainedGeometryMatchesIndependentlyAlignedBackingCoordinates(
-        _ sample: (scale: Double, ownerX: Double, childX: Double)
-    ) {
-        #expect(pixelAligned(63 + 21.6, scale: sample.scale) == sample.ownerX)
-        #expect(pixelAligned(63 + 21.6 + 10.8, scale: sample.scale) == sample.childX)
-        #expect(pixelAligned(63 + 27.18 + 10.8, scale: sample.scale) == 101)
-        #expect(pixelAligned(63 + 10.8, scale: sample.scale) != sample.childX,
-                "Omitting the managed-owner indentation must still fail on either backing grid")
-    }
-
-    private func pixelAligned(_ coordinate: Double, scale: Double) -> Double {
-        (coordinate * scale).rounded() / scale
     }
 
     /// A fixed base captured once plus an offset. Reading `now` never moves time; it moves only when a

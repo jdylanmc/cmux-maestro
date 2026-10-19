@@ -9,7 +9,7 @@ Internal Copilot tasks, Other activity, completed-work history, dismissal, repla
 Explicit provider `.subagent` observations with literal session/child parents
 are internal tasks. They are not interactive tabs. Hierarchy attaches
 its compact consumer under the exact owning session. This includes
-coalesced managed rows and retained original-session context. A task is one
+coalesced managed rows. A task is one
 connector-linked text line. No identity icon. No navigation/lifecycle
 actions. Full observed name and state stay in accessibility and tooltips.
 Working alone animates green. Reduce Motion keeps a static working arc.
