@@ -2003,9 +2003,6 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             "--mcp-github-auth": "guard=https://example.test",
             "--dynamic-retrieval": "skills=on",
             "--mode": "plan",
-            "--session-id": "00000000-0000-4000-8000-000000000001",
-            "--resume": "00000000-0000-4000-8000-000000000001",
-            "-r": "00000000-0000-4000-8000-000000000001",
             "--connect": "00000000-0000-4000-8000-000000000001",
             "--bash-env": "on",
             "--secret-env-vars": "SYNTHETIC_SECRET",
@@ -2020,10 +2017,29 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             "--continue", "--fleet", "--enable-memory", "--plan", "--acp", "--remote",
             "--remote-export", "--no-ask-user", "--no-experimental",
             "--allow-all-mcp-server-instructions",
-            "--resume", "-r", "--connect", "--bash-env", "--no-remote", "--no-remote-export",
+            "--connect", "--bash-env", "--no-remote", "--no-remote-export",
         ):
             with self.subTest(flag=flag):
                 self.assertFalse(parse(["copilot", "--yolo", flag]))
+
+    def test_resume_and_session_id_preserve_launch_mode_without_hiding_restrictions(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        session = "00000000-0000-4000-8000-000000000001"
+        for selector in (
+            ["--resume", session], [f"--resume={session}"], ["-r", session],
+            ["--session-id", session], [f"--session-id={session}"], ["--resume"], ["-r"],
+        ):
+            for grant in ("--yolo", "--allow-all"):
+                with self.subTest(selector=selector, grant=grant):
+                    self.assertTrue(parse(["copilot", *selector, grant]))
+                    self.assertTrue(parse(["copilot", grant, *selector, "--deny-tool=web"], ["web"]))
+                    self.assertFalse(parse(["copilot", *selector]))
+                    self.assertFalse(parse(["copilot", *selector, grant, "--agent", "readonly"]))
+                    self.assertFalse(parse(["copilot", *selector, grant, "--plugin-dir=/synthetic/guard"]))
+                    self.assertFalse(parse(["copilot", *selector, grant, "--deny-tool=web"]))
+        for selector in (["--session-id", "--yolo"], ["--session-id=--yolo"], ["--resume=--yolo"]):
+            with self.subTest(selector=selector):
+                self.assertFalse(parse(["copilot", *selector]))
 
     def test_unrecorded_deny_flags_do_not_widen_the_parent(self):
         parse = CONTROLLER_API["launch_flags_allow_all"]
