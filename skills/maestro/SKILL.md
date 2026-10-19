@@ -56,14 +56,19 @@ repository and delivery policy remain with those clients.
 
 ## Delegate a managed child
 
-When `maestro_readiness` reports `status: "managed"` with `capabilities.spawn: true`
-and `maestro_spawn` is available, prefer it for explicitly authorized substantial
-or long-running assignments: implementation workers, reviewers, and spikes.
-These workers have visible, interactive terminals the human can use in CMUX and
-see in the Maestro sidebar. Use built-in `task` for short read-only lookups,
-searches, and quick single-shot reviews. When not managed or Maestro tools are
-unavailable, fall back to `task` within the authorized scope; never use it to
-bypass a refused managed launch or a permission restriction.
+In a known managed session with `maestro_spawn` available, prefer it for
+explicitly authorized substantial or long-running assignments: implementation
+workers, reviewers, and spikes. These workers have visible, interactive
+terminals the human can use in CMUX and see in the Maestro sidebar.
+Where offered, `maestro_readiness` confirms `status: "managed"` and
+`capabilities.spawn: true`. Maestro-launched sessions have no readiness tool;
+verify them with `maestro_identity({})` under the lifecycle guide instead.
+
+Use built-in `task` for short read-only lookups, searches, and quick single-shot
+reviews. Only unmanaged sessions fall back to `task` for substantial work,
+within the authorized scope. Failed verification or missing lifecycle tools in
+a managed session block coordination: explain the blocker, never substitute
+`task` or bypass a refused launch or permission restriction.
 
 For an explicitly authorized child assignment, follow
 `/cmux-maestro-native:cmux-maestro-orchestrate` and call `maestro_spawn`.
@@ -74,7 +79,8 @@ from the installed controller's `icons --search <term>`; a plain SF Symbol name
 such as `sparkles` is refused. The adapter obtains the actual invoking session's
 account itself. Never provide an account, sender, capability, or control token.
 An unavailable account/API fails before terminal creation rather than selecting
-another subscription. Do not substitute a tabless helper for a refused launch.
+another subscription. Do not substitute a tabless helper for a refused launch
+or a missing managed lifecycle tool.
 
 The launch result is exact terminal-creation acceptance, not native messaging readiness
 or completed work. Lifecycle `messaging: configured` does not prove attachment.
