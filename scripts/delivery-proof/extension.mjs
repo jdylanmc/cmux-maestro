@@ -1,5 +1,6 @@
 import { joinSession } from "@github/copilot-sdk/extension";
 import { sessionEndGate, startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
+import { createProcessObserver } from "./processes.mjs";
 
 const shutdown = new AbortController();
 const diagnosticCodes = new Set([
@@ -9,6 +10,10 @@ const diagnosticCodes = new Set([
 let listener;
 let beats;
 let stopping = false;
+// Owned-process passes run only while this session is managed (ADR 0026).
+const processes = createProcessObserver();
+const join = config => joinSession(processes.hooks(config));
+const managedListener = value => { listener = value; processes.start(); };
 
 function fail(context, error) {
   const code = diagnosticCodes.has(error?.code) ? error.code : "INITIALIZATION_FAILED";
@@ -19,6 +24,7 @@ function fail(context, error) {
 async function stop() {
   if (stopping) return;
   stopping = true;
+  processes.stop();
   // /exit sends SIGTERM just before SessionEnd; give that record (and its binding clear) two seconds.
   await sessionEndGate.drain(2000);
   shutdown.abort();
@@ -36,7 +42,7 @@ process.on("SIGTERM", stop);
 process.on("SIGHUP", () => { sessionEndGate.hungUp = true; stop(); });
 
 startManaged({
-  joinSession, signal: shutdown.signal, onListener: value => { listener = value; },
+  joinSession: join, signal: shutdown.signal, onListener: managedListener,
 }).then(async managed => {
   // Beats hand recurring prompts to Copilot's own scheduler in any CMUX session; failures are
   // diagnosed inside and never stop messaging.
@@ -47,9 +53,9 @@ startManaged({
   if (managed === null) {
     // A session born in CMUX enrolls itself (ADR 0025); otherwise readiness only.
     const born = await startBornManaged({
-      joinSession, signal: shutdown.signal, onListener: value => { listener = value; }, onJoined: beatsFor,
+      joinSession: join, signal: shutdown.signal, onListener: managedListener, onJoined: beatsFor,
     });
-    session = born === null ? await startReadiness({ joinSession, signal: shutdown.signal }) : born.session;
+    session = born === null ? await startReadiness({ joinSession: join, signal: shutdown.signal }) : born.session;
   }
   beatsFor(session);
 }).catch(error => {

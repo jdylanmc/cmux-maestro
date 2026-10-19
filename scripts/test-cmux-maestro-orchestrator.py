@@ -6586,5 +6586,225 @@ class AgentTagTests(unittest.TestCase):
         self.assertEqual(self.stored()["sessions"], {item: ["shared"] for item in sessions})
 
 
+class FakeProcessProbe:
+    """Injected process facts: a ps table per pass, sysctl identities, lsof output and markers."""
+
+    def __init__(self, tables, identities, listeners=None, markers=None, listeners_complete=True):
+        self.tables = list(tables)
+        self.identities = identities
+        self.listener_map = listeners or {}
+        self.marker_map = markers or {}
+        self.listeners_complete = listeners_complete
+        self.asked = []
+
+    def table(self):
+        return (self.tables.pop(0) if len(self.tables) > 1 else self.tables[0]), True
+
+    def identity(self, pid):
+        return self.identities.get(pid)
+
+    def listeners(self, pids):
+        self.asked.append(set(pids))
+        return {pid: value for pid, value in self.listener_map.items() if pid in pids}, self.listeners_complete
+
+    def markers(self, session):
+        return self.marker_map.get(session, [])
+
+
+class ProcessObservationTests(unittest.TestCase):
+    """#78/#75: ownership from the node's recorded binding; identity is PID plus microsecond start."""
+    LSTART = "Mon Oct 19 10:00:00 2026"
+    UID = 501
+
+    def setUp(self):
+        self.start = CONTROLLER_API["process_start_epoch"](self.LSTART)
+        self.at = self.start + 600
+
+    def node(self, identifier="a", pid=100, session="s-a", generation=1):
+        return {"id": identifier, "runId": "run-" + identifier, "surfaceId": "surface-" + identifier,
+                "phase": "turn-running", "createdAt": identifier, "copilotSessionId": session,
+                "generation": generation, "providerProcess": {"pid": pid, "start": self.LSTART}}
+
+    def state(self, *nodes):
+        return {"nodes": {node["id"]: node for node in nodes}}
+
+    def row(self, ppid, pgid, name, uid=None):
+        return (ppid, pgid, self.UID if uid is None else uid, name)
+
+    def observe(self, state, probe, previous=None, at=None):
+        projection, _count = CONTROLLER_API["observe_processes"](
+            state, previous or {}, probe, self.at if at is None else at, uid=self.UID)
+        return {item["nodeId"]: item for item in projection["nodes"]}, projection
+
+    def test_owned_tree_lists_listeners_and_separates_provider_helpers(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 100, "node"),
+                 102: self.row(100, 102, "zsh"), 103: self.row(102, 102, "python3.12"),
+                 900: self.row(1, 900, "unrelated")}
+        identities = {pid: (int(self.start), 0) if pid == 100 else (int(self.start) + pid, 7) for pid in table}
+        listeners = {103: [{"protocol": "tcp", "address": "127.0.0.1", "port": 5173, "scope": "loopback"},
+                           {"protocol": "tcp", "address": "*", "port": 3000, "scope": "any"}]}
+        probe = FakeProcessProbe([table], identities, listeners, {"s-a": [(100, self.start + 5)]})
+        nodes, _ = self.observe(self.state(self.node()), probe)
+        node = nodes["a"]
+        self.assertEqual(node["state"], "owned-current")
+        self.assertEqual([(item["pid"], item["group"]) for item in node["processes"]],
+                         [(102, "separate"), (103, "separate"), (101, "provider")])
+        self.assertEqual(node["processes"][1]["listeners"], listeners[103])
+        self.assertEqual(node["processes"][1]["startMicros"], (int(self.start) + 103) * 1_000_000 + 7)
+        # Never the provider itself or an unrelated process, and one lsof for the whole pass.
+        self.assertEqual(probe.asked, [{101, 102, 103}])
+        self.assertFalse(any(key in json.dumps(node) for key in ("argv", "cwd", "env")))
+
+    def test_pid_reuse_is_exit_and_a_reused_provider_is_not_custody(self):
+        previous = {"nodes": [{"nodeId": "a", "copilotSessionId": "s-a", "generation": 1, "processes": [
+            {"pid": 101, "startMicros": 5_000_000, "name": "node", "group": "separate", "state": "owned-current"}]}]}
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(1, 101, "other")}
+        # PID 101 now belongs to a different process; PID 100 started after the recorded provider.
+        identities = {100: (int(self.start) + 30, 0), 101: (9, 0)}
+        probe = FakeProcessProbe([table], identities, markers={"s-a": [(100, self.start + 40)]})
+        node = self.observe(self.state(self.node()), probe, previous)[0]["a"]
+        self.assertEqual(node["state"], "exited")
+        self.assertEqual([(item["pid"], item["state"]) for item in node["processes"]], [(101, "exited")])
+        self.assertEqual(probe.asked, [set()])
+
+    def test_escaped_process_is_reported_once_owned_and_never_reattributed(self):
+        table = {100: self.row(1, 100, "copilot"), 104: self.row(1, 104, "server")}
+        identities = {100: (int(self.start), 0), 104: (int(self.start) + 4, 9)}
+        previous = {"nodes": [{"nodeId": "a", "copilotSessionId": "s-a", "generation": 1, "processes": [
+            {"pid": 104, "startMicros": (int(self.start) + 4) * 1_000_000 + 9, "name": "server",
+             "group": "separate", "state": "owned-current",
+             "listeners": [{"protocol": "tcp", "address": "127.0.0.1", "port": 8000, "scope": "loopback"}]}]}]}
+        probe = FakeProcessProbe([table], identities, markers={"s-a": [(100, self.start + 5)]})
+        nodes, projection = self.observe(self.state(self.node()), probe, previous)
+        escaped = nodes["a"]["processes"]
+        self.assertEqual([(item["pid"], item["state"], item["listeners"]) for item in escaped], [(104, "escaped", [])])
+        # The next pass keeps it escaped, then drops it after the retention bound.
+        again = self.observe(self.state(self.node()), probe, projection, at=self.at + 10)[0]["a"]
+        self.assertEqual([item["state"] for item in again["processes"]], ["escaped"])
+        expired = self.observe(self.state(self.node()), probe, projection, at=self.at + 301)[0]["a"]
+        self.assertEqual(expired["processes"], [])
+        # Another generation of the same node starts with no carried identities.
+        other = self.observe(self.state(self.node(generation=2)), probe, previous)[0]["a"]
+        self.assertEqual(other["processes"], [])
+
+    def test_other_sessions_and_shared_or_foreign_custody_are_never_attributed(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "a-tool"),
+                 200: self.row(1, 200, "copilot"), 201: self.row(200, 201, "b-tool"), 300: self.row(1, 300, "copilot")}
+        identities = {pid: (int(self.start), 0) for pid in table}
+        markers = {"s-a": [(100, self.start + 5)], "s-b": [(200, self.start + 5)], "s-c": [(300, self.start + 5)],
+                   "s-d": [(201, self.start + 5)]}
+        probe = FakeProcessProbe([table], identities, markers=markers)
+        nodes, _ = self.observe(self.state(self.node("a", 100, "s-a"), self.node("b", 200, "s-b")), probe)
+        self.assertEqual([item["pid"] for item in nodes["a"]["processes"]], [101])
+        self.assertEqual([item["pid"] for item in nodes["b"]["processes"]], [201])
+        # One provider recorded for two sessions (a switch inside one process) is ambiguous for both.
+        shared = self.observe(self.state(self.node("a", 300, "s-a"), self.node("c", 300, "s-c")),
+                              FakeProcessProbe([table], identities, markers=markers))[0]
+        self.assertEqual((shared["a"]["state"], shared["c"]["state"]), ("ambiguous", "ambiguous"))
+        self.assertEqual(shared["a"]["processes"], [])
+        # A live lock held by a process that is neither the provider nor its direct child.
+        foreign = self.observe(self.state(self.node("d", 100, "s-d")),
+                               FakeProcessProbe([table], identities, markers=markers))[0]["d"]
+        self.assertEqual((foreign["state"], foreign["processes"]), ("ambiguous", []))
+
+    def test_incomplete_denied_and_missing_custody_states(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "sudo", uid=0),
+                 400: self.row(1, 400, "copilot", uid=0)}
+        identities = {100: (int(self.start), 0), 101: (int(self.start) + 1, 0), 400: (int(self.start), 0)}
+        markers = {"s-a": [(100, self.start + 5)], "s-e": [(400, self.start + 5)]}
+        nodes = self.observe(self.state(self.node("a", 100, "s-a"), self.node("e", 400, "s-e"),
+                                        self.node("f", 100, "s-f")),
+                             FakeProcessProbe([table], identities, markers=markers))[0]
+        # Another user's descendant stays listed, but the list may be incomplete.
+        self.assertEqual(nodes["a"]["state"], "ambiguous")
+        alone = self.observe(self.state(self.node("a", 100, "s-a")),
+                             FakeProcessProbe([table], identities, markers=markers))[0]["a"]
+        self.assertEqual((alone["state"], [item["pid"] for item in alone["processes"]]), ("scan-incomplete", [101]))
+        self.assertEqual(nodes["e"]["state"], "denied")
+        lockless = self.observe(self.state(self.node("f", 100, "s-f")),
+                                FakeProcessProbe([table], identities, markers=markers))[0]["f"]
+        self.assertEqual(lockless["state"], "no-custody")
+        # A stale lock (its PID now belongs to a later process) is not custody either.
+        stale = self.observe(self.state(self.node("a", 100, "s-a")), FakeProcessProbe(
+            [table], identities, markers={"s-a": [(100, self.start - 60)]}))[0]["a"]
+        self.assertEqual(stale["state"], "no-custody")
+        failed = self.observe(self.state(self.node("a", 100, "s-a")), FakeProcessProbe(
+            [{100: self.row(1, 100, "copilot"), 102: self.row(100, 102, "zsh")}],
+            {100: (int(self.start), 0), 102: (int(self.start) + 2, 0)}, markers=markers,
+            listeners_complete=False))[0]["a"]
+        self.assertEqual((failed["state"], [item["pid"] for item in failed["processes"]]), ("scan-incomplete", [102]))
+
+    def test_a_process_replaced_during_the_pass_is_dropped(self):
+        before = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "node"), 102: self.row(100, 102, "zsh")}
+        after = {100: self.row(1, 100, "copilot"), 102: self.row(1, 102, "zsh")}
+        probe = FakeProcessProbe([before, after], {100: (int(self.start), 0), 101: (5, 0), 102: (6, 0)},
+                                 markers={"s-a": [(100, self.start + 5)]})
+        node = self.observe(self.state(self.node()), probe)[0]["a"]
+        self.assertEqual((node["state"], node["processes"]), ("owned-current", []))
+
+    def test_listener_parsing_keeps_bind_addresses_and_never_guesses_protocols(self):
+        parse = CONTROLLER_API["parse_tcp_listeners"]
+        output = "p7\nf5\nn127.0.0.1:5173\nf6\nn*:3000\nf7\nn192.168.1.20:8080\nf8\nn[::1]:9000\nf9\nn[::]:4000\n"
+        found, complete = parse(output, {7}, True)
+        self.assertTrue(complete)
+        self.assertEqual([(item["address"], item["port"], item["scope"], item["protocol"]) for item in found[7]], [
+            ("127.0.0.1", 5173, "loopback", "tcp"), ("*", 3000, "any", "tcp"),
+            ("192.168.1.20", 8080, "other", "tcp"), ("[::1]", 9000, "loopback", "tcp"), ("[::]", 4000, "any", "tcp")])
+        for bad in ("p8\nn127.0.0.1:5173\n", "p7\nnlocalhost:http\n", "p7\nn127.0.0.1:0\n", "px\n"):
+            self.assertFalse(parse(bad, {7}, True)[1], bad)
+
+    def test_projection_is_bounded(self):
+        table = {100: self.row(1, 100, "copilot"), **{pid: self.row(100, pid, "w") for pid in range(1000, 1040)}}
+        identities = {pid: (int(self.start), pid) for pid in table}
+        previous = {"nodes": [{"nodeId": "a", "copilotSessionId": "s-a", "generation": 1, "processes": [
+            {"pid": pid, "startMicros": pid, "name": "gone", "state": "owned-current"} for pid in range(2000, 2030)]}]}
+        node = self.observe(self.state(self.node()), FakeProcessProbe(
+            [table], identities, markers={"s-a": [(100, self.start + 5)]}), previous)[0]["a"]
+        states = [item["state"] for item in node["processes"]]
+        self.assertEqual((states.count("owned-current"), states.count("exited"), node["omittedCount"]), (32, 16, 8))
+
+    def test_real_process_table_lsof_and_microsecond_identity(self):
+        probe = CONTROLLER_API["SystemProcessProbe"]()
+        server = subprocess.Popen([sys.executable, "-c", (
+            "import socket,sys,time\ns=socket.socket()\ns.bind(('127.0.0.1',0))\ns.listen()\n"
+            "print(s.getsockname()[1],flush=True)\ntime.sleep(60)")], stdout=subprocess.PIPE, text=True)
+        self.addCleanup(server.stdout.close)
+        self.addCleanup(server.wait)
+        self.addCleanup(server.kill)
+        port = int(server.stdout.readline())
+        own = os.getpid()
+        identity = probe.identity(own)
+        lstart = CONTROLLER_API["process_start"](own)
+        self.assertEqual(identity[0], int(CONTROLLER_API["process_start_epoch"](lstart)))
+        self.assertIsNone(probe.identity(server.pid + 10_000_000))
+        node = self.node(pid=own)
+        node["providerProcess"]["start"] = lstart
+        probe.markers = lambda session: [(own, time.time())]
+        projection, _count = CONTROLLER_API["observe_processes"](self.state(node), {}, probe, time.time())
+        entry = next(item for item in projection["nodes"][0]["processes"] if item["pid"] == server.pid)
+        self.assertEqual(entry["listeners"], [{"protocol": "tcp", "address": "127.0.0.1", "port": port,
+                                               "scope": "loopback"}])
+        self.assertEqual(entry["startMicros"] // 1_000_000, probe.identity(server.pid)[0])
+
+    def test_cli_publishes_a_private_file_and_bounds_passes(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        root = Path(os.path.realpath(home.name)) / "Orchestration"
+        Store = CONTROLLER_API["Store"]
+        with Store(root) as store:
+            store.write(CONTROLLER_API["empty_state"]())
+        observe = CONTROLLER_API["command_process_observe"]
+        probe = FakeProcessProbe([{}], {})
+        self.assertEqual(observe(root, probe, at=1000.0), {"nodes": 0, "processes": 0})
+        published = root / "observer" / "processes.json"
+        self.assertEqual(published.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(json.loads(published.read_text())["nodes"], [])
+        self.assertEqual(observe(root, probe, at=1001.0), {"skipped": "recent"})
+        self.assertEqual(observe(root, probe, at=1002.5)["nodes"], 0)
+        with open(root / "control" / "processes.lock", "a") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX)
+            self.assertEqual(observe(root, probe, at=1010.0), {"skipped": "busy"})
+
+
 if __name__ == "__main__":
     unittest.main()

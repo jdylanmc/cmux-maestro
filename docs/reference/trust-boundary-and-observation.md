@@ -42,6 +42,8 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   `observer/` directory. Cannot read sibling control, binary, task or result data.
   Controller uses exact CMUX workspace, pane, surface UUIDs. Never
   infers ownership from labels, paths, focus, chronology, or terminal text.
+  `observer/processes.json` adds owned process names, PIDs and TCP listeners
+  ([background processes and ports](processes-and-ports.md)). Never argv or environment.
 - Outer hook shell redirects both output streams. Returns zero even
   when helper is missing, fails, or crashes. Hooks cannot supply prompt
   content, tool decisions, or control commands.

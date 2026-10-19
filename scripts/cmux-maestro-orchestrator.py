@@ -3781,6 +3781,321 @@ def verify_session_custody(session, provider):
         os.close(descriptor)
 
 
+# Owned background processes (#78) and their TCP listeners (#75), ADR 0026.
+# Ownership is keyed by the node's recorded binding (session, generation, provider process), never
+# by lock files, names, ports or cwd alone. Identity is PID plus microsecond start time.
+PROCESS_OBSERVATION_FILE = "processes.json"
+PROCESS_STATES = ("owned-current", "scan-incomplete", "denied", "no-custody", "ambiguous", "exited")
+MAX_OBSERVED_PROCESSES = 32
+MAX_PROCESS_LISTENERS = 8
+MAX_PROCESS_EVENTS = 16
+PROCESS_EVENT_SECONDS = 300
+PROCESS_SCAN_SECONDS = 2
+PROCESS_TOOL_SECONDS = 5
+
+
+class SystemProcessProbe:
+    """Read-only process facts: one `ps` table, sysctl start identities and one `lsof` pass.
+
+    Never reads argv or environment and never signals.
+    """
+    _KINFO_SIZE = 648  # sizeof(struct kinfo_proc) on arm64 and x86_64 macOS
+    _libc = None
+
+    @staticmethod
+    def _run(argv):
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, timeout=PROCESS_TOOL_SECONDS)
+        except (OSError, subprocess.TimeoutExpired, UnicodeError):
+            return None
+
+    def identity(self, pid):
+        """(seconds, microseconds) start of a live, non-zombie process, or None."""
+        import ctypes
+        import ctypes.util
+        if SystemProcessProbe._libc is None:
+            SystemProcessProbe._libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
+        if type(pid) is not int or not 0 < pid <= 2_147_483_647:
+            return None
+        buffer = ctypes.create_string_buffer(self._KINFO_SIZE)
+        size = ctypes.c_size_t(self._KINFO_SIZE)
+        mib = (ctypes.c_int * 4)(1, 14, 1, pid)  # CTL_KERN, KERN_PROC, KERN_PROC_PID
+        if self._libc.sysctl(mib, 4, buffer, ctypes.byref(size), None, 0) != 0 or size.value != self._KINFO_SIZE:
+            return None
+        raw = buffer.raw
+        seconds = int.from_bytes(raw[0:8], "little", signed=True)
+        microseconds = int.from_bytes(raw[8:12], "little", signed=True)
+        # p_stat 5 is SZOMB; a zombie no longer runs anything.
+        if int.from_bytes(raw[40:44], "little", signed=True) != pid or raw[36] == 5:
+            return None
+        return (seconds, microseconds)
+
+    def table(self):
+        """{pid: (ppid, pgid, uid, name)} from one `ps`, and whether it is complete."""
+        result = self._run(["/bin/ps", "-axo", "pid=,ppid=,pgid=,uid=,ucomm="])
+        return parse_process_table(result.stdout, result.returncode == 0 and not result.stderr) \
+            if result is not None else ({}, False)
+
+    def listeners(self, pids):
+        """{pid: [listener]} for TCP LISTEN sockets of exactly these PIDs, and completeness."""
+        if not pids:
+            return {}, True
+        result = self._run(["/usr/sbin/lsof", "-nP", "-w", "-a", "-p", ",".join(map(str, sorted(pids))),
+                            "-iTCP", "-sTCP:LISTEN", "-Fpn"])
+        if result is None:
+            return {}, False
+        # lsof exits 1 when nothing matched; any diagnostic means the list may be incomplete.
+        return parse_tcp_listeners(result.stdout, set(pids), result.returncode in (0, 1) and not result.stderr)
+
+    @staticmethod
+    def markers(session):
+        """[(pid, birth)] for each inuse.<PID>.lock of the session, through the anchored scan."""
+        return [(int(name.split(".")[1]), getattr(marker, "st_birthtime", marker.st_mtime))
+                for name, marker in session_lock_markers(session)]
+
+
+def parse_process_table(output, complete):
+    table = {}
+    for line in output.splitlines():
+        parts = line.split(None, 4)
+        if len(parts) < 4 or not all(part.isdigit() for part in parts[:4]):
+            complete = False
+            continue
+        # The accounting name only (at most 16 characters from the kernel); never argv.
+        name = re.sub(r"[^A-Za-z0-9._ +-]", "?", parts[4].strip() if len(parts) == 5 else "")[:32] or "?"
+        table[int(parts[0])] = (int(parts[1]), int(parts[2]), int(parts[3]), name)
+    return table, complete
+
+
+def listener_scope(address):
+    if address in ("*", "0.0.0.0", "[::]"):
+        return "any"
+    if address.startswith("127.") or address == "[::1]":
+        return "loopback"
+    return "other"
+
+
+def parse_tcp_listeners(output, pids, complete):
+    found, pid = {}, None
+    for line in output.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:]) if line[1:].isdigit() else None
+            complete = complete and pid is not None
+        elif line.startswith("n"):
+            match = re.fullmatch(r"(\*|[0-9]{1,3}(?:\.[0-9]{1,3}){3}|\[[0-9A-Fa-f:.]{2,45}\]):([0-9]{1,5})", line[1:])
+            if pid not in pids or match is None or not 0 < int(match.group(2)) <= 65_535:
+                complete = False
+                continue
+            entry = {"protocol": "tcp", "address": match.group(1), "port": int(match.group(2)),
+                     "scope": listener_scope(match.group(1))}
+            if entry not in found.setdefault(pid, []):
+                found[pid].append(entry)
+    return found, complete
+
+
+def process_descendants(table, root):
+    children = {}
+    for pid, (parent, *_rest) in table.items():
+        children.setdefault(parent, []).append(pid)
+    found, queue = [], [root]
+    while queue:
+        for child in sorted(children.get(queue.pop(0), [])):
+            if child != root and child not in found:
+                found.append(child)
+                queue.append(child)
+    return found
+
+
+def observed_identity_key(pid, identity):
+    return pid, identity[0] * 1_000_000 + identity[1]
+
+
+def previous_process_entries(previous, node):
+    """The last pass's entries for exactly this node binding; another generation starts empty."""
+    for item in previous.get("nodes", []) if isinstance(previous, dict) else []:
+        if (isinstance(item, dict) and item.get("nodeId") == node["id"]
+                and item.get("copilotSessionId") == node.get("copilotSessionId")
+                and item.get("generation") == node["generation"] and isinstance(item.get("processes"), list)):
+            return [entry for entry in item["processes"] if isinstance(entry, dict)
+                    and type(entry.get("pid")) is int and type(entry.get("startMicros")) is int
+                    and entry.get("state") in ("owned-current", "escaped", "exited")]
+    return []
+
+
+def process_custody(node, probe, table, uid, shared):
+    """The node state before its tree is read, and the root's identity when custody holds."""
+    provider = node["providerProcess"]
+    root = provider["pid"]
+    identity = probe.identity(root)
+    epoch = process_start_epoch(provider["start"])
+    # The recorded start has one-second resolution; a later process at that PID is not the provider.
+    if identity is None or epoch is None or abs(identity[0] - epoch) >= 1:
+        return "exited", None
+    if root not in table:
+        return "scan-incomplete", None
+    if table[root][2] != uid:
+        return "denied", None
+    if shared:
+        return "ambiguous", None
+    try:
+        markers = probe.markers(node["copilotSessionId"])
+    except (OSError, OrchestrationError):
+        return "no-custody", None
+    live = []
+    for pid, birth in markers:
+        owner = probe.identity(pid)
+        # A process that started after its marker was written cannot own it (PID reuse).
+        if owner is not None and owner[0] <= birth + 1:
+            live.append(pid)
+    if not live:
+        return "no-custody", None
+    if any(pid != root and table.get(pid, (None,))[0] != root for pid in live):
+        return "ambiguous", None
+    return "owned-current", identity
+
+
+def process_observation_nodes(state):
+    released = {node["runId"] for node in state["nodes"].values() if node.get("surfaceReleased")}
+    nodes = [node for node in state["nodes"].values()
+             if node.get("surfaceId") is not None and node["phase"] in PROJECTED_PHASES
+             and node["runId"] not in released and node.get("copilotSessionId")
+             and _valid_process_identity(node.get("providerProcess"))]
+    return sorted(nodes, key=lambda item: (item["createdAt"], item["id"]))[:MAX_HOST_NODES]
+
+
+def observe_processes(state, previous, probe, at, uid=None):
+    """One read-only pass over every managed node: (sanitized projection, owned PID count)."""
+    uid = os.getuid() if uid is None else uid
+    stamp = datetime.datetime.fromtimestamp(at, datetime.timezone.utc).isoformat().replace("+00:00", "Z")
+    nodes = process_observation_nodes(state)
+    anchors = {}
+    for node in nodes:
+        key = (node["providerProcess"]["pid"], node["providerProcess"]["start"])
+        anchors[key] = anchors.get(key, 0) + 1
+    table, table_complete = probe.table()
+    passes = []
+    for node in nodes:
+        provider = node["providerProcess"]
+        status, root = process_custody(node, probe, table, uid, anchors[(provider["pid"], provider["start"])] > 1)
+        tree = {}
+        if root is not None:
+            for pid in process_descendants(table, provider["pid"]):
+                identity = probe.identity(pid)
+                if identity is not None:
+                    tree[pid] = identity
+        passes.append((node, status, root, tree))
+    owned = {pid for _node, _status, _root, tree in passes for pid in tree}
+    listeners, listeners_complete = probe.listeners(owned)
+    # Fence: parentage and identity must still hold after lsof, like CMUX's own scanner.
+    fence, fence_complete = probe.table()
+    published, count = [], 0
+    for node, status, root, tree in passes:
+        provider = node["providerProcess"]
+        entries = []
+        root_current = root is not None and probe.identity(provider["pid"]) == root
+        if root is not None and not root_current:
+            status = "scan-incomplete"
+        if root_current:
+            still = set(process_descendants(fence, provider["pid"]))
+            group = table[provider["pid"]][1]
+            incomplete = not (table_complete and fence_complete and listeners_complete)
+            for pid, identity in tree.items():
+                if pid not in still or probe.identity(pid) != identity:
+                    continue  # exited or replaced during the pass; reported by the next diff
+                _parent, pgid, owner, name = fence.get(pid, table[pid])
+                incomplete = incomplete or owner != uid
+                entries.append({
+                    "pid": pid, "startMicros": observed_identity_key(pid, identity)[1], "name": name,
+                    "group": "provider" if pgid == group else "separate", "state": "owned-current",
+                    "listeners": listeners.get(pid, [])[:MAX_PROCESS_LISTENERS],
+                })
+            status = "scan-incomplete" if incomplete else "owned-current"
+        current = {(entry["pid"], entry["startMicros"]) for entry in entries}
+        events = []
+        prior = previous_process_entries(previous, node)
+        if status == "exited" and not prior:
+            continue  # an ended provider with nothing observed before has nothing to report
+        if status in ("owned-current", "scan-incomplete", "exited"):
+            reachable = set(process_descendants(fence, provider["pid"])) if root_current else set()
+            for entry in prior:
+                key = (entry["pid"], entry["startMicros"])
+                if key in current:
+                    continue
+                identity = probe.identity(entry["pid"])
+                alive = identity is not None and observed_identity_key(entry["pid"], identity) == key
+                since = entry.get("since") if entry["state"] != "owned-current" else stamp
+                if not isinstance(since, str) or parse_age(since, at) > PROCESS_EVENT_SECONDS:
+                    continue
+                if entry["state"] == "exited" or not alive:
+                    state_name, since = "exited", since if entry["state"] == "exited" else stamp
+                elif entry["pid"] in reachable:
+                    continue  # still in the tree but not proven this pass; never guessed
+                else:
+                    # Alive outside the tree: detached, and never attributed again.
+                    state_name = "escaped"
+                events.append({"pid": entry["pid"], "startMicros": entry["startMicros"],
+                               "name": entry.get("name") if isinstance(entry.get("name"), str) else "?",
+                               "group": "provider" if entry.get("group") == "provider" else "separate",
+                               "state": state_name, "since": since, "listeners": []})
+            events = sorted(events, key=lambda item: item["since"], reverse=True)[:MAX_PROCESS_EVENTS]
+        entries.sort(key=lambda item: (item["group"] == "provider", item["startMicros"], item["pid"]))
+        count += len(entries)
+        published.append({
+            "nodeId": node["id"], "copilotSessionId": node["copilotSessionId"],
+            "generation": node["generation"], "state": status, "observedAt": stamp,
+            "processes": entries[:MAX_OBSERVED_PROCESSES] + events,
+            "omittedCount": max(0, len(entries) - MAX_OBSERVED_PROCESSES),
+        })
+    return {"version": 1, "observedAt": stamp, "nodes": published}, count
+
+
+def parse_age(value, at):
+    try:
+        moment = datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return float("inf")
+    return at - moment.timestamp()
+
+
+def command_process_observe(root, probe=None, at=None):
+    """Publish observer/processes.json; a skipped or failed pass never touches control state."""
+    probe = probe or SystemProcessProbe()
+
+    def read(store):
+        lock = os.open("processes.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=store.control_fd)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(lock)
+            return None
+        try:
+            payload = store._read_regular(PROCESS_OBSERVATION_FILE, MAX_BYTES, directory=store.observer_fd)
+            previous = json.loads(payload) if payload else {}
+        except (OrchestrationError, ValueError, UnicodeError):
+            previous = {}
+        return lock, store.read(), previous
+
+    held = with_store(root, read, read_only=True)
+    if held is None:
+        return {"skipped": "busy"}
+    lock, state, previous = held
+    try:
+        moment = time.time() if at is None else at
+        observed = previous.get("observedAt") if isinstance(previous, dict) else None
+        if isinstance(observed, str) and 0 <= parse_age(observed, moment) < PROCESS_SCAN_SECONDS:
+            return {"skipped": "recent"}
+        projection, count = observe_processes(state, previous, probe, moment)
+        encoded = json.dumps(projection, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        if len(encoded) > MAX_BYTES:
+            raise OrchestrationError("Process observation byte safety limit reached.")
+        with_store(root, lambda store: Store._atomic(store.observer_fd, PROCESS_OBSERVATION_FILE, encoded),
+                   read_only=True)
+        return {"nodes": len(projection["nodes"]), "processes": count}
+    finally:
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        os.close(lock)
+
+
 def command_native_close(root, cmux):
     try:
         raw = sys.stdin.buffer.read(8193)
@@ -6717,6 +7032,7 @@ def parser():
     ended.add_argument("--workspace", required=True)
     commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     commands.add_parser("native-custody", help=argparse.SUPPRESS)
+    commands.add_parser("process-observe", help=argparse.SUPPRESS)
     resume = commands.add_parser("resume", help="Resume one ended managed session in its restored CMUX surface")
     resume.add_argument("session_id")
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
@@ -6891,7 +7207,7 @@ def main(argv=None):
             return 0
         cmux = None if args.command in {
             "launch-settings", "capacity", "runtime", "report", "native-observe", "archive-ended",
-            "native-session-end", "native-custody",
+            "native-session-end", "native-custody", "process-observe",
         } else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
@@ -6917,6 +7233,8 @@ def main(argv=None):
             output = command_native_session_end(root, cmux)
         elif args.command == "native-custody":
             output = command_native_custody(root)
+        elif args.command == "process-observe":
+            output = command_process_observe(root)
         elif args.command == "archive-ended":
             output = command_archive_ended(args, root)
         elif args.command == "runtime":

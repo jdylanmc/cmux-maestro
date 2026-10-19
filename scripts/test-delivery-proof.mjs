@@ -13,6 +13,7 @@ import {
   ENROLLMENT_MESSAGES, createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
   startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
+import { createProcessObserver, runProcessObserve } from "./delivery-proof/processes.mjs";
 
 const base = await fs.realpath("/tmp");
 
@@ -560,9 +561,12 @@ for (const [signal, recorded] of [["SIGHUP", false], ["SIGTERM", true]]) {
     const f = await loaderFixture(t);
     const born = await f.launchBorn();
     await f.listening();
-    assert.deepEqual(await born.calls(), ["native-enroll"]);
+    // Once managed, the session also asks for one owned-process pass (ADR 0026).
+    await f.waitFor(async () => (await born.calls()).includes("process-observe"));
+    const calls = async () => (await born.calls()).filter(call => call !== "process-observe");
+    assert.deepEqual(await calls(), ["native-enroll"]);
     assert.deepEqual(await f.stop(born, signal), [0, null], born.stderr);
-    assert.deepEqual(await born.calls(), recorded ? ["native-enroll", "native-session-end"] : ["native-enroll"]);
+    assert.deepEqual(await calls(), recorded ? ["native-enroll", "native-session-end"] : ["native-enroll"]);
     assert.equal(await f.exists(f.endpoint), null);
   });
 }
@@ -2752,9 +2756,78 @@ test("born managed: custody loss is latched; its end does not restore stale auth
   assert.equal(f.calls.custody.length, checks);
 });
 
-test("the installed adapter fits setup's 64 KiB resource bound", async () => {
-  const size = (await fs.stat(fileURLToPath(new URL("./delivery-proof/adapter.mjs", import.meta.url)))).size;
-  assert.ok(size <= 65_536, `adapter.mjs is ${size} bytes`);
+test("each installed module fits setup's resource bound", async () => {
+  for (const [name, limit] of [["adapter.mjs", 65_536], ["extension.mjs", 8192], ["processes.mjs", 16_384]]) {
+    const size = (await fs.stat(fileURLToPath(new URL(`./delivery-proof/${name}`, import.meta.url)))).size;
+    assert.ok(size <= limit, `${name} is ${size} bytes`);
+  }
+});
+
+function processObserverFixture() {
+  let clock = 0;
+  const runs = [];
+  const intervals = [];
+  const observer = createProcessObserver({
+    now: () => clock, run: async () => { runs.push(clock); },
+    timers: { setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.at(-1); },
+      clearInterval: handle => { if (handle) handle.cleared = true; } },
+  });
+  return { observer, runs, intervals, advance: ms => { clock += ms; } };
+}
+
+test("owned-process passes wait for management, then run on a bounded interval and debounce", async () => {
+  const f = processObserverFixture();
+  const config = f.observer.hooks({ tools: [] });
+  await config.hooks.onPostToolUse({}, {});
+  assert.deepEqual(f.runs, [], "an unmanaged session never asks for a pass");
+  f.observer.start();
+  f.observer.start();
+  await f.observer.trigger();
+  assert.deepEqual(f.runs, [0]);
+  assert.deepEqual(f.intervals.map(item => item.ms), [10_000], "one bounded interval");
+  f.advance(1_000);
+  await config.hooks.onPostToolUse({}, {});
+  await config.hooks.onAgentStop({}, {});
+  assert.deepEqual(f.runs, [0], "tool use within the debounce does not ask again");
+  f.advance(1_500);
+  await config.hooks.onAgentStop({}, {});
+  await f.observer.trigger();
+  assert.deepEqual(f.runs, [0, 2_500]);
+  f.advance(10_000);
+  await f.intervals[0].fn();
+  assert.equal(f.runs.length, 3);
+  await config.hooks.onSessionEnd({ reason: "user_exit" }, {});
+  assert.ok(f.intervals[0].cleared && !f.observer.active);
+  f.advance(10_000);
+  await f.intervals[0].fn();
+  assert.equal(f.runs.length, 3, "nothing runs after the session ends");
+});
+
+test("owned-process hooks keep existing handlers and their results", async () => {
+  const f = processObserverFixture();
+  const seen = [];
+  const config = f.observer.hooks({ tools: ["t"], hooks: {
+    onPostToolUse: async input => { seen.push(["post", input]); return { kept: true }; },
+    onSessionEnd: async input => { seen.push(["end", input]); return "ended"; },
+    onUserPromptSubmitted: async () => "prompt",
+  } });
+  assert.deepEqual(config.tools, ["t"]);
+  assert.deepEqual(await config.hooks.onPostToolUse(1), { kept: true });
+  assert.equal(await config.hooks.onAgentStop(), undefined);
+  assert.equal(await config.hooks.onUserPromptSubmitted(), "prompt");
+  assert.equal(await config.hooks.onSessionEnd(2), "ended");
+  assert.deepEqual(seen, [["post", 1], ["end", 2]]);
+});
+
+test("an owned-process pass invokes only the controller's process-observe command", async (t) => {
+  const root = await fs.mkdtemp(path.join(base, "maestro-processes-"));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const log = path.join(root, "calls");
+  const controller = path.join(root, "controller");
+  await fs.writeFile(controller, `#!/bin/sh\nprintf '%s\\n' "$*" >> ${JSON.stringify(log)}\nexit 3\n`, { mode: 0o700 });
+  await runProcessObserve(controller);
+  await runProcessObserve(path.join(root, "missing"));
+  assert.equal(await fs.readFile(log, "utf8"), "process-observe\n");
 });
 
 test("born managed: an unrecorded refusal is asked once more, then stands until the next join", async (t) => {

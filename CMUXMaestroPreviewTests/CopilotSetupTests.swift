@@ -1183,7 +1183,7 @@ struct CopilotSetupTests {
             at: repository.appendingPathComponent(".agents/skills/maestro-pet/pet_kit.py"),
             to: petKit
         )
-        for name in ["adapter.mjs", "extension.mjs"] {
+        for name in ["adapter.mjs", "extension.mjs", "processes.mjs"] {
             try FileManager.default.copyItem(
                 at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
                 to: directory.appendingPathComponent(name)
@@ -1223,6 +1223,8 @@ struct CopilotSetupTests {
             == Data(contentsOf: directory.appendingPathComponent("extension.mjs")))
         #expect(try Data(contentsOf: native.appendingPathComponent("adapter.mjs"))
             == Data(contentsOf: directory.appendingPathComponent("adapter.mjs")))
+        #expect(try Data(contentsOf: native.appendingPathComponent("processes.mjs"))
+            == Data(contentsOf: directory.appendingPathComponent("processes.mjs")))
         #expect(try routes.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
         let installed = directory.appendingPathComponent(
             "Orchestration/bin/cmux-maestro-orchestrator"

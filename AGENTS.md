@@ -24,6 +24,8 @@ do not copy its source or history, modify it, or make this project depend on it.
   CLI Integration, not app resources or the runtime plugin.
 - `scripts/delivery-proof/adapter.mjs`: shared installed native-session
   adapter and backwards-compatible disposable proof transport.
+- `scripts/delivery-proof/processes.mjs`: installed owned-process pass
+  triggers (ADR 0026).
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
   script. Never commit it.
 
