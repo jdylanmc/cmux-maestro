@@ -195,7 +195,8 @@ nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
     /// Slug to its human color; absent means the automatic color.
     var colors: [String: SidebarTagSwatch] = [:]
 
-    static let maximumStoredBytes = 1_048_576
+    /// Above the largest valid store (about 1.6 MB), so the entry caps, which pruning handles, always bind first.
+    static let maximumStoredBytes = 4_194_304
     static let maximumEntries = 2_048
     static let failOpen = Self()
     static let unreadableNotice = "Tags unavailable."

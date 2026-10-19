@@ -57,6 +57,32 @@ struct SidebarTagTests {
         }
     }
 
+    /// The byte caps never bind before the entry caps, so a full store is always one pruning can recover.
+    @Test func largestValidStoresFitTheirByteCaps() throws {
+        let wide = String(repeating: "\u{20000}", count: SidebarTagSlug.maximumLength)  // CJK letter, 4 UTF-8 bytes
+        let slug = SidebarTagSlug.canonical(wide)
+        #expect(SidebarTagSlug.isCanonical(slug) && slug.utf8.count == 96)
+        var settings = SidebarTagSettings()
+        let distinct = (0..<SidebarTagSlug.maximumPerSource).map { index in
+            String(slug.unicodeScalars.dropLast().map(Character.init)) + "\(index)"
+        }
+        for _ in 0..<SidebarTagSettings.maximumEntries {
+            settings.assignments[SidebarTagSettings.key(UUID())] = distinct
+        }
+        for index in 0..<SidebarTagSettings.maximumEntries {
+            settings.colors[String(slug.unicodeScalars.dropLast(4).map(Character.init)) + String(format: "%04d", index)] = .slate
+        }
+        #expect(distinct.allSatisfy { SidebarTagSlug.isCanonical($0) && $0.utf8.count >= 93 })
+        #expect(settings.isValid)
+        #expect(try JSONEncoder().encode(settings).count <= SidebarTagSettings.maximumStoredBytes)
+
+        var agent: [String: [String]] = [:]
+        for _ in 0..<SidebarAgentTagsFile.maximumSessions { agent[UUID().uuidString.lowercased()] = distinct }
+        let data = try JSONSerialization.data(withJSONObject: ["version": 1, "sessions": agent], options: [.sortedKeys])
+        #expect(data.count <= SidebarAgentTagsFile.maximumBytes)
+        #expect(try SidebarAgentTagsFile.decode(data).count == SidebarAgentTagsFile.maximumSessions)
+    }
+
     @Test func fullStoresDropOnlyEndedSessionsAndUnusedColorsThenRefuse() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
