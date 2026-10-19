@@ -243,7 +243,9 @@ class ProofTests(unittest.TestCase):
         for constraint in (
             "workspaceId", "sessionId", "generation", "4096 UTF-8 bytes",
             "/cmux-maestro-native:cmux-maestro-orchestrate", "messagingInstalled: true",
-            "Worker actors cannot request YOLO", "delivery and completion are",
+            "Worker actors cannot explicitly request `yolo: true`", "delivery and completion are",
+            "inherit the verified/recorded parent launch mode",
+            "Runtime `/allow-all` toggles are not inherited",
         ):
             self.assertIn(constraint, skill)
         self.assertTrue((REPO / "skills/maestro/intent.md").is_file())

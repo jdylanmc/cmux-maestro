@@ -28,6 +28,9 @@ do not discard an unrecorded manual deny or persist it from argv.
 Unavailable argv or changed PID identity never proves allow-all.
 Unknown options, assisted approval, and unreplayed tool/path restrictions also
 default. Optional arguments such as `--resume` never swallow following options.
+Custom-agent (`--agent`) and configuration-directory (`--config-dir`) selectors
+also default: they can carry restrictions that the child does not replay.
+Maestro does not read their definitions to try to prove them unrestricted.
 
 Safety correction to the initial two-category design: Copilot documents
 `--allow-all` as tools **and paths and URLs**. Tools plus paths alone cannot

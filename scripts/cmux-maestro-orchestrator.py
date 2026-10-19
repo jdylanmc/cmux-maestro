@@ -2130,7 +2130,7 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
     # Values cannot become permission flags, even when a prompt is exactly "--yolo".
     value_flags = {
         "--interactive", "-i", "--prompt", "-p", "--model", "--context", "--reasoning-effort",
-        "--session-id", "--name", "-n", "--agent", "--config-dir", "--log-dir",
+        "--session-id", "--name", "-n", "--log-dir",
         "--log-level", "--plugin-dir", "--additional-mcp-config", "--add-dir", "-C",
         "--auto-tier", "--extension-sdk-path", "--stream", "--output-format", "--attachment",
         "--add-github-mcp-toolset", "--add-github-mcp-tool",
@@ -2178,6 +2178,7 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
         elif flag.startswith("--deny-") or flag in {
             "--assisted-approval", "--disallow-temp-dir", "--available-tools", "--excluded-tools",
             "--disable-mcp-server", "--disable-builtin-mcps",
+            "--agent", "--config-dir",
         }:
             return False
         elif flag in value_flags:
