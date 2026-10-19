@@ -72,13 +72,51 @@ struct SidebarWorktreeProjectionTests {
                                                  in: tree) == nil)
         #expect(SidebarWorktreeGrouping.evidence(for: node(session: nil, surface: surface, workspace: workspace),
                                                  in: tree) == nil)
-        // A child agent never takes its parent's worktree: only its own session decides.
-        let child = SidebarOrchestrationNode(
-            id: UUID(), runId: UUID(), parentId: UUID(), role: "worker", label: "Child", workspaceId: workspace,
-            surfaceId: UUID(), generation: 1, phase: "turn-running", availability: "busy",
-            copilotSessionId: UUID(), executionMode: .interactive, createdAt: now, updatedAt: now
+    }
+
+    /// The parent's session is in a verified worktree; its spawned child's own session has no
+    /// evidence. The child is Unknown, never grouped with its parent.
+    @Test func childNeverTakesItsParentsWorktree() {
+        let parentSession = UUID(), parentSurface = UUID(), childSession = UUID(), childSurface = UUID()
+        let worktree = verified(identity("0000000000000001"))
+        func session(_ id: UUID, _ surface: UUID, _ evidence: AgentSessionWorktree?) -> SidebarCopilotSession {
+            var result = SidebarCopilotSession(
+                id: id, workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .working,
+                model: nil, observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+                omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+            )
+            result.currentWorktree = evidence
+            return result
+        }
+        let tree = SidebarCopilotTree(
+            availability: .ready, sessions: [session(parentSession, parentSurface, worktree),
+                                             session(childSession, childSurface, nil)],
+            issues: [], generatedAt: now
         )
+        let parent = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Parent", workspaceId: workspace,
+            surfaceId: parentSurface, generation: 1, phase: "turn-running", availability: "busy",
+            copilotSessionId: parentSession, executionMode: .interactive, createdAt: now, updatedAt: now
+        )
+        let child = SidebarOrchestrationNode(
+            id: UUID(), runId: parent.runId, parentId: parent.id, role: "worker", label: "Child",
+            workspaceId: workspace, surfaceId: childSurface, generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: childSession, executionMode: .interactive,
+            createdAt: now, updatedAt: now
+        )
+        #expect(SidebarWorktreeGrouping.evidence(for: parent, in: tree) == worktree)
         #expect(SidebarWorktreeGrouping.evidence(for: child, in: tree) == nil)
+        let groups = SidebarWorktreeGrouping.groups([parent, child]) { SidebarWorktreeGrouping.evidence(for: $0, in: tree) }
+        #expect(groups.map(\.key) == [.worktree("0000000000000001"), .unknown])
+        #expect(groups.map { $0.members.map(\.label) } == [["Parent"], ["Child"]])
+    }
+
+    @Test func groupHeaderShowsNoBranchWhenMembersDisagree() {
+        let main = identity("0000000000000001"), topic = identity("0000000000000001", head: .branch("topic"))
+        let agreeing = SidebarWorktreeGrouping.groups([verified(main), verified(main)]) { $0 }
+        #expect(agreeing.map(\.detail) == ["main · 0000000"])
+        let disagreeing = SidebarWorktreeGrouping.groups([verified(main), verified(topic)]) { $0 }
+        #expect(disagreeing.count == 1 && disagreeing[0].detail == "0000000" && disagreeing[0].members.count == 2)
     }
 
     @Test func groupDisclosureIsStoredPerWorkspaceAndKey() throws {

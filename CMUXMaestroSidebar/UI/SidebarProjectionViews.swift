@@ -1,5 +1,17 @@
 import SwiftUI
 
+extension SidebarWorktreeGrouping {
+    /// The current-worktree evidence of a managed agent's exact session: same session UUID,
+    /// workspace and surface. A node without a recorded session has none.
+    static func evidence(for node: SidebarOrchestrationNode, in tree: SidebarCopilotTree) -> AgentSessionWorktree? {
+        guard let sessionID = node.copilotSessionId else { return nil }
+        let session = (tree.sessions + tree.statusSessions).first {
+            $0.id == sessionID && $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
+        }
+        return session?.currentWorktree
+    }
+}
+
 /// Worktrees or Sub-agents, for every workspace in every window.
 struct SidebarProjectionPicker: View {
     @Binding var selection: SidebarProjection

@@ -255,6 +255,7 @@ only: nothing is focused, moved, acknowledged or adopted.
 - **Worktrees**: each workspace's agents grouped by their exact session's current
   worktree (ADR 0026). Header: branch glyph, repository name, `branch · tree` or
   `Detached HEAD · commit · tree` (tree = first 7 hex of the opaque key), agent count.
+  When members' observations report different heads, the second line shows only `tree`.
   Groups order: current worktrees (by repository, branch, key), last-known worktrees
   (clock glyph), `No repository`, `Unknown`. A child never takes its parent's
   worktree; an agent with no evidence, a non-current non-repository result, or no
