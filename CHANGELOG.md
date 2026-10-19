@@ -62,6 +62,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- The global `maestro` guide prefers visible, interactive `maestro_spawn` workers
+  for authorized substantial work in managed sessions. Built-in `task` remains
+  for short read-only work, quick reviews, and unmanaged fallback, never to bypass
+  a refused launch. Spawn icon guidance now names the Nerd Fonts 3.5.1 catalog.
 - Every Copilot session in a CMUX tab is Maestro-managed (#261, ADR 0025 amendment). A session
   already running when Maestro was installed enrolls in place at its next extension join
   (`/clear`, `/resume`, or an extension reload you run); Maestro never triggers one. A session the
