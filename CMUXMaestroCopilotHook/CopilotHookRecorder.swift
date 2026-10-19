@@ -628,6 +628,8 @@ nonisolated enum CopilotWorktreeResolver {
         } else if errno != ENOENT {
             return .unknown
         }
+        // Git's own test (`is_git_directory`): the shared directory holds `objects` and `refs`.
+        guard hasRepositoryLayout(common) else { return .unknown }
         let commonName = (common as NSString).lastPathComponent
         let repositoryPath = commonName == ".git" ? (common as NSString).deletingLastPathComponent
             : isLinked ? common : root
@@ -643,16 +645,28 @@ nonisolated enum CopilotWorktreeResolver {
         return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
     }
 
+    /// The whole `HEAD` file, as Git reads it: trailing ASCII whitespace dropped, one line only.
     static func parseHead(_ text: String) -> CopilotWorktreeHead? {
-        let line = (text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "")
-            .trimmingCharacters(in: .whitespaces)
+        var scalars = Substring(text).unicodeScalars
+        while let last = scalars.last, [" ", "\t", "\n", "\r"].contains(last) { scalars.removeLast() }
+        let line = String(scalars)
+        guard !line.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) else { return nil }
         if line.hasPrefix("ref: refs/heads/") {
             let name = String(line.dropFirst(16))
-            return CopilotSessionLocation.validBranch(name) ? .branch(name) : nil
+            return validBranchRef(name) && CopilotSessionLocation.validBranch(name) ? .branch(name) : nil
         }
         guard [40, 64].contains(line.utf8.count),
               line.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
         return .detached(String(line.prefix(7)))
+    }
+
+    /// Git's ref-name rules for a branch under `refs/heads/` (`git check-ref-format --branch`).
+    static func validBranchRef(_ name: String) -> Bool {
+        guard !name.isEmpty, name != "@", !name.hasPrefix("-"), !name.hasSuffix("/"), !name.hasSuffix("."),
+              !name.contains(".."), !name.contains("@{"), !name.contains("//"),
+              !name.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F || " ~^:?*[\\".unicodeScalars.contains($0) })
+        else { return false }
+        return name.split(separator: "/").allSatisfy { !$0.hasPrefix(".") && !$0.hasSuffix(".lock") }
     }
 
     /// A one-path Git file (`.git` gitfile, `commondir`): Git drops only trailing CR and LF, so
@@ -663,6 +677,12 @@ nonisolated enum CopilotWorktreeResolver {
         let value = String(scalars)
         guard !value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) else { return nil }
         return value
+    }
+
+    private static func hasRepositoryLayout(_ path: String) -> Bool {
+        var objects = stat(), refs = stat()
+        return lstat(join(path, "objects"), &objects) == 0 && objects.st_mode & S_IFMT == S_IFDIR
+            && lstat(join(path, "refs"), &refs) == 0 && refs.st_mode & S_IFMT == S_IFDIR
     }
 
     private static func looksLikeGitDirectory(_ path: String) -> Bool {

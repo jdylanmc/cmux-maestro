@@ -35,6 +35,8 @@ private struct LocationScratch {
 
     func repo(_ name: String, head: String = "ref: refs/heads/main\n") throws -> URL {
         try write(head, "\(name)/.git/HEAD")
+        _ = try directory("\(name)/.git/objects")
+        _ = try directory("\(name)/.git/refs")
         try write("", "\(name)/src/file.swift")
         return root.appendingPathComponent(name)
     }
@@ -383,8 +385,11 @@ struct CopilotWorktreeResolverTests: Sendable {
     @Test func gitfilePathKeepsTrailingSpacesLikeGit() throws {
         let scratch = try LocationScratch()
         defer { scratch.remove() }
-        try scratch.write("ref: refs/heads/spaced\n", "admin /HEAD")
-        try scratch.write("ref: refs/heads/sibling\n", "admin/HEAD")
+        for (directory, branch) in [("admin ", "spaced"), ("admin", "sibling")] {
+            try scratch.write("ref: refs/heads/\(branch)\n", "\(directory)/HEAD")
+            _ = try scratch.directory("\(directory)/objects")
+            _ = try scratch.directory("\(directory)/refs")
+        }
         try scratch.write("gitdir: \(scratch.root.path)/admin \r\n", "tree/.git")
         guard case .verified(let tree) = resolve(scratch.root.appendingPathComponent("tree")) else {
             Issue.record("gitfile with a trailing-space path must verify that directory"); return
@@ -400,6 +405,55 @@ struct CopilotWorktreeResolverTests: Sendable {
         #expect(resolve(scratch.root.appendingPathComponent("loose")) == .unknown)
         #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a b \t\r\n\n") == "a b \t")
         #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a\nb\n") == nil)
+    }
+
+    /// YAML blanks are ASCII space and tab; a trailing NBSP is part of the path.
+    @Test func trailingNoBreakSpaceInCwdStaysInThePath() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let plain = try scratch.repo("app")
+        let spaced = try scratch.repo("app\u{00A0}")
+        let yaml = Data("name: Synthetic\u{00A0}\ncwd: \(spaced.path)\n".utf8)
+        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: yaml))
+        #expect(cwd == spaced.path)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: cwd) == resolve(spaced))
+        #expect(resolve(spaced) != resolve(plain))
+        #expect(CMUXMaestroPreview.CopilotSessionName.parse(yaml) == "Synthetic")
+    }
+
+    /// Git's repository test: the shared Git directory must hold `objects` and `refs`.
+    @Test func headOnlyGitDirectoriesAreUnknown() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        try scratch.write("ref: refs/heads/main\n", "bare-head/.git/HEAD")
+        #expect(resolve(scratch.root.appendingPathComponent("bare-head")) == .unknown)
+        try scratch.write("ref: refs/heads/main\n", "target/HEAD")
+        try scratch.write("gitdir: \(scratch.root.path)/target\n", "gitfile/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("gitfile")) == .unknown)
+        _ = try scratch.directory("plain-common")
+        try scratch.write("ref: refs/heads/main\n", "admin/HEAD")
+        try scratch.write("../plain-common\n", "admin/commondir")
+        try scratch.write("gitdir: \(scratch.root.path)/admin\n", "linked/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("linked")) == .unknown)
+        // Control: the same linked layout with a real shared directory verifies.
+        _ = try scratch.directory("plain-common/objects")
+        _ = try scratch.directory("plain-common/refs")
+        guard case .verified = resolve(scratch.root.appendingPathComponent("linked")) else {
+            Issue.record("control must verify"); return
+        }
+    }
+
+    @Test func headIsReadAsGitReadsIt() {
+        let parse = CMUXMaestroPreview.CopilotWorktreeResolver.parseHead
+        #expect(parse("ref: refs/heads/topic \n") == .branch("topic"))
+        #expect(parse("ref: refs/heads/a..b\n") == nil)
+        #expect(parse("\nref: refs/heads/main\n") == nil)
+        #expect(parse("ref: refs/heads/main\njunk\n") == nil)
+        for bad in ["a@{b", "a.lock", ".hidden", "a/.b", "a b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a\\b", "a/", "a.", "@", "-a", "a//b"] {
+            #expect(parse("ref: refs/heads/\(bad)\n") == nil, "\(bad)")
+        }
+        #expect(parse("ref: refs/heads/feat/x-1.2\n") == .branch("feat/x-1.2"))
+        #expect(parse("0123456789abcdef0123456789abcdef01234567\n") == .detached("0123456"))
     }
 
     @Test func currentWorktreeRecordRoundTripsAndRejectsDeviations() throws {

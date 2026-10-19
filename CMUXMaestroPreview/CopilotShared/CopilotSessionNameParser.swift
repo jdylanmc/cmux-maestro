@@ -7,6 +7,8 @@ nonisolated enum CopilotSessionName {
     static let filename = "workspace.yaml"
     static let maximumFileBytes = 16_384
     static let maximumCharacters = 200
+    /// YAML separates only with ASCII space and tab; other Unicode spaces are scalar content.
+    private static let yamlBlank = CharacterSet(charactersIn: " \t")
 
     static func parse(_ data: Data) -> String? {
         scalar(forKey: "name", in: data, escapedTab: " ").flatMap(sanitize)
@@ -81,13 +83,13 @@ nonisolated enum CopilotSessionName {
 
     private static func continues(_ lines: [Substring], after index: Int) -> Bool {
         guard let next = lines.dropFirst(index + 1).first(where: {
-            !$0.trimmingCharacters(in: .whitespaces).isEmpty
+            !$0.trimmingCharacters(in: yamlBlank).isEmpty
         }) else { return false }
         return next.first == " " || next.first == "\t"
     }
 
     private static func scalar(_ raw: Substring, continued: Bool, escapedTab: String) -> String? {
-        let value = raw.trimmingCharacters(in: .whitespaces)
+        let value = raw.trimmingCharacters(in: yamlBlank)
         // Indented lines after the key would extend a plain scalar or form a nested block.
         guard !value.isEmpty, !continued, let first = value.first else { return nil }
         switch first {
@@ -106,7 +108,7 @@ nonisolated enum CopilotSessionName {
         if let comment = result.range(of: " #") ?? result.range(of: "\t#") {
             result = String(result[..<comment.lowerBound])
         }
-        result = result.trimmingCharacters(in: .whitespaces)
+        result = result.trimmingCharacters(in: yamlBlank)
         // `key: value` inside a plain scalar is a nested mapping, not a title.
         guard !result.isEmpty, !result.contains(": "), !result.hasSuffix(":") else { return nil }
         // Plain null is no name.
@@ -161,8 +163,8 @@ nonisolated enum CopilotSessionName {
     ) -> Bool {
         var rest = String(first)
         while let character = iterator.next() { rest.append(character) }
-        let trimmed = rest.trimmingCharacters(in: .whitespaces)
-        return trimmed.isEmpty || (rest.first?.isWhitespace == true && trimmed.hasPrefix("#"))
+        let trimmed = rest.trimmingCharacters(in: yamlBlank)
+        return trimmed.isEmpty || ((rest.first == " " || rest.first == "\t") && trimmed.hasPrefix("#"))
     }
 
     static func sanitize(_ value: String) -> String? {
