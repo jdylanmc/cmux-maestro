@@ -67,8 +67,11 @@ struct SidebarLayoutRenderingTests {
                             folder.appendingPathComponent("\(density.rawValue)-\(appearance.name)-\(width)-rows.json"))
                         let ordinary = geometry.filter { !$0.label.hasPrefix("Focus workspace") }
                         #expect(ordinary.allSatisfy { $0.frame.height <= 34 }, "Exactly one title and one metadata line")
-                        #expect(abs(ordinary[1].frame.minY - ordinary[0].frame.minY - density.rowHeight) < 0.01)
-                        #expect(abs(ordinary[2].frame.minY - ordinary[1].frame.minY - density.rowHeight) < 0.01)
+                        // Agent rows are one line (name and state); the first two rows are agents, then a browser.
+                        #expect(abs(ordinary[1].frame.minY - ordinary[0].frame.minY - density.agentRowHeight) < 0.01)
+                        #expect(abs(ordinary[2].frame.minY - ordinary[1].frame.minY
+                            - (density.agentRowHeight + density.rowHeight) / 2 + (ordinary[2].frame.height
+                                - ordinary[1].frame.height) / 2) <= 0.5)
                         #expect(ordinary.prefix(3).allSatisfy { $0.frame.minX == ordinary[0].frame.minX })
                         #expect(geometry.contains { $0.help.contains("State unavailable")
                             && $0.help.contains("Child history incomplete")
@@ -80,6 +83,150 @@ struct SidebarLayoutRenderingTests {
                 }
             }
         }
+    }
+
+    /// Worktrees and Sub-agents for one synthetic workspace. Images are review evidence under
+    /// `.build/visual-target/projections/`; they are not hosted CMUX proof.
+    @Test func worktreeAndSubAgentProjections() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        let projection = await makeProjectionModel()
+        defer { projection.model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(.never)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/visual-target/projections")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        func titles(_ host: NSView) -> [String: CGRect] {
+            Dictionary(nativeTitles(in: host).map { ($0.accessibilityLabel() ?? "", host.convert($0.bounds, from: $0)) },
+                       uniquingKeysWith: { first, _ in first })
+        }
+        for width in [280, 350] {
+            preferences.projection = .worktrees
+            try await render(model: projection.model, preferences: preferences, width: width, height: 640,
+                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             destination: folder.appendingPathComponent("worktrees-expanded-\(width).png")) { host in
+                let rows = titles(host)
+                // One line per agent: name and state, no subtitle.
+                for name in ["Coordinator", "Left helper", "Right helper", "Unrelated"] {
+                    let frame = try #require(rows["Focus \(name)"], "\(name) row: \(rows.keys.sorted())")
+                    #expect(frame.height <= 24, "\(name) must be one line: \(frame)")
+                }
+                // Same repository and branch, two worktrees: two groups, in their own order.
+                let order = try ["Coordinator", "Left helper", "Right helper", "Unrelated"].map {
+                    try #require(rows["Focus \($0)"]).minY
+                }
+                #expect(order == order.sorted())
+            }
+            for key in projection.keys {
+                preferences.setExpanded(false, for: .worktreeGroup(key, workspaceID: projection.workspace))
+            }
+            try await render(model: projection.model, preferences: preferences, width: width, height: 640,
+                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             destination: folder.appendingPathComponent("worktrees-collapsed-\(width).png")) { host in
+                let rows = titles(host)
+                // Collapsed groups are icon cards: each icon focuses its own agent.
+                #expect(rows["Focus Coordinator"] == nil)
+                for name in ["Coordinator", "Left helper", "Right helper", "Unrelated"] {
+                    #expect(rows.keys.contains { $0.hasPrefix("\(name), ") }, "\(name) icon: \(rows.keys.sorted())")
+                }
+            }
+            for key in projection.keys {
+                preferences.setExpanded(true, for: .worktreeGroup(key, workspaceID: projection.workspace))
+            }
+            preferences.projection = .subAgents
+            try await render(model: projection.model, preferences: preferences, width: width, height: 640,
+                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             destination: folder.appendingPathComponent("subagents-expanded-\(width).png")) { host in
+                let rows = titles(host)
+                let root = try #require(rows["Focus Coordinator"])
+                let child = try #require(rows["Focus Left helper"])
+                #expect(child.minX > root.minX, "Spawned children indent under their parent")
+            }
+            preferences.setExpanded(false, for: .managed(projection.root))
+            try await render(model: projection.model, preferences: preferences, width: width, height: 640,
+                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             destination: folder.appendingPathComponent("subagents-collapsed-\(width).png")) { host in
+                let rows = titles(host)
+                #expect(rows["Focus Left helper"] == nil)
+                #expect(rows.keys.contains { $0.hasPrefix("Left helper, ") })
+                #expect(rows.keys.contains { $0.hasPrefix("Right helper, ") })
+            }
+            preferences.setExpanded(true, for: .managed(projection.root))
+        }
+    }
+
+    private func makeProjectionModel() async -> (
+        model: SidebarConnectionModel, workspace: UUID, root: UUID, keys: [SidebarWorktreeGroupKey]
+    ) {
+        let now = Date()
+        let workspace = UUID()
+        let surfaces = (0..<5).map { _ in UUID() }
+        let sessions = (0..<4).map { _ in UUID() }
+        let nodes = (0..<4).map { _ in UUID() }
+        let left = CopilotWorktreeIdentity(key: "0a1b2c3d4e5f6071", repository: "maestro", head: .branch("feat/sidebar"),
+                                           linked: true)
+        let right = CopilotWorktreeIdentity(key: "f0e1d2c3b4a59687", repository: "maestro", head: .branch("feat/sidebar"),
+                                            linked: true)
+        let names = ["Coordinator", "Left helper", "Right helper", "Unrelated"]
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: [.init(
+                id: workspace, title: .available("Projection review (synthetic)"), detail: .available("Synthetic"),
+                isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .available(nil), projectRootPath: .available(nil),
+                surfaces: .available(surfaces.enumerated().map { index, id in
+                    .init(id: id, title: index < 4 ? names[index] : "Build", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .available(nil))
+                })
+            )], windowID: UUID()
+        )
+        let managed = (0..<4).map { index in
+            SidebarOrchestrationNode(
+                id: nodes[index], runId: nodes[0], parentId: index == 1 || index == 2 ? nodes[0] : nil,
+                role: index == 1 || index == 2 ? "worker" : "coordinator", label: names[index],
+                workspaceId: workspace, surfaceId: surfaces[index], generation: 1, phase: "turn-running",
+                availability: "busy", copilotSessionId: sessions[index], executionMode: .interactive,
+                createdAt: now.addingTimeInterval(Double(index - 10)), updatedAt: now
+            )
+        }
+        let worktrees: [AgentSessionWorktree?] = [
+            .init(evidence: .verified(left), isCurrent: true), .init(evidence: .verified(left), isCurrent: true),
+            .init(evidence: .verified(right), isCurrent: true), nil,
+        ]
+        let observations: [CopilotSessionObservation] = (0..<4).map { index in
+            var observation = CopilotSessionObservation(
+                sessionID: sessions[index], surfaceID: surfaces[index], launchWorkspaceID: workspace,
+                liveness: .alive, state: index == 3 ? .idle : .working, model: "synthetic-model",
+                children: index == 0 ? [.init(id: "scan", parentID: nil, kind: .subagent, name: "Scan sources",
+                                              state: .working, model: nil)] : [],
+                observedAt: now
+            )
+            observation.currentWorktree = worktrees[index]
+            return observation
+        }
+        let copilot = SidebarCopilotPolling(
+            read: neutralRead { _ in .init(generatedAt: now, sessions: observations, issues: [], isComplete: true) },
+            pause: { try await Task.sleep(for: .seconds(60)) },
+            expiryPause: Self.suspendFrozenClock, now: { now }
+        )
+        let orchestration = SidebarOrchestrationPolling(
+            read: { .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: managed) },
+            pause: { try await Task.sleep(for: .seconds(60)) }
+        )
+        let model = SidebarConnectionModel(copilot: copilot, orchestration: orchestration)
+        model.replaceHierarchy(with: hierarchy)
+        model.showConnected(workspaceCount: 1, surfaceCount: surfaces.count)
+        let topology = SidebarTopology(hierarchy)
+        model.navigation.update(topology: topology, connected: true, workspaceAllowed: true,
+                                surfaceAllowed: true, perform: { _ in Issue.record("Synthetic render cannot navigate") })
+        copilot.update(topology: topology, connected: true)
+        orchestration.update(topology: topology, connected: true)
+        orchestration.setVisible(true)
+        await sidebarEventually { orchestration.snapshot.generatedAt == now }
+        copilot.updateManagedSubjects(orchestration.snapshot)
+        model.setVisible(true)
+        return (model, workspace, nodes[0], [.worktree(left.key), .worktree(right.key), .unknown])
     }
 
     private struct NativeRowGeometry: Codable {
@@ -600,8 +747,8 @@ struct SidebarLayoutRenderingTests {
         }
         #expect(!lines.contains { $0.contains("Copilot agent") || $0.lowercased().contains("session ") })
         #expect(!lines.contains { $0.contains("counts incomplete") || $0.contains("0 agents") || $0.contains("Other tabs") })
-        #expect(lines.contains { $0.contains("review-worktree") })
-        #expect(!lines.contains { $0.contains("Agent") && $0.contains("review-worktree") })
+        // Agent rows have no subtitle: the assigned worktree is in the hover card, not the row.
+        #expect(!lines.contains { $0.contains("review-worktree") })
         #expect(!titleLines.contains { $0.contains("State unavailable") })
         #expect(lines.contains { $0.contains("Terminal") })
         #expect(!lines.contains { $0.contains("Earlier skill") || $0.contains("Branch collapsed")
@@ -645,7 +792,8 @@ struct SidebarLayoutRenderingTests {
             destination: commandImage
         )
         let commandLines = try SidebarRenderingEvidence.recognizedLines(in: commandImage)
-        #expect(commandLines.filter { $0.contains("Running a command") }.count == 1)
+        // The activity caption was an agent-row subtitle; agent rows show only name and state.
+        #expect(!commandLines.contains { $0.contains("Running a command") })
         #expect(!commandLines.contains { $0.contains("Executing tool:") || $0.contains("bash invocation") })
         #expect(commandMetrics.documentHeight == unmanagedBaselineMetrics.documentHeight,
                 "Folded activity replaces context in the existing metadata line")
@@ -836,7 +984,7 @@ struct SidebarLayoutRenderingTests {
         let rootHeight = height(rootModel)
         let treeHeight = height(treeModel)
         #expect(rootHeight <= 120)
-        #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.rowHeight)
+        #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.agentRowHeight)
     }
 
     @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
@@ -903,7 +1051,14 @@ struct SidebarLayoutRenderingTests {
                         let statusText = try SidebarRenderingEvidence.recognizedLines(
                             in: statusImage, dark: appearance == .dark, naturalLanguage: true
                         )
+                        // OCR can misread one letter from surrounding layout ("Walting"). A second reading of
+                        // only the lower half (footer and status) must then contain every exact word.
+                        let footerText = try SidebarRenderingEvidence.recognizedLines(
+                            in: statusImage, dark: appearance == .dark, keepingBottomFraction: 0.5,
+                            naturalLanguage: true
+                        )
                         let completeWarning = Self.containsCompleteConnectionWarning(statusText, waiting: waiting)
+                            || Self.containsCompleteConnectionWarning(footerText, waiting: waiting)
                         #expect(completeWarning, "\(statusImage.lastPathComponent): \(statusText)")
                         #expect(!Self.containsCompleteConnectionWarning(statusText, waiting: !waiting),
                                 "\(statusImage.lastPathComponent): \(statusText)")

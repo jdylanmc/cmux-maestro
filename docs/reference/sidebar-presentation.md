@@ -206,13 +206,14 @@ separate from activity and icon color. Other workspaces' remembered focus does
 not light a border. Ambiguous/unavailable focus evidence does not guess.
 Identity colors do not change this treatment. Icons have no wand decoration.
 Choosing an icon or role preset does not imply orchestration ownership.
-Both densities use a single-line name and one quiet metadata line: 11/9-point
+Interactive agent rows (managed agents and single-session Copilot surfaces) are one
+line: icon, name, tag-chip slot (#51), state cue. No subtitle, location or activity
+caption: 30-point Compact, 34-point Comfortable rows (ADR 0027). Their state, assigned
+directory and activity stay in the row's help; the assigned directory also in hover and details. Other
+surfaces keep a single-line name and one quiet metadata line: 11/9-point
 type in 46-point Compact rows, 12/10-point type in 52-point Comfortable rows.
-Agent metadata omits the generic `Agent` prefix and separator, leaving the
-existing location or activity beside the unchanged status slot. Missing context
-adds no placeholder or separator. Literal `Agent` text in names and locations,
-ordinary Terminal/Browser labels, full location help and keyboard-accessible
-agent previews stay unchanged. No new current-worktree inference is made.
+Missing context adds no placeholder or separator. Ordinary Terminal/Browser
+labels, full location help and keyboard-accessible agent previews stay unchanged.
 Routine Unknown, State unavailable and Last verified prose moves to full help,
 accessibility and details, not a third row. Unknown/stale states keep a static
 dashed cue, never an idle or working claim. Incomplete child-history context
@@ -241,3 +242,26 @@ Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection). Activate it again to return to the outline.
 A workspace's menu has **Rename… (⇧⌘R)** and its preview ends with "⇧⌘R to rename": the
 CMUX extension SDK has no rename action, so Maestro selects the workspace and reminds you of
+
+## Projections
+
+Workspaces are always the top level. One segmented control under the header,
+**Worktrees | Sub-agents**, applies to every workspace in every window and is saved
+(`sidebar.projection`, default Sub-agents) (ADR 0027). Switching changes presentation
+only: nothing is focused, moved, acknowledged or adopted.
+
+- **Sub-agents**: agents by recorded spawning parent, as before. A collapsed parent
+  shows an icon card of every spawned descendant instead of a count.
+- **Worktrees**: each workspace's agents grouped by their exact session's current
+  worktree (ADR 0026). Header: branch glyph, repository name, `branch · tree` or
+  `Detached HEAD · commit · tree` (tree = first 7 hex of the opaque key), agent count.
+  Groups order: current worktrees (by repository, branch, key), last-known worktrees
+  (clock glyph), `No repository`, `Unknown`. A child never takes its parent's
+  worktree; an agent with no evidence, a non-current non-repository result, or no
+  recorded session is `Unknown`. Same repository and branch in two worktrees are two
+  groups. Plain terminals and browsers follow the groups.
+- A collapsed group or parent is an **icon card**: each agent's state cue and icon in
+  one row that scrolls inside the card, plus a separate expand control. Each icon
+  focuses its agent's surface and previews like its row. Group disclosure is saved
+  per workspace and group (`worktreeGroup` in the layout record), expanded by default.
+- Internal tasks stay subordinate text rows under their exact owner in both views.

@@ -34,6 +34,7 @@ enum SidebarTerminalIconStyle: String, CaseIterable, Identifiable {
 @MainActor
 final class SidebarPreferences {
     private static let selectedModeKey = "sidebar.selectedMode"
+    private static let projectionKey = "sidebar.projection"
     private static let historyKey = "sidebar.completedHistory.v1"
     private static let attentionKey = "sidebar.attention.v1"
     private static let showEndedKey = "sidebar.showEnded"
@@ -84,6 +85,14 @@ final class SidebarPreferences {
         didSet { defaults.set(terminalIconStyle.rawValue, forKey: Self.terminalIconStyleKey) }
     }
 
+    /// One choice for every workspace in every window.
+    var projection: SidebarProjection {
+        didSet {
+            guard projection != oldValue else { return }
+            defaults.set(projection.rawValue, forKey: Self.projectionKey)
+        }
+    }
+
     var selectedMode: SidebarMode {
         didSet {
             guard selectedMode != oldValue else { return }
@@ -131,6 +140,8 @@ final class SidebarPreferences {
             .flatMap(SidebarTerminalIconStyle.init(rawValue:)) ?? .ghost
         selectedMode = defaults.string(forKey: Self.selectedModeKey)
             .flatMap(SidebarMode.init(rawValue:)) ?? .hierarchy
+        projection = defaults.string(forKey: Self.projectionKey)
+            .flatMap(SidebarProjection.init(rawValue:)) ?? .subAgents
         historyStore = SidebarPreferenceStore(file: .init(url: historyFile), legacy: {
             guard let stored = defaults.object(forKey: Self.historyKey) else { return nil }
             guard let data = stored as? Data, data.count <= SidebarHistorySettings.maximumStoredBytes else {

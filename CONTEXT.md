@@ -180,6 +180,14 @@ _Avoid_: launch status
 Outline view of workspaces, surfaces, sessions, and agents.
 _Avoid_: tree view
 
+**Projection**:
+How the Hierarchy groups each workspace's agents: Worktrees (by current worktree) or Sub-agents (by spawning parent). One global choice; workspaces stay on top. (ADR 0027)
+_Avoid_: view, mode, grouping workspace
+
+**Icon card**:
+A collapsed Worktrees group or parent: its agents' icons and state cues in one horizontally scrolling row, each focusing its agent.
+_Avoid_: summary strip, collapsed summary
+
 **Taskboard**:
 One card per agent session, bucketed by state: Waiting on you, Working, Failed, Idle, Finished, Unknown.
 _Avoid_: dashboard

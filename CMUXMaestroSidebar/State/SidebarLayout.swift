@@ -9,6 +9,8 @@ nonisolated enum SidebarDensity: String, Codable, CaseIterable, Identifiable, Se
     func spacing(_ compact: Double) -> Double { compact * (self == .compact ? 1 : 1.35) }
     var controlSize: Double { self == .compact ? 20 : 24 }
     var rowHeight: Double { self == .compact ? 46 : 52 }
+    /// An interactive agent's single line: icon, name, tags, state.
+    var agentRowHeight: Double { self == .compact ? 30 : 34 }
     var rowTitleSize: Double { self == .compact ? 11 : 12 }
     var rowMetadataSize: Double { self == .compact ? 9 : 10 }
     func stacksActions(width: Double) -> Bool { width < (self == .compact ? 240 : 280) }
@@ -21,7 +23,7 @@ nonisolated enum SidebarDensity: String, Codable, CaseIterable, Identifiable, Se
 }
 
 nonisolated struct SidebarExpansionID: Hashable, Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case workspace, surface, session, child, managed, internalTasks }
+    enum Kind: String, Codable, Sendable { case workspace, surface, session, child, managed, internalTasks, worktreeGroup }
     let kind: Kind
     let id: UUID
     var provider: String? = nil
@@ -39,11 +41,17 @@ nonisolated struct SidebarExpansionID: Hashable, Codable, Sendable {
     static func internalTasks(sessionID: UUID, parentID: String? = nil) -> Self {
         .init(kind: .internalTasks, id: sessionID, provider: "copilot", childID: parentID)
     }
+    /// One Worktrees group in one workspace.
+    static func worktreeGroup(_ key: SidebarWorktreeGroupKey, workspaceID: UUID) -> Self {
+        .init(kind: .worktreeGroup, id: workspaceID, childID: key.storageID)
+    }
 
     var isValid: Bool {
         switch kind {
         case .workspace, .surface, .managed:
             return provider == nil && childID == nil
+        case .worktreeGroup:
+            return provider == nil && childID.map(SidebarWorktreeGroupKey.validStorageID) == true
         case .session, .child, .internalTasks:
             guard let provider, !provider.isEmpty, provider.utf8.count <= 64,
                   provider.utf8.allSatisfy({ (97...122).contains($0) || (48...57).contains($0) || $0 == 45 }) else {

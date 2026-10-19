@@ -27,6 +27,15 @@ struct SidebarItemIcon: View {
     }
 
     private var appearance: (choice: SidebarIconChoice, source: String) {
+        Self.appearance(kind: kind, target: target, agentGlyph: agentGlyph, agentColor: agentColor,
+                        icons: preferences.icons, agentStyle: agentStyle, terminalStyle: terminalStyle)
+    }
+
+    /// The icon a row shows: the human's choice, the agent's own selection, or the standard glyph.
+    static func appearance(
+        kind: Kind, target: SidebarIconTarget?, agentGlyph: String?, agentColor: SidebarAvatarColor?,
+        icons: SidebarIconSettings, agentStyle: SidebarAgentIconStyle, terminalStyle: SidebarTerminalIconStyle
+    ) -> (choice: SidebarIconChoice, source: String) {
         let standardGlyph: String
         switch kind {
         case .agent: standardGlyph = agentStyle == .copilot ? "oct-copilot" : "md-robot"
@@ -36,7 +45,7 @@ struct SidebarItemIcon: View {
         let standard = SidebarIconChoice(glyph: standardGlyph, color: .theme)
         let agent: SidebarIconChoice? = agentGlyph != nil || agentColor != nil
             ? .init(glyph: agentGlyph ?? standardGlyph, color: agentColor ?? .theme) : nil
-        var resolved = preferences.icons.resolve(target: target, standard: standard, agent: agent)
+        var resolved = icons.resolve(target: target, standard: standard, agent: agent)
         if case .success(let catalog) = SidebarGlyphCatalog.shared,
            let glyph = catalog.glyph(named: resolved.choice.glyph) {
             resolved.choice.glyph = glyph.name
