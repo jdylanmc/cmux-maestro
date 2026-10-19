@@ -13,21 +13,16 @@ Select current row: uses existing typed CMUX Focus action. Each workspace
 appears once. Explicit managed agents and remaining terminals share its outline. Exact
 managed workspace/surface pair normally replaces its observed terminal row.
 Fresh, unique live observation may prove different session ID on that pair.
-Then observed session keeps own primary row. Unneeded old registrations and
-their exact unprotected observed copies drop automatically in both views,
-regardless of **Show ended agents**. Unrelated incomplete history never hides
-current session. It never keeps unneeded old registration on screen.
-Recorded failed turn qualifies only when exact original session is freshly
-confirmed dead and current replacement is verified. Failed phase alone
-never proves old work ended.
+Then observed session keeps own primary row. The old registration leaves no
+row in either view, regardless of **Show ended agents**, and neither does its
+exact old observation; their attention leaves with them. An observed session on
+a managed surface that is not that agent's own gets no row of its own, but
+stays as evidence for that agent's state and attention. Unrelated incomplete
+history never hides current session.
 
-Ancestors and original-session content needed by known descendants, unresolved
-attention or incomplete own evidence remain as **Work context**. Their actions
-inspect that context, not replacement terminal. Each descendant keeps own
-state, attention and supported navigation. Counts separate required
-context from current agents. Both views put current content before old context.
-Captured focus actions stay bound to original workspace and surface.
-After move, use newly rendered row.
+An ended ancestor is not kept for its descendants: a live descendant shows as
+a normal row, a root when its parent is not shown. Captured focus actions stay
+bound to original workspace and surface. After move, use newly rendered row.
 
 This is presentation filtering. Not deletion, not session termination, not inferred
 end state. Stored registrations, observations and history preferences stay

@@ -6,6 +6,8 @@ The saved order is a list of CMUX UUIDs per sibling list: one per CMUX window fo
 
 Primary managed agents are rows for their own CMUX surface, so they share the workspace's surface list, keyed by that surface's UUID. They render as a block before other surfaces, by default active first, then oldest. Each block keeps its place: agents reorder among agents and plain surfaces among plain surfaces. Interleaving the blocks would change the default layout and break the separation between managed and other rows. Nested agents move with their root agent. Work-context rows (agents no longer current on their surface) keep their own section and order.
 
+Amendment (2026-10-18, #259): the Work context section is removed. An agent no longer current on its surface has no row, so there is no separate section to order; a live descendant shown without its parent is a root in the surface list.
+
 Every move or reset, from drag, menu or VoiceOver, goes through one seam, `SidebarReorderBackend`. It takes exact UUIDs, reports per-kind capabilities (the UI offers only what works), and says whether the order is Maestro-local or host-authoritative. `LocalSidebarReorderBackend` is the behaviour above. `SidebarReorderBackends.make(grantedActionScopes:host:store:)` is the only place that chooses a backend, separately for workspaces and surfaces; today it always returns local. Settings copy and its global **Reset sidebar order** also go through the backend; the reset is hidden while any kind is host-ordered.
 
 Why: the human wants a stable order for scanning many agents. The sandboxed sidebar has no way to change CMUX's order, and a second control path into CMUX would break ADR 0001.

@@ -31,8 +31,8 @@ struct SidebarInternalTaskTests {
             let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [owner], observations: observation, now: now)
             #expect(placements.map(\.managedNodeID) == [owner.id, owner.id], "Preserve conservative surface suppression")
             #expect(placements.map(\.contentOwnerID) == [missingManagedIdentity ? nil : owner.id, nil])
-            #expect(placements[1].requiresSeparateContext)
-            #expect(SidebarPresentation.retainedSessionIDs(observation, managed: [owner], now: now).contains(fixtures.otherSessionID))
+            #expect(placements[1].hasNoSurfaceRow)
+            #expect(SidebarPresentation.rowlessSessionIDs(observation, managed: [owner], now: now).contains(fixtures.otherSessionID))
         }
         let keys = Set(tree.sessions.flatMap { session in
             session.nodes.compactMap { $0.dismissibleOutcome(sessionID: session.id) }

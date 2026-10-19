@@ -223,22 +223,21 @@ struct SidebarSessionNameTests {
         #expect(text.contains("SYNTHETIC-ALPHA - Waiting"), "Shared surface keeps the terminal title: \(text)")
     }
 
-    @Test func workContextRowKeepsSessionContextLabel() async throws {
+    @Test func sessionOnAnotherAgentsSurfaceHasNoRow() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
-        // A managed agent owns the surface; an unmanaged named session bound there needs a separate context row.
+        // A managed agent owns the surface; an unmanaged named session bound there has nothing of its own to focus.
         let observed = [Observed(id: Self.namedSession, surface: Self.unnamedSurface, name: "Synthetic context name")]
         let short = String(Self.namedSession.uuidString.prefix(8)).lowercased()
         let r = try await render(observed, managedOn: Self.unnamedSurface, preferences: fixture.preferences()) {
-            $0.title("Inspect context session \(short)") != nil
+            $0.title("Focus Synthetic launch label") != nil
         }
         defer { r.close() }
-        #expect(r.title("Inspect context session \(short)") != nil)
-        let text = try r.text(nil, "session-name-work-context.png")
-        #expect(text.contains("Session context \(short)"), "Work context keeps its label: \(text)")
-        #expect(!text.contains("Synthetic context name"), "Work-context row does not lead with the name: \(text)")
+        #expect(r.titles.allSatisfy { $0.accessibilityLabel()?.contains(short) != true }, "No row for the session")
+        let text = try r.text(nil, "session-name-no-context-row.png")
+        #expect(!text.contains("Synthetic context name") && !text.contains(short), "No row for the session: \(text)")
+        #expect(!text.contains("context"), "No context row or section: \(text)")
         #expect(text.contains("Synthetic launch label"), "Managed row keeps its launch label: \(text)")
-        #expect(!text.contains("Synthetic managed name"), "Managed row is not retitled: \(text)")
     }
 
     @Test func beatTargetUsesTheSessionName() async throws {

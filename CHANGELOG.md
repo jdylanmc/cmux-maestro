@@ -275,6 +275,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Removed
 
+- Remove the sidebar's Work context section (#259). An ended or archived run leaves no row:
+  a registration whose surface now holds a verified different session and its old
+  observation no longer stay on screen for context or unread attention, and a session on
+  another agent's surface gets no row of its own. A live descendant of an ended agent shows as a normal,
+  focusable row without the ancestor.
 - Drop the reusable, movable content-tab concept. Taskboard stays a sidebar-only view
   toggled from the header, and the visual proof of concept now matches (Beats is a
   popover; no utility tabs). Closes #86 and #87 as not planned.

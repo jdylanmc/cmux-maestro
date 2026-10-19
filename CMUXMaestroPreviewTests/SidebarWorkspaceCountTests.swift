@@ -14,12 +14,27 @@ struct SidebarWorkspaceCountTests {
         #expect(summary.agentCount == 1)
         #expect(summary.states.map { "\($0.title):\($0.count)" } == ["Working:1"])
         #expect(summary.agentLine == "1 agent · 1 working")
-        #expect(summary.retainedRecordCount == 0)
         let placement = try #require(SidebarPresentation.sessionPlacements(
             tree.sessions, managed: [root], observations: tree, now: now
         ).first)
         #expect(placement.managedNodeID == root.id)
-        #expect(placement.contentOwnerID == nil && placement.requiresSeparateContext)
+        #expect(placement.contentOwnerID == nil && placement.hasNoSurfaceRow)
+    }
+
+    @Test(arguments: [false, true])
+    func legacyCoordinatorKeepsItsLiveSessionStateInVisibleWork(_ showEnded: Bool) throws {
+        let root = owner()
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
+        observed.attention = [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)]
+        let raw = tree([observed])
+        let visible = SidebarVisibleWork(tree: raw, managed: [root], history: .init(), showEnded: showEnded, now: now)
+        #expect(visible.managed == [root])
+        #expect(visible.tree.sessions.map(\.id) == [fixtures.sessionID], "Evidence stays; only its own row is omitted")
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now, tree: visible.tree)
+                == SidebarPresentation.managedState(root, availability: .ready, now: now, tree: raw))
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now, tree: visible.tree).title == "Working")
+        #expect(SidebarPresentation.managedNeedsInput(root, tree: visible.tree, now: now))
+        #expect(SidebarPresentation.rowlessSessionIDs(visible.tree, managed: visible.managed, now: now) == [fixtures.sessionID])
     }
 
     @Test(arguments: [false, true])
@@ -37,14 +52,13 @@ struct SidebarWorkspaceCountTests {
         #expect(summary.tabs.contains(.init(kind: .terminal, count: 1)))
         #expect(summary.tabs.contains(.init(kind: .browser, count: 1)))
         #expect(summary.tabs.reduce(0) { $0 + $1.count } == 2)
-        #expect(summary.retainedRecordCount == 0)
         #expect(summary.agentLine.hasPrefix("2 agents"))
         let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [root], observations: tree, now: now)
         #expect(placements[0].contentOwnerID == (exactOwner ? root.id : nil))
         #expect(placements[1].session.id == historical.id && placements[1].contentOwnerID == nil)
-        #expect(placements[1].requiresSeparateContext)
+        #expect(placements[1].hasNoSurfaceRow)
         #expect(placements[2].managedNodeID == nil && placements[2].contentOwnerID == nil)
-        #expect(SidebarPresentation.retainedSessionIDs(tree, managed: [root], now: now).contains(historical.id))
+        #expect(SidebarPresentation.rowlessSessionIDs(tree, managed: [root], now: now).contains(historical.id))
         #expect(tree.dismissibleOutcomes.count == 3, "Counting cannot hide or merge exact task outcomes")
         #expect(SidebarPresentation.unmanagedSurfaces(
             surfaces, workspaceID: fixtures.workspaceA, managed: [root], observations: tree, now: now
@@ -60,7 +74,6 @@ struct SidebarWorkspaceCountTests {
         #expect(summary.states.reduce(0) { $0 + $1.count } == 1)
         let expected = exactOwner && variant == "ambiguous" ? "Working:1" : "Registered:1"
         #expect(summary.states.map { "\($0.title):\($0.count)" } == [expected])
-        #expect(summary.retainedRecordCount == 0)
         let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [root], observations: tree, now: now)
         #expect(placements.allSatisfy { $0.managedNodeID == root.id })
         #expect(placements.filter { $0.session.id != fixtures.sessionID }.allSatisfy { $0.contentOwnerID == nil })
@@ -76,24 +89,6 @@ struct SidebarWorkspaceCountTests {
         if variant != "historical" { #expect(summary.incomplete) }
         #expect(summary.tabs.contains(.init(kind: .terminal, count: 1)))
         #expect(summary.tabs.contains(.init(kind: .browser, count: 1)))
-        #expect(summary.retainedRecordCount == 0)
-    }
-
-    @Test func retainedManagedEntryLegendRemainsDistinctFromSupplementalObservations() {
-        let root = owner(sessionID: fixtures.otherSessionID)
-        let current = session(fixtures.sessionID, surface: fixtures.surfaceA)
-        let old = session(fixtures.otherSessionID, surface: fixtures.surfaceA, state: .completed, liveness: .dead)
-        let additionalHistory = session(UUID(), surface: fixtures.surfaceA, state: .completed, liveness: .dead)
-        let tree = tree([current, old, additionalHistory])
-        let summary = summary(tree, managed: [root])
-        #expect(summary.agentCount == 2, "Preserve the existing managed-record plus live-agent entry contract")
-        #expect(summary.retainedRecordCount == 1)
-        #expect(summary.agentLine.hasPrefix("2 entries · 1 needed for context"))
-        #expect(summary.states.reduce(0) { $0 + $1.count } == 2)
-        let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [root], observations: tree, now: now)
-        #expect(placements[0].contentOwnerID == nil)
-        #expect(placements[1].contentOwnerID == root.id && placements[1].retainsContents)
-        #expect(placements[2].contentOwnerID == nil)
     }
 
     @Test(arguments: ["coordinator", "worker"], ["launching", "turn-running"])
@@ -194,7 +189,7 @@ struct SidebarWorkspaceCountTests {
         let placements = SidebarPresentation.sessionPlacements(tree.sessions, managed: [node], observations: tree, now: now)
         #expect(placements.map(\.managedNodeID) == [node.id, node.id])
         #expect(placements.map(\.contentOwnerID) == [node.id, nil])
-        #expect(placements[1].requiresSeparateContext)
+        #expect(placements[1].hasNoSurfaceRow)
         #expect(SidebarPresentation.managedState(node, availability: .stale, now: now, tree: tree).title == "Idle")
         let details = SidebarPresentation.managedNodeDetails(node, hierarchy: fixtures.hierarchy(), tree: tree, now: now)
         #expect(!details.contains { $0.title == "Branch" || $0.title == "Worktree" })

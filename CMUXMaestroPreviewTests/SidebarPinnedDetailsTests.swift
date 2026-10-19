@@ -392,20 +392,13 @@ struct SidebarPinnedDetailsTests {
         #expect(inspector(coordinatorSubject, sessions: [session(id: UUID())], nodes: [coordinator]) == nil)
     }
 
-    @Test func displacedManagedRecordCanBeInspectedWithoutBorrowingCurrentSurface() throws {
+    @Test func displacedManagedRecordHasNoInspection() throws {
         let node = managed(sessionID: fixtures.otherSessionID)
         let observations = tree([session()])
-        let subject = try #require(SidebarPresentation.inspection(
+        #expect(SidebarPresentation.inspection(
             for: .managed(node), hierarchy: hierarchy(), connected: true, tree: observations,
             managed: snapshot([node]), availability: .ready, now: now
-        ))
-        #expect(subject.surfaceID == nil && subject.surfaceKind == nil)
-        #expect(subject.sessionID == fixtures.otherSessionID)
-        let detail = try #require(inspector(subject, nodes: [node]))
-        #expect(detail.notice?.contains("Work context") == true)
-        #expect(detail.lines.contains(.sessionID(fixtures.otherSessionID)))
-        #expect(!detail.lines.contains { $0.value == "/synthetic/worktree-0" || $0.value == "verified-model" })
-        #expect(detail.lines.contains { $0.title == "Focus" && $0.value.contains("Original session") })
+        ) == nil)
         #expect(pinned(nodes: [node]).inspection?.sessionID == fixtures.sessionID)
     }
 

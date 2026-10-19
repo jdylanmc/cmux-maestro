@@ -257,7 +257,7 @@ struct SidebarAgentHoverTests {
         #expect(card(.session(fixtures.sessionID), sessions: originalTree.sessions, hierarchy: .empty) == nil)
     }
 
-    @Test func retainedOriginalNeverBorrowsReplacementDirectoryButNativeContextSurvives() throws {
+    @Test func replacedOriginalHasNoHoverOrInspectionAndNeverBorrowsReplacementDirectory() throws {
         let hierarchy = directoryHierarchy("/synthetic/replacement-report")
         var old = session(liveness: .dead)
         old.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Child",
@@ -267,25 +267,14 @@ struct SidebarAgentHoverTests {
         let sessions = [old, replacement]
         let tree = SidebarCopilotTree(availability: .ready, sessions: sessions, issues: [], generatedAt: now)
         let managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
-        let oldHover = try #require(card(.session(old.id), sessions: sessions, hierarchy: hierarchy, nodes: [node]))
-        #expect(oldHover.category == "Session context" && oldHover.notice != nil)
-        #expect(!oldHover.lines.contains { $0.title.lowercased().contains("directory") || $0.value.contains("/synthetic/") })
-        for target in [SidebarAgentHoverTarget.managed(node.id, generation: 2), .child(sessionID: old.id, childID: "child")] {
-            let retained = try #require(card(target, sessions: sessions, hierarchy: hierarchy, nodes: [node]))
-            let field = try #require(retained.lines.first { $0.title.lowercased().contains("directory") })
-            #expect(field.value == "Not current for this original session")
-            #expect(field.help?.contains("Reported by CMUX") == true)
-            #expect(!retained.lines.contains { $0.value == "/synthetic/replacement-report" })
+        for target in [SidebarAgentHoverTarget.session(old.id), .managed(node.id, generation: 2),
+                       .child(sessionID: old.id, childID: "child")] {
+            #expect(card(target, sessions: sessions, hierarchy: hierarchy, nodes: [node]) == nil)
         }
         for target in [SidebarInspection.Target.unmanaged(.session(old.id)), .unmanaged(.child(sessionID: old.id, childID: "child")), .managed(node)] {
-            let subject = try #require(SidebarPresentation.inspection(
+            #expect(SidebarPresentation.inspection(
                 for: target, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
-            ))
-            #expect(subject.surfaceID == nil)
-            let detail = try #require(SidebarPresentation.inspectorDetails(
-                for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
-            ))
-            #expect(!detail.lines.contains { $0.value == "/synthetic/replacement-report" })
+            ) == nil)
         }
         let pinned = SidebarPresentation.pinnedDetails(
             hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
@@ -512,12 +501,17 @@ struct SidebarAgentHoverTests {
             issues: scenario == "denied" ? [.permissionDenied] : [],
             generatedAt: scenario == "stale-tree" ? now.addingTimeInterval(-9) : now
         )
-        let hover = try #require(SidebarAgentHoverContent.card(
+        let card = SidebarAgentHoverContent.card(
             for: .managed(node.id, generation: node.generation), hierarchy: fixtures.hierarchy(),
             connected: true, tree: observations,
             managed: .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node]),
             availability: .ready, now: now
-        ))
+        )
+        if scenario == "replaced" {
+            #expect(card == nil, "A replaced agent has no row and no hover")
+            return
+        }
+        let hover = try #require(card)
         #expect(!hover.lines.contains { ["Model", "Last reported model"].contains($0.title) })
         #expect(!hover.lines.contains { $0.value == "unsafe-model" })
     }
