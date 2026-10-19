@@ -27,16 +27,20 @@ BENCHMARK_TEST = "CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSynthe
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 
 
-def yaml_jobs(workflow):
-    """The jobs mapping from a real YAML parse: PyYAML if installed, else Ruby's bundled YAML."""
+def yaml_workflow(workflow):
+    """A real YAML parse: PyYAML if installed, else Ruby's bundled YAML."""
     try:
         import yaml
     except ImportError:
         result = subprocess.run(
-            ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.safe_load(STDIN.read)['jobs'])"],
+            ["ruby", "-ryaml", "-rjson", "-e", "puts JSON.generate(YAML.safe_load(STDIN.read))"],
             input=workflow, capture_output=True, text=True, check=True)
         return json.loads(result.stdout)
-    return yaml.safe_load(workflow)["jobs"]
+    return yaml.safe_load(workflow)
+
+
+def yaml_jobs(workflow):
+    return yaml_workflow(workflow)["jobs"]
 
 
 def yaml_job_ids(workflow):
@@ -1343,7 +1347,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_runs_one_suite_per_pr_update_and_full_validation_on_main(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        triggers = workflow.split("\non:\n", 1)[1].split("\njobs:", 1)[0]
+        triggers = re.split(r"\n(?=\S)", workflow.split("\non:\n", 1)[1], maxsplit=1)[0]
         # Feature-branch pushes would duplicate the PR suite; only main pushes and PR updates validate.
         self.assertEqual(triggers, "  push:\n    branches: [main]\n  pull_request:\n",
                          "The CI event matrix is merge policy: update docs/agents/merge-policy.md "
@@ -1364,6 +1368,13 @@ class BuildMetadataTests(unittest.TestCase):
                        "draft pull request", "Tags are not validated"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
+
+    def test_ci_cancels_superseded_pr_runs_without_cancelling_running_main(self):
+        workflow = yaml_workflow((ROOT / ".github/workflows/ci.yml").read_text())
+        self.assertEqual(workflow["concurrency"], {
+            "group": "ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}",
+            "cancel-in-progress": "${{ github.event_name == 'pull_request' }}",
+        }, "Keep cancellation scoped to one PR and never cancel an in-progress main push.")
 
     def test_ci_documentation_tracks_the_guarded_validation_commands(self):
         jobs = workflow_jobs((ROOT / ".github/workflows/ci.yml").read_text())

@@ -73,6 +73,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- CI cancels superseded pull request runs so obsolete work no longer competes
+  for macOS runners. Other PRs and in-progress `main` runs are unaffected;
+  the current candidate still needs its own successful `ci-gate`.
 - The global `maestro` guide prefers visible, interactive `maestro_spawn` workers
   for substantial work in managed sessions only with explicit human authorization
   to delegate to another Copilot session. Built-in `task` remains
