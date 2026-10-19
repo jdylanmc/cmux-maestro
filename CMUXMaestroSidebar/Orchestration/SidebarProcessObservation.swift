@@ -67,8 +67,14 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
               Set(nodes.map(\.nodeId)).count == nodes.count else { return false }
         return nodes.allSatisfy { node in
             let owned = node.processes.filter { $0.state == "owned-current" }
+            // An ended provider keeps only retained events; an unproven node has no list.
+            let listShape = switch node.state {
+            case "exited": owned.isEmpty
+            case "denied", "no-custody", "ambiguous": node.processes.isEmpty
+            default: true
+            }
             // Bounded counts: a malformed optional file must never trap the hover's arithmetic.
-            return Self.nodeStates.contains(node.state) && node.observedAt <= future
+            return listShape && Self.nodeStates.contains(node.state) && node.observedAt <= future
                 && (0...Self.maximumOmitted).contains(node.omittedCount)
                 && (0...Self.maximumOmitted).contains(node.omittedHelperCount ?? 0)
                 && node.generation >= 0 && owned.count <= Self.maximumProcesses
@@ -149,7 +155,9 @@ enum SidebarProcessPresentation {
         if hidden > 0 { lines.append(.init(title: "More background processes", value: "\(hidden)")) }
         if helpers > 0 { lines.append(.init(title: helpersTitle, value: "\(helpers)")) }
         let listeners = owned.flatMap { process in process.listeners.map { (process, $0) } }
-        if listeners.isEmpty, entry.state == "owned-current", !stale, entry.omittedCount == 0 {
+        // Unprobed processes, helpers included, may listen: unknown is never shown as none.
+        if listeners.isEmpty, entry.state == "owned-current", !stale, entry.omittedCount == 0,
+           (entry.omittedHelperCount ?? 0) == 0 {
             lines.append(.init(title: listenersTitle, value: "None"))
         }
         for (process, listener) in listeners.prefix(maximumLines) {

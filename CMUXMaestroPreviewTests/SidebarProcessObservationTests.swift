@@ -104,6 +104,24 @@ struct SidebarProcessObservationTests {
         #expect(result.contains(.init(title: "More background processes", value: "4")))
     }
 
+    @Test func skippedHelpersMeanListenersAreUnknownNotNone() {
+        let data = Data(String(decoding: file(processes: ""), as: UTF8.self)
+            .replacingOccurrences(of: #""omittedCount":0"#, with: #""omittedCount":0,"omittedHelperCount":1"#).utf8)
+        let result = lines(data)
+        #expect(result.contains(.init(title: "Copilot helpers", value: "1")))
+        #expect(!result.contains { $0.title == "Listening" })
+    }
+
+    @Test func nodeStatesAndTheirListsMustAgree() {
+        let owned = #"{"pid":7,"startMicros":7,"name":"w","group":"separate","state":"owned-current","listeners":[]}"#
+        #expect(snapshot(file(state: "exited", processes: owned)).processes.isEmpty)
+        for state in ["denied", "no-custody", "ambiguous"] {
+            #expect(snapshot(file(state: state, processes: owned)).processes.isEmpty)
+        }
+        let detached = #"{"pid":7,"startMicros":7,"name":"w","group":"separate","state":"escaped","since":"2027-01-15T08:00:00Z","listeners":[]}"#
+        #expect(snapshot(file(state: "exited", processes: detached)).processes[nodeID] != nil)
+    }
+
     @Test func omittedHelpersAreCountedAsHelpersNotBackgroundWork() {
         let data = Data(String(decoding: file(omitted: 3), as: UTF8.self)
             .replacingOccurrences(of: #""omittedCount":3"#, with: #""omittedCount":3,"omittedHelperCount":5"#).utf8)
