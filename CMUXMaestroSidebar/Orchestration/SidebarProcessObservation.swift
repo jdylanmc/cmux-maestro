@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-/// The controller's optional `observer/processes.json` (ADR 0026): owned background processes and
+/// The controller's optional `observer/processes.json` (ADR 0029): owned background processes and
 /// their TCP listeners per managed node. Sanitized identities only; never argv or environment.
 nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
     struct Listener: Codable, Equatable, Sendable {

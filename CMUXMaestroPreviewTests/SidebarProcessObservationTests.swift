@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// #78 background processes and #75 listeners on the agent hover (ADR 0026).
+/// #78 background processes and #75 listeners on the agent hover (ADR 0029).
 @MainActor
 struct SidebarProcessObservationTests {
     private let fixtures = SidebarTreeFixtures()

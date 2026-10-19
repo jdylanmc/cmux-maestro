@@ -173,7 +173,7 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
     let complete: Bool
     let omittedCount: Int
     let nodes: [SidebarOrchestrationNode]
-    /// Owned-process observations matched to exactly these node bindings (ADR 0026); never decoded
+    /// Owned-process observations matched to exactly these node bindings (ADR 0029); never decoded
     /// from `current.json`.
     var processes: [UUID: SidebarProcessObservation.Node] = [:]
 
