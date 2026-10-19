@@ -208,6 +208,10 @@ async function invokeController(command, request, controller, signal) {
     const child = execFile(controller, [command], {
       timeout: 60_000, maxBuffer: 65_536, signal,
     }, (error, stdout, stderr) => {
+      if (error?.killed && !signal?.aborted) {
+        reject(Object.assign(new Error("Controller timed out."), { timedOut: true }));
+        return;
+      }
       if (error) {
         try {
           const failure = JSON.parse(stderr);
@@ -693,33 +697,35 @@ const LAUNCHER_INPUTS = ["CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER
 // Reasons the controller may give; anything else is reported generically.
 export const ENROLLMENT_REASONS = new Set([
   "integration-not-installed", "provider-process-unverified", "session-not-persisted", "enrollment-busy",
+  "awaiting-first-prompt",
   "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
   "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
   "enrolled-runtime-unavailable", "enrolled-node-unavailable",
   "surface-mismatch", "account-mismatch", "account-unrecorded", "session-live-or-uncertain",
 ]);
-// The controller records no decision for these; the session tries again at its next prompt.
-export const RETRIED_AT_NEXT_PROMPT = new Set(["session-not-persisted", "enrollment-busy"]);
-// What maestro_readiness says, in plain words, for each reason.
+// Unrecorded by the controller; asked once more at a later event.
+export const RETRIED_ONCE = new Set(["session-not-persisted", "enrollment-busy", "awaiting-first-prompt"]);
+// Plain words for maestro_readiness.
 export const ENROLLMENT_MESSAGES = {
   "enrollment-pending": "Maestro is enrolling this session.",
-  "integration-not-installed": "Maestro's production integration is not installed.",
-  "provider-process-unverified": "Maestro could not verify this session's Copilot process.",
-  "session-not-persisted": "Copilot has not saved this session yet. Maestro tries again at the next prompt.",
-  "enrollment-busy": "Another Maestro enrollment was still running. Maestro tries again at the next prompt.",
-  "cmux-identity-unverified": "CMUX could not confirm that this terminal is the tab its environment names.",
-  "surface-owned": "Another Maestro session, launch, or kept tab owns this CMUX tab.",
-  "provider-already-enrolled": "Another Maestro session is still recorded for this Copilot process.",
-  "session-previously-managed": "Maestro launched this session; it comes back only through its own resume command.",
-  "capacity-unavailable": "Maestro is at its session limit for this workspace or this Mac.",
-  "account-unverified": "Copilot did not report this session's GitHub account in time.",
-  "enrollment-failed": "Maestro could not finish enrolling this session.",
-  "enrolled-runtime-unavailable": "Maestro enrolled this session, but its messaging did not start here.",
-  "enrolled-node-unavailable": "This session was enrolled, but its Maestro record is no longer current.",
-  "surface-mismatch": "Maestro recorded this session in a different CMUX tab.",
-  "account-mismatch": "Maestro recorded this session with a different GitHub account.",
-  "account-unrecorded": "Maestro's record of this session has no GitHub account.",
-  "session-live-or-uncertain": "Another process may still hold this Copilot session.",
+  "awaiting-first-prompt": "Maestro enrolls this session at its first prompt, when Copilot takes it.",
+  "integration-not-installed": "Maestro is not installed.",
+  "provider-process-unverified": "Maestro could not verify this Copilot process.",
+  "session-not-persisted": "Copilot has not saved this session.",
+  "enrollment-busy": "Another Maestro enrollment was running.",
+  "cmux-identity-unverified": "CMUX could not confirm this terminal is its tab.",
+  "surface-owned": "Another Maestro session owns this tab.",
+  "provider-already-enrolled": "Another Maestro session holds this Copilot process.",
+  "session-previously-managed": "Maestro launched this session; only its resume command restores it.",
+  "capacity-unavailable": "Maestro is at its session limit.",
+  "account-unverified": "Copilot did not report this session's account in time.",
+  "enrollment-failed": "Maestro could not enroll this session.",
+  "enrolled-runtime-unavailable": "Enrolled, but messaging did not start here.",
+  "enrolled-node-unavailable": "Enrolled, but its Maestro record is no longer current.",
+  "surface-mismatch": "Maestro recorded this session in another tab.",
+  "account-mismatch": "Maestro recorded this session with another account.",
+  "account-unrecorded": "Maestro's record has no account.",
+  "session-live-or-uncertain": "Another process may hold this session.",
 };
 const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
 
@@ -737,6 +743,7 @@ async function invokeEnroll(request, controller, signal) {
     return await invokeController("native-enroll", request, controller, signal);
   } catch (error) {
     signal?.throwIfAborted();
+    if (error?.timedOut) throw Object.assign(new Error("Maestro enrollment refused."), { reason: "enrollment-busy" });
     const [, reason, account] =
       /^enrollment refused: ([a-z-]+)(?:: ([A-Za-z0-9][A-Za-z0-9_-]{0,99}))?$/.exec(error?.message ?? "") ?? [];
     const known = ENROLLMENT_REASONS.has(reason) ? reason : "enrollment-failed";
@@ -745,13 +752,23 @@ async function invokeEnroll(request, controller, signal) {
   }
 }
 
-// Born managed (ADR 0025): every Copilot session in a CMUX terminal with the production
-// integration installed and no launcher inputs enrolls itself when this extension joins it:
-// new, resumed, relaunched, or already running (joined by an extension reload). Tools are declared
-// at join, so managed tools refuse until enrollment succeeds. One enrollment runs at a time.
+// Copilot writes inuse.<PID>.lock at a session's first prompt; the controller verifies its owner.
+async function sessionLockPresent(sessionId) {
+  try {
+    const names = await fs.readdir(path.join(os.homedir(), ".copilot", "session-state", sessionId));
+    return names.some(name => /^inuse\.[1-9][0-9]{0,9}\.lock$/.test(name));
+  } catch {
+    return false;
+  }
+}
+
+// Born managed (ADR 0025): every CMUX Copilot session without launcher inputs enrolls itself once
+// Copilot holds it (checked at join and at later hook events). Managed tools refuse until then.
+// One enrollment at a time; the controller is asked at most twice per join.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
   diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
   endSession = recordSessionEnd, endGate = sessionEndGate, promptWaitMs = 10000,
+  hasSessionLock = () => sessionLockPresent(environment.SESSION_ID),
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -805,10 +822,11 @@ export async function startBornManaged({ joinSession, environment = process.env,
     },
   });
 
+  let controllerCalls = 0;
   // One attempt: the session's own account, the controller's decision, then this runtime.
   const attempt = async () => {
-    // Unverified accounts still reach the controller, as null, so the refusal is recorded for this
-    // provider and a later extension reload cannot enroll it.
+    controllerCalls++;
+    // An unverified account reaches the controller as null, so its refusal is recorded.
     let account = { login: null, host: null };
     try {
       const auth = await Promise.race([session.rpc.gitHubAuth.getStatus(),
@@ -835,7 +853,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
       // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
       const reason = account.login === null ? "account-unverified"
         : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed";
-      state = { status: RETRIED_AT_NEXT_PROMPT.has(reason) ? "pending" : "unavailable", reason,
+      state = { status: RETRIED_ONCE.has(reason) && controllerCalls < 2 ? "pending" : "unavailable", reason,
         ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };
       return undefined;
     }
@@ -861,33 +879,40 @@ export async function startBornManaged({ joinSession, environment = process.env,
     }
   };
   let inFlight = null;
-  const enrollOnce = () => {
-    inFlight ??= attempt().finally(() => { inFlight = null; });
+  const advance = () => {
+    inFlight ??= (async () => {
+      if (state.status !== "pending") return undefined;
+      // Nothing is decided before Copilot holds the session: two tabs must not both look sole.
+      if (!await hasSessionLock().catch(() => false)) {
+        state = { status: "pending", reason: "awaiting-first-prompt" };
+        return undefined;
+      }
+      return attempt();
+    })().finally(() => { inFlight = null; });
     return inFlight;
+  };
+  // Hook input is never read; a bounded wait lets this turn use the tools.
+  const onEvent = async () => {
+    if (state.status !== "pending") return undefined;
+    let timer;
+    await Promise.race([advance().catch(() => {}),
+      new Promise(resolve => { timer = setTimeout(resolve, promptWaitMs); })]);
+    clearTimeout(timer);
+    return undefined;
   };
 
   signal?.throwIfAborted();
-  // Hooks are declared at join too. SessionEnd reaches the runtime's observer as soon as a
-  // validated enrollment installed it, even if the runtime then failed: the human's exit must
-  // still be recorded. Tools stay gated on a fully enrolled runtime. A refusal the controller did
-  // not record (the session was not saved yet, or another enrollment was running) is tried again
-  // when the human next submits a prompt; the prompt itself is never read.
+  // SessionEnd reaches the runtime's observer once enrollment installed it, even if the runtime
+  // then failed. A resumed session's sessionStart fires only after its first prompt.
   session = await joinSession({ tools, hooks: {
     onSessionEnd: async (input, invocation) => delegates.onSessionEnd?.(input, invocation),
-    onUserPromptSubmitted: async () => {
-      if (state.status !== "pending" || !RETRIED_AT_NEXT_PROMPT.has(state.reason)) return undefined;
-      let timer;
-      await Promise.race([enrollOnce().catch(() => {}),
-        new Promise(resolve => { timer = setTimeout(resolve, promptWaitMs); })]);
-      clearTimeout(timer);
-      return undefined;
-    },
+    onUserPromptSubmitted: onEvent, onSessionStart: onEvent, onPostToolUse: onEvent, onAgentStop: onEvent,
   } });
   signal?.throwIfAborted();
   requireCondition(session?.sessionId === sessionId);
   onJoined?.(session);  // Beats need only the joined session, not enrollment.
   if (state.status !== "pending") return { session };
-  const listener = await enrollOnce();
+  const listener = await advance();
   return listener === undefined ? { session } : { session, listener };
 }
 

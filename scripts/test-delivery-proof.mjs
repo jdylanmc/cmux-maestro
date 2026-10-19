@@ -498,6 +498,10 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ok: true, ob
     const bin = path.join(home, "Library/Application Support/CMUXMaestroPreview/Orchestration/bin");
     await fs.mkdir(bin, { recursive: true, mode: 0o700 });
     const calls = path.join(root, "controller-calls");
+    // Copilot already holds the session (its lock appears at the first prompt).
+    const sessionState = path.join(home, ".copilot", "session-state", binding.sessionId);
+    await fs.mkdir(sessionState, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(sessionState, `inuse.${process.pid}.lock`), "");
     await fs.writeFile(path.join(bin, "cmux-maestro-orchestrator"), `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
 const command = process.argv[2];
@@ -2548,7 +2552,7 @@ process.exitCode=packet.code;
 // ---- Born managed (ADR 0025) ------------------------------------------------------------------
 
 async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}, statusTimeoutMs,
-  startManagedRuntime, endGate = createSessionEndGate(), endSession } = {}) {
+  startManagedRuntime, endGate = createSessionEndGate(), endSession, hasSessionLock = async () => true } = {}) {
   const f = await managedFixture(t, { owners: [0, 0] });
   const own = f.bindings[0];
   const env = {
@@ -2567,7 +2571,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     } } },
   };
   const born = await startBornManaged({
-    environment: env, parentPid, controller: "/synthetic/controller",
+    environment: env, parentPid, controller: "/synthetic/controller", hasSessionLock,
     // A listener started by a later attempt (at a prompt) is closed with the fixture too.
     onListener: (listener) => { if (!f.adapters.includes(listener)) f.adapters.push(listener); },
     ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
@@ -2642,30 +2646,45 @@ test("born managed: a refused enrollment stays unmanaged with one stable reason"
   }
 });
 
-test("born managed: an unsaved session is enrolled once at the next prompt, never concurrently", async (t) => {
-  let refuse = true;
+test("born managed: nothing is decided until Copilot holds the session, then one enrollment", async (t) => {
+  // Copilot writes the session's lock at its first prompt; two tabs resuming one session must not
+  // both look like its sole owner before then.
+  let held = false;
   let release;
-  const f = await bornFixture(t, { enroll: async (request) => {
-    if (refuse) throw Object.assign(new Error("x"), { reason: "session-not-persisted" });
+  const f = await bornFixture(t, { hasSessionLock: async () => held, enroll: async (request) => {
     await new Promise(resolve => { release = resolve; });
     return { ok: true, nodeId: f.own.nodeId, workspaceId: request.workspaceId, sessionId: request.sessionId,
       generation: 1, routes: f.root, peer: f.own.peer };
   } });
+  assert.equal(f.calls.enroll.length, 0);
   assert.deepEqual((await readiness(f)).managed, { status: "pending", origin: "born-managed",
-    reason: "session-not-persisted", message: ENROLLMENT_MESSAGES["session-not-persisted"] });
-  assert.match((await f.tools.maestro_send({})).textResultForLlm, /tries again at the next prompt/);
-  refuse = false;
-  // Two prompts while the controller works: one more enrollment, and the prompt text is never read.
-  const prompts = [f.hooks.onUserPromptSubmitted({ prompt: "PRIVATE" }, { sessionId: f.own.sessionId }),
-    f.hooks.onUserPromptSubmitted({ prompt: "PRIVATE" }, { sessionId: f.own.sessionId })];
+    reason: "awaiting-first-prompt", message: ENROLLMENT_MESSAGES["awaiting-first-prompt"] });
+  await f.hooks.onUserPromptSubmitted({ prompt: "PRIVATE" }, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 0);
+  held = true;
+  // Several events at once (sessionStart follows the first prompt): one enrollment.
+  const events = [f.hooks.onSessionStart({ source: "resume" }, { sessionId: f.own.sessionId }),
+    f.hooks.onPostToolUse({}, { sessionId: f.own.sessionId })];
   await new Promise(resolve => setTimeout(resolve, 20));
   release();
-  assert.deepEqual(await Promise.all(prompts), [undefined, undefined]);
-  assert.equal(f.calls.enroll.length, 2);
+  assert.deepEqual(await Promise.all(events), [undefined, undefined]);
+  assert.equal(f.calls.enroll.length, 1);
   assert.equal(JSON.stringify(f.calls.enroll).includes("PRIVATE"), false);
   assert.equal((await readiness(f)).status, "managed");
-  await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  await f.hooks.onAgentStop({}, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 1);
+});
+
+test("born managed: an unrecorded refusal is asked once more, then stands until the next join", async (t) => {
+  const f = await bornFixture(t, { enroll: async () => {
+    throw Object.assign(new Error("x"), { reason: "enrollment-busy" }); } });
+  assert.equal((await readiness(f)).managed.status, "pending");
+  for (let prompt = 0; prompt < 3; prompt++) {
+    await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  }
   assert.equal(f.calls.enroll.length, 2);
+  assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
+    reason: "enrollment-busy", message: ENROLLMENT_MESSAGES["enrollment-busy"] });
 });
 
 test("born managed: a recorded refusal is never tried again at a prompt", async (t) => {
@@ -2674,7 +2693,7 @@ test("born managed: a recorded refusal is never tried again at a prompt", async 
   await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
   assert.equal(f.calls.enroll.length, 1);
   const report = await readiness(f);
-  assert.equal(report.managed.message, "Maestro is at its session limit for this workspace or this Mac.");
+  assert.equal(report.managed.message, "Maestro is at its session limit.");
 });
 
 test("born managed: an unverified account is recorded as a refusal; an unverified provider never reaches the controller", async (t) => {
@@ -2736,7 +2755,7 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     const session = { ...f.session };
     let tools;
     await startBornManaged({
-      environment: f.env, parentPid: 4242, controller,
+      environment: f.env, parentPid: 4242, controller, hasSessionLock: async () => true,
       joinSession: async (options) => { tools = options.tools; return session; },
     });
     const tool = tools.find((item) => item.name === "maestro_readiness");

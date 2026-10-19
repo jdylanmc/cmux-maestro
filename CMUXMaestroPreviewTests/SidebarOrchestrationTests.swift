@@ -619,6 +619,28 @@ struct SidebarOrchestrationTests {
         #expect(SidebarPresentation.managedPet(ended, tree: unbound, now: Date()) == nil)
     }
 
+    /// #261 wiring: copilot polling reads details for the managed subjects' exact sessions and
+    /// carries them on the tree it publishes.
+    @Test func pollingCarriesManagedDetailsForManagedSessions() async {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let requested = ManagedRequests()
+        let polling = SidebarCopilotPolling(
+            read: neutralRead { _ in CopilotSnapshot(generatedAt: Date(), sessions: [], issues: [], isComplete: true) },
+            readManaged: { ids in
+                await requested.append(ids)
+                return [session: CopilotManagedSessionDetails(sessionName: "Synthetic refactor", readAt: Date())]
+            },
+            pause: { try await Task.sleep(for: .milliseconds(20)) }
+        )
+        polling.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
+        polling.updateManagedSubjects(SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
+            nodes: [bornRoot(workspace: workspace, surface: surface, session: session)]))
+        polling.setVisible(true)
+        await sidebarEventually { polling.tree.managedDetails[session]?.sessionName == "Synthetic refactor" }
+        #expect(await requested.values.first == [session])
+    }
+
     @Test func bornRootKeepsItsNameDuringObservationLossOnlyWithinTheGrace() {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let snapshot = SidebarOrchestrationSnapshot(
@@ -819,4 +841,9 @@ private final class OrchestrationReadGate {
         pending.removeAll()
         for continuation in continuations { continuation.resume(throwing: CancellationError()) }
     }
+}
+
+private actor ManagedRequests {
+    private(set) var values: [Set<UUID>] = []
+    func append(_ ids: Set<UUID>) { values.append(ids) }
 }
