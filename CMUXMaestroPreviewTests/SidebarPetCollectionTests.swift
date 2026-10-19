@@ -108,6 +108,25 @@ struct SidebarPetCollectionTests {
         #expect(reopen().visibleID(session: session, agentChoice: nil) == "blob")
     }
 
+    @Test func repeatedHoverLookupsPastTheSessionCacheDecodeTheSheetOnce() throws {
+        let (_, root, session, _) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SidebarPetStore(
+            defaults: UserDefaults(suiteName: "pet-decode-\(UUID().uuidString)")!,
+            uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
+            sessionDirectory: root.appendingPathComponent("sessions", isDirectory: true), sessionCacheSeconds: 0)
+        let sheet = root.appendingPathComponent("sessions/\(session.uuidString.lowercased())/blob/spritesheet.png")
+        let before = SidebarPetStore.decodeCount(sheet)
+        for index in 0..<5 {
+            let id = try #require(store.visibleID(session: session, agentChoice: "blob"))
+            #expect(id == "blob")
+            #expect(store.available(for: session).contains { $0.id == "blob" })
+            #expect(store.frame(petID: id, session: session, state: .working, index: index) != nil)
+            _ = store.topInset(petID: id, session: session)
+        }
+        #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
+    }
+
     @Test func choosePetRowActionIsOnlyForExactAgentSessionsAndMotionRespectsReduceMotion() {
         var opened = 0
         let presenter = SidebarRowMenuPresenter()
