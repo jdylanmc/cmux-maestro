@@ -45,7 +45,8 @@ nonisolated struct SidebarIconOverrides: Codable, Equatable, Sendable {
             return updated
         }
         return .init(version: snapshot.version, generatedAt: snapshot.generatedAt,
-                     complete: snapshot.complete, omittedCount: snapshot.omittedCount, nodes: nodes)
+                     complete: snapshot.complete, omittedCount: snapshot.omittedCount, nodes: nodes,
+                     processes: snapshot.processes)
     }
 }
 
@@ -172,6 +173,13 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
     let complete: Bool
     let omittedCount: Int
     let nodes: [SidebarOrchestrationNode]
+    /// Owned-process observations matched to exactly these node bindings (ADR 0026); never decoded
+    /// from `current.json`.
+    var processes: [UUID: SidebarProcessObservation.Node] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case version, generatedAt, complete, omittedCount, nodes
+    }
 
     static let empty = Self(
         version: 1, generatedAt: .distantPast, complete: true, omittedCount: 0, nodes: []
@@ -196,7 +204,7 @@ extension SidebarOrchestrationSnapshot {
             return updated
         }
         return .init(version: version, generatedAt: generatedAt, complete: complete,
-                     omittedCount: omittedCount, nodes: named)
+                     omittedCount: omittedCount, nodes: named, processes: processes)
     }
 }
 
@@ -268,6 +276,25 @@ nonisolated enum SidebarOrchestrationReader {
             at: observer, filename: "current.json", owner: owner,
             maximum: maximumBytes, permissions: 0o600
         )
+        var snapshot = try decoder().decode(SidebarOrchestrationSnapshot.self, from: data)
+        try validate(snapshot)
+        if let iconData = try? CopilotFileAccess.readStableRegular(
+            at: observer, filename: "icons.json", owner: owner,
+            maximum: maximumBytes, permissions: 0o600
+        ) {
+            snapshot = SidebarIconOverrides.overlaid(iconData, onto: snapshot)
+        }
+        // Optional, like icons: a missing or malformed file shows no process lines, never an error.
+        if let processData = try? CopilotFileAccess.readStableRegular(
+            at: observer, filename: "processes.json", owner: owner,
+            maximum: maximumBytes, permissions: 0o600
+        ) {
+            snapshot.processes = SidebarProcessObservation.matching(processData, snapshot: snapshot, now: Date())
+        }
+        return snapshot
+    }
+
+    static func decoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let value = try decoder.singleValueContainer().decode(String.self)
@@ -282,18 +309,7 @@ nonisolated enum SidebarOrchestrationReader {
             }
             return date
         }
-        let snapshot = try decoder.decode(SidebarOrchestrationSnapshot.self, from: data)
-        try validate(snapshot)
-        let iconData: Data
-        do {
-            iconData = try CopilotFileAccess.readStableRegular(
-                at: observer, filename: "icons.json", owner: owner,
-                maximum: maximumBytes, permissions: 0o600
-            )
-        } catch {
-            return snapshot
-        }
-        return SidebarIconOverrides.overlaid(iconData, onto: snapshot)
+        return decoder
     }
 
     static func validate(_ snapshot: SidebarOrchestrationSnapshot, now: Date = Date()) throws {
@@ -540,7 +556,7 @@ final class SidebarOrchestrationPolling {
                     self.projected = SidebarOrchestrationSnapshot(
                         version: raw.version, generatedAt: raw.generatedAt,
                         complete: raw.complete, omittedCount: raw.omittedCount,
-                        nodes: nodes
+                        nodes: nodes, processes: raw.processes
                     )
                     self.snapshot = self.projected
                     self.retitle()

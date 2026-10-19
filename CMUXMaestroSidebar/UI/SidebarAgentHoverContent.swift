@@ -40,6 +40,7 @@ enum SidebarAgentHoverContent {
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
             lines = Self.copyable(lines)
+            lines += SidebarProcessPresentation.lines(managed.processes[node.id], now: now)
             let current = availability == .ready || availability == .partial
             if !current && availability != .stale {
                 lines = lines.map { line in
