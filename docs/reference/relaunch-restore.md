@@ -82,6 +82,7 @@ Copilot 1.0.98 defers a resumed session's `sessionStart` hook and its `inuse.<PI
 - A session started before the Maestro integration was installed enrolls only at its next extension join (`/clear`, `/resume`, or an extension reload you run). Maestro never triggers one.
 - After `/clear` or an in-session `/resume`, the new session takes over the tab only when the previous session's end was recorded; otherwise it stays unmanaged with `provider-already-enrolled`. If the previous root still has live children, it releases the tab and keeps them: no row shows that run, its children appear as their own observed sessions, and the new root cannot close them. A later `/resume` of the released session in another tab refuses with `surface-mismatch`.
 - Before its first prompt, a new or resumed session reports `awaiting-first-prompt` and its Maestro tools refuse.
+- If a second tab resumes a session that is already managed, the first tab loses Maestro authority as soon as the second holds the session lock (`session-custody-lost`), and the second is refused. Neither is managed until one of them joins again (extension reload, `/resume`, or a relaunch) as the sole holder.
 - An unmanaged restored session can show the CMUX surface title (for example `Terminal`) until Maestro's observer hook binds it.
 
 ## Live checks

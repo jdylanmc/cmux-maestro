@@ -74,6 +74,8 @@ Notable changes are recorded using Keep a Changelog categories.
   children releases the tab and keeps its run; the new root has no authority over them.
 - A session enrolls once Copilot holds it, at its first prompt, never on the absence of
   Copilot's session lock (#261): two tabs resuming one session cannot both look like its owner.
+  A managed root also loses authority (readiness `session-custody-lost`) as soon as another live
+  process holds its session; only the next extension join restores it.
   Before then, readiness says `awaiting-first-prompt`. Refusals recorded by an earlier
   controller that this one no longer makes are decided again after the upgrade.
 - Documentation-only pull requests no longer need a macOS runner (#191). The skill-override and

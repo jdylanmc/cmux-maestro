@@ -99,7 +99,7 @@ A Copilot session that a human starts in CMUX and that enrolls itself as its own
 _Avoid_: adopted, auto-managed (enrollment by the session's own extension only adds tools; it is not adoption)
 
 **Session custody**:
-Copilot's own `inuse.<PID>.lock` for a session, written at its first prompt. Enrollment needs it held by the provider alone; its absence decides nothing.
+Copilot's own `inuse.<PID>.lock` for a session, written at its first prompt. Enrollment and every later managed operation need it held by the provider alone; its absence decides nothing, and a second live holder suspends authority until the next join.
 _Avoid_: session ownership (that is Maestro's node)
 
 **Startup placeholder**:
