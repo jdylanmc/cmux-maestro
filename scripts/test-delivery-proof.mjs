@@ -2610,7 +2610,8 @@ test("born managed: a CMUX session enrolls itself and gains the managed tools", 
   assert.equal(f.born.session, f.session);
   assert.deepEqual(f.tools.declared.slice(0, -1), managedToolSpecs());
   const permission = f.tools.declared.find(spec => spec.name === "maestro_spawn").parameters.properties.yolo;
-  assert.match(permission.description, /true.*explicit human approval/i);
+  assert.match(permission.description, /true.*(?:explicit human approval|human-approved)/i);
+  assert.match(permission.description, /true.*coordinator/i);
   assert.equal(f.tools.declared.at(-1).name, "maestro_readiness");
   assert.deepEqual(f.calls.enroll, [{ controller: "/synthetic/controller", request: {
     sessionId: f.own.sessionId, workspaceId: f.own.workspaceId, surfaceId: f.env.CMUX_SURFACE_ID,
