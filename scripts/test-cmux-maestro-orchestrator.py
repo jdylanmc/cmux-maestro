@@ -1882,7 +1882,7 @@ class BornFixture:
         self.addCleanup(shutil.rmtree, self.routes, True)
         self.extension = self.h.path / "installed-extension"
         self.extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, self.extension / name)
             (self.extension / name).chmod(0o600)
         self.install(age=10)
@@ -1896,7 +1896,7 @@ class BornFixture:
         config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(self.extension)}))
         config.chmod(0o600)
         stamp = time.time() - age
-        for name in ("adapter.mjs", "extension.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
@@ -2292,7 +2292,7 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
 
     def test_reload_after_an_update_reuses_the_enrolled_node(self):
         touch = ("import time\n"
-                 f"for name in ('adapter.mjs', 'extension.mjs'):\n"
+                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs'):\n"
                  f"    os.utime(os.path.join({str(self.extension)!r}, name), (time.time() + 5, time.time() + 5))")
         first, reload = self.enroll(repeat=2, env={"FAKE_BETWEEN": touch})
         self.assertTrue(first["ok"], first)
@@ -2866,7 +2866,7 @@ class ChildResumeTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.routes, True)
         extension = self.h.path / "installed-extension"
         extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (self.h.root / "bin").mkdir(mode=0o700, exist_ok=True)
@@ -3682,7 +3682,7 @@ class OrchestratorTests(unittest.TestCase):
         try:
             extension = h.root / "extension"
             extension.mkdir(mode=0o700)
-            for name in ("adapter.mjs", "extension.mjs"):
+            for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
                 shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
                 (extension / name).chmod(0o600)
             (h.root / "bin").mkdir(mode=0o700)
@@ -5890,7 +5890,7 @@ class DirectLaunchTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, routes)
         extension = h.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (h.root / "bin").mkdir(mode=0o700)
@@ -6589,8 +6589,9 @@ class AgentTagTests(unittest.TestCase):
 class FakeProcessProbe:
     """Injected process facts: a ps table per pass, sysctl identities, lsof output and markers."""
 
-    def __init__(self, tables, identities, listeners=None, markers=None, listeners_complete=True):
+    def __init__(self, tables, identities, listeners=None, markers=None, listeners_complete=True, complete=None):
         self.tables = list(tables)
+        self.complete = list(complete or [True])
         self.identities = identities
         self.listener_map = listeners or {}
         self.marker_map = markers or {}
@@ -6598,7 +6599,8 @@ class FakeProcessProbe:
         self.asked = []
 
     def table(self):
-        return (self.tables.pop(0) if len(self.tables) > 1 else self.tables[0]), True
+        complete = self.complete.pop(0) if len(self.complete) > 1 else self.complete[0]
+        return (self.tables.pop(0) if len(self.tables) > 1 else self.tables[0]), complete
 
     def identity(self, pid):
         return self.identities.get(pid)
@@ -6742,6 +6744,48 @@ class ProcessObservationTests(unittest.TestCase):
         node = self.observe(self.state(self.node()), probe)[0]["a"]
         self.assertEqual((node["state"], node["processes"]), ("owned-current", []))
 
+    def test_a_failed_process_table_never_reports_an_escape(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "server")}
+        identities = {100: (int(self.start), 0), 101: (int(self.start) + 1, 3)}
+        markers = {"s-a": [(100, self.start + 5)]}
+        listener = [{"protocol": "tcp", "address": "127.0.0.1", "port": 8000, "scope": "loopback"}]
+        _, previous = self.observe(self.state(self.node()), FakeProcessProbe([table], identities, {101: listener}, markers))
+        for tables, complete in (([{}, table], [False, True]), ([table, {}], [True, False])):
+            with self.subTest(complete=complete):
+                node, failed = self.observe(self.state(self.node()), FakeProcessProbe(
+                    tables, identities, {101: listener}, markers, complete=complete), previous, at=self.at + 10)
+                node = node["a"]
+                self.assertEqual(node["state"], "scan-incomplete")
+                self.assertEqual([(item["pid"], item["state"], item["listeners"]) for item in node["processes"]],
+                                 [(101, "owned-current", listener)])
+                # Tracking survives: the next complete pass still owns it.
+                recovered = self.observe(self.state(self.node()), FakeProcessProbe(
+                    [table], identities, {101: listener}, markers), failed, at=self.at + 20)[0]["a"]
+                self.assertEqual([(item["pid"], item["state"]) for item in recovered["processes"]],
+                                 [(101, "owned-current")])
+
+    def test_messaging_configuration_requires_the_installed_process_module(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        root = Path(os.path.realpath(home.name))
+        extension, routes = root / "extension", root / "r"
+        for directory in (root / "bin", extension, routes):
+            directory.mkdir(mode=0o700)
+        (root / "bin/messaging.json").write_text(json.dumps(
+            {"version": 1, "routes": str(routes), "extension": str(extension)}))
+        (root / "bin/messaging.json").chmod(0o600)
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
+            shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
+            (extension / name).chmod(0o600)
+        configuration = CONTROLLER_API["messaging_configuration"]
+        self.assertEqual(configuration(root)["extension"], str(extension))
+        (extension / "processes.mjs").write_bytes(b"x" * 16_385)
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "adapter is unavailable"):
+            configuration(root)
+        (extension / "processes.mjs").unlink()
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Messaging"):
+            configuration(root)
+
     def test_listener_parsing_keeps_bind_addresses_and_never_guesses_protocols(self):
         parse = CONTROLLER_API["parse_tcp_listeners"]
         output = "p7\nf5\nn127.0.0.1:5173\nf6\nn*:3000\nf7\nn192.168.1.20:8080\nf8\nn[::1]:9000\nf9\nn[::]:4000\n"
@@ -6758,10 +6802,12 @@ class ProcessObservationTests(unittest.TestCase):
         identities = {pid: (int(self.start), pid) for pid in table}
         previous = {"nodes": [{"nodeId": "a", "copilotSessionId": "s-a", "generation": 1, "processes": [
             {"pid": pid, "startMicros": pid, "name": "gone", "state": "owned-current"} for pid in range(2000, 2030)]}]}
-        node = self.observe(self.state(self.node()), FakeProcessProbe(
-            [table], identities, markers={"s-a": [(100, self.start + 5)]}), previous)[0]["a"]
+        probe = FakeProcessProbe([table], identities, markers={"s-a": [(100, self.start + 5)]})
+        node = self.observe(self.state(self.node()), probe, previous)[0]["a"]
         states = [item["state"] for item in node["processes"]]
         self.assertEqual((states.count("owned-current"), states.count("exited"), node["omittedCount"]), (32, 16, 8))
+        # Probing is bounded too: lsof sees only the candidates kept.
+        self.assertEqual(len(probe.asked[0]), 32)
 
     def test_real_process_table_lsof_and_microsecond_identity(self):
         probe = CONTROLLER_API["SystemProcessProbe"]()

@@ -31,7 +31,7 @@ Each pass is bounded: 5 s per tool, about 100 ms in practice for one `ps`, one `
 | Node `state` | Meaning |
 | --- | --- |
 | `owned-current` | Custody verified this pass; the list is complete. |
-| `scan-incomplete` | Custody verified, but a tool failed or a descendant belongs to another user. The list shows what was proven. |
+| `scan-incomplete` | Custody verified, but `lsof` failed or a descendant belongs to another user: the list shows what was proven. If either `ps` failed, the last list is kept unchanged; missing parentage never makes a process `escaped`. |
 | `denied` | The provider runs as another user. No list. |
 | `no-custody` | No live lock for the session, or a stale one. No list. |
 | `ambiguous` | Another process holds the session's lock, or two nodes record one provider. No list. |
@@ -43,7 +43,7 @@ Each pass is bounded: 5 s per tool, about 100 ms in practice for one `ps`, one `
 | `escaped` | Owned in an earlier pass; alive now outside the tree. Never attributed again; no listeners. Kept 5 minutes. |
 | `exited` | Owned or detached earlier; gone or its PID now belongs to another process. Kept 5 minutes. |
 
-Bounds per node: 32 owned processes (separate group first, then by start), 16 retained `escaped` or `exited`, 8 listeners per process. `group` is `provider` when a process shares the provider's process group (Copilot's MCP servers, extensions and helpers) and `separate` otherwise. It sorts presentation only.
+Bounds per node: 32 owned processes (separate group first, then by start; only those are probed), 16 retained `escaped` or `exited`, 8 listeners per process. `group` is `provider` when a process shares the provider's process group (Copilot's MCP servers, extensions and helpers) and `separate` otherwise. It sorts presentation only.
 
 `scope` is `loopback` (`127.*`, `[::1]`), `any` (`*`, `0.0.0.0`, `[::]`) or `other` (any other bound address). `protocol` is always `tcp`.
 

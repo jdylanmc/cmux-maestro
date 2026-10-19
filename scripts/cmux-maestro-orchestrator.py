@@ -177,12 +177,13 @@ def messaging_configuration(root):
         private_message_directory(extension)
         if len(os.fsencode(routes / ("0" * 16 + ".sock"))) > 100:
             raise OrchestrationError("Messaging socket path is too long.")
-        for name in ("extension.mjs", "adapter.mjs"):
+        # extension.mjs imports both modules; a missing one stops the whole native extension.
+        for name, maximum in (("extension.mjs", 65_536), ("adapter.mjs", 65_536), ("processes.mjs", 16_384)):
             descriptor = os.open(extension / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 info = os.fstat(descriptor)
                 if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
-                        or info.st_mode & 0o077 or not 0 < info.st_size <= 65_536):
+                        or info.st_mode & 0o077 or not 0 < info.st_size <= maximum):
                     raise OrchestrationError("Installed messaging adapter is unavailable.")
             finally:
                 os.close(descriptor)
@@ -3977,21 +3978,35 @@ def observe_processes(state, previous, probe, at, uid=None):
     for node in nodes:
         provider = node["providerProcess"]
         status, root = process_custody(node, probe, table, uid, anchors[(provider["pid"], provider["start"])] > 1)
-        tree = {}
+        tree, skipped = {}, 0
         if root is not None:
-            for pid in process_descendants(table, provider["pid"]):
+            # Bound probing, not only output: the separate group first, like the published order.
+            group = table[provider["pid"]][1]
+            candidates = sorted(process_descendants(table, provider["pid"]), key=lambda pid: table[pid][1] == group)
+            skipped = max(0, len(candidates) - MAX_OBSERVED_PROCESSES)
+            for pid in candidates[:MAX_OBSERVED_PROCESSES]:
                 identity = probe.identity(pid)
                 if identity is not None:
                     tree[pid] = identity
-        passes.append((node, status, root, tree))
-    owned = {pid for _node, _status, _root, tree in passes for pid in tree}
+        passes.append((node, status, root, tree, skipped))
+    owned = {pid for _node, _status, _root, tree, _skipped in passes for pid in tree}
     listeners, listeners_complete = probe.listeners(owned)
     # Fence: parentage and identity must still hold after lsof, like CMUX's own scanner.
     fence, fence_complete = probe.table()
     published, count = [], 0
-    for node, status, root, tree in passes:
+    tables_complete = table_complete and fence_complete
+    for node, status, root, tree, skipped in passes:
         provider = node["providerProcess"]
         entries = []
+        prior = previous_process_entries(previous, node)
+        if not tables_complete and status != "exited":
+            # Missing parentage is not proof of detachment: keep the last list, unchanged.
+            published.append({
+                "nodeId": node["id"], "copilotSessionId": node["copilotSessionId"],
+                "generation": node["generation"], "state": "scan-incomplete", "observedAt": stamp,
+                "processes": prior, "omittedCount": 0,
+            })
+            continue
         root_current = root is not None and probe.identity(provider["pid"]) == root
         if root is not None and not root_current:
             status = "scan-incomplete"
@@ -4012,7 +4027,6 @@ def observe_processes(state, previous, probe, at, uid=None):
             status = "scan-incomplete" if incomplete else "owned-current"
         current = {(entry["pid"], entry["startMicros"]) for entry in entries}
         events = []
-        prior = previous_process_entries(previous, node)
         if status == "exited" and not prior:
             continue  # an ended provider with nothing observed before has nothing to report
         if status in ("owned-current", "scan-incomplete", "exited"):
@@ -4044,7 +4058,7 @@ def observe_processes(state, previous, probe, at, uid=None):
             "nodeId": node["id"], "copilotSessionId": node["copilotSessionId"],
             "generation": node["generation"], "state": status, "observedAt": stamp,
             "processes": entries[:MAX_OBSERVED_PROCESSES] + events,
-            "omittedCount": max(0, len(entries) - MAX_OBSERVED_PROCESSES),
+            "omittedCount": max(0, len(entries) - MAX_OBSERVED_PROCESSES) + skipped,
         })
     return {"version": 1, "observedAt": stamp, "nodes": published}, count
 
