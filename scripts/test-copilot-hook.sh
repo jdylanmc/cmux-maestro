@@ -8,10 +8,12 @@ mkdir -p "$OUTPUT"
 
 SOURCES=(
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityRecord.swift"
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotWorktree.swift"
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotLocationRecord.swift"
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift"
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotFileAccess.swift"
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift"
-    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionName.swift"
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionNameParser.swift"
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift"
     "$ROOT/CMUXMaestroCopilotHook/main.swift"
 )

@@ -236,7 +236,7 @@ struct CopilotLocationHookTests: Sendable {
         #expect(try run(hook, ["cwd": repo.path]) == .recorded)
         let file = record(hook)
         let data = try Data(contentsOf: file)
-        #expect(CMUXMaestroPreview.CopilotSessionLocation.decode(data, sessionID: session) == .init(branch: "topic", worktree: false))
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(data, sessionID: session)?.location == .init(branch: "topic", worktree: false))
         #expect(!String(decoding: data, as: UTF8.self).contains(scratch.root.path))
         var info = stat()
         #expect(stat(file.path, &info) == 0 && info.st_mode & 0o777 == 0o600)
@@ -247,11 +247,12 @@ struct CopilotLocationHookTests: Sendable {
         let outside = try scratch.directory("not-a-repo")
         #expect(try run(hook, ["cwd": outside.path]) == .recorded)
         // The record stays for the session's current worktree; the tool-path branch fact is gone.
-        #expect(CMUXMaestroPreview.CopilotSessionLocation.decode(try Data(contentsOf: file), sessionID: session) == nil)
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(try Data(contentsOf: file), sessionID: session)?
+            .location == nil)
         let tree = try scratch.worktree("wt", branch: "w")
         #expect(try run(hook, ["cwd": tree.path]) == .recorded)
-        #expect(CMUXMaestroPreview.CopilotSessionLocation.decode(try Data(contentsOf: file), sessionID: session)
-            == .init(branch: "w", worktree: true))
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(try Data(contentsOf: file), sessionID: session)?
+            .location == .init(branch: "w", worktree: true))
     }
 
     /// The session's own selected directory decides its worktree, not the tool path or payload cwd.
@@ -362,6 +363,20 @@ struct CopilotWorktreeResolverTests: Sendable {
         chmod(scratch.root.appendingPathComponent("denied").path, 0o000)
         defer { chmod(scratch.root.appendingPathComponent("denied").path, 0o755) }
         #expect(resolve(denied) == .unknown)
+    }
+
+    /// A quoted `cwd:` keeps its escaped tab; only name display turns it into a space.
+    @Test func escapedTabInCwdNamesTheTabbedDirectoryNotItsSpacedSibling() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let tabbed = try scratch.repo("a\tb")
+        let spaced = try scratch.repo("a b")
+        let yaml = Data("name: \"x\\ty\"\ncwd: \"\(scratch.root.path)/a\\tb\"\n".utf8)
+        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: yaml))
+        #expect(cwd == tabbed.path)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: cwd) == resolve(tabbed))
+        #expect(resolve(tabbed) != resolve(spaced))
+        #expect(CMUXMaestroPreview.CopilotSessionName.parse(yaml) == "x y")
     }
 
     @Test func currentWorktreeRecordRoundTripsAndRejectsDeviations() throws {

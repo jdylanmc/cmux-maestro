@@ -273,13 +273,6 @@ nonisolated struct AgentSessionLocation: Codable, Equatable, Sendable {
     let worktree: Bool
 }
 
-/// The worktree a session's own selected directory is in (ADR 0026). `isCurrent` is false when
-/// the evidence is last known: the session's directory record changed since, or was not read live.
-nonisolated struct AgentSessionWorktree: Codable, Equatable, Sendable {
-    let evidence: CopilotWorktreeEvidence
-    let isCurrent: Bool
-}
-
 // Additional evidence, never a reinterpretation of v1's nested childWork.
 // Items are ordered literal edges; missing parents and cycles are permissible.
 nonisolated struct AgentChildWorkObservation: Codable, Equatable, Sendable {

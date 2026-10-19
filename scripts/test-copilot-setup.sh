@@ -42,10 +42,12 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     -default-isolation MainActor \
     -parse-as-library -emit-module -emit-library -enable-testing -module-name CMUXMaestroPreview \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityRecord.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotWorktree.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotLocationRecord.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotFileAccess.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift" \
-    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionName.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionNameParser.swift" \
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetup.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetupObservation.swift" \
