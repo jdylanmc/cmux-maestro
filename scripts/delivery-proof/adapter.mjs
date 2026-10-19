@@ -346,7 +346,7 @@ export function managedToolSpecs() {
 
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
   closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
-  endSession, endGate = sessionEndGate, observe, signal, onListener, diagnostic = () => {
+  endSession, endGate = sessionEndGate, observe, signal, onListener, custody, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
 } }) {
   signal?.throwIfAborted();
@@ -362,6 +362,8 @@ export async function start({ root, peer, joinSession, managed = false, expected
     const current = await bindingAt(root, peer, managed);
     requireCondition(sameAddress(publicAddress(current), ownAddress) &&
       current.capability === own.capability && current.nodeId === own.nodeId);
+    // Born roots: their provider must still alone hold the session (#261).
+    await custody?.({ nodeId: own.nodeId, ...ownAddress, capability: own.capability });
   }
   let session;
   let observation;
@@ -629,6 +631,7 @@ export async function start({ root, peer, joinSession, managed = false, expected
   server.maxConnections = 8;
   const listener = {
     get session() { return session; },
+    custody: currentBinding,
     close: () => {
       if (closing) return closing;
       for (const socket of sockets) socket.destroy();
@@ -697,7 +700,7 @@ const LAUNCHER_INPUTS = ["CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER
 // Reasons the controller may give; anything else is reported generically.
 export const ENROLLMENT_REASONS = new Set([
   "integration-not-installed", "provider-process-unverified", "session-not-persisted", "enrollment-busy",
-  "awaiting-first-prompt",
+  "awaiting-first-prompt", "session-custody-lost",
   "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
   "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
   "enrolled-runtime-unavailable", "enrolled-node-unavailable",
@@ -707,26 +710,28 @@ export const ENROLLMENT_REASONS = new Set([
 export const RETRIED_ONCE = new Set(["session-not-persisted", "enrollment-busy", "awaiting-first-prompt"]);
 // Plain words for maestro_readiness.
 export const ENROLLMENT_MESSAGES = {
-  "enrollment-pending": "Maestro is enrolling this session.",
-  "awaiting-first-prompt": "Maestro enrolls this session at its first prompt, when Copilot takes it.",
+  "enrollment-pending": "Enrolling.",
+  "awaiting-first-prompt": "Enrolls at the first prompt, when Copilot takes the session.",
   "integration-not-installed": "Maestro is not installed.",
-  "provider-process-unverified": "Maestro could not verify this Copilot process.",
+  "provider-process-unverified": "This Copilot process is unverified.",
   "session-not-persisted": "Copilot has not saved this session.",
-  "enrollment-busy": "Another Maestro enrollment was running.",
-  "cmux-identity-unverified": "CMUX could not confirm this terminal is its tab.",
+  "enrollment-busy": "Another enrollment was running.",
+  "cmux-identity-unverified": "CMUX did not confirm this tab.",
   "surface-owned": "Another Maestro session owns this tab.",
-  "provider-already-enrolled": "Another Maestro session holds this Copilot process.",
-  "session-previously-managed": "Maestro launched this session; only its resume command restores it.",
+  "provider-already-enrolled": "Another Maestro session holds this process.",
+  "session-previously-managed": "Maestro launched this session; its resume command restores it.",
   "capacity-unavailable": "Maestro is at its session limit.",
-  "account-unverified": "Copilot did not report this session's account in time.",
-  "enrollment-failed": "Maestro could not enroll this session.",
-  "enrolled-runtime-unavailable": "Enrolled, but messaging did not start here.",
-  "enrolled-node-unavailable": "Enrolled, but its Maestro record is no longer current.",
-  "surface-mismatch": "Maestro recorded this session in another tab.",
-  "account-mismatch": "Maestro recorded this session with another account.",
-  "account-unrecorded": "Maestro's record has no account.",
+  "account-unverified": "The account was not reported in time.",
+  "enrollment-failed": "Enrollment failed.",
+  "enrolled-runtime-unavailable": "Enrolled; messaging did not start.",
+  "enrolled-node-unavailable": "Enrolled; the record is no longer current.",
+  "surface-mismatch": "Recorded in another tab.",
+  "account-mismatch": "Recorded with another account.",
+  "account-unrecorded": "No account recorded.",
   "session-live-or-uncertain": "Another process may hold this session.",
+  "session-custody-lost": "Another process holds this session too; stopped until the next join.",
 };
+const CUSTODY_LOST = "Maestro session custody is ambiguous; management is unavailable.";
 const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
 
 function cmuxEnvironment(environment) {
@@ -752,7 +757,7 @@ async function invokeEnroll(request, controller, signal) {
   }
 }
 
-// Copilot writes inuse.<PID>.lock at a session's first prompt; the controller verifies its owner.
+// Lock written at the first prompt; the controller verifies its owner.
 async function sessionLockPresent(sessionId) {
   try {
     const names = await fs.readdir(path.join(os.homedir(), ".copilot", "session-state", sessionId));
@@ -762,13 +767,13 @@ async function sessionLockPresent(sessionId) {
   }
 }
 
-// Born managed (ADR 0025): every CMUX Copilot session without launcher inputs enrolls itself once
-// Copilot holds it (checked at join and at later hook events). Managed tools refuse until then.
-// One enrollment at a time; the controller is asked at most twice per join.
+// Born managed (ADR 0025): enrolls once Copilot holds the session; the controller is asked at most
+// twice per join. Managed tools refuse until then.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
   diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
   endSession = recordSessionEnd, endGate = sessionEndGate, promptWaitMs = 10000,
   hasSessionLock = () => sessionLockPresent(environment.SESSION_ID),
+  checkCustody = (request, path) => invokeController("native-custody", request, path, signal),
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -780,6 +785,21 @@ export async function startBornManaged({ joinSession, environment = process.env,
   }
   const delegates = {};
   let session;
+  let runtime;
+  // Latched: only the next join's enrollment restores authority.
+  let custodyLost = false;
+  const custody = async (identity) => {
+    requireCondition(!custodyLost);
+    try {
+      await checkCustody({ identity }, controller);
+    } catch (error) {
+      if (error?.message === CUSTODY_LOST) {
+        custodyLost = true;
+        state = { status: "unavailable", reason: "session-custody-lost" };
+      }
+      throw error;
+    }
+  };
   const refusal = () => ({ resultType: "failure",
     textResultForLlm: `Maestro management is unavailable for this session (${state.reason}). ` +
       ENROLLMENT_MESSAGES[state.reason] +
@@ -799,6 +819,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
         signal?.throwIfAborted();
         exactKeys(args, []);
         requireCondition(session?.sessionId === sessionId && invocation?.sessionId === sessionId);
+        if (state.status === "enrolled") await runtime.custody().catch(() => {});
         const enrolled = state.status === "enrolled";
         return JSON.stringify({
           status: enrolled ? "managed" : "diagnostic-only",
@@ -859,7 +880,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
     }
     try {
       const listener = await startManagedRuntime({
-        root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener,
+        root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener, custody,
         expected: { workspaceId: enrolled.workspaceId, sessionId, generation: enrolled.generation,
           nodeId: enrolled.nodeId, controller },
         endSession, endGate,
@@ -869,6 +890,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
           return session;
         },
       });
+      runtime = listener;
       state = { status: "enrolled", nodeId: enrolled.nodeId, generation: enrolled.generation };
       return listener;
     } catch (error) {
@@ -971,10 +993,8 @@ export async function startReadiness({ joinSession, environment = process.env, s
 
 // ---- Beats: recurring prompts handed to Copilot's own scheduler -------------------------------
 // Policy: docs/adr/0007.
-// Copilot owns timing, time zones and queueing. This section is the only place that knows how
-// schedules are created. `session.schedule.addCron` exists in the runtime but is absent from the
-// SDK's typed client, so it is reached through the raw connection behind this one function. If a
-// Copilot release changes it, the gateway fails and Beats stop registering; nothing else breaks.
+// Copilot owns timing, zones and queueing. `session.schedule.addCron` is absent from the typed SDK
+// client, so only this gateway reaches it raw; if Copilot changes it, only Beats stop registering.
 
 // The label is for people only. Ownership is the schedule IDs this section created, recorded in a
 // per-session ledger (ADR 0002: exact identity, never titles).
@@ -1005,10 +1025,8 @@ export function createScheduleGateway(session) {
   };
 }
 
-// Pure: which native schedules to add or remove so this session runs exactly `wanted` (its runnable
-// Beats, as returned by the controller). Only schedules in `owned` (schedule ID -> Beat ID) are ever
-// kept or removed; every other schedule, whatever its label, is the user's. `forget` lists owned IDs
-// Copilot no longer has.
+// Pure: schedules to add or remove so this session runs exactly `wanted`. Only `owned` (schedule ID ->
+// Beat ID) are touched; any other schedule is the user's. `forget`: owned IDs Copilot no longer has.
 export function planBeatSchedules({ wanted, entries, tz, owned }) {
   const remove = [];
   const present = new Set();
@@ -1029,10 +1047,9 @@ export function planBeatSchedules({ wanted, entries, tz, owned }) {
   return { add, remove, forget };
 }
 
-// The per-session ledger of schedule IDs this extension created, outside the Beats store (ADR 0020):
-// `owned` (schedule ID -> Beat ID) and `pending` adds recorded before Copilot is asked, so a schedule
-// created just before the process stopped is adopted instead of duplicated. A missing ledger is
-// empty; an unreadable or invalid one throws, so the caller changes nothing.
+// Per-session ledger outside the Beats store (ADR 0020): `owned` and `pending` adds (recorded before
+// Copilot is asked, so a schedule made just before a stop is adopted, not duplicated). Missing is
+// empty; unreadable or invalid throws, so the caller changes nothing.
 const LEDGER_LIMIT = 65_536;
 
 const emptyLedger = () => ({ owned: new Map(), pending: [] });

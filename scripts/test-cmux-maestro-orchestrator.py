@@ -2103,6 +2103,49 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         record(self.h.root, key, anchor, "surface-owned")
         self.assertEqual(reason(), "surface-owned")
 
+    def test_a_second_live_holder_suspends_a_born_roots_authority(self):
+        # Tab A enrolled as sole holder; tab B (here: this live test process, not A's child) then
+        # holds the same session. Every controller operation of A refuses; nothing changes.
+        foreign = os.getpid()
+        then = (
+            "receipt = json.loads(results[0].stdout)\n"
+            "binding = json.load(open(os.path.join(receipt['routes'], receipt['peer'] + '.json')))\n"
+            "identity = {k: binding[k] for k in ('nodeId', 'workspaceId', 'sessionId', 'generation', 'capability')}\n"
+            "lock = os.path.join(env['HOME'], '.copilot', 'session-state', env['SESSION_ID'],"
+            f" 'inuse.{foreign}.lock')\n"
+            "def call(command, body):\n"
+            "    done = subprocess.run([sys.executable, driver, command], input=json.dumps(body),"
+            " capture_output=True, text=True, env=env, timeout=30)\n"
+            "    return [done.returncode, done.stderr]\n"
+            "out = {'held': call('native-custody', {'identity': identity})}\n"
+            "open(lock, 'w').close()\n"
+            "out['custody'] = call('native-custody', {'identity': identity})\n"
+            "out['spawn'] = call('native-spawn', {'identity': {**identity, 'login': 'human-account',"
+            " 'host': 'github.com'}, 'assignment': {'name': 'W', 'cwd': '/tmp', 'task': 'x'}})\n"
+            "out['close'] = call('native-close', {'identity': identity, 'target': {"
+            "'workerId': '00000000-0000-4000-8000-0000000000aa', 'workspaceId': identity['workspaceId'],"
+            " 'surfaceId': '00000000-0000-4000-8000-0000000000ab',"
+            " 'sessionId': '00000000-0000-4000-8000-0000000000ac', 'generation': 1}})\n"
+            "os.unlink(lock)\n"
+            "result = subprocess.CompletedProcess([], 0, json.dumps(out), '')\n")
+        enrolled, calls = self.enroll(env={"FAKE_THEN": then})
+        self.assertTrue(enrolled["ok"], enrolled)
+        self.assertEqual(calls["held"][0], 0, calls["held"])
+        before = self.h.state()
+        for name in ("custody", "spawn", "close"):
+            code, stderr = calls[name]
+            self.assertNotEqual(code, 0, name)
+            self.assertIn("custody is ambiguous", stderr, name)
+        self.assertEqual(self.h.state()["nodes"], before["nodes"])
+
+    def test_a_reload_revalidates_custody(self):
+        foreign = os.getpid()
+        between = ("open(os.path.join(env['HOME'], '.copilot', 'session-state', env['SESSION_ID'],"
+                   f" 'inuse.{foreign}.lock'), 'w').close()\n")
+        first, reload = self.enroll(repeat=2, env={"FAKE_BETWEEN": between})
+        self.assertTrue(first["ok"], first)
+        self.refused(reload, "session-live-or-uncertain")
+
     def test_a_session_running_before_install_enrolls_in_place_at_its_next_join(self):
         # The integration is newer than the provider: the session was already running, and its
         # extension joins it now (for example after an extension reload).
@@ -2423,8 +2466,12 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         binding = json.loads((self.routes / f"{outcome['peer']}.json").read_text())
         identity = {key: binding[key] for key in ("nodeId", "workspaceId", "sessionId", "generation", "capability")}
         node = h.state()["nodes"][outcome["nodeId"]]
-        authorized = CONTROLLER_API["authorize_native_spawn"](
-            h.state(), {**identity, "login": "human-account", "host": "github.com"})
+        spawn_identity = {**identity, "login": "human-account", "host": "github.com"}
+        # Its provider has exited and holds the session no more: no authority.
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "custody is ambiguous"):
+            CONTROLLER_API["authorize_native_spawn"](h.state(), spawn_identity)
+        with patch.dict(CONTROLLER_API["authorize_native_spawn"].__globals__, require_born_custody=lambda actor: None):
+            authorized = CONTROLLER_API["authorize_native_spawn"](h.state(), spawn_identity)
         self.assertEqual(authorized["id"], node["id"])
         self.assertEqual(CONTROLLER_API["recorded_native_permissions"](node),
                          ("default", {"allow": [], "deny": []}))

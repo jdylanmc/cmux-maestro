@@ -2552,19 +2552,20 @@ process.exitCode=packet.code;
 // ---- Born managed (ADR 0025) ------------------------------------------------------------------
 
 async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}, statusTimeoutMs,
-  startManagedRuntime, endGate = createSessionEndGate(), endSession, hasSessionLock = async () => true } = {}) {
+  startManagedRuntime, endGate = createSessionEndGate(), endSession, hasSessionLock = async () => true,
+  checkCustody = async () => {} } = {}) {
   const f = await managedFixture(t, { owners: [0, 0] });
   const own = f.bindings[0];
   const env = {
     SESSION_ID: own.sessionId, CMUX_WORKSPACE_ID: own.workspaceId.toUpperCase(),
     CMUX_SURFACE_ID: randomUUID(), COPILOT_EXTENSION_PARENT_PID: String(parentPid), ...environment,
   };
-  const calls = { enroll: [], auth: 0, ended: [] };
+  const calls = { enroll: [], auth: 0, ended: [], sent: [], custody: [] };
   let tools;
   let hooks;
   const session = {
     sessionId: own.sessionId,
-    send: async () => {},
+    send: async (value) => { calls.sent.push(value); },
     rpc: { gitHubAuth: { getStatus: async () => {
       calls.auth++;
       return auth ?? { isAuthenticated: true, login: "human-account", host: "https://github.com" };
@@ -2572,6 +2573,8 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
   };
   const born = await startBornManaged({
     environment: env, parentPid, controller: "/synthetic/controller", hasSessionLock,
+    diagnostic: () => f.events.emit("drop"),
+    checkCustody: async (request, controller) => { calls.custody.push({ request, controller }); return checkCustody(request); },
     // A listener started by a later attempt (at a prompt) is closed with the fixture too.
     onListener: (listener) => { if (!f.adapters.includes(listener)) f.adapters.push(listener); },
     ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
@@ -2597,7 +2600,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     },
   });
   if (born?.listener && !f.adapters.includes(born.listener)) f.adapters.push(born.listener);
-  return { ...f, own, env, born, tools, hooks, calls, session, endGate };
+  return { ...f, peerTools: f.tools, own, env, born, tools, hooks, calls, session, endGate };
 }
 
 const readiness = async (f) => JSON.parse(await f.tools.maestro_readiness({}));
@@ -2673,6 +2676,48 @@ test("born managed: nothing is decided until Copilot holds the session, then one
   assert.equal((await readiness(f)).status, "managed");
   await f.hooks.onAgentStop({}, { sessionId: f.own.sessionId });
   assert.equal(f.calls.enroll.length, 1);
+});
+
+test("born managed: a second holder of the session suspends every managed operation, latched", async (t) => {
+  // Tab A enrolled as the session's sole holder; tab B later resumes the same session.
+  let ambiguous = false;
+  const f = await bornFixture(t, { checkCustody: async () => {
+    if (ambiguous) throw new Error("Maestro session custody is ambiguous; management is unavailable.");
+  } });
+  await f.launch(1);
+  const toA = { destination: managedAddress(f.own), body: "synthetic" };
+  f.peerTools[1].maestro_send(toA);
+  for (let i = 0; i < 200 && f.calls.sent.length === 0; i++) await delay(10);
+  assert.equal(f.calls.sent.length, 1);
+  assert.deepEqual(f.calls.custody.at(-1), { controller: "/synthetic/controller", request: { identity: {
+    nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId, generation: 1,
+    capability: f.own.capability } } });
+  ambiguous = true;
+  for (const [name, args] of [["maestro_peers", {}], ["maestro_identity", {}],
+    ["maestro_send", { destination: managedAddress(f.bindings[1]), body: "x" }],
+    ["maestro_spawn", { name: "w", cwd: "/tmp", task: "t" }],
+    ["maestro_close", { target: { workerId: randomUUID(), workspaceId: f.own.workspaceId, surfaceId: randomUUID(),
+      sessionId: randomUUID(), generation: 1 } }]]) {
+    assert.equal((await f.tools[name](args)).resultType, "failure", name);
+  }
+  const drops = once(f.events, "drop");
+  await f.peerTools[1].maestro_send(toA);
+  await drops;
+  assert.equal(f.calls.sent.length, 1, "no inbound delivery while custody is ambiguous");
+  assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
+    reason: "session-custody-lost", message: ENROLLMENT_MESSAGES["session-custody-lost"] });
+  assert.equal(f.sends.length, 0);
+  // The ambiguity ending does not restore stale authority; only the next join re-checks it.
+  ambiguous = false;
+  const checks = f.calls.custody.length;
+  assert.equal((await f.tools.maestro_peers({})).resultType, "failure");
+  assert.equal((await readiness(f)).status, "diagnostic-only");
+  assert.equal(f.calls.custody.length, checks);
+});
+
+test("the installed adapter fits setup's 64 KiB resource bound", async () => {
+  const size = (await fs.stat(fileURLToPath(new URL("./delivery-proof/adapter.mjs", import.meta.url)))).size;
+  assert.ok(size <= 65_536, `adapter.mjs is ${size} bytes`);
 });
 
 test("born managed: an unrecorded refusal is asked once more, then stands until the next join", async (t) => {

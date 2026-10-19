@@ -2490,6 +2490,42 @@ def authorize_native_actor(state, identity):
     return actor
 
 
+CUSTODY_LOST = "Maestro session custody is ambiguous; management is unavailable."
+
+
+def require_born_custody(actor):
+    """A born root acts only while its recorded provider (or that provider's direct child) is the
+    sole live owner of its session's lock (#261). Checked before every managed operation, so a
+    second tab that resumes the same session suspends the first one's authority. Nothing is
+    recorded: authority returns only through a new enrollment check at the next extension join."""
+    if actor.get("enrollment") != "born":
+        return
+    try:
+        require_session_custody(actor["copilotSessionId"], actor["providerProcess"])
+    except EnrollmentRefused as error:
+        raise OrchestrationError(CUSTODY_LOST) from error
+
+
+def command_native_custody(root):
+    """The invoking born session's current custody, for its adapter's local operations."""
+    try:
+        raw = sys.stdin.buffer.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {"identity"}:
+            raise ValueError()
+    except (UnicodeError, ValueError) as error:
+        raise OrchestrationError("Custody request is invalid.") from error
+    actor = authorize_native_actor(read_state(root), request["identity"])
+    if (actor.get("enrollment") != "born" or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
+            or str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
+            or not process_matches(actor)):
+        raise OrchestrationError("Custody request does not match the invoking native session.")
+    require_born_custody(actor)
+    return {"custody": "held"}
+
+
 def authorize_native_spawn(state, identity):
     if not isinstance(identity, dict) or set(identity) != {
         "nodeId", "workspaceId", "sessionId", "generation", "capability", "login", "host"
@@ -2503,6 +2539,7 @@ def authorize_native_spawn(state, identity):
     validate_launch_settings({"version": 1, "copilotAccount": identity["login"]})
     if not identity["login"]:
         raise OrchestrationError("Parent account is unavailable; no account fallback was used.")
+    require_born_custody(actor)
     return actor
 
 
@@ -3046,9 +3083,11 @@ def command_native_enroll(root, cmux):
 
     with EnrollmentLock(root):
         snapshot = read_state(root)
-        # Extension reload in the same enrolled provider: same node and route, even after an update.
+        # Extension reload in the same enrolled provider: same node and route, even after an update,
+        # once custody is verified again; this is how authority suspended by a second tab returns.
         current = reload_match(snapshot)
         if current is not None:
+            require_session_custody(session, anchor)
             return receipt(current)
         previous = recorded_decision(snapshot, key, anchor)
         if previous is not None:
@@ -3788,6 +3827,7 @@ def native_close_request(root, cmux, request):
                     or str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
                     or not process_matches(actor)):
                 raise OrchestrationError("Close does not match the invoking native session.")
+            require_born_custody(actor)
         else:
             if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
                     or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
@@ -6435,6 +6475,7 @@ def parser():
     ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
     ended.add_argument("--workspace", required=True)
     commands.add_parser("native-session-end", help=argparse.SUPPRESS)
+    commands.add_parser("native-custody", help=argparse.SUPPRESS)
     resume = commands.add_parser("resume", help="Resume one ended managed session in its restored CMUX surface")
     resume.add_argument("session_id")
     commands.add_parser("beats-snapshot", help=argparse.SUPPRESS)
@@ -6601,7 +6642,7 @@ def main(argv=None):
             return 0
         cmux = None if args.command in {
             "launch-settings", "capacity", "runtime", "report", "native-observe", "archive-ended",
-            "native-session-end",
+            "native-session-end", "native-custody",
         } else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
@@ -6625,6 +6666,8 @@ def main(argv=None):
             output = command_native_enroll(root, cmux)
         elif args.command == "native-session-end":
             output = command_native_session_end(root, cmux)
+        elif args.command == "native-custody":
+            output = command_native_custody(root)
         elif args.command == "archive-ended":
             output = command_archive_ended(args, root)
         elif args.command == "runtime":
