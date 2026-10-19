@@ -22,6 +22,22 @@ struct SidebarWorkspaceCountTests {
     }
 
     @Test(arguments: [false, true])
+    func legacyCoordinatorKeepsItsLiveSessionStateInVisibleWork(_ showEnded: Bool) throws {
+        let root = owner()
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
+        observed.attention = [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)]
+        let raw = tree([observed])
+        let visible = SidebarVisibleWork(tree: raw, managed: [root], history: .init(), showEnded: showEnded, now: now)
+        #expect(visible.managed == [root])
+        #expect(visible.tree.sessions.map(\.id) == [fixtures.sessionID], "Evidence stays; only its own row is omitted")
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now, tree: visible.tree)
+                == SidebarPresentation.managedState(root, availability: .ready, now: now, tree: raw))
+        #expect(SidebarPresentation.managedState(root, availability: .ready, now: now, tree: visible.tree).title == "Working")
+        #expect(SidebarPresentation.managedNeedsInput(root, tree: visible.tree, now: now))
+        #expect(SidebarPresentation.rowlessSessionIDs(visible.tree, managed: visible.managed, now: now) == [fixtures.sessionID])
+    }
+
+    @Test(arguments: [false, true])
     func supplementalHistoryDoesNotInflateExactManagedAndUnmanagedCounts(_ exactOwner: Bool) throws {
         let root = owner(sessionID: exactOwner ? fixtures.sessionID : nil)
         let current = session(fixtures.sessionID, surface: fixtures.surfaceA)

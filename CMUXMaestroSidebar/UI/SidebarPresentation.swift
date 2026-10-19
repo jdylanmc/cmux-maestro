@@ -209,10 +209,11 @@ struct SidebarVisibleWork {
         var tree = tree
         tree.sessions += tree.statusSessions
         // A registration that is no longer current on its surface has nothing to navigate to,
-        // so it leaves no row; its descendants stay.
-        let rowless = SidebarPresentation.rowlessSessionIDs(tree, managed: managed, now: now)
+        // so it and its old observation leave no row; its descendants stay. A session on a
+        // managed surface that is not that agent's own stays as evidence but gets no row.
+        let replaced = SidebarPresentation.replacedSessionIDs(tree, managed: managed, now: now)
         let managed = SidebarPresentation.coalescingManagedNodes(managed, observations: tree, now: now)
-        tree.sessions.removeAll { rowless.contains($0.id) }
+        tree.sessions.removeAll { replaced.contains($0.id) }
         self.tree = tree
         self.managed = managed
         guard !showEnded else { return }
@@ -645,8 +646,7 @@ enum SidebarPresentation {
                 let current = tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
                     && SidebarCopilotTree.isFresh(session.observedAt, now: now)
                 let unfocusable = session.statusOnly
-                let notice = unfocusable ? sessionFocusUnavailable
-                    : current ? nil : "Session observation is stale. Last-known metadata is not live state."
+                let notice = current ? nil : "Session observation is stale. Last-known metadata is not live state."
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
                     let context = unfocusable ? [] : paths(
@@ -817,7 +817,6 @@ enum SidebarPresentation {
         return managed.filter { !displaced.contains($0.id) }
     }
 
-    static let sessionFocusUnavailable = "Original session is not current on this surface."
 
     static func displacedManagedNodeIDs(
         _ managed: [SidebarOrchestrationNode], observations: SidebarCopilotTree?, now: Date
@@ -871,9 +870,8 @@ enum SidebarPresentation {
         }
     }
 
-    /// Sessions with no row: the exact observation of a managed agent no longer current on its
-    /// surface, or a session on a managed surface that is not that agent's own.
-    static func rowlessSessionIDs(
+    /// The exact observations of managed agents no longer current on their surface.
+    static func replacedSessionIDs(
         _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date
     ) -> Set<UUID> {
         let displaced = displacedManagedNodeIDs(managed, observations: tree, now: now)
@@ -882,8 +880,17 @@ enum SidebarPresentation {
             replaced.contains {
                 $0.copilotSessionId == session.id && $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
             }
-        }.map(\.id)).union(sessionPlacements(tree.sessions, managed: managed, observations: tree, now: now)
-            .filter(\.hasNoSurfaceRow).map(\.session.id))
+        }.map(\.id))
+    }
+
+    /// Sessions with no row: replaced observations, and sessions on a managed surface that are not
+    /// that agent's own.
+    static func rowlessSessionIDs(
+        _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date
+    ) -> Set<UUID> {
+        replacedSessionIDs(tree, managed: managed, now: now)
+            .union(sessionPlacements(tree.sessions, managed: managed, observations: tree, now: now)
+                .filter(\.hasNoSurfaceRow).map(\.session.id))
     }
 
     static func workspaceSummary(

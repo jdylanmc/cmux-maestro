@@ -73,7 +73,6 @@ enum SidebarAgentHoverContent {
                              notice: "Child observation is no longer current.")
             }
             let allowed = Set(["Name", "Kind", "Model", "Last reported model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
-            let unfocusable = session.statusOnly
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
                 .init(title: "Placement", value: "Observed child; native placement belongs to its parent session"),
@@ -81,8 +80,7 @@ enum SidebarAgentHoverContent {
                     workspaceID: session.workspaceID, surfaceID: session.surfaceID
                 ).workingDirectory, isParent: true, copyable: true)
             ]
-            let notices = [unfocusable ? SidebarPresentation.sessionFocusUnavailable : nil,
-                session.childrenComplete && !session.treeDegraded ? nil : "Child history is incomplete; missing work is not assumed finished."]
+            let notices = [session.childrenComplete && !session.treeDegraded ? nil : "Child history is incomplete; missing work is not assumed finished."]
                 .compactMap { $0 }
             return .init(
                 id: "child-\(sessionID)-\(childID)", category: child.kind == .subagent ? "Agent preview" : "Activity preview", title: child.name,
@@ -119,8 +117,7 @@ enum SidebarAgentHoverContent {
         return .init(
             id: "session-\(session.id)", category: "Agent preview", title: title,
             subtitle: SidebarPresentation.sessionState(session).title,
-            lines: lines, notice: unfocusable ? SidebarPresentation.sessionFocusUnavailable
-                : session.liveness == .alive ? nil : "Live session ownership is not confirmed."
+            lines: lines, notice: session.liveness == .alive ? nil : "Live session ownership is not confirmed."
         )
     }
 }

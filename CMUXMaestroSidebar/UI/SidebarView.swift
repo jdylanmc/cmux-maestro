@@ -908,7 +908,8 @@ struct SidebarView: View {
             let work = visibleWork
             TaskboardContent(
                 tree: work.tree, hierarchy: model.hierarchy, navigation: model.navigation,
-                selection: unmanagedSelection
+                selection: unmanagedSelection,
+                rowlessSessionIDs: SidebarPresentation.rowlessSessionIDs(work.tree, managed: work.managed, now: now())
             )
         }
     }
@@ -2225,12 +2226,11 @@ private struct CopilotSessionRow: View {
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
     private var name: String? { session.sessionName }
     private var actions: [SidebarRowActionGroup] {
-        var items: [SidebarRowAction] = [
-            focusUnavailable ? .unavailable("Focus original session", SidebarPresentation.sessionFocusUnavailable)
-                : .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                         navigation: navigation, prepareSeen: prepareSeen),
-            .init(title: "Open details", perform: { selection = .session(session.id) })
+        var items: [SidebarRowAction] = focusUnavailable ? [] : [
+            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                   navigation: navigation, prepareSeen: prepareSeen)
         ]
+        items.append(.init(title: "Open details", perform: { selection = .session(session.id) }))
         if session.hasShownOutline(layout) {
             items.append(.init(title: expanded ? "Collapse branch" : "Expand branch",
                                perform: { setExpanded(.session(session.id), !expanded) }))
@@ -2295,7 +2295,7 @@ private struct CopilotSessionRow: View {
                 session: session, expanded: expanded,
                 navigation: navigation, layout: layout, setExpanded: setExpanded,
                 dismiss: dismiss, acknowledge: acknowledge, selection: $selection,
-                parentFocusUnavailable: focusUnavailable ? SidebarPresentation.sessionFocusUnavailable : nil
+                parentFocusUnavailable: focusUnavailable
             )
         }
         .sidebarRowGroup(focus: nil, expanded: expanded && session.hasShownOutline(layout))
@@ -2327,7 +2327,7 @@ private struct CopilotSessionContents: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     var ownerDepth = 0
-    var parentFocusUnavailable: String? = nil
+    var parentFocusUnavailable = false
     var taskboard = false
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
@@ -2609,7 +2609,7 @@ private struct CopilotWorkRow: View {
     var setExpanded: ((SidebarExpansionID, Bool) -> Void)? = nil
     var paths: HierarchyPathContext? = nil
     var taskboard = false
-    var parentFocusUnavailable: String? = nil
+    var parentFocusUnavailable = false
     @Binding var selection: UnmanagedSelection?
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
@@ -2620,13 +2620,12 @@ private struct CopilotWorkRow: View {
             || node.dismissibleFailure(sessionID: session.id) != nil
     }
     private var actions: [SidebarRowActionGroup] {
-        var items: [SidebarRowAction] = [
-            parentFocusUnavailable.map { .unavailable("Open original parent chat", $0) }
-                ?? .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
-                          navigation: navigation, prepareSeen: prepareSeen, parentChat: true,
-                          subject: .unmanaged(.child(sessionID: session.id, childID: node.id)), revalidate: focusInspection),
-            .init(title: "Open activity details", perform: { selection = .child(sessionID: session.id, childID: node.id) })
+        var items: [SidebarRowAction] = parentFocusUnavailable ? [] : [
+            .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
+                   navigation: navigation, prepareSeen: prepareSeen, parentChat: true,
+                   subject: .unmanaged(.child(sessionID: session.id, childID: node.id)), revalidate: focusInspection)
         ]
+        items.append(.init(title: "Open activity details", perform: { selection = .child(sessionID: session.id, childID: node.id) }))
         if let expansion, node.hasChildren, let setExpanded {
             items.append(.init(title: expansion.expanded ? "Collapse branch" : "Expand branch",
                                perform: { setExpanded(expansion.expansionID, !expansion.expanded) }))
@@ -2651,7 +2650,7 @@ private struct CopilotWorkRow: View {
         paths: HierarchyPathContext? = nil,
         taskboard: Bool = false,
         selection: Binding<UnmanagedSelection?> = .constant(nil),
-        parentFocusUnavailable: String? = nil
+        parentFocusUnavailable: Bool = false
     ) {
         self.node = node
         self.session = session
@@ -2696,12 +2695,12 @@ private struct CopilotWorkRow: View {
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation,
-                    label: parentFocusUnavailable == nil ? "Open parent chat for \(node.name), Copilot \(session.shortID)"
-                        : "Inspect context activity \(node.name), Copilot \(session.shortID)",
-                    detail: parentFocusUnavailable ?? SidebarPresentation.statusDescription(
+                    label: parentFocusUnavailable ? "Show details for \(node.name), Copilot \(session.shortID)"
+                        : "Open parent chat for \(node.name), Copilot \(session.shortID)",
+                    detail: SidebarPresentation.statusDescription(
                         stateVisual, needsInput: SidebarPresentation.needsInput(node.attention)),
                     inspection: .unmanaged(.child(sessionID: session.id, childID: node.id)),
-                    inspectOnly: parentFocusUnavailable == nil ? nil : {
+                    inspectOnly: !parentFocusUnavailable ? nil : {
                         selection = .child(sessionID: session.id, childID: node.id)
                     }
                 ) {
@@ -2868,10 +2867,11 @@ private struct TaskboardContent: View {
     let hierarchy: HierarchySnapshot
     let navigation: SidebarNavigation
     @Binding var selection: UnmanagedSelection?
+    var rowlessSessionIDs: Set<UUID> = []
     @Environment(\.sidebarDensity) private var density
 
     private var sessions: [SidebarCopilotSession] {
-        tree.sessions.filter { !$0.statusOnly }
+        tree.sessions.filter { !$0.statusOnly && !rowlessSessionIDs.contains($0.id) }
     }
 
     var body: some View {

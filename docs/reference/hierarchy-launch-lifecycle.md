@@ -15,8 +15,9 @@ managed workspace/surface pair normally replaces its observed terminal row.
 Fresh, unique live observation may prove different session ID on that pair.
 Then observed session keeps own primary row. The old registration leaves no
 row in either view, regardless of **Show ended agents**, and neither does its
-exact old observation or an observed session on a managed surface that is not
-that agent's own. Their attention leaves with them. Unrelated incomplete
+exact old observation; their attention leaves with them. An observed session on
+a managed surface that is not that agent's own gets no row of its own, but
+stays as evidence for that agent's state and attention. Unrelated incomplete
 history never hides current session.
 
 An ended ancestor is not kept for its descendants: a live descendant shows as
