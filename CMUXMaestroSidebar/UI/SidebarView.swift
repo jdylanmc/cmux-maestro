@@ -1082,6 +1082,9 @@ struct SidebarView: View {
                 .disabled(preferences.icons.overrides.isEmpty && preferences.iconNotice == nil)
                 .help("Remove human icon choices in every window and follow agent selections again. Other preferences are unchanged.")
                 .accessibilityIdentifier("sidebar-reset-icons")
+            Button("Reset all tags") { preferences.resetTags() }
+                .disabled(preferences.tagSettings == SidebarTagSettings() && preferences.tagNotice == nil)
+                .accessibilityIdentifier("sidebar-reset-tags")
             Picker("Density", selection: Binding(
                 get: { preferences.layout.density },
                 set: { preferences.setDensity($0) }

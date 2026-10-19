@@ -219,7 +219,7 @@ nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
 /// through the sidebar's existing read-only Copilot grant. The sidebar never writes it.
 nonisolated struct SidebarAgentTagsFile: Sendable {
     static let filename = "agent-tags.json"
-    static let maximumBytes = 262_144
+    static let maximumBytes = 2_097_152
     static let maximumSessions = 2_048
     let directory: URL
 
@@ -248,11 +248,14 @@ nonisolated struct SidebarAgentTagsFile: Sendable {
         return try Self.decode(data)
     }
 
+    /// The controller's rules (`tags_decode`): plain UTF-8 JSON with unique keys and Int64
+    /// integers only. Both run scripts/test-fixtures/tag-store-cases.json.
     static func decode(_ data: Data) throws -> [UUID: [String]] {
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+        guard !data.contains(0), !SidebarBeatsState.containsByteOrderMark(data), SidebarBeatsState.isPlainJSON(data),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == ["version", "sessions"],
               let version = object["version"] as? NSNumber, CFGetTypeID(version) == CFNumberGetTypeID(),
-              version.intValue == SidebarTagSlug.version,
+              !CFNumberIsFloatType(version), version.intValue == SidebarTagSlug.version,
               let sessions = object["sessions"] as? [String: Any], sessions.count <= maximumSessions
         else { throw CopilotFileError.changed }
         var result: [UUID: [String]] = [:]

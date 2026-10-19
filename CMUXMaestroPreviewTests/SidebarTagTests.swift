@@ -34,11 +34,60 @@ struct SidebarTagTests {
         }
     }
 
-    private func preferences(_ fixture: SidebarPreferenceFixture, agent: SidebarAgentTagsFile? = nil) -> SidebarPreferences {
+    private func preferences(
+        _ fixture: SidebarPreferenceFixture, agent: SidebarAgentTagsFile? = nil,
+        retained: @escaping (UUID) -> Bool = { _ in true }
+    ) -> SidebarPreferences {
         SidebarPreferences(
             defaults: fixture.defaults, historyFile: fixture.historyFile, attentionFile: fixture.attentionFile,
-            layoutStore: .init(file: .init(url: fixture.layoutFile)), agentTagsFile: agent
+            layoutStore: .init(file: .init(url: fixture.layoutFile)), agentTagsFile: agent, sessionRetained: retained
         )
+    }
+
+    @Test func agentStoreContractMatchesTheController() throws {
+        let data = try Data(contentsOf: Self.fixtures.appendingPathComponent("tag-store-cases.json"))
+        let cases = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for item in try #require(cases["valid"] as? [[String: String]]) {
+            #expect(throws: Never.self, "\(item["name"] ?? "")") { try SidebarAgentTagsFile.decode(Data(item["raw"]!.utf8)) }
+        }
+        let invalid = try #require(cases["invalid"] as? [[String: String]])
+        #expect(invalid.count >= 15)
+        for item in invalid {
+            #expect(throws: (any Error).self, "\(item["name"] ?? "")") { try SidebarAgentTagsFile.decode(Data(item["raw"]!.utf8)) }
+        }
+    }
+
+    @Test func fullStoresDropOnlyEndedSessionsAndUnusedColorsThenRefuse() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let ended = (0..<SidebarTagSettings.maximumEntries / 2).map { _ in UUID() }
+        let kept = (0..<SidebarTagSettings.maximumEntries / 2).map { _ in UUID() }
+        let endedKeys = Set(ended.map(SidebarTagSettings.key))
+        var settings = SidebarTagSettings()
+        for id in ended + kept { settings.assignments[SidebarTagSettings.key(id)] = ["x"] }
+        for index in 0..<SidebarTagSettings.maximumEntries { settings.colors["unused-\(index)"] = .rose }
+        settings.colors["x"] = .plum
+        settings.colors.removeValue(forKey: "unused-0")
+        try JSONEncoder().encode(settings)
+            .write(to: fixture.root.appendingPathComponent("sidebar-tags.json"))
+        let preferences = preferences(fixture, retained: { !endedKeys.contains(SidebarTagSettings.key($0)) })
+        #expect(preferences.tagSettings.assignments.count == SidebarTagSettings.maximumEntries)
+        let newcomer = UUID()
+        #expect(preferences.setHumanTags("new", for: newcomer) == nil)
+        #expect(preferences.tagSettings.assignments.count == kept.count + 1)
+        #expect(preferences.humanTags(for: kept[0]) == ["x"] && preferences.humanTags(for: ended[0]).isEmpty)
+        #expect(preferences.setTagColor(.ocean, for: "new") == nil)
+        #expect(preferences.tagSettings.colors == ["x": .plum, "new": .ocean])
+
+        let allKept = self.preferences(fixture)
+        for id in (0..<(SidebarTagSettings.maximumEntries - kept.count - 1)).map({ _ in UUID() }) {
+            allKept.setHumanTags("y", for: id)
+        }
+        #expect(allKept.tagSettings.assignments.count == SidebarTagSettings.maximumEntries)
+        #expect(allKept.setHumanTags("z", for: UUID()) == "Tag storage is full.")
+        #expect(allKept.tagSettings.assignments.count == SidebarTagSettings.maximumEntries)
+        allKept.resetTags()
+        #expect(allKept.tagSettings == SidebarTagSettings() && allKept.tagNotice == nil)
     }
 
     @Test func canonicalizationMatchesTheControllerOnSharedCases() throws {

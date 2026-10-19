@@ -56,6 +56,8 @@ final class SidebarPreferences {
     var tagSettings: SidebarTagSettings { tagStore.value.settings }
     var tagNotice: String? { tagStore.value.notice }
     @ObservationIgnored private let agentTagsFile: SidebarAgentTagsFile?
+    /// Whether Copilot still keeps a session's state; a full tag store drops only sessions it no longer keeps.
+    @ObservationIgnored private let sessionRetained: (UUID) -> Bool
     /// Agents' own tags by exact session; the last good read stays when a later read fails.
     private(set) var agentTags: [UUID: [String]] = [:]
     var history: SidebarHistorySettings { historyStore.value.settings }
@@ -95,14 +97,14 @@ final class SidebarPreferences {
             defaults: .standard,
             historyFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-history.json"),
             attentionFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-attention.json"),
-            layoutStore: .shared, agentTagsFile: .standard()
+            layoutStore: .shared, agentTagsFile: .standard(), sessionRetained: Self.copilotKeepsSession
         )
     }
 
     init(
         defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore,
         iconFile: URL? = nil, orderFile: URL? = nil, tagFile: URL? = nil,
-        agentTagsFile: SidebarAgentTagsFile? = nil
+        agentTagsFile: SidebarAgentTagsFile? = nil, sessionRetained: @escaping (UUID) -> Bool = { _ in true }
     ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
@@ -119,6 +121,7 @@ final class SidebarPreferences {
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true
         )
         self.agentTagsFile = agentTagsFile
+        self.sessionRetained = sessionRetained
         showEnded = defaults.bool(forKey: Self.showEndedKey)
         let storedFooter = defaults.double(forKey: Self.pinnedFooterHeightKey)
         pinnedFooterHeight = storedFooter.isFinite && storedFooter > 0 ? storedFooter : nil
@@ -219,8 +222,13 @@ final class SidebarPreferences {
     func setHumanTags(_ input: String, for session: UUID) -> String? {
         let slugs: [String]
         do { slugs = try SidebarTagSlug.parse(input) } catch { return error.message }
+        let retained = sessionRetained
         tagStore.apply {
             let key = SidebarTagSettings.key(session)
+            if !slugs.isEmpty, $0.assignments[key] == nil, $0.assignments.count >= SidebarTagSettings.maximumEntries {
+                // Full: drop only sessions Copilot no longer keeps (ADR 0026); otherwise refuse.
+                $0.assignments = $0.assignments.filter { UUID(uuidString: $0.key).map(retained) ?? false }
+            }
             if slugs.isEmpty { $0.assignments.removeValue(forKey: key) } else { $0.assignments[key] = slugs }
             guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
         }
@@ -231,11 +239,28 @@ final class SidebarPreferences {
     @discardableResult
     func setTagColor(_ swatch: SidebarTagSwatch?, for slug: String) -> String? {
         guard SidebarTagSlug.isCanonical(slug) else { return SidebarTagError.noLetterOrNumber.message }
+        let agentSlugs = Set(agentTags.values.joined())
         tagStore.apply {
+            if swatch != nil, $0.colors[slug] == nil, $0.colors.count >= SidebarTagSettings.maximumEntries {
+                // Full: drop colors for slugs no session carries; otherwise refuse.
+                let used = Set($0.assignments.values.joined()).union(agentSlugs)
+                $0.colors = $0.colors.filter { used.contains($0.key) }
+            }
             $0.colors[slug] = swatch
             guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
         }
         return tagNotice
+    }
+
+    /// Removes every human tag and color; agents' own tags are unchanged.
+    func resetTags() { tagStore.apply(reset: true) { _ in } }
+
+    nonisolated static func copilotKeepsSession(_ id: UUID) -> Bool {
+        guard let root = try? CopilotPaths.sessionStateRoot() else { return true }
+        var directory: ObjCBool = false
+        // No readable Copilot state folder proves nothing; keep everything.
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &directory), directory.boolValue else { return true }
+        return FileManager.default.fileExists(atPath: root.appendingPathComponent(id.uuidString.lowercased()).path)
     }
 
     func refreshTags() {

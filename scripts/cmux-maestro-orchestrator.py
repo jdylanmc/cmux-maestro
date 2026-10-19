@@ -6140,7 +6140,7 @@ TAGS_VERSION = 1
 TAGS_MAX_PER_SESSION = 6
 TAGS_MAX_LENGTH = 24
 TAGS_MAX_SESSIONS = 2048
-TAGS_MAX_STORE_BYTES = 256 * 1024
+TAGS_MAX_STORE_BYTES = 2 * 1024 * 1024
 TAGS_FILE = "agent-tags.json"
 
 
@@ -6204,8 +6204,12 @@ def validate_tags_state(state):
 
 
 def tags_decode(raw):
+    """Plain UTF-8 JSON, unique keys, integers only; the sidebar (SidebarAgentTagsFile.decode) applies
+    the same rules. Both run scripts/test-fixtures/tag-store-cases.json."""
     if len(raw) > TAGS_MAX_STORE_BYTES:
         raise OrchestrationError("The agent tag store is not a private regular file within its size limit.")
+    if b"\x00" in raw or BEATS_BYTE_ORDER_MARK.search(raw):
+        raise OrchestrationError("The agent tag store is not valid JSON.")
 
     def unique(pairs):
         value = dict(pairs)
@@ -6301,6 +6305,12 @@ def tags_store_snapshot(*, root=None):
     return tags_open_store(root / TAGS_FILE) or {"version": TAGS_VERSION, "sessions": {}}
 
 
+def copilot_keeps_session(session):
+    """Copilot still holds this session's state folder. A missing state root proves nothing."""
+    sessions = Path.home() / ".copilot/session-state"
+    return not sessions.is_dir() or (sessions / session).is_dir()
+
+
 def tags_command(args, *, root=None):
     """Agent surface: list, add, remove or clear the caller's own tags for its proven session.
     Human tags and colors are the sidebar's; nothing here reads or changes them."""
@@ -6328,6 +6338,11 @@ def tags_command(args, *, root=None):
             if len(following) > TAGS_MAX_PER_SESSION:
                 raise OrchestrationError(
                     f"An agent has at most {TAGS_MAX_PER_SESSION} tags per session; nothing was changed.")
+            if session not in sessions and len(sessions) >= TAGS_MAX_SESSIONS:
+                # Full: drop only sessions Copilot no longer keeps, which can never tag again (ADR 0026).
+                for ended in [item for item in sessions if not copilot_keeps_session(item)]:
+                    del sessions[ended]
+                    result.setdefault("pruned", []).append(ended)
             if session not in sessions and len(sessions) >= TAGS_MAX_SESSIONS:
                 raise OrchestrationError("The agent tag store is full; nothing was changed.")
         elif args.tags_action == "remove":

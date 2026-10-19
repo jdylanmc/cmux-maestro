@@ -1,0 +1,95 @@
+{
+  "_comment": "Agent tag store contract. scripts/cmux-maestro-orchestrator.py tags_decode and SidebarAgentTagsFile.decode must agree on every case.",
+  "valid": [
+    {
+      "name": "empty",
+      "raw": "{\"sessions\":{},\"version\":1}"
+    },
+    {
+      "name": "one session",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"front-end\",\"café\",\"数据-pipeline\"]},\"version\":1}"
+    },
+    {
+      "name": "six tags of 24",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"aaaaaaaaaaaaaaaaaaaaaaaa\",\"bbbbbbbbbbbbbbbbbbbbbbbb\",\"cccccccccccccccccccccccc\",\"dddddddddddddddddddddddd\",\"eeeeeeeeeeeeeeeeeeeeeeee\",\"ffffffffffffffffffffffff\"]},\"version\":1}"
+    }
+  ],
+  "invalid": [
+    {
+      "name": "float version",
+      "raw": "{\"sessions\":{},\"version\":1.0}"
+    },
+    {
+      "name": "exponent version",
+      "raw": "{\"sessions\":{},\"version\":1e0}"
+    },
+    {
+      "name": "boolean version",
+      "raw": "{\"sessions\":{},\"version\":true}"
+    },
+    {
+      "name": "string version",
+      "raw": "{\"sessions\":{},\"version\":\"1\"}"
+    },
+    {
+      "name": "newer version",
+      "raw": "{\"sessions\":{},\"version\":2}"
+    },
+    {
+      "name": "duplicate top-level key",
+      "raw": "{\"sessions\":{},\"version\":1,\"version\":1}"
+    },
+    {
+      "name": "duplicate session key",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"a\"],\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"b\"]},\"version\":1}"
+    },
+    {
+      "name": "extra key",
+      "raw": "{\"extra\":0,\"sessions\":{},\"version\":1}"
+    },
+    {
+      "name": "uppercase session key",
+      "raw": "{\"sessions\":{\"0F8FAD5B-D9CB-469F-A165-70867728950E\":[\"a\"]},\"version\":1}"
+    },
+    {
+      "name": "not a uuid",
+      "raw": "{\"sessions\":{\"session\":[\"a\"]},\"version\":1}"
+    },
+    {
+      "name": "empty list",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[]},\"version\":1}"
+    },
+    {
+      "name": "seven tags",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\"]},\"version\":1}"
+    },
+    {
+      "name": "duplicate slug",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"a\",\"a\"]},\"version\":1}"
+    },
+    {
+      "name": "noncanonical slug",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"Front End\"]},\"version\":1}"
+    },
+    {
+      "name": "slug over 24",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"xxxxxxxxxxxxxxxxxxxxxxxxx\"]},\"version\":1}"
+    },
+    {
+      "name": "number slug",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[1]},\"version\":1}"
+    },
+    {
+      "name": "escaped byte order mark",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"\\ufeffa\"]},\"version\":1}"
+    },
+    {
+      "name": "not json",
+      "raw": "not json"
+    },
+    {
+      "name": "array",
+      "raw": "[]"
+    }
+  ]
+}

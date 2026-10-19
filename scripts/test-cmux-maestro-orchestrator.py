@@ -6528,6 +6528,38 @@ class AgentTagTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("Not Canonical", path.read_text())
 
+    def test_store_contract_cases_match_the_sidebar(self):
+        cases = json.loads((REPO / "scripts/test-fixtures/tag-store-cases.json").read_text())
+        decode = CONTROLLER_API["tags_decode"]
+        for case in cases["valid"]:
+            decode(case["raw"].encode())
+        for case in cases["invalid"]:
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"], msg=case["name"]):
+                decode(case["raw"].encode())
+        with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            decode(b"\xef\xbb\xbf" + cases["valid"][0]["raw"].encode())
+
+    def test_full_store_drops_only_sessions_copilot_no_longer_keeps(self):
+        command = CONTROLLER_API["tags_command"]
+        state_root = self.home / ".copilot/session-state"
+        kept, ended = str(uuid.uuid4()), str(uuid.uuid4())
+        (state_root / kept).mkdir(parents=True)
+        (state_root / self.session).mkdir()
+        arguments = lambda session, action="add": type("Args", (), {
+            "own_session": True, "session_id": session, "tags_action": action, "tag": ["x"]})()
+        with patch.dict(command.__globals__, {"TAGS_MAX_SESSIONS": 2, "prove_own_session": lambda *_, **__: None}), \
+                patch.dict(os.environ, {"HOME": str(self.home)}):
+            command(arguments(kept))
+            command(arguments(ended))
+            result = command(arguments(self.session))
+            self.assertEqual(result["pruned"], [ended])
+            self.assertEqual(sorted(self.stored()["sessions"]), sorted([kept, self.session]))
+            (state_root / str(uuid.uuid4())).mkdir()
+            newcomer = sorted(path.name for path in state_root.iterdir() if path.name not in (kept, self.session))[0]
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                command(arguments(newcomer))
+            self.assertEqual(sorted(self.stored()["sessions"]), sorted([kept, self.session]))
+
     def test_concurrent_agents_lose_nothing(self):
         sessions = [str(uuid.uuid4()) for _ in range(6)]
         threads = [threading.Thread(target=self.run_tags, args=("add", "shared"), kwargs={"session": item})
