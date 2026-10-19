@@ -2125,14 +2125,30 @@ def process_arguments(pid):
 
 
 def launch_flags_allow_all(arguments, recorded_denies=()):
-    flags = {"--yolo", "--allow-all", "--allow-all-tools", "--allow-all-paths"}
+    flags = {"--yolo", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls"}
     enabled, disabled = set(), set()
     # Values cannot become permission flags, even when a prompt is exactly "--yolo".
     value_flags = {
         "--interactive", "-i", "--prompt", "-p", "--model", "--context", "--reasoning-effort",
-        "--session-id", "--resume", "--name", "--agent", "--config-dir", "--log-dir",
-        "--log-level", "--plugin-dir", "--additional-mcp-config", "--allow-tool",
-        "--allow-url", "--add-dir", "-C", "--share", "--share-gist",
+        "--session-id", "--name", "-n", "--agent", "--config-dir", "--log-dir",
+        "--log-level", "--plugin-dir", "--additional-mcp-config", "--add-dir", "-C",
+        "--auto-tier", "--extension-sdk-path", "--stream", "--output-format", "--attachment",
+        "--disable-mcp-server", "--add-github-mcp-toolset", "--add-github-mcp-tool",
+        "--mcp-github-auth", "--max-autopilot-continues", "--mode", "--dynamic-retrieval",
+        "--enable-mcp-server", "--max-ai-credits", "--usage-output-file",
+    }
+    # Optional/variadic values never consume another option. Unknown options fail closed,
+    # so a future value-taking flag cannot reinterpret its value as an allow-all grant.
+    other_flags = {
+        "--resume", "-r", "--connect", "--share", "--bash-env", "--mouse",
+        "--allow-tool", "--allow-url", "--secret-env-vars", "--continue", "--share-gist",
+        "--fleet", "--silent", "-s", "--enable-memory", "--banner", "--screen-reader",
+        "--plain-diff", "--disable-builtin-mcps", "--enable-all-github-mcp-tools",
+        "--allow-all-mcp-server-instructions", "--autopilot", "--plan", "--experimental",
+        "--acp", "--remote", "--remote-export", "--no-custom-instructions",
+        "--no-auto-update", "--no-ask-user", "--no-color", "--no-experimental",
+        "--no-bash-env", "--no-mouse", "--no-remote", "--no-remote-export",
+        "--no-eager-powershell-resolution",
     }
     index = 1
     while index < len(arguments):
@@ -2159,14 +2175,19 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
                 if arguments[index] not in recorded_denies:
                     return False
                 index += 1
-        elif flag.startswith("--deny-"):
+        elif flag.startswith("--deny-") or flag in {
+            "--assisted-approval", "--disallow-temp-dir", "--available-tools", "--excluded-tools",
+        }:
             return False
-        elif flag in value_flags and not separator:
-            index += 1
+        elif flag in value_flags:
+            if not separator:
+                index += 1
+        elif flag not in other_flags and argument.startswith("-"):
+            return False
     if disabled:
         return False
     return bool(enabled & {"--yolo", "--allow-all"}) or {
-        "--allow-all-tools", "--allow-all-paths",
+        "--allow-all-tools", "--allow-all-paths", "--allow-all-urls",
     }.issubset(enabled)
 
 

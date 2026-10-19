@@ -20,12 +20,19 @@ No lock file alone selects a provider. Store only `permissionMode` and
 `permissionSource`, never argv, prompt text, or environment. This is a narrow
 exception to the no-observed-content read rule, not permission to retain content.
 
-`--yolo`, `--allow-all`, or both `--allow-all-tools` and `--allow-all-paths`
+`--yolo`, `--allow-all`, or all of `--allow-all-tools`, `--allow-all-paths`, and `--allow-all-urls`
 prove launch allow-all, including `=true` forms. False/unknown boolean values
 do not. Argument values and text after `--` are not flags. A deny flag not
 already covered by the recorded tool policy prevents inherited allow-all:
 do not discard an unrecorded manual deny or persist it from argv.
 Unavailable argv or changed PID identity never proves allow-all.
+Unknown options, assisted approval, and unreplayed tool/path restrictions also
+default. Optional arguments such as `--resume` never swallow following options.
+
+Safety correction to the initial two-category design: Copilot documents
+`--allow-all` as tools **and paths and URLs**. Tools plus paths alone cannot
+be replayed as `--allow-all` without widening URL access, so they stay default.
+This prioritizes the owner's non-escalation requirement over that shortcut.
 
 Enrollment and re-enrollment record the derived mode with source `launch-flags`,
 or default with source `unverified`. Spawn refreshes born-parent evidence,
