@@ -285,6 +285,31 @@ struct SidebarTagTests {
         }
     }
 
+    @Test func editorDraftChangesNothingUntilSavedSoCancelDiscardsColors() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = preferences(fixture)
+        let session = UUID()
+        preferences.setHumanTags("release", for: session)
+        preferences.setTagColor(.rose, for: "release")
+        let saved = preferences.tagSettings
+        var draft = SidebarTagDraft(text: "release, notes")
+        draft.colors["release"] = .some(.ocean)
+        #expect(draft.preview(preferences.tags(for: session)).map(\.swatch) == [.ocean])
+        // Cancel drops the draft: nothing was written.
+        #expect(preferences.tagSettings == saved)
+        #expect(self.preferences(fixture).tagSettings == saved)
+        draft.colors["release"] = .some(nil)
+        #expect(draft.preview(preferences.tags(for: session)).map(\.swatch) == [nil])
+        #expect(draft.commit(to: preferences, session: session) == nil)
+        #expect(preferences.humanTags(for: session) == ["release", "notes"])
+        #expect(preferences.tagSettings.colors.isEmpty)
+        var refused = SidebarTagDraft(text: "!!!")
+        refused.colors["release"] = .some(.plum)
+        #expect(refused.commit(to: preferences, session: session) == SidebarTagError.noLetterOrNumber.message)
+        #expect(preferences.tagSettings.colors.isEmpty)
+    }
+
     @Test func agentStoreReadsStrictlyAndAFailedReadKeepsTheLastGoodTags() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

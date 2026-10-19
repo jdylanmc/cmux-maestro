@@ -133,17 +133,41 @@ struct SidebarTagList: View {
     }
 }
 
+/// Unsaved editor changes. Nothing is written until `commit`; Cancel discards the draft.
+struct SidebarTagDraft: Equatable {
+    var text = ""
+    /// Slug to the chosen swatch; a nil swatch restores the automatic color.
+    var colors: [String: SidebarTagSwatch?] = [:]
+
+    func preview(_ tags: [SidebarResolvedTag]) -> [SidebarResolvedTag] {
+        tags.map { tag in
+            guard let swatch = colors[tag.slug] else { return tag }
+            return .init(slug: tag.slug, human: tag.human, agent: tag.agent, swatch: swatch)
+        }
+    }
+
+    /// Saves the tags, then the colors. Returns why something was not saved, or nil.
+    @MainActor
+    func commit(to preferences: SidebarPreferences, session: UUID) -> String? {
+        if let message = preferences.setHumanTags(text, for: session) { return message }
+        for (slug, swatch) in colors.sorted(by: { $0.key < $1.key }) {
+            if let message = preferences.setTagColor(swatch, for: slug) { return message }
+        }
+        return nil
+    }
+}
+
 /// Human tag editing for one exact session. The agent's own tags show with their owner and
-/// stay unchanged; colors apply to the slug everywhere.
+/// stay unchanged; colors apply to the slug everywhere once saved.
 struct SidebarTagEditor: View {
     let session: UUID
     let preferences: SidebarPreferences
     let close: () -> Void
-    @State private var text = ""
+    @State private var draft = SidebarTagDraft()
     @State private var error: String?
     @State private var coloring: String?
 
-    private var tags: [SidebarResolvedTag] { preferences.tags(for: session) }
+    private var tags: [SidebarResolvedTag] { draft.preview(preferences.tags(for: session)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -152,7 +176,7 @@ struct SidebarTagEditor: View {
                 Spacer(minLength: 0)
                 SidebarCloseButton(label: "Close tags", id: "sidebar-close-tags", action: close)
             }
-            TextField("Your tags", text: $text)
+            TextField("Your tags", text: $draft.text)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(save)
                 .accessibilityIdentifier("sidebar-tag-input")
@@ -188,7 +212,7 @@ struct SidebarTagEditor: View {
         .accessibilityIdentifier("sidebar-tag-editor")
         .onAppear {
             preferences.refreshTags()
-            text = preferences.humanTags(for: session).joined(separator: ", ")
+            draft.text = preferences.humanTags(for: session).joined(separator: ", ")
         }
     }
 
@@ -196,7 +220,7 @@ struct SidebarTagEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(22), spacing: 6), count: 7), spacing: 6) {
                 ForEach(SidebarTagSwatch.allCases, id: \.self) { swatch in
-                    Button { error = preferences.setTagColor(swatch, for: tag.slug) } label: {
+                    Button { draft.colors[tag.slug] = .some(swatch) } label: {
                         Circle().fill(swatch.color.swiftUI).frame(width: 18, height: 18)
                             .overlay { if tag.swatch == swatch { Circle().strokeBorder(Color.primary, lineWidth: 2) } }
                             .frame(width: 22, height: 22).contentShape(Rectangle())
@@ -207,7 +231,7 @@ struct SidebarTagEditor: View {
                     .accessibilityAddTraits(tag.swatch == swatch ? .isSelected : [])
                 }
             }
-            Button("Use automatic color") { error = preferences.setTagColor(nil, for: tag.slug) }
+            Button("Use automatic color") { draft.colors[tag.slug] = .some(nil) }
                 .disabled(tag.swatch == nil)
                 .font(.caption)
                 .accessibilityIdentifier("sidebar-tag-automatic-color")
@@ -215,7 +239,7 @@ struct SidebarTagEditor: View {
     }
 
     private func save() {
-        if let message = preferences.setHumanTags(text, for: session) {
+        if let message = draft.commit(to: preferences, session: session) {
             error = message
         } else {
             close()

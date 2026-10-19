@@ -50,7 +50,8 @@ to the same output.
   `0.64 + ((hash >> 17) % 9) / 100`, HSL to sRGB rounded per channel (the approved prototype's
   reference).
 - **Human override**: one of 14 fixed swatches, stored per slug in `sidebar-tags.json`, so it applies
-  to every occurrence on every session. **Use automatic color** removes it. Agents cannot set colors.
+  to every occurrence on every session. **Use automatic color** removes it. Editor color changes,
+  like tag text, are written only on **Save**; **Cancel** discards both. Agents cannot set colors.
   Colors are fixed sRGB values; light/dark appearance never changes them.
 - Text is black or white, whichever contrasts more with the opaque chip background. Every automatic
   color (all 42,120 hue/saturation/lightness combinations) and every swatch is at least 4.5:1;
