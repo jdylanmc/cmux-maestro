@@ -260,7 +260,9 @@ class ProofTests(unittest.TestCase):
         self.assertNotIn("npx", setup)
         launcher = (REPO / "scripts/cmux-maestro-orchestrator.py").read_text()
         self.assertNotIn("managed_plugin_directory", launcher)
-        self.assertNotIn("--plugin-dir", launcher)
+        arguments = CONTROLLER["interactive_arguments"]
+        with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda _: "/synthetic/copilot"}):
+            self.assertNotIn("--plugin-dir", arguments(self.node, "Synthetic"))
 
     def test_preparation_is_disposable_private_and_outside_source_discovery(self):
         self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
@@ -3388,6 +3390,65 @@ class LifecycleFailureTests(unittest.TestCase):
         child = self.state["nodes"][launcher.call_args.args[2]]
         self.assertEqual(child["permissionMode"], "yolo")
         self.assertEqual(child["toolPolicy"], {"allow": ["read"], "deny": ["web", "shell(rm)"]})
+
+    def test_born_parent_launch_flags_inherit_without_an_explicit_yolo_request(self):
+        initial = copy.deepcopy(self.state)
+        parent_id = self.worker["id"]
+        initial["nodes"][parent_id].update(
+            role="coordinator", parentId=None, runId=parent_id, runtimeProtocolVersion=2,
+            launchMethod="direct", enrollment="born", supervisor=None,
+            launchSettings={"version": 1},
+            permissionMode="default", toolPolicy={"allow": [], "deny": ["web"]},
+        )
+        for argv, assignment, mode, source in (
+            (["copilot", "--yolo", "--deny-tool=web"], {}, "yolo", "parent-launch-flags"),
+            (["copilot", "--yolo"], {"yolo": False}, "default", "explicit-default"),
+            (["copilot"], {}, "default", "parent-launch-flags"),
+            (None, {}, "default", "parent-unverified"),
+            (["copilot", "--yolo", "--deny-tool=unrecorded"], {}, "default", "parent-launch-flags"),
+        ):
+            with self.subTest(argv=argv, assignment=assignment):
+                self.state = copy.deepcopy(initial)
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                read = mock.Mock(return_value=argv)
+                with mock.patch.dict(CONTROLLER["command_spawn"].__globals__, {
+                    "process_start": lambda _: "provider-start", "process_arguments": read,
+                }):
+                    result = self.permission_spawn(parent_id, assignment, launcher)
+                self.assertEqual((result["permissionMode"], result["permissionSource"]), (mode, source))
+                child_id = launcher.call_args.args[2]
+                child = self.state["nodes"][child_id]
+                self.assertEqual(child["permissionMode"], mode)
+                self.assertEqual(child["toolPolicy"]["deny"], ["web"])
+                self.assertEqual(self.state["nodes"][parent_id]["permissionMode"],
+                                 "yolo" if argv and argv[-1] != "--deny-tool=unrecorded" and "--yolo" in argv
+                                 else "default")
+                read.assert_called_once_with(12346)
+                if mode == "yolo":
+                    child.update(phase="turn-running", surfaceId=str(uuid.uuid4()),
+                                 providerProcess={"pid": 12347, "start": "child-start"}, launchAccepted=True)
+                    del self.state["launches"][child_id]
+                    result = self.permission_spawn(child_id, {}, launcher)
+                    grandchild = self.state["nodes"][launcher.call_args.args[2]]
+                    self.assertEqual((result["permissionMode"], grandchild["permissionMode"]), ("yolo", "yolo"))
+                    self.assertEqual(grandchild["toolPolicy"]["deny"], ["web"])
+                    self.assertIn("--allow-all", CONTROLLER["recorded_launch_flags"](grandchild))
+
+    def test_born_parent_pid_reuse_before_reservation_refuses_without_launch(self):
+        parent = self.state["nodes"][self.worker["id"]]
+        parent.update(role="coordinator", parentId=None, runId=parent["id"], runtimeProtocolVersion=2,
+                      launchMethod="direct", enrollment="born", supervisor=None, permissionMode="default",
+                      launchSettings={"version": 1})
+        launcher = mock.Mock(return_value={"launchAccepted": True})
+        with mock.patch.dict(CONTROLLER["command_spawn"].__globals__, {
+            "process_start": mock.Mock(side_effect=["provider-start", "provider-start", "reused"]),
+            "process_arguments": lambda _: ["copilot", "--yolo"],
+        }):
+            with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "provider identity changed"):
+                self.permission_spawn(parent["id"], {}, launcher)
+        launcher.assert_not_called()
+        self.assertEqual(self.state["launches"], {})
+        self.assertEqual(parent["permissionMode"], "default")
 
     def test_native_inheritance_refuses_missing_policy_provenance_after_real_store_normalization(self):
         original_read, original_mutate = CONTROLLER["read_state"], CONTROLLER["mutate"]

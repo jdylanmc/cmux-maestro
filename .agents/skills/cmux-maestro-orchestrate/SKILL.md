@@ -170,6 +170,9 @@ children inherit the parent's explicit **recorded launch policy** when
 `allowTools` and `yolo` are omitted. Deny-only requests keep that recorded mode
 and allows while adding denies. Verify installed capability separately; source
 changes do not reconfigure existing sessions or authorize installation.
+Born-managed parents may also inherit verified provider launch allow-all flags
+(ADR 0006); unavailable evidence defaults, runtime `/allow-all` toggles are not
+observed, and spawn reports the effective requested mode and its source.
 
 These are Copilot policy arguments, not an operating-system sandbox. Never add
 `--allow-all`, a wildcard, all paths or URLs, or rights not explicitly approved

@@ -91,6 +91,10 @@ Notable changes are recorded using Keep a Changelog categories.
   a missing managed lifecycle tool or refused launch. Maestro-launched sessions
   use identity verification, not the born-managed readiness tool. Spawn icon
   guidance now names the Nerd Fonts 3.5.1 catalog.
+- Maestro spawns inherit a born-managed parent's verified launch allow-all mode
+  when `yolo` is omitted, including nested children. `yolo: false` narrows; recorded
+  denies survive. Exact provider PID/start-time checks retain only derived mode
+  and source, never argv. Runtime `/allow-all` changes are not observed (ADR 0006).
 - Every Copilot session in a CMUX tab is Maestro-managed (#261, ADR 0025 amendment). A session
   already running when Maestro was installed enrolls in place at its next extension join
   (`/clear`, `/resume`, or an extension reload you run); Maestro never triggers one. A session the

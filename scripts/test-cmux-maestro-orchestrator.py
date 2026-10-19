@@ -1976,6 +1976,7 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
         parse = CONTROLLER_API["launch_flags_allow_all"]
         self.assertFalse(parse(["copilot", "--yolo", "--deny-tool", "shell(rm)"]))
         self.assertTrue(parse(["copilot", "--yolo", "--deny-tool=shell(rm)"], ["shell(rm)"]))
+        self.assertFalse(parse(["copilot", "--yolo", "--deny-tool", "web", "shell(rm)"], ["web"]))
         self.assertFalse(parse(["copilot", "--yolo", "--deny-url=example.test"]))
 
     def test_process_arguments_keep_boundaries_and_exclude_environment(self):
@@ -2574,6 +2575,16 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
         self.assertFalse((self.routes / f"{first['peer']}.json").exists())
         self.assertTrue((self.routes / f"{resumed['peer']}.json").exists())
         self.assertEqual(len([n for n in self.h.state()["nodes"].values() if n.get("enrollment")]), 1)
+
+    def test_reenrollment_uses_new_provider_flags_not_the_previous_mode(self):
+        first = self.enroll(provider_flags=["--yolo"])
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(self.h.state()["nodes"][first["nodeId"]]["permissionMode"], "yolo")
+        resumed = self.resume(first)
+        self.assertTrue(resumed["ok"], resumed)
+        node = self.h.state()["nodes"][resumed["nodeId"]]
+        self.assertEqual((node["permissionMode"], node["permissionSource"]), ("default", "launch-flags"))
+        self.assertEqual(node["generation"], 2)
 
     def test_live_or_uncertain_previous_process_refuses(self):
         first = self.first()
