@@ -115,6 +115,7 @@ private struct SidebarPetManifest: Codable {
 final class SidebarPetStore {
     static let defaultID = "maestro"
     private static let overridesKey = "sidebar.pet.overrides.v1"
+    private static let hiddenKey = "sidebar.pet.hidden.v1"
     private static let maximumOverrides = 512
     private static let sessionCacheSeconds: TimeInterval = 3
     static let galleryURL = URL(string: "https://codexpets.org/gallery")!
@@ -122,6 +123,7 @@ final class SidebarPetStore {
 
     private(set) var installed: [SidebarPetDescriptor] = []
     private(set) var overrides: [String: String] = [:]
+    private(set) var hidden: Set<String> = []
     private(set) var notice: String?
     private var sheets: [String: CGImage] = [:]
     private var topInsets: [String: CGFloat] = [:]
@@ -140,6 +142,7 @@ final class SidebarPetStore {
             .map { $0.appendingPathComponent("pets/sessions", isDirectory: true) }
         overrides = (defaults.data(forKey: Self.overridesKey)
             .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }) ?? [:]
+        hidden = Set(defaults.stringArray(forKey: Self.hiddenKey) ?? [])
         refresh()
     }
 
@@ -195,6 +198,34 @@ final class SidebarPetStore {
     }
 
     func hasOverride(session: UUID) -> Bool { overrides[session.uuidString.lowercased()] != nil }
+
+    /// The pet shown for an exact agent session, or nil with no session or when hidden for it.
+    func visibleID(session: UUID?, agentChoice: String?) -> String? {
+        guard let session, !isHidden(session: session) else { return nil }
+        return resolvedID(session: session, agentChoice: agentChoice)
+    }
+
+    func isHidden(session: UUID) -> Bool { hidden.contains(session.uuidString.lowercased()) }
+
+    func setHidden(_ value: Bool, session: UUID) {
+        let key = session.uuidString.lowercased()
+        var updated = hidden
+        if value {
+            updated.insert(key)
+            if updated.count > Self.maximumOverrides, let drop = updated.sorted().first(where: { $0 != key }) {
+                updated.remove(drop)
+            }
+        } else {
+            updated.remove(key)
+        }
+        hidden = updated
+        defaults.set(updated.sorted(), forKey: Self.hiddenKey)
+    }
+
+    /// A human choice of the bundled pet, which wins over the agent's own choice until reset.
+    func resetToDefault(session: UUID) { choose(Self.defaultID, session: session) }
+
+    func isDefaultChoice(session: UUID) -> Bool { overrides[session.uuidString.lowercased()] == Self.defaultID }
 
     func choose(_ id: String, session: UUID) {
         guard descriptor(id, session: session) != nil else { return }

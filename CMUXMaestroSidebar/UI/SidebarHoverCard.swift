@@ -7,12 +7,14 @@ struct SidebarHoverCardData: Equatable {
     var subtitle: String? = nil
     var lines: [SidebarDetailLine] = []
     var notice: String? = nil
+    var pet: SidebarHoverPet? = nil
 }
 
 struct SidebarHoverCard: View {
     let data: SidebarHoverCardData
     let close: () -> Void
     let copyValue: (String) -> Bool
+    var pets: SidebarPetStore? = nil
     var copyActionFocusChanged: (Bool) -> Void = { _ in }
     /// Lay out at natural height without scrolling, so the panel can size itself to its content.
     var intrinsic = false
@@ -53,6 +55,7 @@ struct SidebarHoverCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
+                if let pet = data.pet, let pets { SidebarHoverPetView(store: pets, pet: pet) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(data.category).font(.caption).foregroundStyle(.secondary)
                     Text(data.title).font(.headline).lineLimit(3)
@@ -277,6 +280,7 @@ final class SidebarHoverPresenter {
     private var windowObservers: [NSObjectProtocol] = []
     private var hosting: NSHostingView<AnyView>?
     private var copyValue: (String) -> Bool
+    var pets: SidebarPetStore?
     private let showPanel: (NSWindow, SidebarHoverPanel, Bool) -> Void
     /// Runs `action` after `delay` unless the returned task is cancelled first.
     typealias Schedule = @MainActor (_ delay: Duration, _ action: @escaping @MainActor () -> Void) -> Task<Void, Never>
@@ -419,7 +423,7 @@ final class SidebarHoverPresenter {
         guard let panel, let data else { return }
         let content = SidebarHoverCard(
             data: data, close: { [weak self] in self?.dismiss(restoreFocus: true) },
-            copyValue: copyValue,
+            copyValue: copyValue, pets: pets,
             copyActionFocusChanged: { [weak self] in self?.copyActionFocus($0) }
         )
             .onHover { [weak self] in self?.hoverCard($0) }
@@ -465,7 +469,7 @@ final class SidebarHoverPresenter {
     private func preferredCardSize() -> CGSize {
         guard let data else { return CGSize(width: 300, height: 260) }
         let measuring = NSHostingView(rootView: SidebarHoverCard(
-            data: data, close: {}, copyValue: copyValue, intrinsic: true
+            data: data, close: {}, copyValue: copyValue, pets: pets, intrinsic: true
         ).frame(width: 300))
         return CGSize(width: 300, height: max(80, ceil(measuring.fittingSize.height)))
     }
@@ -584,6 +588,7 @@ struct SidebarHoverRegion<Content: View>: View {
     @State private var presenter = SidebarHoverPresenter()
     @Environment(\.sidebarHoverGroup) private var group
     @Environment(\.sidebarClipboardWrite) private var copyValue
+    @Environment(\.sidebarPetStore) private var pets
 
     var body: some View {
         content()
@@ -598,7 +603,7 @@ struct SidebarHoverRegion<Content: View>: View {
             .background {
                 if !nameOnly { SidebarHoverAnchor(presenter: presenter, data: data, group: group) }
             }
-            .onAppear { presenter.setCopyValue(copyValue) }
+            .onAppear { presenter.pets = pets; presenter.setCopyValue(copyValue) }
             .onHover { if !nameOnly { presenter.hoverAnchor($0) } }
             .onDisappear { presenter.detach() }
     }

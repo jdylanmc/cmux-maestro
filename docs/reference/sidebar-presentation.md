@@ -140,7 +140,9 @@ share a test-only asynchronous gate across suites, held through fixture cleanup.
 Other tests stay parallel. Motion captures fix and assert the logical viewport
 before comparing exact native pixels. Static controls keep a zero-change requirement.
 Activity-only children offer **Open parent chat**, never an independent surface.
-Unsupported pet, tag, backlog, placement and exit actions show disabled reasons.
+**Choose pet…** opens the pet picker for an exact agent session. Unsupported pet
+(activity-only children, status-only sessions), tag, backlog, placement and exit
+actions show disabled reasons.
 Menus add no capability or lifecycle authority.
 Previewing never changes the **Active window** footer. Footer follows only the
 current window's selected workspace and uniquely focused native surface.
@@ -171,7 +173,9 @@ navigation or identity previews. Each card resolves its own exact
 subject and only current or explicitly last-known metadata. Label missing/expired
 observations. Never replace them with invented model, context, timing or
 Git metrics. Windowless children keep parent-session placement context.
-Opening a card never invokes the existing inspection/mark-seen action. Icon
+Agent cards show that exact session's own pet, honoring its hidden state; child,
+terminal, browser and workspace cards show none. Hovering never changes the
+footer pet. Opening a card never invokes the existing inspection/mark-seen action. Icon
 picker, title-to-focus action, and history controls keep their explicit semantics.
 
 Agent previews put a **Copy session ID** button beside the exact session GUID.
