@@ -94,6 +94,8 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
             && process.listeners.count <= maximumListeners
             && (process.state == "owned-current" || process.listeners.isEmpty)
             && process.listeners.allSatisfy(valid)
+            // Each listener line is keyed by its endpoint; a repeat would collide in the card.
+            && Set(process.listeners.map(\.endpoint)).count == process.listeners.count
     }
 
     private static func valid(_ listener: Listener) -> Bool {

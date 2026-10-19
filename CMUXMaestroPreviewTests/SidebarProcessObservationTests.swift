@@ -157,6 +157,7 @@ struct SidebarProcessObservationTests {
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"0.0.0.0","port":80,"scope":"loopback"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"999.1.1.1","port":80,"scope":"other"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"+1.2.3.4","port":80,"scope":"other"}]}"#,
+            #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"127.0.0.1","port":80,"scope":"loopback"},{"protocol":"tcp","address":"127.0.0.1","port":80,"scope":"loopback"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"[....]","port":80,"scope":"other"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"[:::]","port":80,"scope":"other"}]}"#,
         ] {
