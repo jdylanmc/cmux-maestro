@@ -31,7 +31,7 @@ Each pass is bounded: 5 s per tool, about 100 ms in practice for one `ps`, one `
 | Node `state` | Meaning |
 | --- | --- |
 | `owned-current` | Custody verified this pass; the list is complete. |
-| `scan-incomplete` | Custody verified, but `lsof` failed or a descendant belongs to another user: the list shows what was proven. If either `ps` failed, the last list is kept unchanged; missing parentage never makes a process `escaped`. |
+| `scan-incomplete` | Custody verified, but `lsof` failed or a descendant belongs to another user: the list shows what was proven. If either `ps` failed, or the provider was missing or changed during the pass, the last list is kept unchanged. Only a complete pass classifies an escape. |
 | `denied` | The provider runs as another user. No list. |
 | `no-custody` | No live lock for the session, or a stale one. No list. |
 | `ambiguous` | Another process holds the session's lock, or two nodes record one provider. No list. |
@@ -40,21 +40,21 @@ Each pass is bounded: 5 s per tool, about 100 ms in practice for one `ps`, one `
 | Process `state` | Meaning |
 | --- | --- |
 | `owned-current` | In the tree this pass. Carries listeners. |
-| `escaped` | Owned in an earlier pass; alive now outside the tree. Never attributed again; no listeners. Kept 5 minutes. |
+| `escaped` | Owned in an earlier pass; alive outside the tree after a complete pass. Never attributed again, even if it shows up in the tree; no listeners. Kept 5 minutes. |
 | `exited` | Owned or detached earlier; gone or its PID now belongs to another process. Kept 5 minutes. |
 
-Bounds per node: 32 owned processes (separate group first, then by start; only those are probed), 16 retained `escaped` or `exited`, 8 listeners per process. `group` is `provider` when a process shares the provider's process group (Copilot's MCP servers, extensions and helpers) and `separate` otherwise. It sorts presentation only.
+Bounds per node: 32 owned processes, 16 retained `escaped` or `exited`, 8 listeners per process. Only the 32 kept are probed: `separate` first, newest PID first. `omittedCount` counts skipped `separate` processes; `omittedHelperCount` counts skipped helpers. Published order: `separate` first, then processes with listeners, then newest. `group` is `provider` for a process under a direct child of the provider that shares the provider's process group (Copilot's MCP servers and extensions, and everything they start, such as a browser in its own group) and `separate` otherwise. It sorts presentation only.
 
 `scope` is `loopback` (`127.*`, `[::1]`), `any` (`*`, `0.0.0.0`, `[::]`) or `other` (any other bound address). `protocol` is always `tcp`.
 
 ## Triggers
 
-`processes.mjs`, installed next to `adapter.mjs` and `extension.mjs`, asks for a pass:
-- when the session becomes managed (a launched worker, or a born root once enrolled);
-- after `postToolUse` and `agentStop`, at most once every 2 s;
-- every 10 s while the session runs. It stops at `sessionEnd` and on shutdown.
+`processes.mjs`, installed next to `adapter.mjs` and `extension.mjs`, decides when a session asks. Before it starts the controller, it checks `observer/processes.json`: if any session's pass wrote it under 2 s ago, it does nothing.
+- When the session becomes managed (a launched worker, or a born root once enrolled): one request.
+- After `postToolUse` and `agentStop`: one request, at most once every 2 s.
+- Every 10 s while the session runs, only while its own entry has a `separate` owned process, an `escaped` one, or `scan-incomplete`, or has no entry yet. An idle session only reads the file's metadata, and parses it again only when it changed.
 
-Unmanaged sessions never ask. Output is ignored; a failed pass waits for the next.
+It stops at `sessionEnd` and on shutdown. Unmanaged sessions never ask. Output is ignored; a failed pass waits for the next. If the module is missing, `extension.mjs` runs without it, and `messaging_configuration` refuses the install (`processes.mjs`, at most 16 KiB).
 
 ## Known limits
 

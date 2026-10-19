@@ -1,6 +1,5 @@
 import { joinSession } from "@github/copilot-sdk/extension";
 import { sessionEndGate, startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
-import { createProcessObserver } from "./processes.mjs";
 
 const shutdown = new AbortController();
 const diagnosticCodes = new Set([
@@ -10,10 +9,11 @@ const diagnosticCodes = new Set([
 let listener;
 let beats;
 let stopping = false;
-// Owned-process passes run only while this session is managed (ADR 0026).
-const processes = createProcessObserver();
-const join = config => joinSession(processes.hooks(config));
-const managedListener = value => { listener = value; processes.start(); };
+// Owned-process passes run only while this session is managed (ADR 0026). A missing or broken
+// module costs only process observation, never messaging, Beats or enrollment.
+const processes = await import("./processes.mjs").then(module => module.createProcessObserver(), () => null);
+const join = config => joinSession(processes ? processes.hooks(config) : config);
+const managedListener = value => { listener = value; processes?.start(); };
 
 function fail(context, error) {
   const code = diagnosticCodes.has(error?.code) ? error.code : "INITIALIZATION_FAILED";
@@ -24,7 +24,7 @@ function fail(context, error) {
 async function stop() {
   if (stopping) return;
   stopping = true;
-  processes.stop();
+  processes?.stop();
   // /exit sends SIGTERM just before SessionEnd; give that record (and its binding clear) two seconds.
   await sessionEndGate.drain(2000);
   shutdown.abort();

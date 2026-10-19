@@ -15,5 +15,6 @@ Consequence:
 - A process that detaches before the first pass (for example `nohup … &`) is never attributed.
 - Only same-user processes and TCP `LISTEN` sockets are covered.
 - Sub-agents share their parent's Copilot process, so their work belongs to that session.
-- Process groups only sort Copilot's own helpers (MCP servers and extensions) into a counted group. That sort is not ownership evidence. When it is wrong, it shows a helper as a background process; it never hides one.
-- Each managed session asks for one pass when it becomes managed, after tool use and agent stops (at most one request per 2 s), and every 10 s until it ends. One pass covers every managed node. The controller runs at most one pass at a time and at most one every 2 s.
+- Copilot's own helpers are sorted into a counted group: a subtree under a direct child of the provider that shares its process group (MCP servers and extensions, and what they start). That sort is not ownership evidence. When it is wrong, a helper is listed as a background process, or work started through an MCP server is counted as a helper; neither is dropped.
+- An escape is classified only by a complete pass with the provider proven before and after it. Missing parentage keeps the last list.
+- Each managed session asks for one pass when it becomes managed and after tool use and agent stops (at most one request per 2 s). Every 10 s it asks again only while it has its own work to watch. Any request is skipped when another session's pass is under 2 s old. One pass covers every managed node; the controller runs at most one pass at a time and at most one every 2 s.

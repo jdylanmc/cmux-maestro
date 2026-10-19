@@ -6650,9 +6650,9 @@ class ProcessObservationTests(unittest.TestCase):
         node = nodes["a"]
         self.assertEqual(node["state"], "owned-current")
         self.assertEqual([(item["pid"], item["group"]) for item in node["processes"]],
-                         [(102, "separate"), (103, "separate"), (101, "provider")])
-        self.assertEqual(node["processes"][1]["listeners"], listeners[103])
-        self.assertEqual(node["processes"][1]["startMicros"], (int(self.start) + 103) * 1_000_000 + 7)
+                         [(103, "separate"), (102, "separate"), (101, "provider")])
+        self.assertEqual(node["processes"][0]["listeners"], listeners[103])
+        self.assertEqual(node["processes"][0]["startMicros"], (int(self.start) + 103) * 1_000_000 + 7)
         # Never the provider itself or an unrelated process, and one lsof for the whole pass.
         self.assertEqual(probe.asked, [{101, 102, 103}])
         self.assertFalse(any(key in json.dumps(node) for key in ("argv", "cwd", "env")))
@@ -6764,6 +6764,46 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertEqual([(item["pid"], item["state"]) for item in recovered["processes"]],
                                  [(101, "owned-current")])
 
+    def test_a_root_unproven_mid_pass_keeps_the_last_list(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "server")}
+        identities = {100: (int(self.start), 0), 101: (int(self.start) + 1, 3)}
+        markers = {"s-a": [(100, self.start + 5)]}
+        _, previous = self.observe(self.state(self.node()), FakeProcessProbe([table], identities, markers=markers))
+
+        class Changing(FakeProcessProbe):
+            calls = 0
+
+            def identity(self, pid):
+                if pid == 100:
+                    Changing.calls += 1
+                    return (int(self.identities[100][0]), 0 if Changing.calls == 1 else 9)
+                return super().identity(pid)
+
+        for probe in (Changing([table], identities, markers=markers),  # root identity changed before the fence
+                      FakeProcessProbe([{101: table[101]}], identities, markers=markers)):  # root missing from ps
+            with self.subTest(probe=type(probe).__name__):
+                node = self.observe(self.state(self.node()), probe, previous, at=self.at + 10)[0]["a"]
+                self.assertEqual((node["state"], [(item["pid"], item["state"]) for item in node["processes"]]),
+                                 ("scan-incomplete", [(101, "owned-current")]))
+
+    def test_helpers_are_whole_subtrees_and_a_detached_process_is_never_reattributed(self):
+        # 101 is an MCP server (provider group); 105 is the browser it started in its own group.
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 100, "node"),
+                 105: self.row(101, 105, "Chromium"), 102: self.row(100, 102, "zsh"), 103: self.row(102, 102, "vite")}
+        identities = {pid: (int(self.start) + pid, 0) for pid in table}
+        identities[100] = (int(self.start), 0)
+        markers = {"s-a": [(100, self.start + 5)]}
+        node = self.observe(self.state(self.node()), FakeProcessProbe([table], identities, markers=markers))[0]["a"]
+        self.assertEqual({item["pid"]: item["group"] for item in node["processes"]},
+                         {101: "provider", 105: "provider", 102: "separate", 103: "separate"})
+        previous = {"nodes": [{"nodeId": "a", "copilotSessionId": "s-a", "generation": 1, "processes": [
+            {"pid": 103, "startMicros": (int(self.start) + 103) * 1_000_000, "name": "vite", "group": "separate",
+             "state": "escaped", "listeners": [],
+             "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.at - 60))}]}]}
+        again = self.observe(self.state(self.node()), FakeProcessProbe([table], identities, markers=markers),
+                             previous)[0]["a"]
+        self.assertEqual([item["state"] for item in again["processes"] if item["pid"] == 103], ["escaped"])
+
     def test_messaging_configuration_requires_the_installed_process_module(self):
         home = tempfile.TemporaryDirectory()
         self.addCleanup(home.cleanup)
@@ -6798,14 +6838,18 @@ class ProcessObservationTests(unittest.TestCase):
             self.assertFalse(parse(bad, {7}, True)[1], bad)
 
     def test_projection_is_bounded(self):
-        table = {100: self.row(1, 100, "copilot"), **{pid: self.row(100, pid, "w") for pid in range(1000, 1040)}}
+        table = {100: self.row(1, 100, "copilot"), **{pid: self.row(100, pid, "w") for pid in range(1000, 1040)},
+                 **{pid: self.row(100, 100, "mcp") for pid in range(3000, 3004)}}
         identities = {pid: (int(self.start), pid) for pid in table}
         previous = {"nodes": [{"nodeId": "a", "copilotSessionId": "s-a", "generation": 1, "processes": [
             {"pid": pid, "startMicros": pid, "name": "gone", "state": "owned-current"} for pid in range(2000, 2030)]}]}
         probe = FakeProcessProbe([table], identities, markers={"s-a": [(100, self.start + 5)]})
         node = self.observe(self.state(self.node()), probe, previous)[0]["a"]
         states = [item["state"] for item in node["processes"]]
-        self.assertEqual((states.count("owned-current"), states.count("exited"), node["omittedCount"]), (32, 16, 8))
+        self.assertEqual((states.count("owned-current"), states.count("exited"), node["omittedCount"],
+                          node["omittedHelperCount"]), (32, 16, 8, 4))
+        # Newest work first: the highest PIDs were kept.
+        self.assertEqual(min(item["pid"] for item in node["processes"] if item["state"] == "owned-current"), 1008)
         # Probing is bounded too: lsof sees only the candidates kept.
         self.assertEqual(len(probe.asked[0]), 32)
 

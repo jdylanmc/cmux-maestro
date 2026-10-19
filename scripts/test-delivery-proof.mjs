@@ -13,7 +13,7 @@ import {
   ENROLLMENT_MESSAGES, createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
   startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
-import { createProcessObserver, runProcessObserve } from "./delivery-proof/processes.mjs";
+import { createProcessObserver, runProcessObserve, sessionNeedsWatching } from "./delivery-proof/processes.mjs";
 
 const base = await fs.realpath("/tmp");
 
@@ -2767,13 +2767,52 @@ function processObserverFixture() {
   let clock = 0;
   const runs = [];
   const intervals = [];
-  const observer = createProcessObserver({
-    now: () => clock, run: async () => { runs.push(clock); },
+  const f = { published: null, reads: 0 };
+  f.observer = createProcessObserver({
+    now: () => clock, run: async () => { runs.push(clock); }, sessionId: "own",
+    stat: async () => f.published && { mtimeMs: f.published.mtimeMs, size: 10 },
+    read: async () => { f.reads++; return JSON.stringify(f.published.value); },
     timers: { setInterval: (fn, ms) => { intervals.push({ fn, ms, cleared: false }); return intervals.at(-1); },
       clearInterval: handle => { if (handle) handle.cleared = true; } },
   });
-  return { observer, runs, intervals, advance: ms => { clock += ms; } };
+  return Object.assign(f, { runs, intervals, now: () => clock, advance: ms => { clock += ms; } });
 }
+
+test("owned-process checks skip the controller when a shared pass is fresh or this session is idle", async () => {
+  const f = processObserverFixture();
+  const idle = { nodes: [{ copilotSessionId: "own", state: "owned-current", processes: [
+    { state: "owned-current", group: "provider" }] }] };
+  f.published = { mtimeMs: -500, value: idle };
+  f.observer.start();
+  await f.observer.trigger();
+  assert.deepEqual(f.runs, [], "another session's pass 0.5 s ago already covered this one");
+  f.advance(10_000);
+  await f.intervals[0].fn();
+  assert.deepEqual(f.runs, [], "an idle session's interval check never starts the controller");
+  f.advance(10_000);
+  await f.intervals[0].fn();
+  assert.equal(f.reads, 1, "an unchanged projection is read once");
+  f.advance(3_000);
+  await f.observer.hooks({}).hooks.onPostToolUse();
+  await f.observer.trigger();
+  assert.deepEqual(f.runs, [23_000], "tool use still asks");
+  f.published = { mtimeMs: 23_000, value: { nodes: [{ copilotSessionId: "own", state: "owned-current",
+    processes: [{ state: "owned-current", group: "separate" }] }] } };
+  f.advance(10_000);
+  await f.intervals[0].fn();
+  assert.deepEqual(f.runs, [23_000, 33_000], "own background work is watched every interval");
+});
+
+test("a session is watched only for its own work, detached processes or an incomplete scan", () => {
+  const node = (state, processes) => ({ copilotSessionId: "own", state, processes });
+  assert.equal(sessionNeedsWatching({ nodes: [] }, "own"), true);
+  assert.equal(sessionNeedsWatching({ nodes: [{ ...node("owned-current", []), copilotSessionId: "other" }] }, "own"), true);
+  assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [])] }, "own"), false);
+  assert.equal(sessionNeedsWatching({ nodes: [node("no-custody", [])] }, "own"), false);
+  assert.equal(sessionNeedsWatching({ nodes: [node("scan-incomplete", [])] }, "own"), true);
+  assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [{ state: "escaped", group: "separate" }])] }, "own"), true);
+  assert.equal(sessionNeedsWatching({ nodes: [node("owned-current", [{ state: "exited", group: "separate" }])] }, "own"), false);
+});
 
 test("owned-process passes wait for management, then run on a bounded interval and debounce", async () => {
   const f = processObserverFixture();

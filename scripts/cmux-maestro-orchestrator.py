@@ -3964,6 +3964,23 @@ def process_observation_nodes(state):
     return sorted(nodes, key=lambda item: (item["createdAt"], item["id"]))[:MAX_HOST_NODES]
 
 
+def process_helpers(table, root):
+    """Descendants under a direct child of the provider that shares its process group.
+
+    Copilot's MCP servers and extensions share the provider's group and everything they start
+    (a browser in its own group included) hangs off them; tool shells start their own group.
+    Presentation only, never ownership evidence (ADR 0026).
+    """
+    group = table[root][1]
+    helpers, queue = set(), [pid for pid, row in table.items() if row[0] == root and pid != root and row[1] == group]
+    while queue:
+        pid = queue.pop()
+        if pid not in helpers:
+            helpers.add(pid)
+            queue.extend(child for child, row in table.items() if row[0] == pid and child != root)
+    return helpers
+
+
 def observe_processes(state, previous, probe, at, uid=None):
     """One read-only pass over every managed node: (sanitized projection, owned PID count)."""
     uid = os.getuid() if uid is None else uid
@@ -3978,90 +3995,92 @@ def observe_processes(state, previous, probe, at, uid=None):
     for node in nodes:
         provider = node["providerProcess"]
         status, root = process_custody(node, probe, table, uid, anchors[(provider["pid"], provider["start"])] > 1)
-        tree, skipped = {}, 0
+        tree, helpers, skipped = {}, set(), [0, 0]
         if root is not None:
-            # Bound probing, not only output: the separate group first, like the published order.
-            group = table[provider["pid"]][1]
-            candidates = sorted(process_descendants(table, provider["pid"]), key=lambda pid: table[pid][1] == group)
-            skipped = max(0, len(candidates) - MAX_OBSERVED_PROCESSES)
+            helpers = process_helpers(table, provider["pid"])
+            # Bound probing, not only output: work first, newest first (PIDs grow until they wrap).
+            candidates = sorted(process_descendants(table, provider["pid"]), key=lambda pid: (pid in helpers, -pid))
+            for pid in candidates[MAX_OBSERVED_PROCESSES:]:
+                skipped[pid in helpers] += 1
             for pid in candidates[:MAX_OBSERVED_PROCESSES]:
                 identity = probe.identity(pid)
                 if identity is not None:
                     tree[pid] = identity
-        passes.append((node, status, root, tree, skipped))
-    owned = {pid for _node, _status, _root, tree, _skipped in passes for pid in tree}
+        passes.append((node, status, root, tree, helpers, skipped))
+    owned = {pid for item in passes for pid in item[3]}
     listeners, listeners_complete = probe.listeners(owned)
     # Fence: parentage and identity must still hold after lsof, like CMUX's own scanner.
     fence, fence_complete = probe.table()
     published, count = [], 0
-    tables_complete = table_complete and fence_complete
-    for node, status, root, tree, skipped in passes:
+    for node, status, root, tree, helpers, skipped in passes:
         provider = node["providerProcess"]
-        entries = []
         prior = previous_process_entries(previous, node)
-        if not tables_complete and status != "exited":
-            # Missing parentage is not proof of detachment: keep the last list, unchanged.
+        root_current = root is not None and probe.identity(provider["pid"]) == root
+        detached = {(entry["pid"], entry["startMicros"]) for entry in prior if entry["state"] == "escaped"}
+        if status == "exited" and not prior:
+            continue  # an ended provider with nothing observed before has nothing to report
+        if status != "exited" and (root is None or not root_current or not (table_complete and fence_complete)):
+            # Denied, no custody or ambiguous on a complete table carries nothing. Otherwise missing
+            # parentage or a root that changed mid-pass is not proof of detachment: keep the last
+            # list unchanged; only a complete pass may classify an escape.
+            unproven = root is None and status != "scan-incomplete" and table_complete
             published.append({
                 "nodeId": node["id"], "copilotSessionId": node["copilotSessionId"],
-                "generation": node["generation"], "state": "scan-incomplete", "observedAt": stamp,
-                "processes": prior, "omittedCount": 0,
+                "generation": node["generation"], "state": status if unproven else "scan-incomplete",
+                "observedAt": stamp, "processes": [] if unproven else prior,
+                "omittedCount": 0, "omittedHelperCount": 0,
             })
             continue
-        root_current = root is not None and probe.identity(provider["pid"]) == root
-        if root is not None and not root_current:
-            status = "scan-incomplete"
+        entries = []
         if root_current:
             still = set(process_descendants(fence, provider["pid"]))
-            group = table[provider["pid"]][1]
-            incomplete = not (table_complete and fence_complete and listeners_complete)
+            incomplete = not listeners_complete
             for pid, identity in tree.items():
-                if pid not in still or probe.identity(pid) != identity:
-                    continue  # exited or replaced during the pass; reported by the next diff
-                _parent, pgid, owner, name = fence.get(pid, table[pid])
+                key = observed_identity_key(pid, identity)
+                # Exited or replaced during the pass, or detached earlier: never attributed again.
+                if pid not in still or probe.identity(pid) != identity or key in detached:
+                    continue
+                _parent, _pgid, owner, name = fence.get(pid, table[pid])
                 incomplete = incomplete or owner != uid
                 entries.append({
-                    "pid": pid, "startMicros": observed_identity_key(pid, identity)[1], "name": name,
-                    "group": "provider" if pgid == group else "separate", "state": "owned-current",
+                    "pid": pid, "startMicros": key[1], "name": name,
+                    "group": "provider" if pid in helpers else "separate", "state": "owned-current",
                     "listeners": listeners.get(pid, [])[:MAX_PROCESS_LISTENERS],
                 })
             status = "scan-incomplete" if incomplete else "owned-current"
         current = {(entry["pid"], entry["startMicros"]) for entry in entries}
+        reachable = set(process_descendants(fence, provider["pid"])) if root_current else set()
         events = []
-        if status == "exited" and not prior:
-            continue  # an ended provider with nothing observed before has nothing to report
-        if status in ("owned-current", "scan-incomplete", "exited"):
-            reachable = set(process_descendants(fence, provider["pid"])) if root_current else set()
-            for entry in prior:
-                key = (entry["pid"], entry["startMicros"])
-                if key in current:
-                    continue
-                identity = probe.identity(entry["pid"])
-                alive = identity is not None and observed_identity_key(entry["pid"], identity) == key
-                since = entry.get("since") if entry["state"] != "owned-current" else stamp
-                if not isinstance(since, str) or parse_age(since, at) > PROCESS_EVENT_SECONDS:
-                    continue
-                if entry["state"] == "exited" or not alive:
-                    state_name, since = "exited", since if entry["state"] == "exited" else stamp
-                elif entry["pid"] in reachable:
-                    continue  # still in the tree but not proven this pass; never guessed
-                else:
-                    # Alive outside the tree: detached, and never attributed again.
-                    state_name = "escaped"
-                events.append({"pid": entry["pid"], "startMicros": entry["startMicros"],
-                               "name": entry.get("name") if isinstance(entry.get("name"), str) else "?",
-                               "group": "provider" if entry.get("group") == "provider" else "separate",
-                               "state": state_name, "since": since, "listeners": []})
-            events = sorted(events, key=lambda item: item["since"], reverse=True)[:MAX_PROCESS_EVENTS]
-        entries.sort(key=lambda item: (item["group"] == "provider", item["startMicros"], item["pid"]))
+        for entry in prior:
+            key = (entry["pid"], entry["startMicros"])
+            if key in current:
+                continue
+            identity = probe.identity(entry["pid"])
+            alive = identity is not None and observed_identity_key(entry["pid"], identity) == key
+            since = entry.get("since") if entry["state"] != "owned-current" else stamp
+            if not isinstance(since, str) or parse_age(since, at) > PROCESS_EVENT_SECONDS:
+                continue
+            if entry["state"] == "exited" or not alive:
+                state_name, since = "exited", since if entry["state"] == "exited" else stamp
+            elif entry["state"] == "owned-current" and entry["pid"] in reachable:
+                continue  # still in the tree but past the probe bound; never guessed
+            else:
+                # Alive outside the tree after a complete pass: detached, never attributed again.
+                state_name = "escaped"
+            events.append({"pid": entry["pid"], "startMicros": entry["startMicros"],
+                           "name": entry.get("name") if isinstance(entry.get("name"), str) else "?",
+                           "group": "provider" if entry.get("group") == "provider" else "separate",
+                           "state": state_name, "since": since, "listeners": []})
+        events = sorted(events, key=lambda item: item["since"], reverse=True)[:MAX_PROCESS_EVENTS]
+        # Work first, then anything listening, then newest: a dev server is never pushed out of view.
+        entries.sort(key=lambda item: (item["group"] == "provider", not item["listeners"], -item["startMicros"]))
         count += len(entries)
         published.append({
             "nodeId": node["id"], "copilotSessionId": node["copilotSessionId"],
             "generation": node["generation"], "state": status, "observedAt": stamp,
-            "processes": entries[:MAX_OBSERVED_PROCESSES] + events,
-            "omittedCount": max(0, len(entries) - MAX_OBSERVED_PROCESSES) + skipped,
+            "processes": entries + events, "omittedCount": skipped[0], "omittedHelperCount": skipped[1],
         })
     return {"version": 1, "observedAt": stamp, "nodes": published}, count
-
 
 def parse_age(value, at):
     try:
