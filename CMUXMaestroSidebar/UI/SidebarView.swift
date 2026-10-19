@@ -785,6 +785,7 @@ struct SidebarView: View {
         .padding(.vertical, preferences.layout.density.spacing(10))
         .padding(.bottom, Self.hostFooterClearance)
         .environment(preferences)
+        .environment(\.sidebarPetStore, pets)
         .environment(\.sidebarHoverGroup, hoverGroup)
         .environment(\.sidebarAgentHoverProvider, { target in
             let connected: Bool
@@ -1466,6 +1467,10 @@ private struct ManagedNodeRow: View {
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
     @State private var showingPicker: SidebarIconTarget?
+    @State private var petPicker: UUID?
+    private var pet: (session: UUID, choice: String?)? {
+        SidebarPresentation.managedPet(node, tree: copilotTree, now: evidenceDate)
+    }
 
     private var actions: [SidebarRowActionGroup] {
         let iconTarget = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
@@ -1480,7 +1485,8 @@ private struct ManagedNodeRow: View {
         }
         var groups: [SidebarRowActionGroup] = [
             .init(title: "Navigation", actions: navigationActions),
-            .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: true),
+            .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: true,
+                        pet: pet.map { pet in { petPicker = pet.session } }),
             placement, .lifecycle()
         ]
         if !hasChildren, let dismissManaged,
@@ -1557,6 +1563,7 @@ private struct ManagedNodeRow: View {
             }
         }
         .frame(minHeight: density.rowHeight)
+        .sidebarPetPicker(session: $petPicker, agentChoice: pet?.choice)
         .environment(\.sidebarReorderSource, reorder?.dragSource)
         .sidebarRowActions(title: node.title, groups: actions) {
             SidebarBeatIndicator(session: beatSession, titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
@@ -2033,6 +2040,7 @@ private struct SurfaceRow: View {
     @Environment(\.sidebarAgentHoverProvider) private var hoverProvider
     @Environment(\.sidebarHoverConnected) private var connected
     @State private var showingPicker: SidebarIconTarget?
+    @State private var petPicker: UUID?
     private var singleSession: SidebarCopilotSession? { sessions.count == 1 ? sessions.first : nil }
     private var expanded: Bool {
         layout.isExpanded(.surface(surface.id))
@@ -2078,7 +2086,8 @@ private struct SurfaceRow: View {
             ?? ((surface.kind == .terminal || surface.kind == .browser) ? .surface(surface.id) : nil)
         return [
             .init(title: "Navigation", actions: items),
-            .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: singleSession != nil || surface.kind == .agentSession),
+            .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: singleSession != nil || surface.kind == .agentSession,
+                        pet: singleSession.flatMap { $0.statusOnly ? nil : $0.id }.map { id in { petPicker = id } }),
             .placement(reorder), .lifecycle()
         ]
     }
@@ -2150,6 +2159,7 @@ private struct SurfaceRow: View {
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
             }
             .frame(minHeight: density.rowHeight)
+            .sidebarPetPicker(session: $petPicker, agentChoice: singleSession?.petId)
             .environment(\.sidebarReorderSource, reorder.dragSource)
             .sidebarRowActions(title: title, groups: actions) {
                 SidebarBeatIndicator(session: singleSession.flatMap { $0.statusOnly ? nil : $0.id },
@@ -2226,6 +2236,7 @@ private struct CopilotSessionRow: View {
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarRowGroup) private var outerGroup
     @State private var showingPicker: SidebarIconTarget?
+    @State private var petPicker: UUID?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
     private var name: String? { session.sessionName }
     private var actions: [SidebarRowActionGroup] {
@@ -2239,7 +2250,8 @@ private struct CopilotSessionRow: View {
                                perform: { setExpanded(.session(session.id), !expanded) }))
         }
         return [.init(title: "Navigation", actions: items),
-                .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true), .placement(.movesWithParent), .lifecycle()]
+                .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true,
+                            pet: session.statusOnly ? nil : { petPicker = session.id }), .placement(.movesWithParent), .lifecycle()]
     }
 
     var body: some View {
@@ -2285,6 +2297,7 @@ private struct CopilotSessionRow: View {
                 }
             }
             .frame(minHeight: density.rowHeight)
+            .sidebarPetPicker(session: $petPicker, agentChoice: session.petId)
             .sidebarRowActions(title: name ?? "Copilot \(session.shortID)", groups: actions) {
                 SidebarBeatIndicator(session: focusUnavailable ? nil : session.id,
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
@@ -2937,6 +2950,7 @@ private struct TaskboardAgentCard: View {
     @Environment(\.sidebarFocusInspection) private var focusInspection
     @Environment(\.sidebarDensity) private var density
     @State private var showingPicker: SidebarIconTarget?
+    @State private var petPicker: UUID?
 
     private var actions: [SidebarRowActionGroup] {
         [.init(title: "Navigation", actions: [
@@ -2944,7 +2958,8 @@ private struct TaskboardAgentCard: View {
                    navigation: navigation, prepareSeen: prepareSeen,
                    subject: .unmanaged(.session(session.id)), revalidate: focusInspection),
             .init(title: "Open details", perform: { selection = .session(session.id) })
-        ]), .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true), .placement(.taskboard), .lifecycle()]
+        ]), .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true,
+                       pet: session.statusOnly ? nil : { petPicker = session.id }), .placement(.taskboard), .lifecycle()]
     }
 
     private func line(_ symbol: String, _ text: String) -> some View {
@@ -2992,6 +3007,7 @@ private struct TaskboardAgentCard: View {
         }
         .padding(.vertical, density.spacing(6))
         .padding(.horizontal, density.spacing(4))
+        .sidebarPetPicker(session: $petPicker, agentChoice: session.petId)
         .sidebarRowActions(title: title, groups: actions, trailingAlignment: .top) {
             SidebarBeatIndicator(session: session.statusOnly ? nil : session.id, titleHeight: 16)
                 .padding(.top, density.spacing(6))

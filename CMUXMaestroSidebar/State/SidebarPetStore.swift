@@ -115,24 +115,30 @@ private struct SidebarPetManifest: Codable {
 final class SidebarPetStore {
     static let defaultID = "maestro"
     private static let overridesKey = "sidebar.pet.overrides.v1"
+    private static let hiddenKey = "sidebar.pet.hidden.v1"
     private static let maximumOverrides = 512
-    private static let sessionCacheSeconds: TimeInterval = 3
+    private let sessionCacheSeconds: TimeInterval
     static let galleryURL = URL(string: "https://codexpets.org/gallery")!
     static let generatorURL = URL(string: "https://www.autosprite.io/codex-pet-generator")!
 
     private(set) var installed: [SidebarPetDescriptor] = []
     private(set) var overrides: [String: String] = [:]
+    private(set) var hidden: Set<String> = []
     private(set) var notice: String?
     private var sheets: [String: CGImage] = [:]
     private var topInsets: [String: CGFloat] = [:]
+    /// Sheets that passed the header probe but failed to decode; retried after `refresh()`.
+    @ObservationIgnored private var failedSheets: Set<String> = []
     private var frames: [String: CGImage] = [:]
     private var sessionCache: [UUID: (date: Date, pets: [SidebarPetDescriptor])] = [:]
     private let defaults: UserDefaults
     private let uploadDirectory: URL
     private let sessionDirectory: URL?
 
-    init(defaults: UserDefaults = .standard, uploadDirectory: URL? = nil, sessionDirectory: URL? = nil) {
+    init(defaults: UserDefaults = .standard, uploadDirectory: URL? = nil, sessionDirectory: URL? = nil,
+         sessionCacheSeconds: TimeInterval = 3) {
         self.defaults = defaults
+        self.sessionCacheSeconds = sessionCacheSeconds
         self.uploadDirectory = uploadDirectory ?? FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CMUXMaestroPreview/Pets", isDirectory: true)
@@ -140,6 +146,7 @@ final class SidebarPetStore {
             .map { $0.appendingPathComponent("pets/sessions", isDirectory: true) }
         overrides = (defaults.data(forKey: Self.overridesKey)
             .flatMap { try? JSONDecoder().decode([String: String].self, from: $0) }) ?? [:]
+        hidden = Set(defaults.stringArray(forKey: Self.hiddenKey) ?? [])
         refresh()
     }
 
@@ -147,7 +154,11 @@ final class SidebarPetStore {
 
     /// Pets that every agent may use, plus any this session's agent made for itself.
     func available(for session: UUID?) -> [SidebarPetDescriptor] {
-        installed + (session.map(sessionPets) ?? [])
+        (installed + (session.map(sessionPets) ?? [])).filter { !failedSheets.contains(sheetKey($0, session: session)) }
+    }
+
+    private func sheetKey(_ pet: SidebarPetDescriptor, session: UUID?) -> String {
+        pet.source == .session ? "\(session?.uuidString.lowercased() ?? "")/\(pet.id)" : pet.id
     }
 
     func descriptor(_ id: String, session: UUID?) -> SidebarPetDescriptor? {
@@ -155,7 +166,7 @@ final class SidebarPetStore {
     }
 
     private func sessionPets(_ session: UUID) -> [SidebarPetDescriptor] {
-        if let cached = sessionCache[session], Date().timeIntervalSince(cached.date) < Self.sessionCacheSeconds {
+        if let cached = sessionCache[session], Date().timeIntervalSince(cached.date) < sessionCacheSeconds {
             return cached.pets
         }
         let pets = Self.scan(sessionDirectory?.appendingPathComponent(session.uuidString.lowercased(), isDirectory: true),
@@ -166,6 +177,7 @@ final class SidebarPetStore {
 
     func refresh() {
         sessionCache = [:]
+        failedSheets = []
         installed = [SidebarPetDescriptor(id: Self.defaultID, displayName: "Maestro", source: .bundled)]
             + Self.scan(uploadDirectory, source: .uploaded, excluding: [Self.defaultID])
     }
@@ -179,7 +191,7 @@ final class SidebarPetStore {
             at: directory, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
         for folder in folders.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
             guard let manifest = manifest(in: folder), let id = manifest.id, id == folder.lastPathComponent,
-                  seen.insert(id).inserted, sheet(in: folder, manifest: manifest) != nil else { continue }
+                  seen.insert(id).inserted, sheetFits(in: folder, manifest: manifest) else { continue }
             pets.append(.init(id: id, displayName: manifest.displayName ?? id, source: source))
         }
         return pets
@@ -195,6 +207,34 @@ final class SidebarPetStore {
     }
 
     func hasOverride(session: UUID) -> Bool { overrides[session.uuidString.lowercased()] != nil }
+
+    /// The pet shown for an exact agent session, or nil with no session or when hidden for it.
+    func visibleID(session: UUID?, agentChoice: String?) -> String? {
+        guard let session, !isHidden(session: session) else { return nil }
+        return resolvedID(session: session, agentChoice: agentChoice)
+    }
+
+    func isHidden(session: UUID) -> Bool { hidden.contains(session.uuidString.lowercased()) }
+
+    func setHidden(_ value: Bool, session: UUID) {
+        let key = session.uuidString.lowercased()
+        var updated = hidden
+        if value {
+            updated.insert(key)
+            if updated.count > Self.maximumOverrides, let drop = updated.sorted().first(where: { $0 != key }) {
+                updated.remove(drop)
+            }
+        } else {
+            updated.remove(key)
+        }
+        hidden = updated
+        defaults.set(updated.sorted(), forKey: Self.hiddenKey)
+    }
+
+    /// A human choice of the bundled pet, which wins over the agent's own choice until reset.
+    func resetToDefault(session: UUID) { choose(Self.defaultID, session: session) }
+
+    func isDefaultChoice(session: UUID) -> Bool { overrides[session.uuidString.lowercased()] == Self.defaultID }
 
     func choose(_ id: String, session: UUID) {
         guard descriptor(id, session: session) != nil else { return }
@@ -299,8 +339,9 @@ final class SidebarPetStore {
 
     private func decodedSheet(for id: String, session: UUID?) -> DecodedSheet? {
         guard let pet = descriptor(id, session: session) else { return nil }
-        let key = pet.source == .session ? "\(session?.uuidString.lowercased() ?? "")/\(id)" : id
+        let key = sheetKey(pet, session: session)
         if let cached = sheets[key], let inset = topInsets[key] { return .init(image: cached, topInset: inset) }
+        guard !failedSheets.contains(key) else { return nil }
         let image: DecodedSheet?
         switch pet.source {
         case .bundled:
@@ -317,6 +358,8 @@ final class SidebarPetStore {
         if let image {
             sheets[key] = image.image
             topInsets[key] = image.topInset
+        } else {
+            failedSheets.insert(key)
         }
         return image
     }
@@ -356,7 +399,29 @@ final class SidebarPetStore {
 
     struct DecodedSheet { let image: CGImage; let topInset: CGFloat }
 
+    /// Catalog scans read only the image header; full decodes stay in the cached `decodedSheet`.
+    nonisolated private static func sheetFits(in folder: URL, manifest: SidebarPetManifest) -> Bool {
+        guard let name = manifest.spritesheetPath.flatMap(plainFilename),
+              let source = CGImageSourceCreateWithURL(folder.appendingPathComponent(name) as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int else { return false }
+        return SidebarPetSheet.accepts(width: width, height: height)
+    }
+
+    #if DEBUG
+    private static let decodeLock = NSLock()
+    nonisolated(unsafe) private static var decodes: [String: Int] = [:]
+    /// Full sheet decode attempts per file path; a test seam for keeping decodes off repeated lookups.
+    nonisolated static func decodeCount(_ url: URL) -> Int {
+        decodeLock.withLock { decodes[url.standardizedFileURL.path, default: 0] }
+    }
+    #endif
+
     nonisolated private static func image(_ url: URL) -> DecodedSheet? {
+        #if DEBUG
+        decodeLock.withLock { decodes[url.standardizedFileURL.path, default: 0] += 1 }
+        #endif
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
               SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }

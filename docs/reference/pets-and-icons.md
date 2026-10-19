@@ -24,7 +24,15 @@ folder. It never selects a pet. Agent adds pet with
 format. It selects pet only after native identity helper proves session ownership.
 Agent-made pet is **scoped to that session**. Use **Save to my pets** in picker to
 keep it for every agent. Precedence: your choice, then agent's choice, then Maestro.
-**Reset to agent's pet** removes your choice. Reduce Motion shows still frame.
+**Reset to default** chooses Maestro as your choice, so it wins over the agent's
+pet until reset. **Reset to agent's pet** removes your choice. **Hide pet** /
+**Show pet** applies to that session only; a hidden footer pet shows a small
+sparkle that still opens the picker. Choices and hidden state follow the exact
+session UUID across pane moves and app restarts; a replacement session in the
+same pane starts fresh. Agent hover cards show the hovered session's own pet
+and hidden state, never the active agent's. Row **Appearance > Choose pet…**
+opens the same picker for that exact session; activity-only children, status-only
+sessions, terminals and browsers have no pet. Reduce Motion shows still frame.
 
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 

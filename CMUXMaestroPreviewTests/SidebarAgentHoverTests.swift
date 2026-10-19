@@ -404,6 +404,33 @@ struct SidebarAgentHoverTests {
         #expect(!current.lines.contains { ["Context", "Elapsed", "Git changes", "Pet"].contains($0.title) })
     }
 
+    @Test func hoverPetIsTheHoveredSessionsOwnAndNeverAChildsOrTheActiveAgents() throws {
+        var active = session()
+        active.petId = "active-pet"
+        var hovered = session(id: fixtures.otherSessionID)
+        hovered.petId = "hovered-pet"
+        hovered.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
+                               state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)]
+        let sessions = [active, hovered]
+        let pet = try #require(card(.session(hovered.id), sessions: sessions)?.pet)
+        #expect(pet == .init(session: hovered.id, choice: "hovered-pet", state: .working))
+        #expect(card(.session(active.id), sessions: sessions)?.pet?.session == active.id)
+        #expect(card(.child(sessionID: hovered.id, childID: "child"), sessions: sessions)?.pet == nil)
+
+        let store = SidebarPetStore(defaults: UserDefaults(suiteName: "hover-pet-\(UUID().uuidString)")!,
+                                    uploadDirectory: FileManager.default.temporaryDirectory
+                                        .appendingPathComponent("hover-pet-\(UUID().uuidString)"),
+                                    sessionDirectory: nil)
+        store.setHidden(true, session: hovered.id)
+        #expect(store.visibleID(session: pet.session, agentChoice: pet.choice) == nil)
+        #expect(store.visibleID(session: active.id, agentChoice: nil) == SidebarPetStore.defaultID)
+        #expect(!store.hasOverride(session: active.id) && !store.isHidden(session: active.id))
+
+        let node = directoryNode(active)
+        let managed = try #require(card(.managed(node.id, generation: node.generation), sessions: sessions, nodes: [node]))
+        #expect(managed.pet?.session == active.id && managed.pet?.choice == "active-pet")
+    }
+
     @Test func observedChildKeepsParentPlacementAndItsOwnModel() throws {
         var a = session()
         a.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
@@ -519,6 +546,7 @@ struct SidebarAgentHoverTests {
     @Test(arguments: [true, false])
     func statusOnlyRetentionNeverResurrectsErasedRootOrChildModels(retainingStatus: Bool) throws {
         var original = session(name: "erased-root-model")
+        original.petId = "erased-pet"
         original.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
                                state: .working, model: "erased-child-model", ancestryUnresolved: false, hasChildren: false)]
         let retained = SidebarCopilotTree.statusOnly(original, retainingStatus: retainingStatus)
@@ -528,6 +556,7 @@ struct SidebarAgentHoverTests {
             #expect(hover.lines.filter { $0.title == "Last reported model" }.map(\.value) == ["Unavailable"])
             #expect(!hover.lines.contains { $0.value == "erased-root-model" || $0.value == "erased-child-model" })
             #expect(hover.lines.allSatisfy { $0.copyableSessionID == nil })
+            #expect(hover.pet == nil)
         }
     }
 

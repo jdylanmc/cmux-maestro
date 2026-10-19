@@ -16,9 +16,11 @@ struct SidebarPetView: View {
 
     private var height: CGFloat { width * CGFloat(SidebarPetSheet.cellHeight) / CGFloat(SidebarPetSheet.cellWidth) }
 
+    static func animates(_ animated: Bool, reduceMotion: Bool) -> Bool { animated && !reduceMotion }
+
     var body: some View {
         Group {
-            if animated && !reduceMotion {
+            if Self.animates(animated, reduceMotion: reduceMotion) {
                 TimelineView(.periodic(from: .now, by: 1.0 / 7.0)) { context in
                     cell(store.frame(petID: petID, session: session, state: state, index: Int(context.date.timeIntervalSinceReferenceDate * 7)))
                 }
@@ -79,17 +81,23 @@ struct SidebarPetButton: View {
         let name = descriptor?.displayName ?? "Maestro"
         // An agent-made pet in use can be captured into the shared collection.
         let capturable = descriptor?.source == .session && content.petSessionID != nil
+        let hidden = content.petSessionID.map(store.isHidden) ?? false
         Button { showingPicker = true } label: {
-            SidebarPetView(store: store, petID: petID, session: content.petSessionID, state: state, width: width,
-                           topTrim: topInset)
+            if hidden {
+                Image(systemName: "sparkles").foregroundStyle(.secondary)
+                    .frame(width: width, height: SidebarFooterPetSize.height(forWidth: width, topInset: topInset))
+            } else {
+                SidebarPetView(store: store, petID: petID, session: content.petSessionID, state: state, width: width,
+                               topTrim: topInset)
+            }
         }
         .buttonStyle(.plain)
-        .help("\(name) · \(state.title). Click to choose a pet.")
-        .accessibilityLabel("Pet \(name), \(state.title)")
+        .help(hidden ? "Choose pet" : "\(name) · \(state.title). Click to choose a pet.")
+        .accessibilityLabel(hidden ? "Pet hidden" : "Pet \(name), \(state.title)")
         .accessibilityHint("Opens the pet picker")
         .accessibilityIdentifier("sidebar-pet-button")
         .overlay(alignment: .center) {
-            if (capturable && hovering) || captured, let session = content.petSessionID {
+            if !hidden, (capturable && hovering) || captured, let session = content.petSessionID {
                 Button {
                     if store.saveToRepository(petID, session: session) != nil {
                         captured = true
@@ -156,9 +164,6 @@ struct SidebarPetPicker: View {
                 .padding(2)
             }
             .frame(height: 210)
-            if sessionID == nil {
-                Text("No agent session selected.").font(.caption2).foregroundStyle(.secondary)
-            }
             HStack {
                 Button("Upload pet…") { upload() }
                     .help("Choose a Codex pet folder or spritesheet.")
@@ -168,24 +173,30 @@ struct SidebarPetPicker: View {
                         .help("Save this pet for all agents.")
                         .accessibilityIdentifier("sidebar-pet-save")
                 }
+            }
+            HStack {
+                Button("Reset to default") { if let sessionID { store.resetToDefault(session: sessionID) } }
+                    .disabled(sessionID.map(store.isDefaultChoice) ?? true)
+                    .accessibilityIdentifier("sidebar-pet-reset-default")
                 Button("Reset to agent's pet") { if let sessionID { store.clearChoice(session: sessionID) } }
                     .disabled(sessionID.map { !store.hasOverride(session: $0) } ?? true)
-                    .help("Reset to the agent’s pet.")
+                    .accessibilityIdentifier("sidebar-pet-reset-agent")
+                if let sessionID {
+                    let hidden = store.isHidden(session: sessionID)
+                    Button(hidden ? "Show pet" : "Hide pet") { store.setHidden(!hidden, session: sessionID) }
+                        .accessibilityIdentifier("sidebar-pet-visibility")
+                }
             }
+            .controlSize(.small)
             if let notice = store.notice {
                 Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Download and unzip a pet, then upload it.").font(.caption2).foregroundStyle(.secondary)
-                HStack(spacing: 10) {
-                    Link("Codex Pets gallery", destination: SidebarPetStore.galleryURL)
-                    Link("Create a pet", destination: SidebarPetStore.generatorURL)
-                }
-                .font(.caption2)
+            HStack(spacing: 10) {
+                Link("Codex Pets gallery", destination: SidebarPetStore.galleryURL)
+                Link("Create a pet", destination: SidebarPetStore.generatorURL)
             }
-            Text("Agent-made pets are session-only until saved.")
-                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            .font(.caption2)
         }
         .padding(14)
         .frame(width: 320)
@@ -282,5 +293,64 @@ private struct SidebarPetCell: View {
         .background(RoundedRectangle(cornerRadius: 6).fill(selected ? SidebarQuestionGlow.lightBlue.opacity(0.18) : Color.clear))
         .overlay(RoundedRectangle(cornerRadius: 6)
             .stroke(selected ? SidebarQuestionGlow.lightBlue : Color.secondary.opacity(0.25), lineWidth: 1))
+    }
+}
+
+private struct SidebarPetStoreKey: EnvironmentKey {
+    static let defaultValue: SidebarPetStore? = nil
+}
+
+extension EnvironmentValues {
+    var sidebarPetStore: SidebarPetStore? {
+        get { self[SidebarPetStoreKey.self] }
+        set { self[SidebarPetStoreKey.self] = newValue }
+    }
+}
+
+/// The exact agent session whose pet a hover card shows, independent of the active/pinned agent.
+struct SidebarHoverPet: Equatable {
+    let session: UUID
+    var choice: String? = nil
+    var state: SidebarPetState = .idle
+}
+
+/// A hover card's pet: the hovered session's own preference, including its hidden state.
+struct SidebarHoverPetView: View {
+    let store: SidebarPetStore
+    let pet: SidebarHoverPet
+
+    var body: some View {
+        if let id = store.visibleID(session: pet.session, agentChoice: pet.choice) {
+            let name = store.descriptor(id, session: pet.session)?.displayName ?? "Maestro"
+            SidebarPetView(store: store, petID: id, session: pet.session, state: pet.state, width: 36,
+                           topTrim: store.topInset(petID: id, session: pet.session))
+                .accessibilityElement()
+                .accessibilityLabel("Pet \(name), \(pet.state.title)")
+                .accessibilityIdentifier("hover-pet")
+        }
+    }
+}
+
+/// Opens the pet picker for one exact agent session from a row action.
+private struct SidebarRowPetPicker: ViewModifier {
+    @Binding var session: UUID?
+    let agentChoice: String?
+    @Environment(\.sidebarPetStore) private var store
+
+    func body(content: Content) -> some View {
+        content.popover(isPresented: Binding(get: { session != nil && store != nil },
+                                             set: { if !$0 { session = nil } }), arrowEdge: .trailing) {
+            if let store, let session {
+                SidebarPetPicker(store: store, sessionID: session, agentChoice: agentChoice, state: .idle) {
+                    self.session = nil
+                }
+            }
+        }
+    }
+}
+
+extension View {
+    func sidebarPetPicker(session: Binding<UUID?>, agentChoice: String?) -> some View {
+        modifier(SidebarRowPetPicker(session: session, agentChoice: agentChoice))
     }
 }

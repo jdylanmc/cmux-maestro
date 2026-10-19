@@ -75,6 +75,101 @@ struct SidebarPetCollectionTests {
         #expect(reopened.hasOverride(session: other))
     }
 
+    @Test func exactSessionPreferencesKeepPrecedenceResetsAndHiddenStateAcrossRestart() throws {
+        let (store, root, session, reopen) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let replacement = UUID()
+
+        #expect(store.visibleID(session: session, agentChoice: "blob") == "blob")
+        store.resetToDefault(session: session)
+        #expect(store.isDefaultChoice(session: session) && store.hasOverride(session: session))
+        #expect(store.resolvedID(session: session, agentChoice: "blob") == SidebarPetStore.defaultID)
+        #expect(reopen().resolvedID(session: session, agentChoice: "blob") == SidebarPetStore.defaultID)
+        store.clearChoice(session: session)
+        #expect(!store.hasOverride(session: session))
+        #expect(store.resolvedID(session: session, agentChoice: "blob") == "blob")
+
+        store.choose("blob", session: session)
+        #expect(store.resolvedID(session: session, agentChoice: SidebarPetStore.defaultID) == "blob")
+        store.setHidden(true, session: session)
+        #expect(store.visibleID(session: session, agentChoice: nil) == nil)
+        #expect(store.resolvedID(session: session, agentChoice: nil) == "blob")
+        let restarted = reopen()
+        #expect(restarted.isHidden(session: session))
+        #expect(restarted.visibleID(session: session, agentChoice: nil) == nil)
+        #expect(restarted.resolvedID(session: session, agentChoice: nil) == "blob")
+
+        // A replacement session in the same pane inherits nothing.
+        #expect(!restarted.isHidden(session: replacement) && !restarted.hasOverride(session: replacement))
+        #expect(restarted.visibleID(session: replacement, agentChoice: nil) == SidebarPetStore.defaultID)
+        #expect(restarted.visibleID(session: nil, agentChoice: "blob") == nil)
+
+        restarted.setHidden(false, session: session)
+        #expect(reopen().visibleID(session: session, agentChoice: nil) == "blob")
+    }
+
+    @Test func repeatedHoverLookupsPastTheSessionCacheDecodeTheSheetOnce() throws {
+        let (_, root, session, _) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SidebarPetStore(
+            defaults: UserDefaults(suiteName: "pet-decode-\(UUID().uuidString)")!,
+            uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
+            sessionDirectory: root.appendingPathComponent("sessions", isDirectory: true), sessionCacheSeconds: 0)
+        let sheet = root.appendingPathComponent("sessions/\(session.uuidString.lowercased())/blob/spritesheet.png")
+        let before = SidebarPetStore.decodeCount(sheet)
+        for index in 0..<5 {
+            let id = try #require(store.visibleID(session: session, agentChoice: "blob"))
+            #expect(id == "blob")
+            #expect(store.available(for: session).contains { $0.id == "blob" })
+            #expect(store.frame(petID: id, session: session, state: .working, index: index) != nil)
+            _ = store.topInset(petID: id, session: session)
+        }
+        #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
+    }
+
+    @Test func sheetThatFailsToDecodeAfterTheScanFailsOnceAndLeavesThePicker() throws {
+        let (_, root, session, _) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SidebarPetStore(
+            defaults: UserDefaults(suiteName: "pet-broken-\(UUID().uuidString)")!,
+            uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
+            sessionDirectory: root.appendingPathComponent("sessions", isDirectory: true), sessionCacheSeconds: 60)
+        let sheet = root.appendingPathComponent("sessions/\(session.uuidString.lowercased())/blob/spritesheet.png")
+        #expect(store.available(for: session).contains { $0.id == "blob" })
+        // The agent rewrites its sheet after the header scan; the half-written file cannot decode.
+        try Data("not an image".utf8).write(to: sheet)
+        let before = SidebarPetStore.decodeCount(sheet)
+        for index in 0..<5 {
+            _ = store.frame(petID: "blob", session: session, state: .idle, index: index)
+        }
+        #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
+        #expect(!store.available(for: session).contains { $0.id == "blob" })
+
+        try pngSheet().write(to: sheet)
+        store.refresh()
+        #expect(store.available(for: session).contains { $0.id == "blob" })
+        #expect(store.sheet(for: "blob", session: session) != nil)
+    }
+
+    @Test func choosePetRowActionIsOnlyForExactAgentSessionsAndMotionRespectsReduceMotion() {
+        var opened = 0
+        let presenter = SidebarRowMenuPresenter()
+        presenter.groups = [
+            .appearance(icon: nil, agent: true, pet: { opened += 1 }),
+            .appearance(icon: nil, agent: true),
+            .appearance(icon: nil, agent: true, child: true),
+            .appearance(icon: nil, agent: false, pet: { opened += 1 })
+        ]
+        let menus = presenter.menu().items.map { $0.submenu?.items.first { $0.title == "Choose pet…" } }
+        #expect(menus[0]?.isEnabled == true && menus[1]?.isEnabled == false && menus[2]?.isEnabled == false)
+        #expect(menus[3] == nil)
+        for item in menus.compactMap({ $0 }) { presenter.invoke(item) }
+        #expect(opened == 1)
+
+        #expect(SidebarPetView.animates(true, reduceMotion: false))
+        #expect(!SidebarPetView.animates(true, reduceMotion: true))
+    }
+
     @Test func bundledPetCannotBeRemoved() throws {
         let (store, root, _, reopen) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }

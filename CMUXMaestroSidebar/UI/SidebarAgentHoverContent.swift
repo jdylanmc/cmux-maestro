@@ -49,11 +49,16 @@ enum SidebarAgentHoverContent {
                     return result
                 }
             }
+            let state = SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree)
             return .init(
                 id: "managed-\(id)-\(generation)", category: "Agent preview", title: node.title,
-                subtitle: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree).title,
+                subtitle: state.title,
                 lines: lines,
-                notice: current ? nil : "Managed observation is stale or unavailable. Last-known metadata is not live state."
+                notice: current ? nil : "Managed observation is stale or unavailable. Last-known metadata is not live state.",
+                pet: SidebarPresentation.managedPet(node, tree: tree, now: now).map {
+                    .init(session: $0.session, choice: $0.choice, state: .resolve(
+                        visual: state, needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now)))
+                }
             )
         case .session(let id):
             guard let session = uniqueSession(id, in: tree),
@@ -114,10 +119,13 @@ enum SidebarAgentHoverContent {
             workspaceID: session.workspaceID, surfaceID: session.surfaceID
         ), copyable: true) }
         lines = Self.copyable(lines)
+        let state = SidebarPresentation.sessionState(session)
         return .init(
             id: "session-\(session.id)", category: "Agent preview", title: title,
-            subtitle: SidebarPresentation.sessionState(session).title,
-            lines: lines, notice: session.liveness == .alive ? nil : "Live session ownership is not confirmed."
+            subtitle: state.title,
+            lines: lines, notice: session.liveness == .alive ? nil : "Live session ownership is not confirmed.",
+            pet: unfocusable ? nil : .init(session: session.id, choice: session.petId, state: .resolve(
+                visual: state, needsInput: SidebarPresentation.needsInput(session.attention)))
         )
     }
 }

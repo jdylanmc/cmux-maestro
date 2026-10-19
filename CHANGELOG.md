@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Agent hover cards show the hovered session's own pet, independent of the active
+  window's footer pet (#50). Children, terminals, browsers and workspaces show none.
+  Row **Appearance > Choose pet…** opens the pet picker for that exact session. The
+  picker adds **Reset to default**, distinct from **Reset to agent's pet**, and a
+  per-session **Hide pet** / **Show pet**, persisted by session UUID.
+
 - Setup installs CMUX's Copilot hooks in a separate owned file,
   `~/.copilot/hooks/cmux-maestro-cmux-hooks.json`, with CMUX 0.65.1's exact commands (#252), so
   CMUX's own restore can bring back sessions you start. CMUX's own installer fails on Copilot's
