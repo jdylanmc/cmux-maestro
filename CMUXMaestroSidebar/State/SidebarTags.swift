@@ -34,7 +34,9 @@ nonisolated enum SidebarTagSlug {
     }
 
     static func isCanonical(_ slug: String) -> Bool {
-        !slug.isEmpty && slug.unicodeScalars.count <= maximumLength && canonical(slug) == slug
+        // Exact scalars: String equality would accept a canonically equivalent, decomposed spelling.
+        !slug.isEmpty && slug.unicodeScalars.count <= maximumLength
+            && canonical(slug).unicodeScalars.elementsEqual(slug.unicodeScalars)
     }
 
     private static func isLetterOrNumber(_ scalar: Unicode.Scalar) -> Bool {

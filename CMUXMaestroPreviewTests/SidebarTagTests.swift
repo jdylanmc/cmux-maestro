@@ -124,7 +124,8 @@ struct SidebarTagTests {
         #expect(cases.count >= 20)
         for item in cases {
             let input = try #require(item["input"]), expected = try #require(item["slug"])
-            #expect(SidebarTagSlug.canonical(input) == expected, "\(input.debugDescription)")
+            #expect(SidebarTagSlug.canonical(input).unicodeScalars.elementsEqual(expected.unicodeScalars),
+                    "\(input.debugDescription)")
             #expect(SidebarTagSlug.canonical(expected) == expected, "idempotent: \(expected)")
         }
     }
@@ -366,6 +367,36 @@ struct SidebarTagTests {
         #expect(preferences.setTagColor(.ocean, for: "new") == nil)
         #expect(preferences.tagSettings.colors["agent-0"] == nil && preferences.tagSettings.colors["new"] == .ocean)
         #expect(preferences.tagSettings.colors.count == SidebarTagSettings.maximumEntries)
+    }
+
+    @Test func decomposedSpellingsAreNotCanonical() {
+        #expect(SidebarTagSlug.isCanonical("caf\u{E9}"))
+        #expect(!SidebarTagSlug.isCanonical("cafe\u{301}"))
+        #expect(SidebarTagSlug.canonical("cafe\u{301}").unicodeScalars.elementsEqual("caf\u{E9}".unicodeScalars))
+    }
+
+    @Test func onlyAMissingSessionEntryCountsAsEnded() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let root = fixture.root.appendingPathComponent("session-state", isDirectory: true)
+        let kept = UUID(), gone = UUID()
+        try FileManager.default.createDirectory(at: root.appendingPathComponent(kept.uuidString.lowercased()),
+                                                withIntermediateDirectories: true)
+        #expect(SidebarPreferences.sessionKept(kept, under: root))
+        #expect(!SidebarPreferences.sessionKept(gone, under: root))
+        #expect(SidebarPreferences.sessionKept(gone, under: fixture.root.appendingPathComponent("absent")))
+
+        var settings = SidebarTagSettings()
+        let sessions = (0..<SidebarTagSettings.maximumEntries).map { _ in UUID() }
+        for id in sessions { settings.assignments[SidebarTagSettings.key(id)] = ["x"] }
+        try JSONEncoder().encode(settings).write(to: fixture.root.appendingPathComponent("sidebar-tags.json"))
+        // The root can be stat'd but not searched: every child lookup is denied, which proves nothing.
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path) }
+        #expect(SidebarPreferences.sessionKept(gone, under: root))
+        let preferences = preferences(fixture, retained: { SidebarPreferences.sessionKept($0, under: root) })
+        #expect(preferences.setHumanTags("new", for: UUID()) == "Tag storage is full.")
+        #expect(self.preferences(fixture).tagSettings == settings)
     }
 
     @Test func agentStoreReadsStrictlyAndAFailedReadKeepsTheLastGoodTags() throws {

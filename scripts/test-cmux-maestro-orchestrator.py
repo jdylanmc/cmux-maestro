@@ -6560,6 +6560,21 @@ class AgentTagTests(unittest.TestCase):
                 command(arguments(newcomer))
             self.assertEqual(sorted(self.stored()["sessions"]), sorted([kept, self.session]))
 
+    def test_denied_session_lookup_keeps_the_session(self):
+        keeps = CONTROLLER_API["copilot_keeps_session"]
+        root = self.home / ".copilot/session-state"
+        with patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertTrue(keeps(self.session))
+            root.mkdir(parents=True)
+            (root / self.session).mkdir()
+            self.assertTrue(keeps(self.session))
+            self.assertFalse(keeps(self.other))
+            root.chmod(0o600)
+            try:
+                self.assertTrue(keeps(self.other))
+            finally:
+                root.chmod(0o700)
+
     def test_concurrent_agents_lose_nothing(self):
         sessions = [str(uuid.uuid4()) for _ in range(6)]
         threads = [threading.Thread(target=self.run_tags, args=("add", "shared"), kwargs={"session": item})

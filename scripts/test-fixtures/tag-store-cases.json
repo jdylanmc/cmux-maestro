@@ -90,6 +90,18 @@
     {
       "name": "array",
       "raw": "[]"
+    },
+    {
+      "name": "object slug",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[{}]},\"version\":1}"
+    },
+    {
+      "name": "array slug",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[[]]},\"version\":1}"
+    },
+    {
+      "name": "decomposed slug",
+      "raw": "{\"sessions\":{\"0f8fad5b-d9cb-469f-a165-70867728950e\":[\"cafe\\u0301\"]},\"version\":1}"
     }
   ]
 }

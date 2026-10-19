@@ -289,10 +289,16 @@ final class SidebarPreferences {
 
     nonisolated static func copilotKeepsSession(_ id: UUID) -> Bool {
         guard let root = try? CopilotPaths.sessionStateRoot() else { return true }
-        var directory: ObjCBool = false
-        // No readable Copilot state folder proves nothing; keep everything.
-        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &directory), directory.boolValue else { return true }
-        return FileManager.default.fileExists(atPath: root.appendingPathComponent(id.uuidString.lowercased()).path)
+        return sessionKept(id, under: root)
+    }
+
+    /// Only a state root that is a directory, with this session's entry reported missing (ENOENT),
+    /// proves the session is gone. Any other answer, including a denied lookup, keeps it.
+    nonisolated static func sessionKept(_ id: UUID, under root: URL) -> Bool {
+        var info = stat()
+        guard lstat(root.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return true }
+        guard lstat(root.appendingPathComponent(id.uuidString.lowercased()).path, &info) != 0 else { return true }
+        return errno != ENOENT
     }
 
     func refreshTags() {

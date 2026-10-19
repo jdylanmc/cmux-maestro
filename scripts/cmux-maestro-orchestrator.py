@@ -6198,7 +6198,7 @@ def validate_tags_state(state):
         except OrchestrationError:
             valid_key = False
         if not valid_key or not isinstance(slugs, list) or not 0 < len(slugs) <= TAGS_MAX_PER_SESSION \
-                or len(set(slugs)) != len(slugs) or not all(tag_slug_valid(slug) for slug in slugs):
+                or not all(tag_slug_valid(slug) for slug in slugs) or len(set(slugs)) != len(slugs):
             raise OrchestrationError("The agent tag store has a malformed entry.")
     return state
 
@@ -6306,9 +6306,21 @@ def tags_store_snapshot(*, root=None):
 
 
 def copilot_keeps_session(session):
-    """Copilot still holds this session's state folder. A missing state root proves nothing."""
+    """Only a state-root directory whose entry for this session is missing (ENOENT) proves the
+    session is gone; any other answer, including a denied lookup, keeps it."""
     sessions = Path.home() / ".copilot/session-state"
-    return not sessions.is_dir() or (sessions / session).is_dir()
+    try:
+        if not stat.S_ISDIR(os.lstat(sessions).st_mode):
+            return True
+    except OSError:
+        return True
+    try:
+        os.lstat(sessions / session)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def tags_command(args, *, root=None):
