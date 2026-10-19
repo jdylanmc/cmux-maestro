@@ -489,7 +489,7 @@ class ProofTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, routes)
         extension = self.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         config = {"version": 1, "routes": str(routes), "extension": str(extension)}
