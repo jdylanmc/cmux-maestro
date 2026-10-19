@@ -1199,15 +1199,13 @@ struct SidebarClarityTests {
         }
     }
 
-    @Test func blockingUnknownAndDegradedReasonsAreNeverMovedIntoDetailsOnly() {
+    @Test func blockingAndUnknownReasonsStayInlineWithoutDegradedProse() {
         let permission = signal(.permission)
         let answer = signal(.answer)
-        let inline = SidebarPresentation.attention([permission, answer], state: .blocked, degraded: true)
-        #expect(inline.contains("Waiting for permission"))
-        #expect(!inline.contains("Waiting for answer"))
-        #expect(inline.contains("Attention evidence incomplete"))
-        #expect(SidebarPresentation.attention([], state: .blocked, degraded: false) == ["Blocking reason unavailable"])
-        #expect(SidebarPresentation.attention([signal(.turnFinished)], state: .idle, degraded: false).isEmpty)
+        let inline = SidebarPresentation.attention([permission, answer], state: .blocked)
+        #expect(inline == ["Waiting for permission"])
+        #expect(SidebarPresentation.attention([], state: .blocked) == ["Blocking reason unavailable"])
+        #expect(SidebarPresentation.attention([signal(.turnFinished)], state: .idle).isEmpty)
         #expect(SidebarPresentation.attentionDetails([signal(.turnFinished)]).contains {
             $0.value == "Main turn only; background work may continue."
         })

@@ -783,7 +783,7 @@ enum SidebarPresentation {
         complete ? "No visible child tasks" : "Child history unavailable"
     }
 
-    static func attention(_ signals: [AgentAttention], state: AgentWorkState, degraded: Bool) -> [String] {
+    static func attention(_ signals: [AgentAttention], state: AgentWorkState) -> [String] {
         var result = AgentAttentionKind.allCases.compactMap { kind -> String? in
             guard kind != .turnFinished, kind != .answer else { return nil }
             // A recovered error on an agent that is still working is noise; the state already says so.
@@ -795,7 +795,6 @@ enum SidebarPresentation {
         if state == .blocked && !signals.contains(where: { $0.kind.isBlocking }) {
             result.append("Blocking reason unavailable")
         }
-        if degraded { result.append("Attention evidence incomplete") }
         return result
     }
 

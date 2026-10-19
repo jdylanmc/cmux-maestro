@@ -627,7 +627,9 @@ actor CopilotSessionReader {
         // polling another one; stationary evicted prefixes must not spin fast.
         if discovery?.finished == true && cohortFinished && cycleOverflowed { pendingHistory = false }
         finishDiscoveryCycle()
-        return snapshot(now: batch.now, observations: batch.observations, issues: issues)
+        // Each frozen prefix ends after `batch.now`, so it can hold events stamped later.
+        // Stamp the snapshot after every read; otherwise those events fail validation.
+        return snapshot(now: max(batch.now, clock()), observations: batch.observations, issues: issues)
     }
 
     // Scheduling only: initial/changed index sweeps and retained-tail deltas.

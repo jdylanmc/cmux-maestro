@@ -2333,11 +2333,9 @@ private struct CopilotSessionContents: View {
     @Environment(\.sidebarContentWidth) private var contentWidth
 
     var body: some View {
-        if !SidebarPresentation.attention(
-            session.attention, state: session.state, degraded: session.attentionDegraded
-        ).isEmpty {
+        if !SidebarPresentation.attention(session.attention, state: session.state).isEmpty {
             SidebarActionLayout {
-                AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
+                AttentionSummary(attention: session.attention, state: session.state)
             }
             .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
@@ -2549,7 +2547,8 @@ struct SidebarInternalTaskRow: View {
     private var taskDetail: String {
         let node = row.node
         var parts = [SidebarPresentation.internalTaskState(node).title]
-        parts += SidebarPresentation.attention(node.attention, state: node.state, degraded: node.attentionDegraded)
+        parts += SidebarPresentation.attention(node.attention, state: node.state)
+        if node.attentionDegraded { parts.append("Attention evidence incomplete") }
         if node.ancestryUnresolved { parts.append("Unresolved ancestry") }
         if node.historyAncestor { parts.append("Retained for descendant context") }
         if let summary = row.collapsedSummary { parts += summary.lines }
@@ -2728,16 +2727,20 @@ private struct CopilotWorkRow: View {
                         .help("Unresolved ancestry")
                         .accessibilityLabel("Unresolved ancestry")
                 }
+                if node.attentionDegraded {
+                    Image(systemName: "exclamationmark.circle")
+                        .sidebarFont(.caption2).foregroundStyle(SidebarTone.attention.color)
+                        .help("Attention evidence incomplete")
+                        .accessibilityLabel("Attention evidence incomplete")
+                }
                 if hasOutcomeActions {
                     DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                 }
             }
             .frame(minHeight: density.rowHeight)
             .sidebarRowActions(title: node.name, groups: actions)
-            if !SidebarPresentation.attention(
-                node.attention, state: node.state, degraded: node.attentionDegraded
-            ).isEmpty {
-                AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
+            if !SidebarPresentation.attention(node.attention, state: node.state).isEmpty {
+                AttentionSummary(attention: node.attention, state: node.state)
             }
         }
 
@@ -2995,11 +2998,10 @@ private struct TaskboardAgentCard: View {
 private struct AttentionSummary: View {
     let attention: [AgentAttention]
     let state: AgentWorkState
-    let degraded: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(SidebarPresentation.attention(attention, state: state, degraded: degraded), id: \.self) { text in
+            ForEach(SidebarPresentation.attention(attention, state: state), id: \.self) { text in
                 let asking = attention.contains(where: { $0.kind.isBlocking })
                     && !attention.contains(where: { $0.kind == .error }) && state != .failed
                 Label(text, systemImage: asking ? "questionmark.circle" : state == .blocked ? "pause.circle" : "exclamationmark.circle")
