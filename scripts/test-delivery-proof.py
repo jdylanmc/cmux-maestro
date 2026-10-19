@@ -3406,6 +3406,8 @@ class LifecycleFailureTests(unittest.TestCase):
             (["copilot"], {}, "default", "parent-launch-flags"),
             (None, {}, "default", "parent-unverified"),
             (["copilot", "--yolo", "--deny-tool=unrecorded"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--resume", "--deny-tool=unrecorded", "--yolo"], {}, "default", "parent-launch-flags"),
+            (["copilot", "-n", "--yolo"], {}, "default", "parent-launch-flags"),
         ):
             with self.subTest(argv=argv, assignment=assignment):
                 self.state = copy.deepcopy(initial)
@@ -3421,8 +3423,7 @@ class LifecycleFailureTests(unittest.TestCase):
                 self.assertEqual(child["permissionMode"], mode)
                 self.assertEqual(child["toolPolicy"]["deny"], ["web"])
                 self.assertEqual(self.state["nodes"][parent_id]["permissionMode"],
-                                 "yolo" if argv and argv[-1] != "--deny-tool=unrecorded" and "--yolo" in argv
-                                 else "default")
+                                 "yolo" if assignment.get("yolo") is False else mode)
                 read.assert_called_once_with(12346)
                 if mode == "yolo":
                     child.update(phase="turn-running", surfaceId=str(uuid.uuid4()),

@@ -1957,8 +1957,10 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
         parse = CONTROLLER_API["launch_flags_allow_all"]
         for flags in (
             ["--yolo"], ["--allow-all"], ["--allow-all=true"], ["--yolo=true"],
-            ["--allow-all-tools", "--allow-all-paths"],
-            ["--allow-all-paths=true", "--allow-all-tools=true"],
+            ["--allow-all-tools", "--allow-all-paths", "--allow-all-urls"],
+            ["--allow-all-paths=true", "--allow-all-tools=true", "--allow-all-urls=true"],
+            ["--resume", "--yolo"], ["-r", "--allow-all"], ["--share-gist", "--yolo"],
+            ["--allow-tool", "--yolo"],
         ):
             with self.subTest(flags=flags):
                 self.assertTrue(parse(["copilot", *flags]))
@@ -1968,6 +1970,10 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             ["--allow-all", "--allow-all=false"], ["--", "--yolo"],
             ["--interactive", "--yolo"], ["--prompt=--allow-all"],
             ["--interactive", "a task mentions --allow-all"], ["--yolo-extra"],
+            ["--allow-all-tools", "--allow-all-paths"],
+            ["-n", "--yolo"], ["--stream", "--yolo"], ["--attachment", "--allow-all"],
+            ["--new-value-option", "--yolo"], ["--yolo", "--assisted-approval"],
+            ["--yolo", "--excluded-tools=write"], ["--yolo", "--disallow-temp-dir"],
         ):
             with self.subTest(flags=flags):
                 self.assertFalse(parse(["copilot", *flags]))
@@ -1978,6 +1984,8 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
         self.assertTrue(parse(["copilot", "--yolo", "--deny-tool=shell(rm)"], ["shell(rm)"]))
         self.assertFalse(parse(["copilot", "--yolo", "--deny-tool", "web", "shell(rm)"], ["web"]))
         self.assertFalse(parse(["copilot", "--yolo", "--deny-url=example.test"]))
+        self.assertFalse(parse(["copilot", "--yolo", "--resume", "--deny-tool", "shell(rm)"]))
+        self.assertFalse(parse(["copilot", "--resume", "--deny-tool=web", "--yolo"]))
 
     def test_process_arguments_keep_boundaries_and_exclude_environment(self):
         parse = CONTROLLER_API["darwin_process_arguments"]
