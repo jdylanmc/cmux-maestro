@@ -1900,7 +1900,7 @@ class BornFixture:
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
-               env=None, repeat=1, sessions=(), **request):
+               env=None, repeat=1, sessions=(), provider_flags=(), **request):
         surface = surface or str(uuid.uuid4())
         if surface not in self.h.cmux_data()["surfaces"]:
             self.h.add_surface(surface)
@@ -1912,7 +1912,7 @@ class BornFixture:
             fcntl.flock(lifetime, fcntl.LOCK_SH)
             completed = subprocess.run(
                 [sys.executable, str(self.provider), str(self.h.driver), json.dumps(body), json.dumps(overrides),
-                 str(repeat), json.dumps(list(sessions))],
+                 str(repeat), json.dumps(list(sessions)), *provider_flags],
                 env={**self.h.env, "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
                 pass_fds=(lifetime.fileno(),), capture_output=True, text=True, timeout=20,
             )
@@ -1952,8 +1952,73 @@ class BornFixture:
 
 
 
+class LaunchFlagPermissionsTests(unittest.TestCase):
+    def test_only_complete_positive_launch_flags_grant_allow_all(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        for flags in (
+            ["--yolo"], ["--allow-all"], ["--allow-all=true"], ["--yolo=true"],
+            ["--allow-all-tools", "--allow-all-paths"],
+            ["--allow-all-paths=true", "--allow-all-tools=true"],
+        ):
+            with self.subTest(flags=flags):
+                self.assertTrue(parse(["copilot", *flags]))
+        for flags in (
+            [], ["--allow-all-tools"], ["--allow-all-paths"], ["--yolo=false"],
+            ["--allow-all=0"], ["--allow-all=false"], ["--allow-all-tools=false", "--allow-all-paths"],
+            ["--allow-all", "--allow-all=false"], ["--", "--yolo"],
+            ["--interactive", "--yolo"], ["--prompt=--allow-all"],
+            ["--interactive", "a task mentions --allow-all"], ["--yolo-extra"],
+        ):
+            with self.subTest(flags=flags):
+                self.assertFalse(parse(["copilot", *flags]))
+
+    def test_unrecorded_deny_flags_do_not_widen_the_parent(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        self.assertFalse(parse(["copilot", "--yolo", "--deny-tool", "shell(rm)"]))
+        self.assertTrue(parse(["copilot", "--yolo", "--deny-tool=shell(rm)"], ["shell(rm)"]))
+        self.assertFalse(parse(["copilot", "--yolo", "--deny-url=example.test"]))
+
+    def test_process_arguments_keep_boundaries_and_exclude_environment(self):
+        parse = CONTROLLER_API["darwin_process_arguments"]
+        raw = (int(3).to_bytes(4, sys.byteorder, signed=True)
+               + b"/bin/copilot\0\0copilot\0--interactive\0private text --yolo\0TOKEN=--allow-all\0")
+        self.assertEqual(parse(raw), ["copilot", "--interactive", "private text --yolo"])
+        for invalid in (b"", b"\0" * 8, raw[:25], raw[:-len(b"TOKEN=--allow-all\0") - 1]):
+            with self.subTest(raw=invalid):
+                self.assertIsNone(parse(invalid))
+
+    def test_pid_reuse_or_unavailable_argv_never_proves_allow_all(self):
+        observe = CONTROLLER_API["observe_launch_permissions"]
+        actor = {"providerProcess": {"pid": 123, "start": "original"}, "toolPolicy": {"deny": []}}
+        for starts, argv, expected in (
+            (["original", "original"], ["copilot", "--yolo"], ("yolo", "launch-flags")),
+            (["original", "original"], ["copilot"], ("default", "launch-flags")),
+            (["reused"], ["copilot", "--yolo"], ("default", "unverified")),
+            (["original", "reused"], ["copilot", "--yolo"], ("default", "unverified")),
+            (["original", "original"], None, ("default", "unverified")),
+        ):
+            with self.subTest(starts=starts, argv=argv):
+                read = unittest.mock.Mock(return_value=argv)
+                with patch.dict(observe.__globals__, {
+                    "process_start": unittest.mock.Mock(side_effect=starts),
+                    "process_arguments": read,
+                }):
+                    self.assertEqual(observe(actor), {"permissionMode": expected[0], "permissionSource": expected[1]})
+                self.assertLessEqual(read.call_count, 1)
+
+
 class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
     """Copilot sessions started in CMUX enroll as their own root (ADR 0025)."""
+
+    def test_launch_flags_record_allow_all_without_retaining_argv(self):
+        outcome = self.enroll(provider_flags=["--allow-all", "--interactive", "private-argv-sentinel"])
+        self.assertTrue(outcome["ok"], outcome)
+        node = self.h.state()["nodes"][outcome["nodeId"]]
+        self.assertEqual(node["permissionMode"], "yolo")
+        self.assertEqual(node["permissionSource"], "launch-flags")
+        for directory in (self.h.root, self.routes):
+            for path in directory.rglob("*.json"):
+                self.assertNotIn("private-argv-sentinel", path.read_text(), str(path))
 
     def test_session_born_in_cmux_becomes_its_own_root_with_recorded_account(self):
         outcome = self.enroll()
