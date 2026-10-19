@@ -602,11 +602,11 @@ nonisolated enum CopilotWorktreeResolver {
     }
 
     private static func linked(file: String, root: String) -> CopilotWorktreeEvidence {
-        guard let text = readSmallFile(file), text.hasPrefix("gitdir:") else { return .unknown }
-        let line = text.dropFirst(7).split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-        let trimmed = line.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, !trimmed.utf8.contains(0),
-              let gitDirectory = canonical(trimmed.hasPrefix("/") ? trimmed : join(root, trimmed)),
+        // As Git reads a gitfile: exact `gitdir: ` prefix, only trailing CR/LF removed.
+        guard let text = readSmallFile(file).flatMap(gitPathFile), text.hasPrefix("gitdir: ") else { return .unknown }
+        let path = String(text.dropFirst(8))
+        guard !path.isEmpty,
+              let gitDirectory = canonical(path.hasPrefix("/") ? path : join(root, path)),
               isDirectory(gitDirectory) else { return .unknown }
         return verified(gitDirectory: gitDirectory, root: root)
     }
@@ -619,8 +619,7 @@ nonisolated enum CopilotWorktreeResolver {
         var isLinked = false
         var entry = stat()
         if lstat(join(gitDirectory, "commondir"), &entry) == 0 {
-            guard let text = readSmallFile(join(gitDirectory, "commondir")),
-                  let line = text.split(whereSeparator: \.isNewline).first.map(String.init),
+            guard let line = readSmallFile(join(gitDirectory, "commondir")).flatMap(gitPathFile),
                   !line.isEmpty,
                   let resolved = canonical(line.hasPrefix("/") ? line : join(gitDirectory, line)),
                   isDirectory(resolved) else { return .unknown }
@@ -654,6 +653,16 @@ nonisolated enum CopilotWorktreeResolver {
         guard [40, 64].contains(line.utf8.count),
               line.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
         return .detached(String(line.prefix(7)))
+    }
+
+    /// A one-path Git file (`.git` gitfile, `commondir`): Git drops only trailing CR and LF, so
+    /// spaces and tabs are part of the path. Any other line break makes it unreadable here.
+    static func gitPathFile(_ text: String) -> String? {
+        var scalars = Substring(text).unicodeScalars
+        while let last = scalars.last, last == "\n" || last == "\r" { scalars.removeLast() }
+        let value = String(scalars)
+        guard !value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) else { return nil }
+        return value
     }
 
     private static func looksLikeGitDirectory(_ path: String) -> Bool {

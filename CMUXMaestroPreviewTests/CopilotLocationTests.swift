@@ -379,6 +379,29 @@ struct CopilotWorktreeResolverTests: Sendable {
         #expect(CMUXMaestroPreview.CopilotSessionName.parse(yaml) == "x y")
     }
 
+    /// Git keeps spaces in a gitfile path and drops only trailing CR/LF; so does the resolver.
+    @Test func gitfilePathKeepsTrailingSpacesLikeGit() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        try scratch.write("ref: refs/heads/spaced\n", "admin /HEAD")
+        try scratch.write("ref: refs/heads/sibling\n", "admin/HEAD")
+        try scratch.write("gitdir: \(scratch.root.path)/admin \r\n", "tree/.git")
+        guard case .verified(let tree) = resolve(scratch.root.appendingPathComponent("tree")) else {
+            Issue.record("gitfile with a trailing-space path must verify that directory"); return
+        }
+        #expect(tree.head == .branch("spaced"))
+        try scratch.write("gitdir: \(scratch.root.path)/admin\n", "other/.git")
+        guard case .verified(let other) = resolve(scratch.root.appendingPathComponent("other")) else {
+            Issue.record("control gitfile must verify"); return
+        }
+        #expect(other.head == .branch("sibling") && other.key != tree.key)
+        // Without the exact `gitdir: ` prefix, Git refuses the file; so do we.
+        try scratch.write("gitdir:\(scratch.root.path)/admin\n", "loose/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("loose")) == .unknown)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a b \t\r\n\n") == "a b \t")
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a\nb\n") == nil)
+    }
+
     @Test func currentWorktreeRecordRoundTripsAndRejectsDeviations() throws {
         let session = UUID()
         let identity = CMUXMaestroPreview.CopilotWorktreeIdentity(
