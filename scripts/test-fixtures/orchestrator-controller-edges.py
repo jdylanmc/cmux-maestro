@@ -11,7 +11,7 @@ from pathlib import Path
 def fixture_edges(environment, driver):
     """Fixture clock and executable edges; the shipped controller reads none of these variables."""
     edges = {"CONTROLLER_ENTRYPOINT": Path(driver)}
-    for name in ("STARTUP_SECONDS", "HEARTBEAT_SECONDS", "ARCHIVE_SECONDS", "BORN_ENROLL_WINDOW_SECONDS"):
+    for name in ("STARTUP_SECONDS", "HEARTBEAT_SECONDS", "ARCHIVE_SECONDS", "BORN_ENROLL_LOCK_SECONDS"):
         if f"FAKE_{name}" in environment:
             edges[name] = float(environment[f"FAKE_{name}"])
     if "FAKE_GIT" in environment:

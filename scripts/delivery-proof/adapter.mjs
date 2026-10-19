@@ -692,12 +692,35 @@ const LAUNCHER_INPUTS = ["CMUX_MAESTRO_MESSAGE_ROOT", "CMUX_MAESTRO_MESSAGE_PEER
   "CMUX_MAESTRO_WORKER_ID", "CMUX_MAESTRO_EXECUTION_MODE"];
 // Reasons the controller may give; anything else is reported generically.
 export const ENROLLMENT_REASONS = new Set([
-  "integration-not-installed", "provider-process-unverified", "session-started-before-install",
+  "integration-not-installed", "provider-process-unverified", "session-not-persisted", "enrollment-busy",
   "cmux-identity-unverified", "surface-owned", "provider-already-enrolled",
   "session-previously-managed", "capacity-unavailable", "account-unverified", "enrollment-failed",
-  "enrolled-runtime-unavailable", "enrollment-window-passed",
-  "surface-mismatch", "account-mismatch", "account-unrecorded", "session-live-or-uncertain", "session-ended",
+  "enrolled-runtime-unavailable", "enrolled-node-unavailable",
+  "surface-mismatch", "account-mismatch", "account-unrecorded", "session-live-or-uncertain",
 ]);
+// The controller records no decision for these; the session tries again at its next prompt.
+export const RETRIED_AT_NEXT_PROMPT = new Set(["session-not-persisted", "enrollment-busy"]);
+// What maestro_readiness says, in plain words, for each reason.
+export const ENROLLMENT_MESSAGES = {
+  "enrollment-pending": "Maestro is enrolling this session.",
+  "integration-not-installed": "Maestro's production integration is not installed.",
+  "provider-process-unverified": "Maestro could not verify this session's Copilot process.",
+  "session-not-persisted": "Copilot has not saved this session yet. Maestro tries again at the next prompt.",
+  "enrollment-busy": "Another Maestro enrollment was still running. Maestro tries again at the next prompt.",
+  "cmux-identity-unverified": "CMUX could not confirm that this terminal is the tab its environment names.",
+  "surface-owned": "Another Maestro session, launch, or kept tab owns this CMUX tab.",
+  "provider-already-enrolled": "Another Maestro session is still recorded for this Copilot process.",
+  "session-previously-managed": "Maestro launched this session; it comes back only through its own resume command.",
+  "capacity-unavailable": "Maestro is at its session limit for this workspace or this Mac.",
+  "account-unverified": "Copilot did not report this session's GitHub account in time.",
+  "enrollment-failed": "Maestro could not finish enrolling this session.",
+  "enrolled-runtime-unavailable": "Maestro enrolled this session, but its messaging did not start here.",
+  "enrolled-node-unavailable": "This session was enrolled, but its Maestro record is no longer current.",
+  "surface-mismatch": "Maestro recorded this session in a different CMUX tab.",
+  "account-mismatch": "Maestro recorded this session with a different GitHub account.",
+  "account-unrecorded": "Maestro's record of this session has no GitHub account.",
+  "session-live-or-uncertain": "Another process may still hold this Copilot session.",
+};
 const defaultController = () => path.join(maestroSupport, "Orchestration/bin/cmux-maestro-orchestrator");
 
 function cmuxEnvironment(environment) {
@@ -722,12 +745,13 @@ async function invokeEnroll(request, controller, signal) {
   }
 }
 
-// Born managed (ADR 0025): a Copilot session that starts in a CMUX terminal with the
-// production integration installed and no launcher inputs enrolls itself as its own root.
-// Tools are declared at join, so managed tools refuse until enrollment succeeds.
+// Born managed (ADR 0025): every Copilot session in a CMUX terminal with the production
+// integration installed and no launcher inputs enrolls itself when this extension joins it:
+// new, resumed, relaunched, or already running (joined by an extension reload). Tools are declared
+// at join, so managed tools refuse until enrollment succeeds. One enrollment runs at a time.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
   diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
-  endSession = recordSessionEnd, endGate = sessionEndGate,
+  endSession = recordSessionEnd, endGate = sessionEndGate, promptWaitMs = 10000,
   enroll = (request, path) => invokeEnroll(request, path, signal), startManagedRuntime = start }) {
   const placement = cmuxEnvironment(environment);
   if (placement === null || LAUNCHER_INPUTS.some(key => environment[key])) return null;
@@ -740,7 +764,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
   const delegates = {};
   let session;
   const refusal = () => ({ resultType: "failure",
-    textResultForLlm: `Maestro management is unavailable for this session (${state.reason}).` +
+    textResultForLlm: `Maestro management is unavailable for this session (${state.reason}). ` +
+      ENROLLMENT_MESSAGES[state.reason] +
       (state.recordedAccount ? ` It was recorded with account ${state.recordedAccount}; sign in to that account and restart.` : "") +
       " No fallback was used." });
   const tools = managedToolSpecs().map(spec => ({ ...spec,
@@ -750,7 +775,7 @@ export async function startBornManaged({ joinSession, environment = process.env,
     } }));
   tools.push({
     name: "maestro_readiness",
-    description: "Read whether this session is born managed by Maestro, or why not. No enrollment, retry, peer messaging, or lifecycle authority.",
+    description: "Read whether this session is managed by Maestro, or why not, in plain words. No enrollment, retry, peer messaging, or lifecycle authority.",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     handler: async (args, invocation) => {
       try {
@@ -765,12 +790,12 @@ export async function startBornManaged({ joinSession, environment = process.env,
           managed: enrolled
             ? { status: "enrolled", origin: "born-managed", nodeId: state.nodeId, generation: state.generation }
             : { status: state.status === "pending" ? "pending" : "unavailable", origin: "born-managed",
-              reason: state.reason,
+              reason: state.reason, message: ENROLLMENT_MESSAGES[state.reason],
               ...(state.recordedAccount ? { recordedAccount: { login: state.recordedAccount, host: "github.com" } } : {}) },
           capabilities: {
             scope: "this-extension", readiness: true, selfSessionIdentity: true,
             managedIdentity: enrolled, peerDiscovery: enrolled, peerMessaging: enrolled,
-            spawn: enrolled, close: enrolled, inPlaceEnrollment: false,
+            spawn: enrolled, close: enrolled, inPlaceEnrollment: true,
           },
         });
       } catch {
@@ -779,68 +804,91 @@ export async function startBornManaged({ joinSession, environment = process.env,
       }
     },
   });
+
+  // One attempt: the session's own account, the controller's decision, then this runtime.
+  const attempt = async () => {
+    // Unverified accounts still reach the controller, as null, so the refusal is recorded for this
+    // provider and a later extension reload cannot enroll it.
+    let account = { login: null, host: null };
+    try {
+      const auth = await Promise.race([session.rpc.gitHubAuth.getStatus(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), statusTimeoutMs).unref?.())]);
+      requireCondition(auth?.isAuthenticated === true && typeof auth.login === "string" &&
+        /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
+        ["github.com", "https://github.com"].includes(auth.host));
+      account = { login: auth.login, host: auth.host };
+    } catch {
+      signal?.throwIfAborted();
+    }
+    let enrolled;
+    try {
+      enrolled = await enroll({ ...placement, pid: providerPid, ...account }, controller);
+      requireCondition(account.login !== null);
+      // A committed enrollment may report a deferred projection or routes it could not retire.
+      exactKeys(enrolled, ["ok", "nodeId", "workspaceId", "sessionId", "generation", "routes", "peer",
+        ...["projection", "routesNotRetired"].filter(key => Object.hasOwn(enrolled, key))]);
+      requireCondition(UUID.test(enrolled.nodeId) && enrolled.sessionId === sessionId &&
+        enrolled.workspaceId === placement.workspaceId && Number.isSafeInteger(enrolled.generation) &&
+        enrolled.generation > 0 && typeof enrolled.routes === "string" && MANAGED_PEER.test(enrolled.peer));
+    } catch (error) {
+      signal?.throwIfAborted();
+      // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
+      const reason = account.login === null ? "account-unverified"
+        : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed";
+      state = { status: RETRIED_AT_NEXT_PROMPT.has(reason) ? "pending" : "unavailable", reason,
+        ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };
+      return undefined;
+    }
+    try {
+      const listener = await startManagedRuntime({
+        root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener,
+        expected: { workspaceId: enrolled.workspaceId, sessionId, generation: enrolled.generation,
+          nodeId: enrolled.nodeId, controller },
+        endSession, endGate,
+        joinSession: async (config) => {
+          for (const tool of config.tools) delegates[tool.name] = tool.handler;
+          if (config.hooks?.onSessionEnd) delegates.onSessionEnd = config.hooks.onSessionEnd;
+          return session;
+        },
+      });
+      state = { status: "enrolled", nodeId: enrolled.nodeId, generation: enrolled.generation };
+      return listener;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      // The controller enrolled this session; only this extension's runtime failed to start.
+      state = { status: "unavailable", reason: "enrolled-runtime-unavailable" };
+      return undefined;
+    }
+  };
+  let inFlight = null;
+  const enrollOnce = () => {
+    inFlight ??= attempt().finally(() => { inFlight = null; });
+    return inFlight;
+  };
+
   signal?.throwIfAborted();
   // Hooks are declared at join too. SessionEnd reaches the runtime's observer as soon as a
   // validated enrollment installed it, even if the runtime then failed: the human's exit must
-  // still be recorded. Tools stay gated on a fully enrolled runtime.
-  session = await joinSession({ tools, hooks: { onSessionEnd: async (input, invocation) =>
-    delegates.onSessionEnd?.(input, invocation) } });
+  // still be recorded. Tools stay gated on a fully enrolled runtime. A refusal the controller did
+  // not record (the session was not saved yet, or another enrollment was running) is tried again
+  // when the human next submits a prompt; the prompt itself is never read.
+  session = await joinSession({ tools, hooks: {
+    onSessionEnd: async (input, invocation) => delegates.onSessionEnd?.(input, invocation),
+    onUserPromptSubmitted: async () => {
+      if (state.status !== "pending" || !RETRIED_AT_NEXT_PROMPT.has(state.reason)) return undefined;
+      let timer;
+      await Promise.race([enrollOnce().catch(() => {}),
+        new Promise(resolve => { timer = setTimeout(resolve, promptWaitMs); })]);
+      clearTimeout(timer);
+      return undefined;
+    },
+  } });
   signal?.throwIfAborted();
   requireCondition(session?.sessionId === sessionId);
   onJoined?.(session);  // Beats need only the joined session, not enrollment.
   if (state.status !== "pending") return { session };
-  // Unverified accounts still reach the controller, as null, so the refusal is recorded for this
-  // provider and a later extension reload cannot enroll it.
-  let account = { login: null, host: null };
-  try {
-    const auth = await Promise.race([session.rpc.gitHubAuth.getStatus(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), statusTimeoutMs).unref?.())]);
-    requireCondition(auth?.isAuthenticated === true && typeof auth.login === "string" &&
-      /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
-      ["github.com", "https://github.com"].includes(auth.host));
-    account = { login: auth.login, host: auth.host };
-  } catch {
-    signal?.throwIfAborted();
-  }
-  let enrolled;
-  try {
-    enrolled = await enroll({ ...placement, pid: providerPid, ...account }, controller);
-    requireCondition(account.login !== null);
-    // A committed enrollment may report a deferred projection or routes it could not retire.
-    exactKeys(enrolled, ["ok", "nodeId", "workspaceId", "sessionId", "generation", "routes", "peer",
-      ...["projection", "routesNotRetired"].filter(key => Object.hasOwn(enrolled, key))]);
-    requireCondition(UUID.test(enrolled.nodeId) && enrolled.sessionId === sessionId &&
-      enrolled.workspaceId === placement.workspaceId && Number.isSafeInteger(enrolled.generation) &&
-      enrolled.generation > 0 && typeof enrolled.routes === "string" && MANAGED_PEER.test(enrolled.peer));
-  } catch (error) {
-    signal?.throwIfAborted();
-    // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
-    state = { status: "unavailable", reason: account.login === null ? "account-unverified"
-      : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed",
-      ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };
-    return { session };
-  }
-  let listener;
-  try {
-    listener = await startManagedRuntime({
-      root: enrolled.routes, peer: enrolled.peer, managed: true, diagnostic, signal, onListener,
-      expected: { workspaceId: enrolled.workspaceId, sessionId, generation: enrolled.generation,
-        nodeId: enrolled.nodeId, controller },
-      endSession, endGate,
-      joinSession: async (config) => {
-        for (const tool of config.tools) delegates[tool.name] = tool.handler;
-        if (config.hooks?.onSessionEnd) delegates.onSessionEnd = config.hooks.onSessionEnd;
-        return session;
-      },
-    });
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    // The controller enrolled this session; only this extension's runtime failed to start.
-    state = { status: "unavailable", reason: "enrolled-runtime-unavailable" };
-    return { session };
-  }
-  state = { status: "enrolled", nodeId: enrolled.nodeId, generation: enrolled.generation };
-  return { session, listener };
+  const listener = await enrollOnce();
+  return listener === undefined ? { session } : { session, listener };
 }
 
 export async function startReadiness({ joinSession, environment = process.env, signal }) {

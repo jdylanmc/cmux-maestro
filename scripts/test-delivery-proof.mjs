@@ -10,7 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
+  ENROLLMENT_MESSAGES, createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
   startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
 
@@ -2568,6 +2568,8 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
   };
   const born = await startBornManaged({
     environment: env, parentPid, controller: "/synthetic/controller",
+    // A listener started by a later attempt (at a prompt) is closed with the fixture too.
+    onListener: (listener) => { if (!f.adapters.includes(listener)) f.adapters.push(listener); },
     ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
     ...(startManagedRuntime === undefined ? {} : { startManagedRuntime }),
     endGate,
@@ -2590,7 +2592,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
         generation: own.generation, routes: f.root, peer: own.peer };
     },
   });
-  if (born?.listener) f.adapters.push(born.listener);
+  if (born?.listener && !f.adapters.includes(born.listener)) f.adapters.push(born.listener);
   return { ...f, own, env, born, tools, hooks, calls, session, endGate };
 }
 
@@ -2609,7 +2611,7 @@ test("born managed: a CMUX session enrolls itself and gains the managed tools", 
   assert.equal(report.status, "managed");
   assert.deepEqual(report.managed, { status: "enrolled", origin: "born-managed", nodeId: f.own.nodeId, generation: 1 });
   assert.equal(report.capabilities.spawn, true);
-  assert.equal(report.capabilities.inPlaceEnrollment, false);
+  assert.equal(report.capabilities.inPlaceEnrollment, true);
   const identity = JSON.parse(await f.tools.maestro_identity({}));
   assert.deepEqual(identity, { nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId,
     generation: 1, account: { login: "human-account", host: "https://github.com" } });
@@ -2620,14 +2622,15 @@ test("born managed: a CMUX session enrolls itself and gains the managed tools", 
 test("born managed: a refused enrollment stays unmanaged with one stable reason", async (t) => {
   for (const [thrown, reason] of [
     [Object.assign(new Error("private detail"), { reason: "capacity-unavailable" }), "capacity-unavailable"],
-    [Object.assign(new Error("x"), { reason: "session-started-before-install" }), "session-started-before-install"],
+    [Object.assign(new Error("x"), { reason: "enrolled-node-unavailable" }), "enrolled-node-unavailable"],
     [Object.assign(new Error("x"), { reason: "invented" }), "enrollment-failed"],
     [new Error("private detail"), "enrollment-failed"],
   ]) {
     const f = await bornFixture(t, { enroll: async () => { throw thrown; } });
     const report = await readiness(f);
     assert.equal(report.status, "diagnostic-only");
-    assert.deepEqual(report.managed, { status: "unavailable", origin: "born-managed", reason });
+    assert.deepEqual(report.managed, { status: "unavailable", origin: "born-managed", reason,
+      message: ENROLLMENT_MESSAGES[reason] });
     assert.equal(JSON.stringify(report).includes("private detail"), false);
     for (const name of ["maestro_peers", "maestro_identity", "maestro_spawn", "maestro_close", "maestro_send"]) {
       const result = await f.tools[name]({});
@@ -2639,13 +2642,48 @@ test("born managed: a refused enrollment stays unmanaged with one stable reason"
   }
 });
 
+test("born managed: an unsaved session is enrolled once at the next prompt, never concurrently", async (t) => {
+  let refuse = true;
+  let release;
+  const f = await bornFixture(t, { enroll: async (request) => {
+    if (refuse) throw Object.assign(new Error("x"), { reason: "session-not-persisted" });
+    await new Promise(resolve => { release = resolve; });
+    return { ok: true, nodeId: f.own.nodeId, workspaceId: request.workspaceId, sessionId: request.sessionId,
+      generation: 1, routes: f.root, peer: f.own.peer };
+  } });
+  assert.deepEqual((await readiness(f)).managed, { status: "pending", origin: "born-managed",
+    reason: "session-not-persisted", message: ENROLLMENT_MESSAGES["session-not-persisted"] });
+  assert.match((await f.tools.maestro_send({})).textResultForLlm, /tries again at the next prompt/);
+  refuse = false;
+  // Two prompts while the controller works: one more enrollment, and the prompt text is never read.
+  const prompts = [f.hooks.onUserPromptSubmitted({ prompt: "PRIVATE" }, { sessionId: f.own.sessionId }),
+    f.hooks.onUserPromptSubmitted({ prompt: "PRIVATE" }, { sessionId: f.own.sessionId })];
+  await new Promise(resolve => setTimeout(resolve, 20));
+  release();
+  assert.deepEqual(await Promise.all(prompts), [undefined, undefined]);
+  assert.equal(f.calls.enroll.length, 2);
+  assert.equal(JSON.stringify(f.calls.enroll).includes("PRIVATE"), false);
+  assert.equal((await readiness(f)).status, "managed");
+  await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 2);
+});
+
+test("born managed: a recorded refusal is never tried again at a prompt", async (t) => {
+  const f = await bornFixture(t, { enroll: async () => {
+    throw Object.assign(new Error("x"), { reason: "capacity-unavailable" }); } });
+  await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 1);
+  const report = await readiness(f);
+  assert.equal(report.managed.message, "Maestro is at its session limit for this workspace or this Mac.");
+});
+
 test("born managed: an unverified account is recorded as a refusal; an unverified provider never reaches the controller", async (t) => {
   for (const auth of [{ isAuthenticated: false }, { isAuthenticated: true, login: "--x", host: "github.com" },
     { isAuthenticated: true, login: "human", host: "example.com" }, new Promise(() => {})]) {
     const f = await bornFixture(t, { auth, statusTimeoutMs: 20,
       enroll: async () => { throw Object.assign(new Error("x"), { reason: "account-unverified" }); } });
     assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
-      reason: "account-unverified" });
+      reason: "account-unverified", message: ENROLLMENT_MESSAGES["account-unverified"] });
     assert.equal(f.calls.enroll.length, 1);
     assert.equal(f.calls.enroll[0].request.login, null);
     assert.equal(f.calls.enroll[0].request.host, null);
@@ -2653,7 +2691,7 @@ test("born managed: an unverified account is recorded as a refusal; an unverifie
   for (const pid of ["", "1", "4243", "abc"]) {
     const f = await bornFixture(t, { environment: { COPILOT_EXTENSION_PARENT_PID: pid } });
     assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
-      reason: "provider-process-unverified" });
+      reason: "provider-process-unverified", message: ENROLLMENT_MESSAGES["provider-process-unverified"] });
     assert.equal(f.calls.enroll.length + f.calls.auth, 0);
   }
 });
@@ -2684,7 +2722,11 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     ["enrollment refused: account-mismatch: bad/name", "enrollment-failed"],
     // Only account-mismatch may carry the recorded account to the human.
     ["enrollment refused: surface-owned: work-account", "surface-owned"],
-    ["enrollment refused: session-ended: work-account", "session-ended"],
+    ["enrollment refused: provider-already-enrolled: work-account", "provider-already-enrolled"],
+    // Reasons that can no longer occur are reported generically.
+    ["enrollment refused: session-ended", "enrollment-failed"],
+    ["enrollment refused: session-started-before-install", "enrollment-failed"],
+    ["enrollment refused: enrollment-window-passed", "enrollment-failed"],
     ["Traceback /private/path", "enrollment-failed"],
   ]) {
     const controller = path.join(directory, `controller-${reason}-${randomUUID()}`);
