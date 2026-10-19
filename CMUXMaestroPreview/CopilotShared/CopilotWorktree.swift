@@ -43,7 +43,7 @@ nonisolated enum CopilotWorktreeHead: Codable, Hashable, Sendable {
     }
 }
 
-/// The worktree a session's own selected directory is in (ADR 0026). `isCurrent` is false when
+/// The worktree a session's own selected directory is in (ADR 0027). `isCurrent` is false when
 /// the evidence is last known: the session's directory record changed since, or was not read live.
 nonisolated struct AgentSessionWorktree: Codable, Equatable, Sendable {
     let evidence: CopilotWorktreeEvidence

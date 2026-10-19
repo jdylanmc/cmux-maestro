@@ -79,7 +79,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var petId: String? = nil
     var branch: String? = nil
     var worktree = false
-    /// Current worktree of this exact session (ADR 0026); nil when no record was published.
+    /// Current worktree of this exact session (ADR 0027); nil when no record was published.
     var currentWorktree: AgentSessionWorktree? = nil
     /// Copilot's own session name (ADR 0022); nil when unavailable.
     var sessionName: String? = nil

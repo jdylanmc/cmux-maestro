@@ -35,7 +35,7 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   effort. Never changes hook outcome. Taskboard agent card shows that
   branch (worktree adds `· worktree` suffix and own icon). Otherwise no row.
   Existing read-only `Copilot/` grant already covers it.
-- Same record, schema 2, adds the session's current worktree (ADR 0026). Helper reads
+- Same record, schema 2, adds the session's current worktree (ADR 0027). Helper reads
   `cwd:` from the exact session's `workspace.yaml` through the proven session
   directory, then Git's plain files there (64 levels, 4 KiB, no symlinks, no `git`
   process). Publishes `verified` (16-hex SHA-256 key of the canonical Git directory,

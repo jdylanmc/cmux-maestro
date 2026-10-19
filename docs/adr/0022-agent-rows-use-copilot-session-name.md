@@ -12,7 +12,7 @@ Consequence: when the name is unavailable (missing, malformed, oversized, symlin
 
 Amendment (2026-10-16, #252): a born-managed root ([ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md)) has no launch label. Its row uses its exact session's name under the same rules and the same eligibility check as managed session matching: one live, fresh observation of that session UUID in its workspace and surface, in a ready or partial tree, or during observation loss the last name read while its grace lasts. Dead, stale, ambiguous or misplaced evidence names nothing, and the row shows `Copilot session`. The name is presentation only; the projected label is unchanged. Launched rows keep their launch label.
 
-Amendment (2026-10-19, #59): the observer hook, outside the sandbox, also reads `cwd:` to find the session's current worktree ([ADR 0026](0026-current-worktree-from-the-session-selected-directory.md)). The sidebar still reads only `name:`; it stats the file to tell whether that evidence is current.
+Amendment (2026-10-19, #59): the observer hook, outside the sandbox, also reads `cwd:` to find the session's current worktree ([ADR 0027](0027-current-worktree-from-the-session-selected-directory.md)). The sidebar still reads only `name:`; it stats the file to tell whether that evidence is current.
 
 Amendment (2026-10-18, #259): Work-context session rows no longer exist, so no row keeps the "Session context" label.
 

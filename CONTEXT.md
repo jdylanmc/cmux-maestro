@@ -47,7 +47,7 @@ Session ID, branch, and worktree flag, plus the session's current worktree. No p
 _Avoid_: repository record
 
 **Current worktree**:
-Worktree a session's own selected directory (`workspace.yaml` `cwd:`) is in: verified (opaque key, repository name, branch or detached commit), not a repository, or unknown. Current or last known. (ADR 0026)
+Worktree a session's own selected directory (`workspace.yaml` `cwd:`) is in: verified (opaque key, repository name, branch or detached commit), not a repository, or unknown. Current or last known. (ADR 0027)
 _Avoid_: project, repo, working directory
 
 **Surface directory**:

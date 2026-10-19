@@ -1,6 +1,6 @@
 import Foundation
 
-// Location record schema 2: the branch fact plus the session's current worktree (ADR 0026).
+// Location record schema 2: the branch fact plus the session's current worktree (ADR 0027).
 
 extension CopilotSessionLocation {
     static let currentKeys: Set<String> = ["schemaVersion", "sessionID", "recordedAt", "current"]
@@ -61,7 +61,7 @@ nonisolated struct CopilotSessionLocationRecord: Equatable, Sendable {
 }
 
 /// The worktree a session's own selected directory (`workspace.yaml` `cwd:`) is in, verified by
-/// reading Git's plain files there (ADR 0026). Never derived from a title, branch, pane or parent.
+/// reading Git's plain files there (ADR 0027). Never derived from a title, branch, pane or parent.
 nonisolated struct CopilotSessionWorktree: Equatable, Sendable {
     let evidence: CopilotWorktreeEvidence
     /// `workspace.yaml` as it was when observed. A different file now means the evidence is stale.

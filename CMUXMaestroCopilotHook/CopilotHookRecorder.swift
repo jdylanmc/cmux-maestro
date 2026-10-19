@@ -550,7 +550,7 @@ nonisolated enum CopilotLocationResolver {
     }
 }
 
-/// The worktree a session's own selected directory is in (ADR 0026). Reads `workspace.yaml`
+/// The worktree a session's own selected directory is in (ADR 0027). Reads `workspace.yaml`
 /// `cwd:` from the session's state directory, then only Git's plain files under that directory:
 /// no `git` process, no environment, bounded depth and size. Any surprise is `unknown`, never
 /// `nonRepository`.
