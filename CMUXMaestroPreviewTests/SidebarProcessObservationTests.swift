@@ -98,6 +98,15 @@ struct SidebarProcessObservationTests {
         #expect(SidebarProcessPresentation.lines(nil, now: now) == [.init(title: "Background processes", value: "Not observed")])
     }
 
+    @Test func omittedHelpersAreCountedAsHelpersNotBackgroundWork() {
+        let data = Data(String(decoding: file(omitted: 3), as: UTF8.self)
+            .replacingOccurrences(of: #""omittedCount":3"#, with: #""omittedCount":3,"omittedHelperCount":5"#).utf8)
+        let result = lines(data)
+        #expect(result.first == .init(title: "Background processes", value: "5"))
+        #expect(result.contains(.init(title: "More background processes", value: "3")))
+        #expect(result.contains(.init(title: "Copilot helpers", value: "7")))
+    }
+
     @Test func observationsMatchOnlyTheExactNodeBindingAndRejectUnsafeShapes() {
         #expect(snapshot(file()).processes[nodeID] != nil)
         #expect(snapshot(file(generation: 1)).processes.isEmpty)

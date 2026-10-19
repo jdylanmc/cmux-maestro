@@ -30,7 +30,10 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
         let state: String
         let observedAt: Date
         let processes: [Process]
+        /// Background processes past the probe bound.
         let omittedCount: Int
+        /// Copilot helpers past the probe bound; counted with the helpers, never as background work.
+        var omittedHelperCount: Int? = nil
     }
 
     let version: Int
@@ -64,6 +67,7 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
         return nodes.allSatisfy { node in
             let owned = node.processes.filter { $0.state == "owned-current" }
             return Self.nodeStates.contains(node.state) && node.observedAt <= future && node.omittedCount >= 0
+                && (node.omittedHelperCount ?? 0) >= 0
                 && node.generation >= 0 && owned.count <= Self.maximumProcesses
                 && node.processes.count - owned.count <= Self.maximumEvents
                 && Set(node.processes.map { "\($0.pid):\($0.startMicros)" }).count == node.processes.count
@@ -114,10 +118,11 @@ enum SidebarProcessPresentation {
         let incomplete = entry.state == "scan-incomplete"
         let owned = entry.processes.filter { $0.state == "owned-current" }
         let separate = owned.filter { $0.group == "separate" }
-        let helpers = owned.count - separate.count
+        let helpers = owned.count - separate.count + (entry.omittedHelperCount ?? 0)
+        let total = separate.count + entry.omittedCount
         // An incomplete scan never claims zero.
         var summary = entry.state == "exited" ? ["Session ended"]
-            : !separate.isEmpty || entry.omittedCount > 0 ? ["\(separate.count)"] : incomplete ? [] : ["None"]
+            : total > 0 ? ["\(total)"] : incomplete ? [] : ["None"]
         if incomplete { summary.append("Scan incomplete") }
         if stale { summary.append("Stale") }
         var lines = [SidebarDetailLine(title: title, value: summary.joined(separator: " · "))]
