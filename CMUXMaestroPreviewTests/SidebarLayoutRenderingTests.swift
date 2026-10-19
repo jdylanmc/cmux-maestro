@@ -768,6 +768,39 @@ struct SidebarLayoutRenderingTests {
         return lines
     }
 
+    @Test func taggedRowRendersTitleInlineChips() async throws {
+        let fixtures = SidebarTreeFixtures()
+        let model = makeModel(fixtures: fixtures, longMetadata: false)
+        defer { model.setVisible(false) }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let folder = root.appendingPathComponent(".build/layout-validation/offscreen")
+        let state = root.appendingPathComponent(".build/layout-tests/\(UUID())")
+        defer { try? FileManager.default.removeItem(at: state) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let suite = "SidebarTagRendering.\(UUID())"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let preferences = SidebarPreferences(
+            defaults: defaults,
+            historyFile: state.appendingPathComponent("history.json"),
+            attentionFile: state.appendingPathComponent("attention.json"),
+            layoutStore: SidebarLayoutStore(file: .init(url: state.appendingPathComponent("layout.json")))
+        )
+        preferences.setRetention(.never)
+        preferences.expandAll()
+        preferences.selectedMode = .hierarchy
+        #expect(preferences.setHumanTags("review, ui", for: fixtures.sessionID) == nil)
+        #expect(preferences.setTagColor(.forest, for: "ui") == nil)
+        let tags = preferences.tags(for: fixtures.sessionID)
+        #expect(tags.map(\.slug) == ["review", "ui"])
+        for appearance in [RenderAppearance.light, .dark] {
+            let url = folder.appendingPathComponent("tags-\(appearance.name)-349.png")
+            try await render(model: model, preferences: preferences, width: 349, appearance: appearance, destination: url)
+            // Synthetic offscreen evidence of title-inline chips; pixel contrast is in SidebarTagTests.
+            #expect(FileManager.default.fileExists(atPath: url.path))
+        }
+    }
+
     @Test func managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth() async throws {
         let fixtures = SidebarTreeFixtures()
         let rootModel = await makeManagedModel(fixtures: fixtures, nodeCount: 1)

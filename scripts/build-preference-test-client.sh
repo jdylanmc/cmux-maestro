@@ -21,6 +21,9 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferences.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarIconPreferences.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarOrder.swift" \
+    "$ROOT/CMUXMaestroSidebar/State/SidebarTags.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotFileAccess.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityRecord.swift" \
     "$ROOT/CMUXMaestroSidebar/UI/SidebarIconModels.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarLayout.swift" \
     "$ROOT/CMUXMaestroPreviewTests/PreferenceAttentionFixture.swift" \

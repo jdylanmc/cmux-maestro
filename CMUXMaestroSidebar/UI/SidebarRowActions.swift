@@ -438,7 +438,8 @@ extension View {
 }
 
 extension SidebarRowActionGroup {
-    static func appearance(icon: (() -> Void)?, agent: Bool, child: Bool = false, pet: (() -> Void)? = nil) -> Self {
+    static func appearance(icon: (() -> Void)?, agent: Bool, child: Bool = false, pet: (() -> Void)? = nil,
+                           tags: (() -> Void)? = nil) -> Self {
         let catalogNotice = SidebarGlyphCatalog.notice
         let availableIcon = catalogNotice == nil ? icon : nil
         var actions: [SidebarRowAction] = [
@@ -448,7 +449,8 @@ extension SidebarRowActionGroup {
         if agent {
             actions.append(pet.map { callback in .init(title: "Choose pet…", perform: { callback() }) }
                 ?? .unavailable("Choose pet…", child ? "Activity-only child has no independent pet." : "Exact session identity unavailable."))
-            actions.append(.unavailable("Edit tags…", "Tag editing is not available."))
+            actions.append(tags.map { callback in .init(title: "Edit tags…", perform: { callback() }) }
+                ?? .unavailable("Edit tags…", child ? "Activity-only child has no independent tags." : "Exact session identity unavailable."))
         }
         return .init(title: "Appearance", actions: actions)
     }

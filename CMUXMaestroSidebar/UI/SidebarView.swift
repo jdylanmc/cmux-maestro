@@ -707,6 +707,10 @@ struct SidebarView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("sidebar-icon-notice")
             }
+            if let notice = preferences.tagNotice {
+                Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
+                    .accessibilityIdentifier("sidebar-tag-notice")
+            }
             if let notice = preferences.attentionNotice {
                 Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
                     .fixedSize(horizontal: false, vertical: true)
@@ -790,11 +794,15 @@ struct SidebarView: View {
         .environment(\.sidebarAgentHoverProvider, { target in
             let connected: Bool
             if case .connected = model.state { connected = true } else { connected = false }
-            return SidebarAgentHoverContent.card(
+            var card = SidebarAgentHoverContent.card(
                 for: target, hierarchy: model.hierarchy, connected: connected,
                 tree: model.copilot.tree, managed: model.orchestration.snapshot,
                 availability: model.orchestration.availability, now: now()
             )
+            card?.tags = preferences.tags(for: SidebarPresentation.tagSession(
+                for: target, managed: model.orchestration.snapshot, tree: model.copilot.tree, now: now()
+            ))
+            return card
         })
         .environment(\.sidebarHoverConnected, {
             if case .connected = model.state { return true }
@@ -821,6 +829,7 @@ struct SidebarView: View {
         .onAppear {
             preferences.refreshLayout()
             preferences.refreshIcons()
+            preferences.refreshTags()
             reorderBackend.refresh()
             model.copilot.updateHistory(preferences.history)
             model.copilot.updateAttention(preferences.attention)
@@ -848,6 +857,8 @@ struct SidebarView: View {
         }
         .onChange(of: model.copilot.tree) { _, _ in
             preferences.refreshLayout()
+            // Agents write their own tags outside the sidebar; read them with each observation.
+            preferences.refreshTags()
             if let owner = dismissedTaskOwner {
                 dismissedTaskOwner = nil
                 DispatchQueue.main.async { restoreFocus(afterDismissing: owner) }
@@ -863,6 +874,7 @@ struct SidebarView: View {
             if phase == .active {
                 preferences.refreshLayout()
                 preferences.refreshIcons()
+                preferences.refreshTags()
                 reorderBackend.refresh()
             }
         }
@@ -1466,11 +1478,13 @@ private struct ManagedNodeRow: View {
     @Environment(\.sidebarFocusInspection) private var focusInspection
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
+    @Environment(SidebarPreferences.self) private var preferences
     @State private var showingPicker: SidebarIconTarget?
     @State private var petPicker: UUID?
     private var pet: (session: UUID, choice: String?)? {
         SidebarPresentation.managedPet(node, tree: copilotTree, now: evidenceDate)
     }
+    @State private var editingTags: UUID?
 
     private var actions: [SidebarRowActionGroup] {
         let iconTarget = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
@@ -1486,7 +1500,8 @@ private struct ManagedNodeRow: View {
         var groups: [SidebarRowActionGroup] = [
             .init(title: "Navigation", actions: navigationActions),
             .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: true,
-                        pet: pet.map { pet in { petPicker = pet.session } }),
+                        pet: pet.map { pet in { petPicker = pet.session } },
+                        tags: beatSession.map { id in { editingTags = id } }),
             placement, .lifecycle()
         ]
         if !hasChildren, let dismissManaged,
@@ -1518,12 +1533,14 @@ private struct ManagedNodeRow: View {
             FocusButton(
                 target: .surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId),
                 navigation: navigation,
-                label: "Focus \(node.title)",
+                label: SidebarPresentation.taggedLabel("Focus \(node.title)", tags: tags),
                 detail: metadataHelp, inspection: .managed(node)
             ) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 4) {
-                        Text(node.title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        SidebarTaggedTitle(tags: tags) {
+                            Text(node.title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        }
                         Spacer(minLength: 0)
                         if activeDescendants > 0 && !expanded {
                             Label("\(activeDescendants)", systemImage: SidebarPresentation.state(.working).symbol)
@@ -1550,6 +1567,7 @@ private struct ManagedNodeRow: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .agentHoverPreview(.managed(node.id, generation: node.generation))
+            .sidebarTagEditor($editingTags)
             if !hasChildren, let dismissManaged,
                let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
                 Button { dismissManaged(outcome) } label: {
@@ -1589,7 +1607,9 @@ private struct ManagedNodeRow: View {
         .accessibilityIdentifier("managed-node-\(node.id)")
     }
 
-    /// The exact session this agent's Beats target.
+    private var tags: [SidebarResolvedTag] { preferences.tags(for: beatSession) }
+
+    /// The exact session this agent's Beats and tags target.
     private var beatSession: UUID? {
         guard case .session(let id) = SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate)
         else { return nil }
@@ -2039,9 +2059,13 @@ private struct SurfaceRow: View {
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarAgentHoverProvider) private var hoverProvider
     @Environment(\.sidebarHoverConnected) private var connected
+    @Environment(SidebarPreferences.self) private var preferences
     @State private var showingPicker: SidebarIconTarget?
     @State private var petPicker: UUID?
+    @State private var editingTags: UUID?
     private var singleSession: SidebarCopilotSession? { sessions.count == 1 ? sessions.first : nil }
+    /// Tags belong to the exact session of a single-agent surface.
+    private var tagSession: UUID? { singleSession.flatMap { $0.statusOnly ? nil : $0.id } }
     private var expanded: Bool {
         layout.isExpanded(.surface(surface.id))
             && (singleSession.map { layout.isExpanded(.session($0.id)) } ?? true)
@@ -2087,7 +2111,8 @@ private struct SurfaceRow: View {
         return [
             .init(title: "Navigation", actions: items),
             .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: singleSession != nil || surface.kind == .agentSession,
-                        pet: singleSession.flatMap { $0.statusOnly ? nil : $0.id }.map { id in { petPicker = id } }),
+                        pet: singleSession.flatMap { $0.statusOnly ? nil : $0.id }.map { id in { petPicker = id } },
+                        tags: tagSession.map { id in { editingTags = id } }),
             .placement(reorder), .lifecycle()
         ]
     }
@@ -2134,10 +2159,14 @@ private struct SurfaceRow: View {
                 SidebarHoverRegion(data: preview) {
                   FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
-                    navigation: navigation, label: "Focus \(surface.kind.title) \(title)", detail: rowMetadataHelp
+                    navigation: navigation,
+                    label: SidebarPresentation.taggedLabel("Focus \(surface.kind.title) \(title)", tags: preferences.tags(for: tagSession)),
+                    detail: rowMetadataHelp
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        SidebarTaggedTitle(tags: preferences.tags(for: tagSession)) {
+                            Text(title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        }
                         HStack(spacing: 4) {
                             if let singleSession {
                                 SessionStateBadge(session: singleSession)
@@ -2151,6 +2180,7 @@ private struct SurfaceRow: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .accessibilityValue(accessibilityStatus)
+                .sidebarTagEditor($editingTags)
                 }
                 if !expanded && hasChildren {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: sessions, complete: countsComplete))
@@ -2235,9 +2265,12 @@ private struct CopilotSessionRow: View {
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarRowGroup) private var outerGroup
+    @Environment(SidebarPreferences.self) private var preferences
     @State private var showingPicker: SidebarIconTarget?
     @State private var petPicker: UUID?
+    @State private var editingTags: UUID?
     private var expanded: Bool { layout.isExpanded(.session(session.id)) }
+    private var tags: [SidebarResolvedTag] { preferences.tags(for: session.statusOnly ? nil : session.id) }
     private var name: String? { session.sessionName }
     private var actions: [SidebarRowActionGroup] {
         var items: [SidebarRowAction] = focusUnavailable ? [] : [
@@ -2251,7 +2284,9 @@ private struct CopilotSessionRow: View {
         }
         return [.init(title: "Navigation", actions: items),
                 .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true,
-                            pet: session.statusOnly ? nil : { petPicker = session.id }), .placement(.movesWithParent), .lifecycle()]
+                            pet: session.statusOnly ? nil : { petPicker = session.id },
+                            tags: session.statusOnly ? nil : { editingTags = session.id }),
+                .placement(.movesWithParent), .lifecycle()]
     }
 
     var body: some View {
@@ -2272,13 +2307,15 @@ private struct CopilotSessionRow: View {
                 FocusButton(
                     target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                     navigation: navigation,
-                    label: "Focus Copilot session \(name.map { "\($0), " } ?? "")\(session.shortID)",
+                    label: SidebarPresentation.taggedLabel("Focus Copilot session \(name.map { "\($0), " } ?? "")\(session.shortID)", tags: tags),
                     detail: SidebarPresentation.sessionStatus(session),
                     inspectOnly: focusUnavailable ? { selection = .session(session.id) } : nil
                 ) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(name ?? "Agent \(session.shortID)")
-                            .font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        SidebarTaggedTitle(tags: tags) {
+                            Text(name ?? "Agent \(session.shortID)")
+                                .font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                        }
                         HStack(spacing: 4) {
                             SessionStateBadge(session: session)
                             Text(SidebarPresentation.rowMetadata(kind: "Agent", activity: SidebarPresentation.activityCaption(
@@ -2292,6 +2329,7 @@ private struct CopilotSessionRow: View {
                 }
                 .accessibilityValue(SidebarPresentation.sessionStatus(session))
                 .agentHoverPreview(.session(session.id))
+                .sidebarTagEditor($editingTags)
                 if !expanded && session.hasShownOutline(layout) {
                     CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: [session]))
                 }
@@ -2777,6 +2815,8 @@ struct SidebarInspector: View {
     let content: SidebarDetailContent?
     let close: () -> Void
     var copyValue: (String) -> Bool = { SidebarSessionCopy.copy($0) }
+    @Environment(SidebarPreferences.self) private var preferences: SidebarPreferences?
+    @State private var editingTags: UUID?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -2795,6 +2835,10 @@ struct SidebarInspector: View {
                         }
                         if let notice = content.notice {
                             Text(notice).sidebarFont(.caption).foregroundStyle(.secondary)
+                        }
+                        if let preferences, let session = content.tagSessionID {
+                            SidebarTagList(tags: preferences.tags(for: session), edit: { editingTags = session })
+                                .sidebarTagEditor($editingTags)
                         }
                         SidebarMetadataDetails(lines: content.lines.filter { $0.copyableValue == nil })
                         ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
@@ -2949,8 +2993,11 @@ private struct TaskboardAgentCard: View {
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarFocusInspection) private var focusInspection
     @Environment(\.sidebarDensity) private var density
+    @Environment(SidebarPreferences.self) private var preferences
     @State private var showingPicker: SidebarIconTarget?
     @State private var petPicker: UUID?
+    @State private var editingTags: UUID?
+    private var tags: [SidebarResolvedTag] { preferences.tags(for: session.statusOnly ? nil : session.id) }
 
     private var actions: [SidebarRowActionGroup] {
         [.init(title: "Navigation", actions: [
@@ -2959,7 +3006,9 @@ private struct TaskboardAgentCard: View {
                    subject: .unmanaged(.session(session.id)), revalidate: focusInspection),
             .init(title: "Open details", perform: { selection = .session(session.id) })
         ]), .appearance(icon: session.statusOnly ? nil : { showingPicker = .session(session.id) }, agent: true,
-                       pet: session.statusOnly ? nil : { petPicker = session.id }), .placement(.taskboard), .lifecycle()]
+                       pet: session.statusOnly ? nil : { petPicker = session.id },
+                       tags: session.statusOnly ? nil : { editingTags = session.id }),
+         .placement(.taskboard), .lifecycle()]
     }
 
     private func line(_ symbol: String, _ text: String) -> some View {
@@ -2980,12 +3029,14 @@ private struct TaskboardAgentCard: View {
             FocusButton(
                 target: .surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                 navigation: navigation,
-                label: "Focus Copilot session \(session.shortID)",
+                label: SidebarPresentation.taggedLabel("Focus Copilot session \(session.shortID)", tags: tags),
                 detail: SidebarPresentation.sessionStatus(session),
                 inspection: .unmanaged(.session(session.id))
             ) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                    SidebarTaggedTitle(tags: tags) {
+                        Text(title).sidebarFont(.caption, weight: .semibold).lineLimit(1)
+                    }
                     if let activity = SidebarPresentation.activityCaption(session.activity) {
                         Text(activity).sidebarFont(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -3003,6 +3054,7 @@ private struct TaskboardAgentCard: View {
                 }
             }
             .agentHoverPreview(.session(session.id))
+            .sidebarTagEditor($editingTags)
             Spacer(minLength: 0)
         }
         .padding(.vertical, density.spacing(6))
@@ -3179,6 +3231,8 @@ struct SidebarPinnedFooter: View {
     @State private var baselineTextHeight: CGFloat = 0
     @State private var footerWidth: CGFloat = 0
     @State private var dragStart: CGFloat?
+    @State private var editingTags: UUID?
+    @Environment(SidebarPreferences.self) private var preferences: SidebarPreferences?
 
     private let headerHeight: CGFloat = 5
     private let rowSpacing: CGFloat = 8
@@ -3323,6 +3377,10 @@ struct SidebarPinnedFooter: View {
                 }
             }
             .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { rowHeight = $0 }
+            if let preferences, let session = content.tagSessionID {
+                SidebarTagList(tags: preferences.tags(for: session), edit: { editingTags = session })
+                    .sidebarTagEditor($editingTags)
+            }
             ForEach(content.lines.filter { $0.copyableValue != nil }) { line in
                 SidebarSessionDetail(line: line, copyValue: copyValue)
             }

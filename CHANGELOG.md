@@ -12,6 +12,14 @@ Notable changes are recorded using Keep a Changelog categories.
   picker adds **Reset to default**, distinct from **Reset to agent's pet**, and a
   per-session **Hide pet** / **Show pet**, persisted by session UUID.
 
+- Agent tags (#51, ADR 0026). **Edit tags…** in an agent row's actions, pinned details and the
+  details popover sets your tags for that exact session; agents tag their own session with
+  `cmux-maestro-orchestrator tags add|remove|list|clear --self`. Tags show as compact chips inline
+  with expanded agent titles, and with their owners in details, hover cards and the Beats panel.
+  The same tag from you and the agent is one chip; removing it from one side keeps the other.
+  Colors are automatic per tag, or one of 14 swatches you choose for that tag everywhere; agents
+  cannot set colors. Text contrast is at least 4.5:1. See
+  [agent tags](docs/reference/agent-tags.md).
 - Setup installs CMUX's Copilot hooks in a separate owned file,
   `~/.copilot/hooks/cmux-maestro-cmux-hooks.json`, with CMUX 0.65.1's exact commands (#252), so
   CMUX's own restore can bring back sessions you start. CMUX's own installer fails on Copilot's

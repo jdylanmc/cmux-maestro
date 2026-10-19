@@ -253,6 +253,7 @@ struct SidebarBeatsPanel: View {
     }
     @State private var pendingDelete: String?
     @State private var actionError: String?
+    @Environment(SidebarPreferences.self) private var preferences: SidebarPreferences?
 
     private var scope: UUID? { controller.scopedSession }
     private var scopeRunning: Bool { scope.map { id in targets.contains { $0.id == id } } ?? true }
@@ -304,6 +305,7 @@ struct SidebarBeatsPanel: View {
                             .accessibilityIdentifier("sidebar-beats-show-all")
                     }
                 }
+                if let preferences, let scope { SidebarTagList(tags: preferences.tags(for: scope)) }
             }
             if let notice = controller.notice ?? actionError {
                 Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)

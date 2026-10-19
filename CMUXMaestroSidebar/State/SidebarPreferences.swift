@@ -52,6 +52,12 @@ final class SidebarPreferences {
     private let orderStore: SidebarPreferenceStore<SidebarOrderSettings>
     var order: SidebarOrderSettings { orderStore.value.settings }
     var orderNotice: String? { orderStore.value.notice }
+    private let tagStore: SidebarPreferenceStore<SidebarTagSettings>
+    var tagSettings: SidebarTagSettings { tagStore.value.settings }
+    var tagNotice: String? { tagStore.value.notice }
+    @ObservationIgnored private let agentTagsFile: SidebarAgentTagsFile?
+    /// Agents' own tags by exact session; the last good read stays when a later read fails.
+    private(set) var agentTags: [UUID: [String]] = [:]
     var history: SidebarHistorySettings { historyStore.value.settings }
     var historyNotice: String? { historyStore.value.notice }
     var attention: SidebarAttentionSettings { attentionStore.value.settings }
@@ -89,13 +95,14 @@ final class SidebarPreferences {
             defaults: .standard,
             historyFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-history.json"),
             attentionFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-attention.json"),
-            layoutStore: .shared
+            layoutStore: .shared, agentTagsFile: .standard()
         )
     }
 
     init(
         defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore,
-        iconFile: URL? = nil, orderFile: URL? = nil
+        iconFile: URL? = nil, orderFile: URL? = nil, tagFile: URL? = nil,
+        agentTagsFile: SidebarAgentTagsFile? = nil
     ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
@@ -107,6 +114,11 @@ final class SidebarPreferences {
             file: .init(url: orderFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-order.json")),
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true
         )
+        tagStore = SidebarPreferenceStore(
+            file: .init(url: tagFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-tags.json")),
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
+        )
+        self.agentTagsFile = agentTagsFile
         showEnded = defaults.bool(forKey: Self.showEndedKey)
         let storedFooter = defaults.double(forKey: Self.pinnedFooterHeightKey)
         pinnedFooterHeight = storedFooter.isFinite && storedFooter > 0 ? storedFooter : nil
@@ -136,6 +148,7 @@ final class SidebarPreferences {
         }, migrated: {
             defaults.removeObject(forKey: Self.attentionKey)
         })
+        refreshTags()
     }
 
     func setDensity(_ density: SidebarDensity) { layoutStore.apply(.density(density)) }
@@ -188,6 +201,49 @@ final class SidebarPreferences {
 
     func resetIcons() { iconStore.apply(reset: true) { _ in } }
     func refreshIcons() { iconStore.refresh() }
+
+    /// Tags for one exact session: the human's, then the agent's own, with shared colors.
+    func tags(for session: UUID?) -> [SidebarResolvedTag] {
+        guard let session else { return [] }
+        return SidebarResolvedTag.resolve(
+            human: tagSettings.assignments[SidebarTagSettings.key(session)] ?? [],
+            agent: agentTags[session] ?? [], colors: tagSettings.colors
+        )
+    }
+
+    func humanTags(for session: UUID) -> [String] { tagSettings.assignments[SidebarTagSettings.key(session)] ?? [] }
+
+    /// Replaces the human's tags for one session; the agent's own tags are untouched.
+    /// Returns why nothing was saved, or nil.
+    @discardableResult
+    func setHumanTags(_ input: String, for session: UUID) -> String? {
+        let slugs: [String]
+        do { slugs = try SidebarTagSlug.parse(input) } catch { return error.message }
+        tagStore.apply {
+            let key = SidebarTagSettings.key(session)
+            if slugs.isEmpty { $0.assignments.removeValue(forKey: key) } else { $0.assignments[key] = slugs }
+            guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
+        }
+        return tagNotice
+    }
+
+    /// A human color for every occurrence of `slug`; nil restores the automatic color.
+    @discardableResult
+    func setTagColor(_ swatch: SidebarTagSwatch?, for slug: String) -> String? {
+        guard SidebarTagSlug.isCanonical(slug) else { return SidebarTagError.noLetterOrNumber.message }
+        tagStore.apply {
+            $0.colors[slug] = swatch
+            guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
+        }
+        return tagNotice
+    }
+
+    func refreshTags() {
+        tagStore.refresh()
+        guard let agentTagsFile else { return }
+        // A failed read keeps the last good tags; nothing is dropped or guessed.
+        if let next = try? agentTagsFile.read(), next != agentTags { agentTags = next }
+    }
 
     /// Changes Maestro's sidebar order only; nothing is sent to CMUX (ADR 0021).
     func applyOrder(_ change: SidebarOrderChange) { orderStore.apply(reset: change.resets) { try change.mutate(&$0) } }
