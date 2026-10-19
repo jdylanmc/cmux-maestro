@@ -104,6 +104,20 @@ struct SidebarProcessObservationTests {
         #expect(result.contains(.init(title: "More background processes", value: "4")))
     }
 
+    @Test func retainedHelpersAreNeverListed() {
+        let helper = #"{"pid":9,"startMicros":9,"name":"mcp","group":"provider","state":"exited","since":"2027-01-15T08:00:00Z","listeners":[]}"#
+        let result = lines(file(processes: helper))
+        #expect(!result.contains { $0.value.contains("PID 9") })
+        #expect(!result.contains { $0.title == "More background processes" })
+    }
+
+    @Test func anIncompleteScanNeverOffersCopies() {
+        let result = lines(file(state: "scan-incomplete"))
+        #expect(result.contains { $0.title == "python3.12" && $0.value == "PID 4242" })
+        #expect(result.contains { $0.value.hasPrefix("127.0.0.1:5173") })
+        #expect(result.allSatisfy { $0.copyableValue == nil })
+    }
+
     @Test func skippedHelpersMeanListenersAreUnknownNotNone() {
         let data = Data(String(decoding: file(processes: ""), as: UTF8.self)
             .replacingOccurrences(of: #""omittedCount":0"#, with: #""omittedCount":0,"omittedHelperCount":1"#).utf8)
@@ -142,6 +156,9 @@ struct SidebarProcessObservationTests {
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"escaped","listeners":[]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"0.0.0.0","port":80,"scope":"loopback"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"999.1.1.1","port":80,"scope":"other"}]}"#,
+            #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"+1.2.3.4","port":80,"scope":"other"}]}"#,
+            #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"[....]","port":80,"scope":"other"}]}"#,
+            #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"[:::]","port":80,"scope":"other"}]}"#,
         ] {
             #expect(snapshot(file(processes: unsafe)).processes.isEmpty, "\(unsafe)")
         }

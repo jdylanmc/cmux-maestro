@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 /// The controller's optional `observer/processes.json` (ADR 0026): owned background processes and
@@ -98,11 +99,18 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
     private static func valid(_ listener: Listener) -> Bool {
         let address = listener.address
         let octets = address.split(separator: ".", omittingEmptySubsequences: false)
-        let ipv4 = octets.count == 4 && octets.allSatisfy { $0.count <= 3 && UInt8($0) != nil }
-        let shape = address == "*" || ipv4
-            || address.range(of: #"^\[[0-9A-Fa-f:.]{2,45}\]$"#, options: .regularExpression) != nil
+        let ipv4 = octets.count == 4
+            && octets.allSatisfy { (1...3).contains($0.count) && $0.allSatisfy(\.isASCII) && $0.allSatisfy(\.isNumber) && UInt8($0) != nil }
+        let shape = address == "*" || ipv4 || validIPv6(address)
         return shape && listener.protocol == "tcp" && (1...65_535).contains(listener.port)
             && listener.scope == scope(of: address)
+    }
+
+    /// `[addr]` whose inside parses as an IPv6 address.
+    private static func validIPv6(_ address: String) -> Bool {
+        guard address.count <= 47, address.hasPrefix("["), address.hasSuffix("]") else { return false }
+        var storage = in6_addr()
+        return inet_pton(AF_INET6, String(address.dropFirst().dropLast()), &storage) == 1
     }
 
     /// The controller's rule; a scope that contradicts the bound address is rejected.
@@ -143,10 +151,13 @@ enum SidebarProcessPresentation {
         if incomplete { summary.append("Scan incomplete") }
         if stale { summary.append("Stale") }
         var lines = [SidebarDetailLine(title: title, value: summary.joined(separator: " · "))]
-        let listed = separate + entry.processes.filter { $0.state != "owned-current" }
+        // Helpers are counted, never listed, whether current or retained.
+        let listed = separate + entry.processes.filter { $0.state != "owned-current" && $0.group == "separate" }
+        // Only a complete, current list was re-verified; a kept or partial list is not.
+        let canCopy = entry.state == "owned-current" && !stale
         for process in listed.prefix(maximumLines) {
             let state = ["escaped": " · Detached", "exited": " · Exited"][process.state] ?? ""
-            let copy = process.state == "owned-current" && !stale
+            let copy = process.state == "owned-current" && canCopy
             lines.append(.init(title: process.name, value: "PID \(process.pid)\(state)",
                                copyableValue: copy ? String(process.pid) : nil,
                                lineID: "process-\(process.pid)-\(process.startMicros)"))
@@ -165,7 +176,7 @@ enum SidebarProcessPresentation {
             lines.append(.init(
                 title: "\(listenersTitle) (\(scope))",
                 value: "\(listener.endpoint) · \(listener.protocol.uppercased()) · \(process.name) \(process.pid)",
-                copyableValue: stale ? nil : listener.endpoint,
+                copyableValue: canCopy ? listener.endpoint : nil,
                 lineID: "listener-\(process.pid)-\(process.startMicros)-\(listener.endpoint)"
             ))
         }
