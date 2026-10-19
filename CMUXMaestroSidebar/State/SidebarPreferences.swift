@@ -220,33 +220,57 @@ final class SidebarPreferences {
     /// Returns why nothing was saved, or nil.
     @discardableResult
     func setHumanTags(_ input: String, for session: UUID) -> String? {
-        let slugs: [String]
-        do { slugs = try SidebarTagSlug.parse(input) } catch { return error.message }
-        let retained = sessionRetained
-        tagStore.apply {
-            let key = SidebarTagSettings.key(session)
-            if !slugs.isEmpty, $0.assignments[key] == nil, $0.assignments.count >= SidebarTagSettings.maximumEntries {
-                // Full: drop only sessions Copilot no longer keeps (ADR 0026); otherwise refuse.
-                $0.assignments = $0.assignments.filter { UUID(uuidString: $0.key).map(retained) ?? false }
-            }
-            if slugs.isEmpty { $0.assignments.removeValue(forKey: key) } else { $0.assignments[key] = slugs }
-            guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
-        }
-        return tagNotice
+        saveTags(input, colors: [:], for: session)
     }
 
     /// A human color for every occurrence of `slug`; nil restores the automatic color.
     @discardableResult
     func setTagColor(_ swatch: SidebarTagSwatch?, for slug: String) -> String? {
         guard SidebarTagSlug.isCanonical(slug) else { return SidebarTagError.noLetterOrNumber.message }
+        return applyTags { try Self.setColors([slug: swatch], in: &$0, agentSlugs: $1) }
+    }
+
+    /// One write for the tag editor: the session's tags (`input`, nil leaves them) and any colors
+    /// (nil swatch restores automatic). Everything is saved, or nothing is. Returns why, or nil.
+    @discardableResult
+    func saveTags(_ input: String?, colors: [String: SidebarTagSwatch?], for session: UUID) -> String? {
+        var slugs: [String]?
+        if let input {
+            do { slugs = try SidebarTagSlug.parse(input) } catch { return error.message }
+        }
+        guard colors.keys.allSatisfy(SidebarTagSlug.isCanonical) else { return SidebarTagError.noLetterOrNumber.message }
+        let retained = sessionRetained
+        return applyTags { settings, agentSlugs in
+            if let slugs {
+                let key = SidebarTagSettings.key(session)
+                if !slugs.isEmpty, settings.assignments[key] == nil,
+                   settings.assignments.count >= SidebarTagSettings.maximumEntries {
+                    // Full: drop only sessions Copilot no longer keeps (ADR 0026); otherwise refuse.
+                    settings.assignments = settings.assignments.filter { UUID(uuidString: $0.key).map(retained) ?? false }
+                }
+                if slugs.isEmpty { settings.assignments.removeValue(forKey: key) } else { settings.assignments[key] = slugs }
+            }
+            try Self.setColors(colors, in: &settings, agentSlugs: agentSlugs)
+        }
+    }
+
+    private static func setColors(
+        _ colors: [String: SidebarTagSwatch?], in settings: inout SidebarTagSettings, agentSlugs: Set<String>
+    ) throws {
+        for (slug, swatch) in colors {
+            if swatch != nil, settings.colors[slug] == nil, settings.colors.count >= SidebarTagSettings.maximumEntries {
+                // Full: drop colors for slugs no session carries; otherwise refuse.
+                let used = Set(settings.assignments.values.joined()).union(agentSlugs).union(colors.keys)
+                settings.colors = settings.colors.filter { used.contains($0.key) }
+            }
+            settings.colors[slug] = swatch
+        }
+    }
+
+    private func applyTags(_ mutation: (inout SidebarTagSettings, Set<String>) throws -> Void) -> String? {
         let agentSlugs = Set(agentTags.values.joined())
         tagStore.apply {
-            if swatch != nil, $0.colors[slug] == nil, $0.colors.count >= SidebarTagSettings.maximumEntries {
-                // Full: drop colors for slugs no session carries; otherwise refuse.
-                let used = Set($0.assignments.values.joined()).union(agentSlugs)
-                $0.colors = $0.colors.filter { used.contains($0.key) }
-            }
-            $0.colors[slug] = swatch
+            try mutation(&$0, agentSlugs)
             guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
         }
         return tagNotice

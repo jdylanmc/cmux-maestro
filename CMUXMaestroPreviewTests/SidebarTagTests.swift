@@ -310,6 +310,30 @@ struct SidebarTagTests {
         #expect(preferences.tagSettings.colors.isEmpty)
     }
 
+    @Test func failedSaveChangesNeitherTagsNorColors() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let session = UUID()
+        var settings = SidebarTagSettings()
+        let used = (0..<SidebarTagSettings.maximumEntries).map { "used-\($0)" }
+        // Every colored slug is carried by some session, so no color can be dropped to make room.
+        for chunk in stride(from: 0, to: used.count, by: SidebarTagSlug.maximumPerSource) {
+            settings.assignments[SidebarTagSettings.key(UUID())] = Array(used[chunk..<min(chunk + 6, used.count)])
+        }
+        for slug in used { settings.colors[slug] = .rose }
+        settings.assignments[SidebarTagSettings.key(session)] = ["before"]
+        try JSONEncoder().encode(settings).write(to: fixture.root.appendingPathComponent("sidebar-tags.json"))
+        let preferences = preferences(fixture)
+        let saved = preferences.tagSettings
+        #expect(saved.colors.count == SidebarTagSettings.maximumEntries)
+        var draft = SidebarTagDraft(text: "after, new")
+        draft.colors["new"] = .some(.ocean)
+        #expect(draft.commit(to: preferences, session: session) == "Tag storage is full.")
+        #expect(preferences.tagSettings == saved)
+        #expect(self.preferences(fixture).tagSettings == saved)
+        #expect(preferences.humanTags(for: session) == ["before"])
+    }
+
     @Test func agentStoreReadsStrictlyAndAFailedReadKeepsTheLastGoodTags() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

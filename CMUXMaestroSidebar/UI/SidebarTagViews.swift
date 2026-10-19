@@ -146,14 +146,10 @@ struct SidebarTagDraft: Equatable {
         }
     }
 
-    /// Saves the tags, then the colors. Returns why something was not saved, or nil.
+    /// Saves the tags and colors in one write: all or nothing. Returns why, or nil.
     @MainActor
     func commit(to preferences: SidebarPreferences, session: UUID) -> String? {
-        if let message = preferences.setHumanTags(text, for: session) { return message }
-        for (slug, swatch) in colors.sorted(by: { $0.key < $1.key }) {
-            if let message = preferences.setTagColor(swatch, for: slug) { return message }
-        }
-        return nil
+        preferences.saveTags(text, colors: colors, for: session)
     }
 }
 
