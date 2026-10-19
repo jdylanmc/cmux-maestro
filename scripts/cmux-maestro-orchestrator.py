@@ -2133,7 +2133,7 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
         "--session-id", "--name", "-n", "--agent", "--config-dir", "--log-dir",
         "--log-level", "--plugin-dir", "--additional-mcp-config", "--add-dir", "-C",
         "--auto-tier", "--extension-sdk-path", "--stream", "--output-format", "--attachment",
-        "--disable-mcp-server", "--add-github-mcp-toolset", "--add-github-mcp-tool",
+        "--add-github-mcp-toolset", "--add-github-mcp-tool",
         "--mcp-github-auth", "--max-autopilot-continues", "--mode", "--dynamic-retrieval",
         "--enable-mcp-server", "--max-ai-credits", "--usage-output-file",
     }
@@ -2143,7 +2143,7 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
         "--resume", "-r", "--connect", "--share", "--bash-env", "--mouse",
         "--allow-tool", "--allow-url", "--secret-env-vars", "--continue", "--share-gist",
         "--fleet", "--silent", "-s", "--enable-memory", "--banner", "--screen-reader",
-        "--plain-diff", "--disable-builtin-mcps", "--enable-all-github-mcp-tools",
+        "--plain-diff", "--enable-all-github-mcp-tools",
         "--allow-all-mcp-server-instructions", "--autopilot", "--plan", "--experimental",
         "--acp", "--remote", "--remote-export", "--no-custom-instructions",
         "--no-auto-update", "--no-ask-user", "--no-color", "--no-experimental",
@@ -2177,6 +2177,7 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
                 index += 1
         elif flag.startswith("--deny-") or flag in {
             "--assisted-approval", "--disallow-temp-dir", "--available-tools", "--excluded-tools",
+            "--disable-mcp-server", "--disable-builtin-mcps",
         }:
             return False
         elif flag in value_flags:

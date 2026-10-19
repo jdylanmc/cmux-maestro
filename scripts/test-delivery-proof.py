@@ -3408,6 +3408,7 @@ class LifecycleFailureTests(unittest.TestCase):
             (["copilot", "--yolo", "--deny-tool=unrecorded"], {}, "default", "parent-launch-flags"),
             (["copilot", "--resume", "--deny-tool=unrecorded", "--yolo"], {}, "default", "parent-launch-flags"),
             (["copilot", "-n", "--yolo"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--yolo", "--disable-builtin-mcps"], {}, "default", "parent-launch-flags"),
         ):
             with self.subTest(argv=argv, assignment=assignment):
                 self.state = copy.deepcopy(initial)
