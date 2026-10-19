@@ -217,18 +217,22 @@ the checks.
 
 Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrolled-node-unavailable`,
 `provider-process-unverified`, `account-unverified`, `integration-not-installed`,
-`session-not-persisted`, `enrollment-busy`, `cmux-identity-unverified`, `surface-owned`,
+`awaiting-first-prompt`, `session-not-persisted`, `enrollment-busy`, `cmux-identity-unverified`, `surface-owned`,
 `provider-already-enrolled`, `session-previously-managed`, `capacity-unavailable`,
 `session-live-or-uncertain`, `enrollment-failed`.
 A resumed session also uses `surface-mismatch`, `account-mismatch` (with the
 recorded login) and `account-unrecorded`; see
 [Relaunch restore](reference/relaunch-restore.md).
 Readiness adds a plain-language `message` for each reason.
-`session-not-persisted` (Copilot's never-saved `--resume` startup placeholder, or a
-session not saved yet) and `enrollment-busy` are not recorded: the loader's
-`onUserPromptSubmitted` hook tries once more at the next prompt, without reading
-the prompt. Every other decision is recorded per session and Copilot process and
-repeated on reload. Enrollments are serialized on the host.
+The loader calls the controller only once Copilot holds the session: its
+`inuse.<PID>.lock` exists, which happens at the first prompt. Until then readiness
+reports `awaiting-first-prompt`. The `onUserPromptSubmitted`, `onSessionStart`,
+`onPostToolUse` and `onAgentStop` hooks re-check, without reading their input.
+`awaiting-first-prompt`, `session-not-persisted` (Copilot's never-saved `--resume`
+startup placeholder) and `enrollment-busy` are not recorded; the loader asks the
+controller at most twice per join. Every other decision is recorded per session
+and Copilot process and repeated on reload. Enrollments are serialized on the host
+(20-second wait, inside the loader's 60-second call limit).
 Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
 
 The readiness-only branch below now applies only when launcher inputs are

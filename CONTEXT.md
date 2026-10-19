@@ -95,8 +95,12 @@ Interactive Copilot session Maestro launched and owns. Accepted only with a matc
 _Avoid_: bot, background job
 
 **Born managed**:
-A Copilot session that a human starts in CMUX and that enrolls itself as its own root coordinator when Maestro's extension joins it: at its start, at a resume, or, for a session already running, at its next extension join. (ADR 0025)
+A Copilot session that a human starts in CMUX and that enrolls itself as its own root coordinator through Maestro's extension, once Copilot holds the session (its first prompt): after a start, a resume, or, for a session already running, its next extension join. (ADR 0025)
 _Avoid_: adopted, auto-managed (enrollment by the session's own extension only adds tools; it is not adoption)
+
+**Session custody**:
+Copilot's own `inuse.<PID>.lock` for a session, written at its first prompt. Enrollment needs it held by the provider alone; its absence decides nothing.
+_Avoid_: session ownership (that is Maestro's node)
 
 **Startup placeholder**:
 The never-saved session Copilot's `--resume` opens first, in the same process, before the resumed session replaces it. It has no session-state directory and is never enrolled. (ADR 0025)

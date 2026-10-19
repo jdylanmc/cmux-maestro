@@ -70,7 +70,12 @@ Notable changes are recorded using Keep a Changelog categories.
   `session-started-before-install`, `enrollment-window-passed` and `session-ended` refusals are
   gone. `maestro_readiness` adds a plain-language `message` for every reason.
 - A session that replaces an ended session in the same Copilot process (`/clear`, `/resume`)
-  takes over the tab when the earlier session's end was recorded (#261).
+  takes over the tab when the earlier session's end was recorded (#261). A root with live
+  children releases the tab and keeps its run; the new root has no authority over them.
+- A session enrolls once Copilot holds it, at its first prompt, never on the absence of
+  Copilot's session lock (#261): two tabs resuming one session cannot both look like its owner.
+  Before then, readiness says `awaiting-first-prompt`. Refusals recorded by an earlier
+  controller that this one no longer makes are decided again after the upgrade.
 - Documentation-only pull requests no longer need a macOS runner (#191). The skill-override and
   policy-link checks moved to a new `validate-portable` job on Linux after a portability proof.
   The skill hash now sorts paths with an explicit en-US collation; Linux's default would report
@@ -166,8 +171,8 @@ Notable changes are recorded using Keep a Changelog categories.
   to a never-saved placeholder session in the same process. Maestro enrolled that placeholder,
   archived the resumed session's ended run, and then refused the real session with a misleading
   `provider-already-enrolled`. Enrollment now requires the session's saved state directory and
-  allows the session lock to be missing (Copilot writes it at the first prompt). Enrollments are
-  serialized, and a recorded decision is never replaced. Until the observer can bind a resumed
+  Copilot's own session lock. Enrollments are serialized, and a recorded decision is never
+  replaced. Until the observer can bind a resumed
   session, its row uses the name and pet of the exact session in the controller's projection
   (ADR 0022 amendment).
 - Each CMUX window's Maestro sidebar shows only its own window. Opening a second window no
