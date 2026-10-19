@@ -756,6 +756,48 @@ struct SidebarHistoryReaderTests {
         #expect(try project(rejected, fixture: fixture).sessions.isEmpty)
     }
 
+    // Copilot appends between the read's start and its frozen EOF. A tool start stamped in
+    // that window must not void every child and flash finished history and skills as rows.
+    @Test func eventAppendedDuringReadKeepsFinishedHistoryAndSkillsHidden() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let clock = HistoryReaderClock()
+        let reader = CopilotSessionReader(
+            bindingDirectory: fixture.bindings, sessionStateRoot: fixture.sessions,
+            clock: { defer { clock.advance(2) }; return clock.read() },
+            processLookup: { $0 == fixture.process.pid ? .found(fixture.process) : .dead }
+        )
+        try fixture.writeEvents([
+            attentionEvent("assistant.turn_start", data: ["turnId": "main"]),
+            attentionEvent("skill.invoked", data: ["name": "roast"]),
+            attentionEvent("tool.execution_start", data: ["toolCallId": "done", "toolName": "task"]),
+            attentionEvent("subagent.started", agent: "done", data: ["toolCallId": "done", "agentDisplayName": "Done"]),
+            attentionEvent("subagent.completed", data: ["toolCallId": "done", "agentDisplayName": "Done"]),
+            attentionEvent("tool.execution_complete", data: ["toolCallId": "done", "success": true]),
+            attentionEvent("tool.execution_start", data: ["toolCallId": "live", "toolName": "task"]),
+            attentionEvent("subagent.started", agent: "live", data: ["toolCallId": "live", "agentDisplayName": "Live"])
+        ])
+        func outline(_ snapshot: CopilotSnapshot) throws -> [String] {
+            let session = try #require(try project(snapshot, fixture: fixture).sessions.first)
+            #expect(!session.attentionDegraded && !session.nodes.contains(where: \.attentionDegraded))
+            // The view keeps finished internal tasks behind the workspace eye.
+            return session.outlineNodes.filter { !($0.isInternalTask && $0.state == .completed) }.map(\.id)
+        }
+        let normal = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(try outline(normal) == ["live"])
+        // The next read starts at clock.read(); this tool start lands one second later.
+        try fixture.append(attentionEvent("tool.execution_start", agent: "live", data: [
+            "toolCallId": "shell", "toolName": "bash"
+        ], timestamp: clock.read().addingTimeInterval(1).ISO8601Format()) + Data([10]))
+        let racing = try await reader.read(surfaceIDs: [fixture.surface])
+        let racingRows = try outline(racing)
+        #expect(racingRows == ["live"])
+        let live = try #require(try project(racing, fixture: fixture).sessions.first?.nodes.first { $0.id == "live" })
+        #expect(live.activity?.summary == "Executing tool: bash")
+        let settled = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(try outline(settled) == ["live"])
+    }
+
     @Test func tornSemanticHistoryWaitsForCompleteReadAndIgnoredPayloadCannotChangeState() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

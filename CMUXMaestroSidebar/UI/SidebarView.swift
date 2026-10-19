@@ -1358,6 +1358,7 @@ struct ManagedHierarchyContent: View {
                             evidenceDate: evidenceDate,
                             availability: polling.availability,
                             copilotTree: copilotTree,
+                            attentionIncomplete: SidebarPresentation.attentionEvidenceIncomplete(retained),
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,
                             toggleExpanded: {
@@ -1454,6 +1455,7 @@ private struct ManagedNodeRow: View {
     let evidenceDate: Date
     let availability: SidebarOrchestrationAvailability
     let copilotTree: SidebarCopilotTree
+    var attentionIncomplete = false
     let navigation: SidebarNavigation
     var reorder: SidebarReorderHandle? = nil
     let toggleExpanded: () -> Void
@@ -1527,6 +1529,7 @@ private struct ManagedNodeRow: View {
                         SidebarStateBadge(visual: stateVisual,
                                           needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
                                           detail: metadataHelp)
+                        if attentionIncomplete { AttentionEvidenceIncompleteIcon() }
                         Text(SidebarPresentation.rowMetadata(
                             kind: stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
                                 : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
@@ -2314,6 +2317,17 @@ private struct SessionStateBadge: View {
                           needsInput: SidebarPresentation.needsInput(session.attention),
                           detail: SidebarPresentation.sessionStatus(session))
             .accessibilityIdentifier("session-evidence-\(session.id)")
+        if SidebarPresentation.attentionEvidenceIncomplete([session]) { AttentionEvidenceIncompleteIcon() }
+    }
+}
+
+/// Degraded attention evidence is an icon, never an inline prose row (#264).
+private struct AttentionEvidenceIncompleteIcon: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.circle")
+            .sidebarFont(.caption2).foregroundStyle(SidebarTone.attention.color)
+            .help("Attention evidence incomplete")
+            .accessibilityLabel("Attention evidence incomplete")
     }
 }
 
@@ -2333,11 +2347,9 @@ private struct CopilotSessionContents: View {
     @Environment(\.sidebarContentWidth) private var contentWidth
 
     var body: some View {
-        if !SidebarPresentation.attention(
-            session.attention, state: session.state, degraded: session.attentionDegraded
-        ).isEmpty {
+        if !SidebarPresentation.attention(session.attention, state: session.state).isEmpty {
             SidebarActionLayout {
-                AttentionSummary(attention: session.attention, state: session.state, degraded: session.attentionDegraded)
+                AttentionSummary(attention: session.attention, state: session.state)
             }
             .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
@@ -2549,7 +2561,8 @@ struct SidebarInternalTaskRow: View {
     private var taskDetail: String {
         let node = row.node
         var parts = [SidebarPresentation.internalTaskState(node).title]
-        parts += SidebarPresentation.attention(node.attention, state: node.state, degraded: node.attentionDegraded)
+        parts += SidebarPresentation.attention(node.attention, state: node.state)
+        if node.attentionDegraded { parts.append("Attention evidence incomplete") }
         if node.ancestryUnresolved { parts.append("Unresolved ancestry") }
         if node.historyAncestor { parts.append("Retained for descendant context") }
         if let summary = row.collapsedSummary { parts += summary.lines }
@@ -2728,16 +2741,15 @@ private struct CopilotWorkRow: View {
                         .help("Unresolved ancestry")
                         .accessibilityLabel("Unresolved ancestry")
                 }
+                if node.attentionDegraded { AttentionEvidenceIncompleteIcon() }
                 if hasOutcomeActions {
                     DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                 }
             }
             .frame(minHeight: density.rowHeight)
             .sidebarRowActions(title: node.name, groups: actions)
-            if !SidebarPresentation.attention(
-                node.attention, state: node.state, degraded: node.attentionDegraded
-            ).isEmpty {
-                AttentionSummary(attention: node.attention, state: node.state, degraded: node.attentionDegraded)
+            if !SidebarPresentation.attention(node.attention, state: node.state).isEmpty {
+                AttentionSummary(attention: node.attention, state: node.state)
             }
         }
 
@@ -2995,11 +3007,10 @@ private struct TaskboardAgentCard: View {
 private struct AttentionSummary: View {
     let attention: [AgentAttention]
     let state: AgentWorkState
-    let degraded: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(SidebarPresentation.attention(attention, state: state, degraded: degraded), id: \.self) { text in
+            ForEach(SidebarPresentation.attention(attention, state: state), id: \.self) { text in
                 let asking = attention.contains(where: { $0.kind.isBlocking })
                     && !attention.contains(where: { $0.kind == .error }) && state != .failed
                 Label(text, systemImage: asking ? "questionmark.circle" : state == .blocked ? "pause.circle" : "exclamationmark.circle")

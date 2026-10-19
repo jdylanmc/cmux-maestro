@@ -1199,15 +1199,23 @@ struct SidebarClarityTests {
         }
     }
 
-    @Test func blockingUnknownAndDegradedReasonsAreNeverMovedIntoDetailsOnly() {
+    @Test func degradedSessionAttentionCountsAndHasARowIndicatorWithoutProse() {
+        var tree = makeTree(nodes: [node(state: .working)])
+        #expect(!SidebarPresentation.attentionEvidenceIncomplete(tree.sessions))
+        tree.sessions[0].attentionDegraded = true
+        let session = tree.sessions[0]
+        #expect(tree.attentionOwnerCount == 1, "Still counted as needing attention")
+        #expect(SidebarPresentation.attention(session.attention, state: session.state).isEmpty, "No inline prose")
+        #expect(SidebarPresentation.attentionEvidenceIncomplete(tree.sessions), "Its row shows why")
+    }
+
+    @Test func blockingAndUnknownReasonsStayInlineWithoutDegradedProse() {
         let permission = signal(.permission)
         let answer = signal(.answer)
-        let inline = SidebarPresentation.attention([permission, answer], state: .blocked, degraded: true)
-        #expect(inline.contains("Waiting for permission"))
-        #expect(!inline.contains("Waiting for answer"))
-        #expect(inline.contains("Attention evidence incomplete"))
-        #expect(SidebarPresentation.attention([], state: .blocked, degraded: false) == ["Blocking reason unavailable"])
-        #expect(SidebarPresentation.attention([signal(.turnFinished)], state: .idle, degraded: false).isEmpty)
+        let inline = SidebarPresentation.attention([permission, answer], state: .blocked)
+        #expect(inline == ["Waiting for permission"])
+        #expect(SidebarPresentation.attention([], state: .blocked) == ["Blocking reason unavailable"])
+        #expect(SidebarPresentation.attention([signal(.turnFinished)], state: .idle).isEmpty)
         #expect(SidebarPresentation.attentionDetails([signal(.turnFinished)]).contains {
             $0.value == "Main turn only; background work may continue."
         })
