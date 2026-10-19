@@ -31,10 +31,19 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   `cwd` and, for `postToolUse`, last absolute file path or leading `cd <path>`
   in `toolArgs`. Then walks up (at most 40 levels) to `.git` directory or linked-worktree
   `.git` file and reads `HEAD` (4 KiB cap, no symlinks). Runs no `git` process, spawns
-  nothing. Detached HEAD, no repository, or any surprise removes record. Best
+  nothing. Detached HEAD, no repository, or any surprise omits the branch fact. Best
   effort. Never changes hook outcome. Taskboard agent card shows that
   branch (worktree adds `· worktree` suffix and own icon). Otherwise no row.
   Existing read-only `Copilot/` grant already covers it.
+- Same record, schema 2, adds the session's current worktree (ADR 0026). Helper reads
+  `cwd:` from the exact session's `workspace.yaml` through the proven session
+  directory, then Git's plain files there (64 levels, 4 KiB, no symlinks, no `git`
+  process). Publishes `verified` (16-hex SHA-256 key of the canonical Git directory,
+  repository directory name, branch or 7-digit detached commit, linked flag),
+  `nonRepository` (readable walk to `/`, no `.git`) or `unknown`, plus the
+  `workspace.yaml` device, inode, size and modification time. Sidebar marks it current
+  only while that file is unchanged and the session was read live; otherwise last
+  known.
 - Terminal control runs in installed standard-library Python controller at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.
   Private prompts, results, control tokens, process identities stay under

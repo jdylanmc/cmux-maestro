@@ -80,6 +80,7 @@
 		C06100000000000000000402 /* CopilotPaths.swift in Hook Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000202; };
 		C06100000000000000000404 /* CopilotFileAccess.swift in Hook Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000204; };
 		C06100000000000000000405 /* CopilotIdentityVerifier.swift in Hook Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000205; };
+		C09900000000000000000004 /* CopilotSessionName.swift in Hook Sources */ = {isa = PBXBuildFile; fileRef = C09900000000000000000003; };
 		C06100000000000000000501 /* SidebarCopilotPolling.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000601; };
 		C06100000000000000000502 /* SidebarCopilotTree.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000602; };
 		C06100000000000000000503 /* SidebarNavigation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000603; };
@@ -653,7 +654,7 @@
 		C06100000000000000000009 /* Hook Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
-			files = (C06100000000000000000401, C06100000000000000000402, C06100000000000000000404, C06100000000000000000405, );
+			files = (C06100000000000000000401, C06100000000000000000402, C06100000000000000000404, C06100000000000000000405, C09900000000000000000004, );
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		A3685BE52FCA3AEE00009F1B /* Sources */ = {

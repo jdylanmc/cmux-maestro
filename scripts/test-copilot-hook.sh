@@ -11,6 +11,7 @@ SOURCES=(
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift"
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotFileAccess.swift"
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift"
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionName.swift"
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift"
     "$ROOT/CMUXMaestroCopilotHook/main.swift"
 )

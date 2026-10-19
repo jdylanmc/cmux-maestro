@@ -43,8 +43,12 @@ The session or child that owns a turn, tool call, request, or outcome.
 _Avoid_: process, parent
 
 **Location record**:
-Session ID, branch, and worktree flag. No path, no repository name.
+Session ID, branch, and worktree flag, plus the session's current worktree. No path.
 _Avoid_: repository record
+
+**Current worktree**:
+Worktree a session's own selected directory (`workspace.yaml` `cwd:`) is in: verified (opaque key, repository name, branch or detached commit), not a repository, or unknown. Current or last known. (ADR 0026)
+_Avoid_: project, repo, working directory
 
 **Surface directory**:
 Directory CMUX reports for one exact surface. Not the agent process CWD.

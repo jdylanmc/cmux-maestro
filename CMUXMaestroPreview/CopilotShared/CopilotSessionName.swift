@@ -10,6 +10,11 @@ nonisolated enum CopilotSessionName {
     static let maximumCharacters = 200
 
     static func parse(_ data: Data) -> String? {
+        scalar(forKey: "name", in: data).flatMap(sanitize)
+    }
+
+    /// One top-level plain or quoted scalar, unsanitized, under the same strict rules as `name:`.
+    static func scalar(forKey key: String, in data: Data) -> String? {
         guard data.count <= maximumFileBytes, var text = String(data: data, encoding: .utf8) else { return nil }
         if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
         // YAML line breaks only; "\r\n" is one Swift Character.
@@ -24,15 +29,15 @@ nonisolated enum CopilotSessionName {
             }
             guard let first = line.first, first != " ", first != "\t", first != "#" else { continue }
             openQuote = unclosedQuote(line)
-            guard line.hasPrefix("name:") else { continue }
-            let value = line.dropFirst("name:".count)
+            guard line.hasPrefix(key + ":") else { continue }
+            let value = line.dropFirst(key.count + 1)
             // `name:x` is a different plain key, not `name`.
             guard value.isEmpty || value.first == " " || value.first == "\t" else { continue }
             // A duplicate top-level key is ambiguous.
             guard found == nil else { return nil }
             found = .some(scalar(value, continued: continues(lines, after: index)))
         }
-        return found.flatMap { $0 }.flatMap(sanitize)
+        return found.flatMap { $0 }
     }
 
     /// The quote character of a top-level quoted key or value left open at the end of `line`.
@@ -242,4 +247,19 @@ nonisolated struct CopilotSessionNameCache: Sendable {
     }
 
     mutating func removeAll() { entries.removeAll() }
+}
+
+// Display sanitiser shared with sidebar metadata. Removes C0/C1 controls (Cc) and
+// bidirectional controls; keeps other format characters such as ZWJ and ZWNJ.
+nonisolated enum CopilotDisplayText {
+    static let bidirectionalControls = CharacterSet(charactersIn:
+        "\u{061C}\u{200E}\u{200F}\u{202A}\u{202B}\u{202C}\u{202D}\u{202E}\u{2066}\u{2067}\u{2068}\u{2069}")
+
+    static func sanitize(_ value: String, limit: Int) -> String? {
+        let kept = value.unicodeScalars.filter {
+            $0.properties.generalCategory != .control && !bidirectionalControls.contains($0)
+        }
+        let text = String(String.UnicodeScalarView(kept)).trimmingCharacters(in: .whitespaces)
+        return text.isEmpty ? nil : String(text.prefix(limit))
+    }
 }

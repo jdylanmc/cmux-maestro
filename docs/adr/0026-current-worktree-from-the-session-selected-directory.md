@@ -1,0 +1,19 @@
+# Current worktree comes from the session's own selected directory
+
+The observer hook records which Git worktree each exact session is working in. It reads the session's selected directory from the `cwd:` field of Copilot's `~/.copilot/session-state/<session-id>/workspace.yaml`, through the session directory it has just proved it owns (the binding proof of [ADR 0002](0002-exact-identity-evidence-never-heuristics.md)). It then reads only Git's plain files under that directory, as the branch fact already does ([ADR 0014](0014-git-probes-run-outside-the-sandbox.md)): no `git` process, no environment, no symlinked `.git`, `HEAD` or `commondir`, at most 64 levels and 4 KiB per file. It runs at every hook the observer already receives (session start, prompt submitted, after a tool), and writes nothing when the result is unchanged.
+
+The result is one of three:
+
+- **Verified**: an opaque key, the first 16 hex digits of a SHA-256 of the worktree's own canonical Git directory; the repository's directory name for display; the branch, or `Detached HEAD` and a 7-digit commit; whether it is a linked worktree. Two worktrees of one repository at one commit have different keys. A branch change keeps the key. The same name or branch in another repository is a different key.
+- **Not a repository**: the selected directory exists, and every directory from it to `/` was read and has no `.git`.
+- **Unknown**: everything else. No `cwd:`, a missing or unreadable directory, denied traversal, a malformed or symlinked Git entry, a bare repository, a Git administrative directory, or an unsupported `HEAD`. Unknown is never "not a repository".
+
+The record also holds `workspace.yaml`'s device, inode, size and modification time when it was read. The sandboxed sidebar compares them with the file it already stats for the session name. The evidence is current only while they match and the session was read live this cycle. Otherwise it is last known. Copilot rewrites `workspace.yaml` when `/cwd` changes the directory, so the change is visible at once, and the next hook re-observes it.
+
+The record keeps the earlier branch fact from tool paths and payload `cwd`, which the Taskboard shows, and adds the current worktree as schema 2 in the same file, `Copilot/locations/<session>.json` (`0600`). The sidebar reads it through its existing read-only grant. It receives no path. The repository directory name is a display label, never identity.
+
+Why: on 2026-10-02 two sessions changed directory with Copilot's `/cwd`. Their process and shell directories stayed the same, but `workspace.yaml` `cwd:` followed, and Git's files there told two worktrees of one repository at the same commit apart (#59). The CMUX surface directory ([ADR 0018](0018-surface-directory-from-cmux-report-only.md)), the controller's assigned directory ([ADR 0014](0014-git-probes-run-outside-the-sandbox.md)), a tool path, a title, a branch label, a pane or a parent session say nothing reliable about the current worktree. One producer in the hook covers managed and unmanaged sessions alike.
+
+Rejected: Git in the sidebar. The controller probing Git, since it runs only when a control command does. The process or shell working directory. Deriving a child session's worktree from its parent. Using the repository or branch name as the grouping key. A second Git collector.
+
+Consequence: a session shows no current worktree until its first hook after this release. Copilot's `workspace.yaml` is not a documented interface; a format change makes the evidence unknown, never wrong. A `workspace.yaml` rewrite that does not change the directory still marks the evidence last known until the next hook. This amends ADR 0014: the sidebar now receives a repository directory name and an opaque worktree key, still no path. It amends ADR 0022 only in that the hook, outside the sandbox, reads one more `workspace.yaml` field; the sidebar still reads only `name:`.

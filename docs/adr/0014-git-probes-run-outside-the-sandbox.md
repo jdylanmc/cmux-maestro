@@ -6,4 +6,6 @@ Why: privacy of paths and repos, and the sandbox cannot run Git anyway.
 
 Rejected: Git in the sidebar, exposing assigned paths through observer metadata.
 
+Amendment (2026-10-19, #59): the hook also records each session's current worktree from its own selected directory, with an opaque key and the repository directory name for display ([ADR 0026](0026-current-worktree-from-the-session-selected-directory.md)). Still no path.
+
 Consequence: a branch row appears only after a session's first tool call following the hook update. Submodule `.git` files count as no location.

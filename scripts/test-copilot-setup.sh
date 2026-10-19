@@ -45,6 +45,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotFileAccess.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionName.swift" \
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetup.swift" \
     "$ROOT/CMUXMaestroPreview/Integration/CopilotSetupObservation.swift" \

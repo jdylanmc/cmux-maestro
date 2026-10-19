@@ -176,6 +176,8 @@ actor CopilotSessionReader {
         var issues: [CopilotIssue] = []
         var observations: [CopilotSessionObservation] = []
         var scopedIssues: [UUID: [CopilotIssue]] = [:]
+        /// `workspace.yaml` of each session read live this cycle; decides current-worktree freshness.
+        var workspaceSources: [UUID: CopilotWorktreeSource] = [:]
         var madeProgress = false
         var unreadHistory = false
     }
@@ -187,6 +189,7 @@ actor CopilotSessionReader {
         var hasUnread = false
         var reachedBoundary = false
         var sessionName: String?
+        var workspaceSource: CopilotWorktreeSource?
         let previouslyPublished: Bool
     }
 
@@ -409,6 +412,8 @@ actor CopilotSessionReader {
         var read = try advanceTail(currentTail(for: record), session: session, budget: &budget, now: now)
         // Published only with the stable identity verified below, under the exact session UUID.
         read.sessionName = sessionNames.name(for: record.sessionID, sessionDirectory: session, owner: verifier.uid)
+        read.workspaceSource = (try? CopilotFileAccess.statEntry(at: session, name: CopilotSessionName.filename))
+            .flatMap { $0.isRegular && $0.uid == verifier.uid ? CopilotWorktreeSource($0) : nil }
         let after = try verifier.verifyStable(before, record: record, sessionDirectory: session)
         guard try bindingRemainsValid(
             record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
@@ -483,6 +488,7 @@ actor CopilotSessionReader {
                 value: read.tail.lastComplete ?? CopilotReducedState()
             )
             result.sessionName = read.sessionName
+            batch.workspaceSources[id] = read.workspaceSource
             batch.observations.append(result)
         }
     }
@@ -505,20 +511,33 @@ actor CopilotSessionReader {
             try Task.checkCancellation()
             var result = observation
             result.sessionIssues = batch.scopedIssues[observation.sessionID].flatMap { $0.isEmpty ? nil : $0 }
-            if let locations { applyLocation(to: &result, locations: locations) }
+            if let locations {
+                applyLocation(to: &result, locations: locations, source: batch.workspaceSources[observation.sessionID])
+            }
             applyAppearance(to: &result, index: index, issues: &batch.issues)
             decorated.append(result)
         }
         batch.observations = decorated
     }
 
-    private func applyLocation(to observation: inout CopilotSessionObservation, locations: Int32) {
+    /// The current worktree is current only while the session's `workspace.yaml` is the exact file
+    /// version the hook observed; any change, or no live read this cycle, makes it last known.
+    private func applyLocation(
+        to observation: inout CopilotSessionObservation, locations: Int32, source: CopilotWorktreeSource?
+    ) {
         guard let data = try? CopilotFileAccess.readStableRegular(
             at: locations, filename: observation.sessionID.uuidString.lowercased() + ".json",
             owner: verifier.uid, maximum: CopilotSessionLocation.maximumBytes, permissions: 0o600
-        ), let location = CopilotSessionLocation.decode(data, sessionID: observation.sessionID) else { return }
-        observation.branch = location.branch
-        observation.worktree = location.worktree
+        ), let record = CopilotSessionLocationRecord.decode(data, sessionID: observation.sessionID) else { return }
+        if let location = record.location {
+            observation.branch = location.branch
+            observation.worktree = location.worktree
+        }
+        if let current = record.current {
+            observation.currentWorktree = .init(
+                evidence: current.evidence, isCurrent: current.source != nil && current.source == source
+            )
+        }
     }
 
     private func applyAppearance(
