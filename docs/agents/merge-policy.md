@@ -68,6 +68,12 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 - CI runs the full validation for pushes to `main`.
 - A feature-branch push without a PR runs nothing. To validate one, open a draft pull request.
 - Tags are not validated; the project pushes none today.
+- Workflow concurrency groups runs by workflow and PR number (or ref for pushes).
+  A newer PR run cancels its superseded run, not another PR's run. Only
+  `pull_request` events enable `cancel-in-progress`; an in-progress `main` push
+  is never cancelled by a newer push. GitHub retains at most one pending run
+  per group, so a newer pending `main` push can replace an older pending push.
+  Every `main` run that starts still selects full validation.
 
 **Final coverage gate (#197):**
 
@@ -77,6 +83,10 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 - The gate judges job results, not the evidence inside them. Each job enforces its own: required artifacts upload with `if-no-files-found: error`, and the integrated harness enforces nonzero test execution, coverage accounting and candidate/base attribution. Losing that evidence fails the job, and so the gate.
 - It runs on `ubuntu-latest`: evaluation is pure Python over job results and needs no macOS behaviour, so it does not wait for a macOS runner. It runs its own tests (`python3 scripts/test-ci-gate.py`) and the classifier's (`python3 scripts/test-ci-classify.py`) on that runner first, so a broken evaluator or classifier fails the gate.
 - To verify: open the run for the exact candidate head, confirm `ci-gate` succeeded, and read its "Evaluate required suites" log or the run summary. The table lists `ci-classify` as `PASS`, then every required suite as `PASS` or `NOT APPLICABLE`, with the classifier's selection reason. A missing `ci-gate` check is not a pass.
+- Superseded runs are not merge evidence. Their cancelled or failed checks stay
+  on their own run/commit; the replacement head needs its own successful
+  `ci-gate`. Cancellation before the gate starts can leave no gate result.
+  Do not turn cancellation into success or reuse a previous head's green gate.
 - On a pull request the gate checks out the candidate, so it runs the candidate's own `scripts/ci-gate.py`, `scripts/ci-required-suites.json` and `.github/workflows/ci.yml`; the classifier likewise runs the candidate's `scripts/ci-classify.py` and `scripts/ci-suite-map.json`. A candidate can therefore change what its own gate requires. Reviewers treat any change to those files as changes to merge policy, and check them against `scripts/test-ci-gate.py`, `scripts/test-ci-classify.py` and the guards in `scripts/test-build-metadata.py`.
 - `ci-gate` is a required status check on `main` (owner decision, 2026-10-15). Branch protection requires the check `ci-gate` from GitHub Actions (app 15368) with `strict: false` (the branch need not be up to date with `main` first; item 4 above still requires a current-base run as merge evidence), `enforce_admins: true` (administrators are bound too), no review requirement, and no force-pushes or deletions. GitHub blocks a merge until `ci-gate` succeeds for the candidate head. Changing protection is a merge-policy change.
 - To verify, read the live rule rather than trusting this page or a displayed check: `GH_TOKEN="$(gh auth token --user jdylanmc)" gh api repos/jdylanmc/cmux-maestro/branches/main/protection`. Expect `required_status_checks.checks` to be exactly `ci-gate` with `app_id` 15368, `strict` `false`, `enforce_admins.enabled` `true`, no `required_pull_request_reviews`, and `allow_force_pushes.enabled` and `allow_deletions.enabled` both `false`. A 404 means protection is off and the gate is not enforced.
