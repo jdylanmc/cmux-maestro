@@ -546,6 +546,7 @@ struct SidebarAgentHoverTests {
     @Test(arguments: [true, false])
     func statusOnlyRetentionNeverResurrectsErasedRootOrChildModels(retainingStatus: Bool) throws {
         var original = session(name: "erased-root-model")
+        original.petId = "erased-pet"
         original.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Review agent",
                                state: .working, model: "erased-child-model", ancestryUnresolved: false, hasChildren: false)]
         let retained = SidebarCopilotTree.statusOnly(original, retainingStatus: retainingStatus)
@@ -555,6 +556,7 @@ struct SidebarAgentHoverTests {
             #expect(hover.lines.filter { $0.title == "Last reported model" }.map(\.value) == ["Unavailable"])
             #expect(!hover.lines.contains { $0.value == "erased-root-model" || $0.value == "erased-child-model" })
             #expect(hover.lines.allSatisfy { $0.copyableSessionID == nil })
+            #expect(hover.pet == nil)
         }
     }
 

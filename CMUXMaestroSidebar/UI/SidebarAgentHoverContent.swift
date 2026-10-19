@@ -124,7 +124,7 @@ enum SidebarAgentHoverContent {
             id: "session-\(session.id)", category: "Agent preview", title: title,
             subtitle: state.title,
             lines: lines, notice: session.liveness == .alive ? nil : "Live session ownership is not confirmed.",
-            pet: .init(session: session.id, choice: session.petId, state: .resolve(
+            pet: unfocusable ? nil : .init(session: session.id, choice: session.petId, state: .resolve(
                 visual: state, needsInput: SidebarPresentation.needsInput(session.attention)))
         )
     }

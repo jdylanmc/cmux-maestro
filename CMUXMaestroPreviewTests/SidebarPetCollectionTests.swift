@@ -127,6 +127,30 @@ struct SidebarPetCollectionTests {
         #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
     }
 
+    @Test func sheetThatFailsToDecodeAfterTheScanFailsOnceAndLeavesThePicker() throws {
+        let (_, root, session, _) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SidebarPetStore(
+            defaults: UserDefaults(suiteName: "pet-broken-\(UUID().uuidString)")!,
+            uploadDirectory: root.appendingPathComponent("Pets", isDirectory: true),
+            sessionDirectory: root.appendingPathComponent("sessions", isDirectory: true), sessionCacheSeconds: 60)
+        let sheet = root.appendingPathComponent("sessions/\(session.uuidString.lowercased())/blob/spritesheet.png")
+        #expect(store.available(for: session).contains { $0.id == "blob" })
+        // The agent rewrites its sheet after the header scan; the half-written file cannot decode.
+        try Data("not an image".utf8).write(to: sheet)
+        let before = SidebarPetStore.decodeCount(sheet)
+        for index in 0..<5 {
+            _ = store.frame(petID: "blob", session: session, state: .idle, index: index)
+        }
+        #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
+        #expect(!store.available(for: session).contains { $0.id == "blob" })
+
+        try pngSheet().write(to: sheet)
+        store.refresh()
+        #expect(store.available(for: session).contains { $0.id == "blob" })
+        #expect(store.sheet(for: "blob", session: session) != nil)
+    }
+
     @Test func choosePetRowActionIsOnlyForExactAgentSessionsAndMotionRespectsReduceMotion() {
         var opened = 0
         let presenter = SidebarRowMenuPresenter()

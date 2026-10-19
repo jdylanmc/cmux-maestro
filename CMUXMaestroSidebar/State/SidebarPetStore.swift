@@ -127,6 +127,8 @@ final class SidebarPetStore {
     private(set) var notice: String?
     private var sheets: [String: CGImage] = [:]
     private var topInsets: [String: CGFloat] = [:]
+    /// Sheets that passed the header probe but failed to decode; retried after `refresh()`.
+    @ObservationIgnored private var failedSheets: Set<String> = []
     private var frames: [String: CGImage] = [:]
     private var sessionCache: [UUID: (date: Date, pets: [SidebarPetDescriptor])] = [:]
     private let defaults: UserDefaults
@@ -152,7 +154,11 @@ final class SidebarPetStore {
 
     /// Pets that every agent may use, plus any this session's agent made for itself.
     func available(for session: UUID?) -> [SidebarPetDescriptor] {
-        installed + (session.map(sessionPets) ?? [])
+        (installed + (session.map(sessionPets) ?? [])).filter { !failedSheets.contains(sheetKey($0, session: session)) }
+    }
+
+    private func sheetKey(_ pet: SidebarPetDescriptor, session: UUID?) -> String {
+        pet.source == .session ? "\(session?.uuidString.lowercased() ?? "")/\(pet.id)" : pet.id
     }
 
     func descriptor(_ id: String, session: UUID?) -> SidebarPetDescriptor? {
@@ -171,6 +177,7 @@ final class SidebarPetStore {
 
     func refresh() {
         sessionCache = [:]
+        failedSheets = []
         installed = [SidebarPetDescriptor(id: Self.defaultID, displayName: "Maestro", source: .bundled)]
             + Self.scan(uploadDirectory, source: .uploaded, excluding: [Self.defaultID])
     }
@@ -332,8 +339,9 @@ final class SidebarPetStore {
 
     private func decodedSheet(for id: String, session: UUID?) -> DecodedSheet? {
         guard let pet = descriptor(id, session: session) else { return nil }
-        let key = pet.source == .session ? "\(session?.uuidString.lowercased() ?? "")/\(id)" : id
+        let key = sheetKey(pet, session: session)
         if let cached = sheets[key], let inset = topInsets[key] { return .init(image: cached, topInset: inset) }
+        guard !failedSheets.contains(key) else { return nil }
         let image: DecodedSheet?
         switch pet.source {
         case .bundled:
@@ -350,6 +358,8 @@ final class SidebarPetStore {
         if let image {
             sheets[key] = image.image
             topInsets[key] = image.topInset
+        } else {
+            failedSheets.insert(key)
         }
         return image
     }
@@ -399,15 +409,19 @@ final class SidebarPetStore {
         return SidebarPetSheet.accepts(width: width, height: height)
     }
 
+    #if DEBUG
     private static let decodeLock = NSLock()
     nonisolated(unsafe) private static var decodes: [String: Int] = [:]
-    /// Full sheet decodes per file path; a test seam for keeping decodes off repeated lookups.
+    /// Full sheet decode attempts per file path; a test seam for keeping decodes off repeated lookups.
     nonisolated static func decodeCount(_ url: URL) -> Int {
         decodeLock.withLock { decodes[url.standardizedFileURL.path, default: 0] }
     }
+    #endif
 
     nonisolated private static func image(_ url: URL) -> DecodedSheet? {
+        #if DEBUG
         decodeLock.withLock { decodes[url.standardizedFileURL.path, default: 0] += 1 }
+        #endif
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
               SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }
