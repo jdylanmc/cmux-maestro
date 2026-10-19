@@ -2020,6 +2020,7 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             "--continue", "--fleet", "--enable-memory", "--plan", "--acp", "--remote",
             "--remote-export", "--no-ask-user", "--no-experimental",
             "--allow-all-mcp-server-instructions",
+            "--resume", "-r", "--connect", "--bash-env", "--no-remote", "--no-remote-export",
         ):
             with self.subTest(flag=flag):
                 self.assertFalse(parse(["copilot", "--yolo", flag]))
@@ -2032,6 +2033,7 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
         self.assertFalse(parse(["copilot", "--yolo", "--deny-url=example.test"]))
         self.assertFalse(parse(["copilot", "--yolo", "--resume", "--deny-tool", "shell(rm)"]))
         self.assertFalse(parse(["copilot", "--resume", "--deny-tool=web", "--yolo"]))
+        self.assertFalse(parse(["copilot", "--share", "--deny-tool=web", "--yolo"]))
 
     def test_process_arguments_keep_boundaries_and_exclude_environment(self):
         parse = CONTROLLER_API["darwin_process_arguments"]

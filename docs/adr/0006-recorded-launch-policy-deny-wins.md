@@ -26,11 +26,43 @@ do not. Argument values and text after `--` are not flags. A deny flag not
 already covered by the recorded tool policy prevents inherited allow-all:
 do not discard an unrecorded manual deny or persist it from argv.
 Unavailable argv or changed PID identity never proves allow-all.
-Unknown options, assisted approval, and unreplayed tool/path restrictions also
-default. Optional arguments such as `--resume` never swallow following options.
-Custom-agent (`--agent`) and configuration-directory (`--config-dir`) selectors
-also default: they can carry restrictions that the child does not replay.
-Maestro does not read their definitions to try to prove them unrestricted.
+All other options default unless explicitly admitted by the controller's small
+`benign_value_flags` / `benign_other_flags` allowlists. Required argument values
+cannot become permission flags; optional arguments such as `--share` never
+swallow following options. This is an allowlist, not an expanding list of known
+bad flags: an unreviewed option cannot prove unrestricted inheritance.
+
+Admitted values are prompt/attachment data, name, model/context/reasoning
+selection, output/logging, and execution budgets. Other admitted flags affect
+presentation, only widen tool/URL access, remove instruction/shell setup,
+control updating, or select autopilot. `--experimental` is also admitted because
+managed children already replay it. Neither prompt contents nor instruction
+files are permission evidence.
+
+Unreplayed loaders/selectors therefore default, including:
+
+- Code/configuration: `--agent`, `--config-dir`, `--plugin-dir`,
+  `--extension-sdk-path`, `--additional-mcp-config`, `--add-dir`, `-C`,
+  `--bash-env`, `--dynamic-retrieval`, `--enable-memory`,
+  `--allow-all-mcp-server-instructions`.
+- Existing or alternate session state: `--session-id`, `--resume`, `-r`,
+  `--continue`, `--connect`, `--acp`, `--remote`, `--remote-export`,
+  `--no-remote`, `--no-remote-export`, `--fleet`.
+- Tool/environment/mode selection: `--add-github-mcp-toolset`,
+  `--add-github-mcp-tool`, `--mcp-github-auth`, `--enable-mcp-server`, `--mode`,
+  `--plan`, `--secret-env-vars`, `--no-ask-user`, `--no-experimental`.
+- Restrictions: `--assisted-approval`, `--disallow-temp-dir`,
+  `--available-tools`, `--excluded-tools`, `--disable-mcp-server`,
+  `--disable-builtin-mcps`, unrecorded `--deny-tool`, and other `--deny-*`.
+
+Unknown selectors such as `--profile` default too. Bare optional selectors also
+default: they may load persisted state. Thus a born root explicitly launched
+with `--resume` or `--session-id` no longer proves inherited allow-all from argv
+alone, even when `--yolo` is also present. Maestro-launched descendants still
+replay their recorded policy. This deliberately narrows implicit inheritance;
+the separately human-approved coordinator grant remains available.
+Maestro never reads plugin, agent, configuration or resumed-session definitions
+to try to prove them unrestricted.
 
 Safety correction to the initial two-category design: Copilot documents
 `--allow-all` as tools **and paths and URLs**. Tools plus paths alone cannot

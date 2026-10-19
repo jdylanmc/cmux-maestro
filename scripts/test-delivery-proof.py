@@ -3421,6 +3421,10 @@ class LifecycleFailureTests(unittest.TestCase):
              {}, "default", "parent-launch-flags"),
             (["copilot", "--yolo", "--additional-mcp-config", '{"mcpServers":{}}'],
              {}, "default", "parent-launch-flags"),
+            (["copilot", "--allow-all", "--resume"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--allow-all", "-C", "/synthetic/workspace"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--yolo", "--add-github-mcp-toolset=repos"], {}, "default", "parent-launch-flags"),
+            (["copilot", "--yolo", "--mode=plan"], {}, "default", "parent-launch-flags"),
         ):
             with self.subTest(argv=argv, assignment=assignment):
                 self.state = copy.deepcopy(initial)

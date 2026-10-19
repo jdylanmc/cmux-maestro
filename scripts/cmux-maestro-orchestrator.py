@@ -2127,28 +2127,21 @@ def process_arguments(pid):
 def launch_flags_allow_all(arguments, recorded_denies=()):
     flags = {"--yolo", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls"}
     enabled, disabled = set(), set()
-    # Values cannot become permission flags, even when a prompt is exactly "--yolo".
-    value_flags = {
+    # Admit only data, model selection, output/UI and budgets, never loaders or
+    # selectors of unreplayed session/configuration/tool state.
+    benign_value_flags = {
         "--interactive", "-i", "--prompt", "-p", "--model", "--context", "--reasoning-effort",
-        "--session-id", "--name", "-n", "--log-dir",
-        "--log-level", "--plugin-dir", "--additional-mcp-config", "--add-dir", "-C",
-        "--auto-tier", "--extension-sdk-path", "--stream", "--output-format", "--attachment",
-        "--add-github-mcp-toolset", "--add-github-mcp-tool",
-        "--mcp-github-auth", "--max-autopilot-continues", "--mode", "--dynamic-retrieval",
-        "--enable-mcp-server", "--max-ai-credits", "--usage-output-file",
+        "--name", "-n", "--log-dir", "--log-level", "--auto-tier", "--stream", "--output-format",
+        "--attachment", "--max-autopilot-continues", "--max-ai-credits", "--usage-output-file",
     }
     # Optional/variadic values never consume another option. Unknown options fail closed,
     # so a future value-taking flag cannot reinterpret its value as an allow-all grant.
-    other_flags = {
-        "--resume", "-r", "--connect", "--share", "--bash-env", "--mouse",
-        "--allow-tool", "--allow-url", "--secret-env-vars", "--continue", "--share-gist",
-        "--fleet", "--silent", "-s", "--enable-memory", "--banner", "--screen-reader",
-        "--plain-diff", "--enable-all-github-mcp-tools",
-        "--allow-all-mcp-server-instructions", "--autopilot", "--plan", "--experimental",
-        "--acp", "--remote", "--remote-export", "--no-custom-instructions",
-        "--no-auto-update", "--no-ask-user", "--no-color", "--no-experimental",
-        "--no-bash-env", "--no-mouse", "--no-remote", "--no-remote-export",
-        "--no-eager-powershell-resolution",
+    benign_other_flags = {
+        "--share", "--mouse", "--allow-tool", "--allow-url", "--share-gist",
+        "--silent", "-s", "--banner", "--screen-reader", "--plain-diff",
+        "--enable-all-github-mcp-tools", "--autopilot", "--experimental",
+        "--no-custom-instructions", "--no-auto-update", "--no-color", "--no-bash-env",
+        "--no-mouse", "--no-eager-powershell-resolution",
     }
     index = 1
     while index < len(arguments):
@@ -2175,16 +2168,10 @@ def launch_flags_allow_all(arguments, recorded_denies=()):
                 if arguments[index] not in recorded_denies:
                     return False
                 index += 1
-        elif flag.startswith("--deny-") or flag in {
-            "--assisted-approval", "--disallow-temp-dir", "--available-tools", "--excluded-tools",
-            "--disable-mcp-server", "--disable-builtin-mcps",
-            "--agent", "--config-dir",
-        }:
-            return False
-        elif flag in value_flags:
+        elif flag in benign_value_flags:
             if not separator:
                 index += 1
-        elif flag not in other_flags and argument.startswith("-"):
+        elif flag not in benign_other_flags and argument.startswith("-"):
             return False
     if disabled:
         return False

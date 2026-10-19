@@ -94,9 +94,10 @@ Notable changes are recorded using Keep a Changelog categories.
 - Maestro spawns inherit a born-managed parent's verified launch allow-all mode
   when `yolo` is omitted, including nested children. `yolo: false` narrows; recorded
   denies survive. Exact provider PID/start-time checks retain only derived mode
-  and source, never argv. Custom-agent and configuration selectors keep children
-  in default mode rather than lose their restrictions. Runtime `/allow-all`
-  changes are not observed (ADR 0006).
+  and source, never argv. Unreplayed plugin, configuration, workspace and
+  session selectors keep children in default mode rather than lose their
+  restrictions; only reviewed benign launch options qualify. Runtime
+  `/allow-all` changes are not observed (ADR 0006).
 - Every Copilot session in a CMUX tab is Maestro-managed (#261, ADR 0025 amendment). A session
   already running when Maestro was installed enrolls in place at its next extension join
   (`/clear`, `/resume`, or an extension reload you run); Maestro never triggers one. A session the

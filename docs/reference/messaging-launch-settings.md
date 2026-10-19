@@ -37,7 +37,11 @@ launch flags, with bound PID/start-time checks. `--yolo`, `--allow-all`, or all 
 `--allow-all-tools`, `--allow-all-paths`, and `--allow-all-urls` qualify (`=true`
 supported). Tools plus paths alone stay default rather than widen URL access.
 Only mode and source are retained; never argv. Missing evidence defaults,
-and an unrecorded manual deny prevents inherited allow-all.
+and an unrecorded manual deny prevents inherited allow-all. Only the controller's
+audited benign-option allowlists qualify alongside the allow-all flags.
+Unreplayed plugins, configuration/workspace loaders, tool selectors, and resumed
+or alternate session selectors (including `--resume` / `--session-id`) default
+rather than drop unknown restrictions. See ADR 0006 for the option boundary.
 Spawn reports `permissionMode` and `permissionSource`; descendants retain the
 recorded mode. Runtime `/allow-all` toggles are invisible: off-to-on does not
 enable inheritance, and on-to-off cannot invalidate recorded launch flags.
