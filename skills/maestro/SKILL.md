@@ -56,10 +56,13 @@ repository and delivery policy remain with those clients.
 
 ## Delegate a managed child
 
-In a known managed session with `maestro_spawn` available, prefer it for
-explicitly authorized substantial or long-running assignments: implementation
-workers, reviewers, and spikes. These workers have visible, interactive
-terminals the human can use in CMUX and see in the Maestro sidebar.
+When the human explicitly authorizes delegation to another Copilot session,
+prefer `maestro_spawn` in a known managed session with that tool available for
+substantial or long-running assignments: implementation workers, reviewers,
+and spikes. Authorization to do the work alone is not permission to spawn;
+without delegation consent, do the work in-session or ask first. These workers
+have visible, interactive terminals the human can use in CMUX and see in the
+Maestro sidebar.
 Where offered, `maestro_readiness` confirms `status: "managed"` and
 `capabilities.spawn: true`. Maestro-launched sessions have no readiness tool;
 verify them with `maestro_identity({})` under the lifecycle guide instead.

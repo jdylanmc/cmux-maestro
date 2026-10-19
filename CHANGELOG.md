@@ -63,7 +63,8 @@ Notable changes are recorded using Keep a Changelog categories.
 ### Changed
 
 - The global `maestro` guide prefers visible, interactive `maestro_spawn` workers
-  for authorized substantial work in managed sessions. Built-in `task` remains
+  for substantial work in managed sessions only with explicit human authorization
+  to delegate to another Copilot session. Built-in `task` remains
   for short read-only work, quick reviews, and unmanaged fallback, never to bypass
   a missing managed lifecycle tool or refused launch. Maestro-launched sessions
   use identity verification, not the born-managed readiness tool. Spawn icon
