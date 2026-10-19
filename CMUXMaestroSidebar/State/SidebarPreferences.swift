@@ -52,6 +52,14 @@ final class SidebarPreferences {
     private let orderStore: SidebarPreferenceStore<SidebarOrderSettings>
     var order: SidebarOrderSettings { orderStore.value.settings }
     var orderNotice: String? { orderStore.value.notice }
+    private let tagStore: SidebarPreferenceStore<SidebarTagSettings>
+    var tagSettings: SidebarTagSettings { tagStore.value.settings }
+    var tagNotice: String? { tagStore.value.notice }
+    @ObservationIgnored private let agentTagsFile: SidebarAgentTagsFile?
+    /// Whether Copilot still keeps a session's state; a full tag store drops only sessions it no longer keeps.
+    @ObservationIgnored private let sessionRetained: (UUID) -> Bool
+    /// Agents' own tags by exact session; the last good read stays when a later read fails.
+    private(set) var agentTags: [UUID: [String]] = [:]
     var history: SidebarHistorySettings { historyStore.value.settings }
     var historyNotice: String? { historyStore.value.notice }
     var attention: SidebarAttentionSettings { attentionStore.value.settings }
@@ -89,13 +97,14 @@ final class SidebarPreferences {
             defaults: .standard,
             historyFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-history.json"),
             attentionFile: root.appendingPathComponent("CMUXMaestroPreview/sidebar-attention.json"),
-            layoutStore: .shared
+            layoutStore: .shared, agentTagsFile: .standard(), sessionRetained: Self.copilotKeepsSession
         )
     }
 
     init(
         defaults: UserDefaults, historyFile: URL, attentionFile: URL, layoutStore: SidebarLayoutStore,
-        iconFile: URL? = nil, orderFile: URL? = nil
+        iconFile: URL? = nil, orderFile: URL? = nil, tagFile: URL? = nil,
+        agentTagsFile: SidebarAgentTagsFile? = nil, sessionRetained: @escaping (UUID) -> Bool = { _ in true }
     ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
@@ -107,6 +116,12 @@ final class SidebarPreferences {
             file: .init(url: orderFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-order.json")),
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true
         )
+        tagStore = SidebarPreferenceStore(
+            file: .init(url: tagFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-tags.json")),
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
+        )
+        self.agentTagsFile = agentTagsFile
+        self.sessionRetained = sessionRetained
         showEnded = defaults.bool(forKey: Self.showEndedKey)
         let storedFooter = defaults.double(forKey: Self.pinnedFooterHeightKey)
         pinnedFooterHeight = storedFooter.isFinite && storedFooter > 0 ? storedFooter : nil
@@ -136,6 +151,7 @@ final class SidebarPreferences {
         }, migrated: {
             defaults.removeObject(forKey: Self.attentionKey)
         })
+        refreshTags()
     }
 
     func setDensity(_ density: SidebarDensity) { layoutStore.apply(.density(density)) }
@@ -188,6 +204,109 @@ final class SidebarPreferences {
 
     func resetIcons() { iconStore.apply(reset: true) { _ in } }
     func refreshIcons() { iconStore.refresh() }
+
+    /// Tags for one exact session: the human's, then the agent's own, with shared colors.
+    func tags(for session: UUID?) -> [SidebarResolvedTag] {
+        guard let session else { return [] }
+        return SidebarResolvedTag.resolve(
+            human: tagSettings.assignments[SidebarTagSettings.key(session)] ?? [],
+            agent: agentTags[session] ?? [], colors: tagSettings.colors
+        )
+    }
+
+    func humanTags(for session: UUID) -> [String] { tagSettings.assignments[SidebarTagSettings.key(session)] ?? [] }
+
+    /// Replaces the human's tags for one session; the agent's own tags are untouched.
+    /// Returns why nothing was saved, or nil.
+    @discardableResult
+    func setHumanTags(_ input: String, for session: UUID) -> String? {
+        saveTags(input, colors: [:], for: session)
+    }
+
+    /// A human color for every occurrence of `slug`; nil restores the automatic color.
+    @discardableResult
+    func setTagColor(_ swatch: SidebarTagSwatch?, for slug: String) -> String? {
+        guard SidebarTagSlug.isCanonical(slug) else { return SidebarTagError.noLetterOrNumber.message }
+        return applyTags { try Self.setColors([slug: swatch], in: &$0, agentSlugs: $1) }
+    }
+
+    /// One write for the tag editor: the session's tags (`input`, nil leaves them) and any colors
+    /// (nil swatch restores automatic). Everything is saved, or nothing is. Returns why, or nil.
+    @discardableResult
+    func saveTags(_ input: String?, colors: [String: SidebarTagSwatch?], for session: UUID) -> String? {
+        var slugs: [String]?
+        if let input {
+            do { slugs = try SidebarTagSlug.parse(input) } catch { return error.message }
+        }
+        guard colors.keys.allSatisfy(SidebarTagSlug.isCanonical) else { return SidebarTagError.noLetterOrNumber.message }
+        let retained = sessionRetained
+        return applyTags { settings, agentSlugs in
+            if let slugs {
+                let key = SidebarTagSettings.key(session)
+                if !slugs.isEmpty, settings.assignments[key] == nil,
+                   settings.assignments.count >= SidebarTagSettings.maximumEntries {
+                    // Full: drop only sessions Copilot no longer keeps (ADR 0026); otherwise refuse.
+                    settings.assignments = settings.assignments.filter { UUID(uuidString: $0.key).map(retained) ?? false }
+                }
+                if slugs.isEmpty { settings.assignments.removeValue(forKey: key) } else { settings.assignments[key] = slugs }
+            }
+            try Self.setColors(colors, in: &settings, agentSlugs: agentSlugs)
+        }
+    }
+
+    private static func setColors(
+        _ colors: [String: SidebarTagSwatch?], in settings: inout SidebarTagSettings, agentSlugs: Set<String>?
+    ) throws {
+        for (slug, swatch) in colors {
+            // Full: drop colors for slugs no session carries; otherwise refuse. Without a current
+            // agent-store read, agent-only slugs are unknown, so nothing is dropped.
+            if swatch != nil, settings.colors[slug] == nil, settings.colors.count >= SidebarTagSettings.maximumEntries,
+               let agentSlugs {
+                let used = Set(settings.assignments.values.joined()).union(agentSlugs).union(colors.keys)
+                settings.colors = settings.colors.filter { used.contains($0.key) }
+            }
+            settings.colors[slug] = swatch
+        }
+    }
+
+    private func applyTags(_ mutation: (inout SidebarTagSettings, Set<String>?) throws -> Void) -> String? {
+        // Pruning decides from a fresh agent read, never the display cache; a failed read is nil.
+        let agentSlugs: Set<String>?
+        if let agentTagsFile {
+            agentSlugs = (try? agentTagsFile.read()).map { Set($0.values.joined()) }
+        } else {
+            agentSlugs = []
+        }
+        tagStore.apply {
+            try mutation(&$0, agentSlugs)
+            guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
+        }
+        return tagNotice
+    }
+
+    /// Removes every human tag and color; agents' own tags are unchanged.
+    func resetTags() { tagStore.apply(reset: true) { _ in } }
+
+    nonisolated static func copilotKeepsSession(_ id: UUID) -> Bool {
+        guard let root = try? CopilotPaths.sessionStateRoot() else { return true }
+        return sessionKept(id, under: root)
+    }
+
+    /// Only a state root that is a directory, with this session's entry reported missing (ENOENT),
+    /// proves the session is gone. Any other answer, including a denied lookup, keeps it.
+    nonisolated static func sessionKept(_ id: UUID, under root: URL) -> Bool {
+        var info = stat()
+        guard lstat(root.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { return true }
+        guard lstat(root.appendingPathComponent(id.uuidString.lowercased()).path, &info) != 0 else { return true }
+        return errno != ENOENT
+    }
+
+    func refreshTags() {
+        tagStore.refresh()
+        guard let agentTagsFile else { return }
+        // A failed read keeps the last good tags; nothing is dropped or guessed.
+        if let next = try? agentTagsFile.read(), next != agentTags { agentTags = next }
+    }
 
     /// Changes Maestro's sidebar order only; nothing is sent to CMUX (ADR 0021).
     func applyOrder(_ change: SidebarOrderChange) { orderStore.apply(reset: change.resets) { try change.mutate(&$0) } }

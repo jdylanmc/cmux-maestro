@@ -6426,5 +6426,165 @@ class PetSheetSizeTests(unittest.TestCase):
                 read(str(self.pet_folder(width, height)), None)
 
 
+
+TAG_FAKE_HELPER = """#!/usr/bin/env python3
+import json, os, sys
+if sys.argv[1:2] != ["prove"] or os.environ.get("FAKE_PROOF") == "deny":
+    print(json.dumps({"ok": False}))
+    sys.exit(2)
+print(json.dumps({"ok": True, "sessionId": sys.argv[sys.argv.index("--session-id") + 1]}))
+"""
+
+
+class AgentTagTests(unittest.TestCase):
+    """The agent surface for its own tags: exact-self proof, canonical slugs, no truncation,
+    no color control, and other sessions' entries untouched."""
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        base = Path(self.directory.name).resolve()
+        self.home = base / "home"
+        self.root = self.home / "Library/Application Support/CMUXMaestroPreview/Copilot/tags"
+        helper = base / "helper"
+        helper.write_text(TAG_FAKE_HELPER)
+        helper.chmod(0o700)
+        package = base / "package"
+        package.mkdir()
+        self.controller = package / CONTROLLER.name
+        shutil.copyfile(CONTROLLER, self.controller)
+        config = package / "identity-helper.json"
+        config.write_text(json.dumps({"helper": str(helper)}))
+        config.chmod(0o600)
+        self.session, self.other = str(uuid.uuid4()), str(uuid.uuid4())
+
+    def tearDown(self):
+        self.directory.cleanup()
+
+    def run_tags(self, action, *tags, session=None, deny=False, extra=()):
+        environment = dict(os.environ, HOME=str(self.home))
+        if deny:
+            environment["FAKE_PROOF"] = "deny"
+        command = [sys.executable, str(self.controller), "tags", action, "--self",
+                   "--session-id", session or self.session, *extra]
+        for tag in tags:
+            command += ["--tag", tag]
+        process = subprocess.run(command, capture_output=True, text=True, env=environment, timeout=30)
+        return process.returncode, json.loads(process.stdout or process.stderr)
+
+    def stored(self):
+        return json.loads((self.root / "agent-tags.json").read_text())
+
+    def test_slug_cases_match_the_sidebar_fixture(self):
+        cases = json.loads((REPO / "scripts/test-fixtures/tag-slug-cases.json").read_text())
+        self.assertEqual(cases["version"], CONTROLLER_API["TAGS_VERSION"])
+        for case in cases["cases"]:
+            self.assertEqual(CONTROLLER_API["tag_slug"](case["input"]), case["slug"], case["input"])
+
+    def test_add_list_remove_clear_bind_to_the_proven_session_only(self):
+        self.assertEqual(self.run_tags("add", "Deploy", session=self.other)[0], 0)
+        code, added = self.run_tags("add", "Front End", "front_end", "Deploy")
+        self.assertEqual(code, 0, added)
+        self.assertEqual(added["agentTags"], ["front-end", "deploy"])
+        self.assertEqual(self.run_tags("list")[1]["agentTags"], ["front-end", "deploy"])
+        code, removed = self.run_tags("remove", "DEPLOY", "absent")
+        self.assertEqual(code, 0, removed)
+        self.assertEqual((removed["agentTags"], removed["notAssigned"]), (["front-end"], ["absent"]))
+        self.assertEqual(self.run_tags("clear")[1]["agentTags"], [])
+        self.assertEqual(self.stored(), {"version": 1, "sessions": {self.other: ["deploy"]}})
+        self.assertEqual((self.root / "agent-tags.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.root.parent.stat().st_mode & 0o777, 0o700)
+
+    def test_unproven_caller_changes_nothing(self):
+        code, value = self.run_tags("add", "deploy", deny=True)
+        self.assertNotEqual(code, 0)
+        self.assertIn("no tag was changed", value["error"])
+        self.assertFalse(self.root.exists())
+
+    def test_over_limit_or_invalid_tags_are_refused_whole(self):
+        self.assertEqual(self.run_tags("add", *[f"t{index}" for index in range(5)])[0], 0)
+        before = self.stored()
+        for tags in (["t9", "t10"], ["x" * 25], ["ok", "!!!"]):
+            code, value = self.run_tags("add", *tags)
+            self.assertNotEqual(code, 0, tags)
+            self.assertIn("nothing was changed", value["error"])
+            self.assertEqual(self.stored(), before)
+        self.assertEqual(self.run_tags("add", "t0", "y" * 24)[1]["agentTags"][-1], "y" * 24)
+
+    def test_agents_have_no_color_control_and_need_an_exact_session(self):
+        with self.assertRaises(SystemExit):
+            with patch("sys.stderr", io.StringIO()):
+                CONTROLLER_API["parser"]().parse_args(["tags", "add", "--self", "--session-id", self.session,
+                                                       "--tag", "x", "--color", "red"])
+        code, value = self.run_tags("add", "x", session="not-a-session")
+        self.assertNotEqual(code, 0)
+        self.assertFalse(self.root.exists())
+
+    def test_invalid_store_is_refused_and_left_untouched(self):
+        self.assertEqual(self.run_tags("add", "keep")[0], 0)
+        path = self.root / "agent-tags.json"
+        path.write_text('{"version":1,"sessions":{"%s":["Not Canonical"]}}' % self.session)
+        code, value = self.run_tags("add", "more")
+        self.assertNotEqual(code, 0)
+        self.assertIn("Not Canonical", path.read_text())
+
+    def test_store_contract_cases_match_the_sidebar(self):
+        cases = json.loads((REPO / "scripts/test-fixtures/tag-store-cases.json").read_text())
+        decode = CONTROLLER_API["tags_decode"]
+        for case in cases["valid"]:
+            decode(case["raw"].encode())
+        for case in cases["invalid"]:
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"], msg=case["name"]):
+                decode(case["raw"].encode())
+        with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+            decode(b"\xef\xbb\xbf" + cases["valid"][0]["raw"].encode())
+
+    def test_full_store_drops_only_sessions_copilot_no_longer_keeps(self):
+        command = CONTROLLER_API["tags_command"]
+        state_root = self.home / ".copilot/session-state"
+        kept, ended = str(uuid.uuid4()), str(uuid.uuid4())
+        (state_root / kept).mkdir(parents=True)
+        (state_root / self.session).mkdir()
+        arguments = lambda session, action="add": type("Args", (), {
+            "own_session": True, "session_id": session, "tags_action": action, "tag": ["x"]})()
+        with patch.dict(command.__globals__, {"TAGS_MAX_SESSIONS": 2, "prove_own_session": lambda *_, **__: None}), \
+                patch.dict(os.environ, {"HOME": str(self.home)}):
+            command(arguments(kept))
+            command(arguments(ended))
+            result = command(arguments(self.session))
+            self.assertEqual(result["pruned"], [ended])
+            self.assertEqual(sorted(self.stored()["sessions"]), sorted([kept, self.session]))
+            (state_root / str(uuid.uuid4())).mkdir()
+            newcomer = sorted(path.name for path in state_root.iterdir() if path.name not in (kept, self.session))[0]
+            with self.assertRaises(CONTROLLER_API["OrchestrationError"]):
+                command(arguments(newcomer))
+            self.assertEqual(sorted(self.stored()["sessions"]), sorted([kept, self.session]))
+
+    def test_denied_session_lookup_keeps_the_session(self):
+        keeps = CONTROLLER_API["copilot_keeps_session"]
+        root = self.home / ".copilot/session-state"
+        with patch.dict(os.environ, {"HOME": str(self.home)}):
+            self.assertTrue(keeps(self.session))
+            root.mkdir(parents=True)
+            (root / self.session).mkdir()
+            self.assertTrue(keeps(self.session))
+            self.assertFalse(keeps(self.other))
+            root.chmod(0o600)
+            try:
+                self.assertTrue(keeps(self.other))
+            finally:
+                root.chmod(0o700)
+
+    def test_concurrent_agents_lose_nothing(self):
+        sessions = [str(uuid.uuid4()) for _ in range(6)]
+        threads = [threading.Thread(target=self.run_tags, args=("add", "shared"), kwargs={"session": item})
+                   for item in sessions]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(self.stored()["sessions"], {item: ["shared"] for item in sessions})
+
+
 if __name__ == "__main__":
     unittest.main()

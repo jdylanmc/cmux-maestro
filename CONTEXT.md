@@ -197,6 +197,10 @@ _Avoid_: footer
 Nerd Font glyph plus identity color, scoped to one session or surface.
 _Avoid_: avatar
 
+**Tag**:
+Short canonical slug on an agent session, assigned by the human, by the agent for itself, or both. Its color belongs to the slug, everywhere; only the human picks it. (ADR 0026)
+_Avoid_: label, category
+
 **Pet**:
 Animated Codex-format sprite sheet. Maps Maestro states to rows 0, 7, 6, 3, 5.
 _Avoid_: mascot

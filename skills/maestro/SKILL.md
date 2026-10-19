@@ -236,6 +236,23 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
   the extension logs one diagnostic and changes no schedule, so do not promise a firing you
   have not seen.
 
+## Your own tags
+
+You may assign short tags to **your own session** so the human can scan agents in the
+sidebar. Resolve your exact session UUID as for Beats; the command proves ownership first.
+
+```sh
+"$MAESTRO" tags add    --self --session-id "$SESSION" --tag review --tag "front end"
+"$MAESTRO" tags list   --self --session-id "$SESSION"
+"$MAESTRO" tags remove --self --session-id "$SESSION" --tag review
+"$MAESTRO" tags clear  --self --session-id "$SESSION"
+```
+
+- Tags are canonicalized (`Front End` and `front_end` are both `front-end`). At most 6 per
+  session, each at most 24 characters; an over-limit or empty tag refuses the whole command.
+- You change only your own tags. The human's tags for your session are separate and stay;
+  a tag you both assign shows once with both owners. Colors are the human's; you cannot set them.
+
 ## Permissions, failures and lifecycle boundaries
 
 - Normal launches add **no tool grants**. Copilot may ask the human for native

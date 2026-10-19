@@ -1,0 +1,97 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "input": "Front End",
+      "slug": "front-end"
+    },
+    {
+      "input": "front_end",
+      "slug": "front-end"
+    },
+    {
+      "input": "  --Front--End--  ",
+      "slug": "front-end"
+    },
+    {
+      "input": "FRONT-END",
+      "slug": "front-end"
+    },
+    {
+      "input": "ＦＲＯＮＴ ｅｎｄ",
+      "slug": "front-end"
+    },
+    {
+      "input": "Ⅻ",
+      "slug": "xii"
+    },
+    {
+      "input": "ﬁx",
+      "slug": "fix"
+    },
+    {
+      "input": "Café",
+      "slug": "café"
+    },
+    {
+      "input": "Café",
+      "slug": "café"
+    },
+    {
+      "input": "İstanbul",
+      "slug": "i-stanbul"
+    },
+    {
+      "input": "ΣΑΣ",
+      "slug": "σασ"
+    },
+    {
+      "input": "数据 pipeline",
+      "slug": "数据-pipeline"
+    },
+    {
+      "input": "①",
+      "slug": "1"
+    },
+    {
+      "input": "a.b/c",
+      "slug": "a-b-c"
+    },
+    {
+      "input": "!!!",
+      "slug": ""
+    },
+    {
+      "input": "",
+      "slug": ""
+    },
+    {
+      "input": "😀 bug",
+      "slug": "bug"
+    },
+    {
+      "input": "x​y",
+      "slug": "x-y"
+    },
+    {
+      "input": "Ǆungla",
+      "slug": "džungla"
+    },
+    {
+      "input": "abcdefghijklmnopqrstuvwxyz",
+      "slug": "abcdefghijklmnopqrstuvwxyz"
+    },
+    {
+      "input": "abcdefghijklmnopqrstuvwx",
+      "slug": "abcdefghijklmnopqrstuvwx"
+    },
+    {
+      "input": "ẞ",
+      "slug": "ß"
+    },
+    {
+      "input": "٣ arabic-indic",
+      "slug": "٣-arabic-indic"
+    }
+  ]
+}

@@ -23,6 +23,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 import uuid
 import zlib
 
@@ -6038,9 +6039,9 @@ def beat_view(beat):
     return {name: beat[name] for name in sorted(BEATS_FIELDS)}
 
 
-def prove_own_session(session):
+def prove_own_session(session, feature="Beats", subject="Beat"):
     """Exact-self authority through the native identity helper (no side effects)."""
-    helper = identity_helper_path("Beats")
+    helper = identity_helper_path(feature)
     try:
         process = subprocess.run([helper, "prove", "--session-id", session], capture_output=True, text=True, timeout=5)
         value = json.loads(process.stdout)
@@ -6048,7 +6049,7 @@ def prove_own_session(session):
         raise OrchestrationError("Own-session identity verification did not complete.") from error
     if process.returncode != 0 or not isinstance(value, dict) or value.get("ok") is not True \
             or str(value.get("sessionId", "")).lower() != session:
-        raise OrchestrationError("This caller could not prove ownership of that session; no Beat was changed.")
+        raise OrchestrationError(f"This caller could not prove ownership of that session; no {subject} was changed.")
 
 
 # "Resume" is reserved for Copilot sessions; these older verbs still work.
@@ -6129,6 +6130,246 @@ def beats_set_enabled(enabled):
 
 # Verbs that change one owned Beat in place; each bumps its revision.
 BEATS_UPDATES = {"edit": beats_edit, "disable": beats_set_enabled(False), "enable": beats_set_enabled(True)}
+
+
+# --- Agent tags: an agent's own tags for its exact session -----------------------
+# Decision: ADR 0026. The human's tags and every tag color live in the
+# sidebar's own container; this store holds only agents' own assignments. Only a caller that
+# proves the session changes that session's entry, and no command chooses a color.
+TAGS_VERSION = 1
+TAGS_MAX_PER_SESSION = 6
+TAGS_MAX_LENGTH = 24
+TAGS_MAX_SESSIONS = 2048
+TAGS_MAX_STORE_BYTES = 2 * 1024 * 1024
+TAGS_FILE = "agent-tags.json"
+
+
+def tag_slug(text):
+    """Canonicalization version 1, shared with the sidebar (SidebarTagSlug.canonical): NFKC,
+    per-character default lowercase, NFKC again, then each run of non-letters/non-numbers is one
+    hyphen and edge hyphens drop. Both run scripts/test-fixtures/tag-slug-cases.json."""
+    text = unicodedata.normalize("NFKC", text)
+    text = unicodedata.normalize("NFKC", "".join(character.lower() for character in text))
+    result, separated = [], False
+    for character in text:
+        if unicodedata.category(character)[0] in "LN":
+            if separated and result:
+                result.append("-")
+            separated = False
+            result.append(character)
+        else:
+            separated = True
+    return "".join(result)
+
+
+def tag_slug_valid(slug):
+    return isinstance(slug, str) and 0 < len(slug) <= TAGS_MAX_LENGTH and tag_slug(slug) == slug
+
+
+def tags_canonical_input(values):
+    """Canonical, deduplicated slugs in the given order. Refuses rather than truncates."""
+    slugs = []
+    for value in values or []:
+        slug = tag_slug(value)
+        if not slug:
+            raise OrchestrationError("Each tag needs a letter or number; nothing was changed.")
+        if len(slug) > TAGS_MAX_LENGTH:
+            raise OrchestrationError(f"Tags are at most {TAGS_MAX_LENGTH} characters; nothing was changed.")
+        if slug not in slugs:
+            slugs.append(slug)
+    if not slugs:
+        raise OrchestrationError("Give at least one --tag.")
+    return slugs
+
+
+def tags_root():
+    """Under the Copilot integration folder the sidebar already reads; the sidebar never writes it."""
+    return Path.home() / "Library/Application Support/CMUXMaestroPreview/Copilot/tags"
+
+
+def validate_tags_state(state):
+    if not isinstance(state, dict) or set(state) != {"version", "sessions"} or type(state["version"]) is not int \
+            or state["version"] != TAGS_VERSION or not isinstance(state["sessions"], dict) \
+            or len(state["sessions"]) > TAGS_MAX_SESSIONS:
+        raise OrchestrationError("The agent tag store is invalid or from a newer version.")
+    for session, slugs in state["sessions"].items():
+        try:
+            valid_key = canonical_uuid(session, "session ID") == session
+        except OrchestrationError:
+            valid_key = False
+        if not valid_key or not isinstance(slugs, list) or not 0 < len(slugs) <= TAGS_MAX_PER_SESSION \
+                or not all(tag_slug_valid(slug) for slug in slugs) or len(set(slugs)) != len(slugs):
+            raise OrchestrationError("The agent tag store has a malformed entry.")
+    return state
+
+
+def tags_decode(raw):
+    """Plain UTF-8 JSON, unique keys, integers only; the sidebar (SidebarAgentTagsFile.decode) applies
+    the same rules. Both run scripts/test-fixtures/tag-store-cases.json."""
+    if len(raw) > TAGS_MAX_STORE_BYTES:
+        raise OrchestrationError("The agent tag store is not a private regular file within its size limit.")
+    if b"\x00" in raw or BEATS_BYTE_ORDER_MARK.search(raw):
+        raise OrchestrationError("The agent tag store is not valid JSON.")
+
+    def unique(pairs):
+        value = dict(pairs)
+        if len(value) != len(pairs):
+            raise ValueError("duplicate key")
+        return value
+
+    def refuse(_):
+        raise ValueError("not an integer")
+    try:
+        state = json.loads(raw.decode("utf-8"), object_pairs_hook=unique, parse_constant=refuse, parse_float=refuse)
+    except (UnicodeError, ValueError, RecursionError) as error:
+        raise OrchestrationError("The agent tag store is not valid JSON.") from error
+    return validate_tags_state(state)
+
+
+def tags_open_store(path):
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except FileNotFoundError:
+        return None
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 \
+                or info.st_size > TAGS_MAX_STORE_BYTES:
+            raise OrchestrationError("The agent tag store is not a private regular file within its size limit.")
+        return tags_decode(os.read(descriptor, TAGS_MAX_STORE_BYTES + 1))
+    finally:
+        os.close(descriptor)
+
+
+def tags_write_store(root, state):
+    data = json.dumps(state, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+    if len(data) > TAGS_MAX_STORE_BYTES:
+        raise OrchestrationError("The agent tag store is full; nothing was changed.")
+    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        temporary = f".{TAGS_FILE}.{secrets.token_hex(4)}"
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        try:
+            try:
+                view = memoryview(data)
+                while view:
+                    view = view[os.write(descriptor, view):]
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+            os.replace(temporary, TAGS_FILE, src_dir_fd=directory, dst_dir_fd=directory)
+        except BaseException:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except OSError:
+                pass
+            raise
+        try:
+            os.fsync(directory)
+        except OSError:
+            pass
+    finally:
+        os.close(directory)
+
+
+def tags_private_root(root):
+    info = root.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise OrchestrationError("The agent tag store directory is not private to this user.")
+
+
+def tags_store_mutate(operation, *, root=None):
+    """Writers serialize on a lock file and replace the store atomically; readers need no lock."""
+    root = Path(root) if root is not None else tags_root()
+    root.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    root.mkdir(mode=0o700, exist_ok=True)
+    tags_private_root(root)
+    lock_descriptor = os.open(root / ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        state = tags_open_store(root / TAGS_FILE) or {"version": TAGS_VERSION, "sessions": {}}
+        result = operation(state)
+        validate_tags_state(state)
+        tags_write_store(root, state)
+        return result
+    finally:
+        os.close(lock_descriptor)
+
+
+def tags_store_snapshot(*, root=None):
+    root = Path(root) if root is not None else tags_root()
+    try:
+        tags_private_root(root)
+    except FileNotFoundError:
+        return {"version": TAGS_VERSION, "sessions": {}}
+    return tags_open_store(root / TAGS_FILE) or {"version": TAGS_VERSION, "sessions": {}}
+
+
+def copilot_keeps_session(session):
+    """Only a state-root directory whose entry for this session is missing (ENOENT) proves the
+    session is gone; any other answer, including a denied lookup, keeps it."""
+    sessions = Path.home() / ".copilot/session-state"
+    try:
+        if not stat.S_ISDIR(os.lstat(sessions).st_mode):
+            return True
+    except OSError:
+        return True
+    try:
+        os.lstat(sessions / session)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def tags_command(args, *, root=None):
+    """Agent surface: list, add, remove or clear the caller's own tags for its proven session.
+    Human tags and colors are the sidebar's; nothing here reads or changes them."""
+    if not args.own_session:
+        raise OrchestrationError("Agent tags are managed with --self for your own session.")
+    session = canonical_uuid(args.session_id, "current session ID")
+    prove_own_session(session, feature="agent tags", subject="tag")
+    if args.tags_action == "list":
+        if args.tag:
+            raise OrchestrationError("list takes no --tag.")
+        return {"sessionId": session, "agentTags": tags_store_snapshot(root=root)["sessions"].get(session, [])}
+    if args.tags_action == "clear":
+        if args.tag:
+            raise OrchestrationError("clear takes no --tag.")
+        requested = []
+    else:
+        requested = tags_canonical_input(args.tag)
+
+    def operate(state):
+        sessions = state["sessions"]
+        current = list(sessions.get(session, []))
+        result = {"sessionId": session}
+        if args.tags_action == "add":
+            following = current + [slug for slug in requested if slug not in current]
+            if len(following) > TAGS_MAX_PER_SESSION:
+                raise OrchestrationError(
+                    f"An agent has at most {TAGS_MAX_PER_SESSION} tags per session; nothing was changed.")
+            if session not in sessions and len(sessions) >= TAGS_MAX_SESSIONS:
+                # Full: drop only sessions Copilot no longer keeps, which can never tag again (ADR 0026).
+                for ended in [item for item in sessions if not copilot_keeps_session(item)]:
+                    del sessions[ended]
+                    result.setdefault("pruned", []).append(ended)
+            if session not in sessions and len(sessions) >= TAGS_MAX_SESSIONS:
+                raise OrchestrationError("The agent tag store is full; nothing was changed.")
+        elif args.tags_action == "remove":
+            following = [slug for slug in current if slug not in requested]
+            result["notAssigned"] = [slug for slug in requested if slug not in current]
+        else:
+            following = []
+        if following:
+            sessions[session] = following
+        else:
+            sessions.pop(session, None)
+        result["agentTags"] = following
+        return result
+
+    return tags_store_mutate(operate, root=root)
 
 
 def command_icon(args, root, cmux):
@@ -6564,6 +6805,11 @@ def parser():
     beats.add_argument("--cron")
     beats.add_argument("--prompt")
     beats.add_argument("--count", type=int, default=5)
+    tags = commands.add_parser("tags", help="Assign or remove your own session's tags (humans choose colors)")
+    tags.add_argument("tags_action", choices=["list", "add", "remove", "clear"])
+    tags.add_argument("--self", action="store_true", dest="own_session")
+    tags.add_argument("--session-id")
+    tags.add_argument("--tag", action="append")
     runtime = commands.add_parser("runtime")
     runtime.add_argument("--worker-id", required=True)
     runtime.add_argument("--token")
@@ -6613,6 +6859,9 @@ def main(argv=None):
             return 0
         if args.command == "beats":
             print(json.dumps({"ok": True, **beats_command(args)}, sort_keys=True))
+            return 0
+        if args.command == "tags":
+            print(json.dumps({"ok": True, **tags_command(args)}, sort_keys=True, ensure_ascii=False))
             return 0
         if args.command == "beats-snapshot":
             print(json.dumps({"ok": True, **command_beats_snapshot()}, sort_keys=True))

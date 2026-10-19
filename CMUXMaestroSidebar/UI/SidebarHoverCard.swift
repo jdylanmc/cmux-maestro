@@ -8,6 +8,7 @@ struct SidebarHoverCardData: Equatable {
     var lines: [SidebarDetailLine] = []
     var notice: String? = nil
     var pet: SidebarHoverPet? = nil
+    var tags: [SidebarResolvedTag] = []
 }
 
 struct SidebarHoverCard: View {
@@ -24,6 +25,7 @@ struct SidebarHoverCard: View {
             if let subtitle = data.subtitle {
                 Text(subtitle).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
+            SidebarTagList(tags: data.tags)
             ForEach(data.lines) { line in
                 if let changes = line.gitChanges {
                     GitChangeBadge(changes: changes)
