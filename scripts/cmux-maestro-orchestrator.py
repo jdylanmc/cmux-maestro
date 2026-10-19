@@ -3782,7 +3782,7 @@ def verify_session_custody(session, provider):
         os.close(descriptor)
 
 
-# Owned background processes (#78) and their TCP listeners (#75), ADR 0026.
+# Owned background processes (#78) and their TCP listeners (#75), ADR 0027.
 # Ownership is keyed by the node's recorded binding (session, generation, provider process), never
 # by lock files, names, ports or cwd alone. Identity is PID plus microsecond start time.
 PROCESS_OBSERVATION_FILE = "processes.json"
@@ -3969,7 +3969,7 @@ def process_helpers(table, root):
 
     Copilot's MCP servers and extensions share the provider's group and everything they start
     (a browser in its own group included) hangs off them; tool shells start their own group.
-    Presentation only, never ownership evidence (ADR 0026).
+    Presentation only, never ownership evidence (ADR 0027).
     """
     group = table[root][1]
     helpers, queue = set(), [pid for pid, row in table.items() if row[0] == root and pid != root and row[1] == group]

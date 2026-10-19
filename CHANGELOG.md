@@ -21,7 +21,7 @@ Notable changes are recorded using Keep a Changelog categories.
   cannot set colors. Text contrast is at least 4.5:1. See
   [agent tags](docs/reference/agent-tags.md).
 - A new controller command, `process-observe`, publishes each managed agent's owned background
-  processes and their TCP listeners to `observer/processes.json` (#78, #75, ADR 0026). Ownership
+  processes and their TCP listeners to `observer/processes.json` (#78, #75, ADR 0027). Ownership
   comes from the node's recorded session, generation and provider process; identity is PID plus
   microsecond start time. Names only, never argv or environment. A process that leaves the tree is
   reported once as detached and never attributed again. The installed adapter gains
