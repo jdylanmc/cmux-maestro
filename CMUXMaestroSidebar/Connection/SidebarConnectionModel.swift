@@ -108,6 +108,9 @@ extension SidebarConnectionModel {
             projectRootPath: hasWorkspacePaths ? .available(workspace.projectRootPath) : .unavailable,
             surfaces: hasSurfaceMetadata
                 ? .available(workspace.surfaces.map { map(surface: $0, hasWorkspacePaths: hasWorkspacePaths) })
+                : .unavailable,
+            listeningPorts: hasWorkspaceMetadata && scopes.contains(.networkPorts)
+                ? .available(Array(Set(workspace.listeningPorts.filter { (1...65_535).contains($0) })).sorted())
                 : .unavailable
         )
     }

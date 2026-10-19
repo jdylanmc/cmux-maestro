@@ -59,6 +59,11 @@ Notable changes are recorded using Keep a Changelog categories.
   or press it with VoiceOver ("Beats for this agent"), to open Beats scoped to that session;
   **New Beat** targets only it and **Show all** returns to every Beat. It never focuses the
   row or navigates CMUX. Its tooltip lists the enabled Beats by cron.
+- The workspace hover shows CMUX's workspace-wide listening ports (#75), labelled
+  `Ports (CMUX, workspace-wide)`: sorted port numbers, `None reported`, or `Not granted`. CMUX gives
+  no owner, address, protocol or completeness, so the row never appears on an agent hover. The
+  sidebar now requests CMUX's `networkPorts` read scope, so CMUX asks you to approve it again;
+  existing scopes keep working until you do.
 
 ### Changed
 

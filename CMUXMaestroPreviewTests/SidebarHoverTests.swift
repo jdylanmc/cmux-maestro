@@ -699,6 +699,15 @@ struct SidebarHoverTests {
         #expect(moved.lines.contains(.init(title: "Shared surfaces", value: "None", copyableValue: "None")))
     }
 
+    @Test func workspacePortsAreLabelledAsCMUXReportedAndWorkspaceWide() throws {
+        let fixtures = SidebarTreeFixtures()
+        let card = try #require(SidebarHoverContent.workspace(fixtures.workspaceA, hierarchy: fixtures.hierarchy(), connected: true))
+        #expect(card.lines.contains(.init(title: "Ports (CMUX, workspace-wide)", value: "Not granted")))
+        #expect(SidebarHoverContent.ports(.available([])) == .init(title: "Ports (CMUX, workspace-wide)", value: "None reported"))
+        #expect(SidebarHoverContent.ports(.available([3000, 5173]))
+            == .init(title: "Ports (CMUX, workspace-wide)", value: "3000, 5173", copyableValue: "3000, 5173"))
+    }
+
     @Test func passiveComponentsHaveNoNavigationOrPreferenceMutationDependencies() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let source = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarHoverCard.swift"), encoding: .utf8)

@@ -111,7 +111,10 @@ that title. Next **Tab** continues onward, not back into the preview.
 Explicit previews also close on outside
 interaction. Workspace previews
 show only current granted workspace metadata and shared-surface counts. Label denied
-or ambiguous evidence unavailable.
+or ambiguous evidence unavailable. **Ports (CMUX, workspace-wide)** lists the port numbers
+CMUX's `networkPorts` scope reports for the whole workspace, sorted and copyable, or
+`None reported` (not proof that nothing listens) or `Not granted`. CMUX gives no owner,
+address, protocol or completeness, so agent previews never show it.
 
 `SidebarHoverRegion` and `SidebarHoverCard` accept presentation data, independent
 of sessions, navigation, preferences, and the bottom details. Passive panels
