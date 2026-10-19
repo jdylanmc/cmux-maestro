@@ -338,6 +338,36 @@ struct SidebarTagTests {
         #expect(preferences.humanTags(for: session) == ["before"])
     }
 
+    @Test func unreadableAgentStoreNeverDropsColorsForAgentOnlySlugs() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let store = try AgentStore(root: fixture.root)
+        let agentSession = UUID()
+        let agentOnly = (0..<SidebarTagSettings.maximumEntries).map { "agent-\($0)" }
+        var settings = SidebarTagSettings()
+        for slug in agentOnly { settings.colors[slug] = .rose }
+        try JSONEncoder().encode(settings).write(to: fixture.root.appendingPathComponent("sidebar-tags.json"))
+        var sessions: [UUID: [String]] = [:]
+        for chunk in stride(from: 0, to: agentOnly.count, by: SidebarTagSlug.maximumPerSource) {
+            sessions[chunk == 0 ? agentSession : UUID()] = Array(agentOnly[chunk..<min(chunk + 6, agentOnly.count)])
+        }
+        try store.writeRaw(Data("not json".utf8))
+        let preferences = preferences(fixture, agent: store.file)
+        #expect(preferences.agentTags.isEmpty)
+        #expect(preferences.setTagColor(.ocean, for: "new") == "Tag storage is full.")
+        #expect(self.preferences(fixture).tagSettings.colors == settings.colors)
+        // Readable again: agent-only slugs are carried, so they are kept and the registry stays full.
+        try store.write(sessions)
+        #expect(preferences.setTagColor(.ocean, for: "new") == "Tag storage is full.")
+        #expect(self.preferences(fixture).tagSettings.colors == settings.colors)
+        // Once an agent drops a slug, its color is the one that makes room.
+        sessions[agentSession] = Array(sessions[agentSession]!.dropFirst())
+        try store.write(sessions)
+        #expect(preferences.setTagColor(.ocean, for: "new") == nil)
+        #expect(preferences.tagSettings.colors["agent-0"] == nil && preferences.tagSettings.colors["new"] == .ocean)
+        #expect(preferences.tagSettings.colors.count == SidebarTagSettings.maximumEntries)
+    }
+
     @Test func agentStoreReadsStrictlyAndAFailedReadKeepsTheLastGoodTags() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

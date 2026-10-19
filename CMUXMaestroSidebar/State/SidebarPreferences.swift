@@ -255,11 +255,13 @@ final class SidebarPreferences {
     }
 
     private static func setColors(
-        _ colors: [String: SidebarTagSwatch?], in settings: inout SidebarTagSettings, agentSlugs: Set<String>
+        _ colors: [String: SidebarTagSwatch?], in settings: inout SidebarTagSettings, agentSlugs: Set<String>?
     ) throws {
         for (slug, swatch) in colors {
-            if swatch != nil, settings.colors[slug] == nil, settings.colors.count >= SidebarTagSettings.maximumEntries {
-                // Full: drop colors for slugs no session carries; otherwise refuse.
+            // Full: drop colors for slugs no session carries; otherwise refuse. Without a current
+            // agent-store read, agent-only slugs are unknown, so nothing is dropped.
+            if swatch != nil, settings.colors[slug] == nil, settings.colors.count >= SidebarTagSettings.maximumEntries,
+               let agentSlugs {
                 let used = Set(settings.assignments.values.joined()).union(agentSlugs).union(colors.keys)
                 settings.colors = settings.colors.filter { used.contains($0.key) }
             }
@@ -267,8 +269,14 @@ final class SidebarPreferences {
         }
     }
 
-    private func applyTags(_ mutation: (inout SidebarTagSettings, Set<String>) throws -> Void) -> String? {
-        let agentSlugs = Set(agentTags.values.joined())
+    private func applyTags(_ mutation: (inout SidebarTagSettings, Set<String>?) throws -> Void) -> String? {
+        // Pruning decides from a fresh agent read, never the display cache; a failed read is nil.
+        let agentSlugs: Set<String>?
+        if let agentTagsFile {
+            agentSlugs = (try? agentTagsFile.read()).map { Set($0.values.joined()) }
+        } else {
+            agentSlugs = []
+        }
         tagStore.apply {
             try mutation(&$0, agentSlugs)
             guard $0.isValid else { throw SidebarPreferenceRejection(notice: "Tag storage is full.") }
