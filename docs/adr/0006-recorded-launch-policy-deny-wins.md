@@ -39,14 +39,22 @@ control updating, or select autopilot. `--experimental` is also admitted because
 managed children already replay it. Neither prompt contents nor instruction
 files are permission evidence.
 
+Owner decision (2026-10-19): admit `--resume` / `-r` and `--session-id` as
+benign selectors so CMUX-restored `copilot --resume <id> --yolo` parents
+inherit their launch allow-all mode. Resumed session state is not inspected:
+the owner accepts that persisted restrictions cannot be verified from argv.
+These selectors do not themselves grant allow-all or bypass any other refusal.
+`--session-id` consumes its required value; optional `--resume` / `-r` never
+swallow a following flag, including a deny or custom-agent selector.
+
 Unreplayed loaders/selectors therefore default, including:
 
 - Code/configuration: `--agent`, `--config-dir`, `--plugin-dir`,
   `--extension-sdk-path`, `--additional-mcp-config`, `--add-dir`, `-C`,
   `--bash-env`, `--dynamic-retrieval`, `--enable-memory`,
   `--allow-all-mcp-server-instructions`.
-- Existing or alternate session state: `--session-id`, `--resume`, `-r`,
-  `--continue`, `--connect`, `--acp`, `--remote`, `--remote-export`,
+- Other existing or alternate session state: `--continue`, `--connect`,
+  `--acp`, `--remote`, `--remote-export`,
   `--no-remote`, `--no-remote-export`, `--fleet`.
 - Tool/environment/mode selection: `--add-github-mcp-toolset`,
   `--add-github-mcp-tool`, `--mcp-github-auth`, `--enable-mcp-server`, `--mode`,
@@ -56,11 +64,11 @@ Unreplayed loaders/selectors therefore default, including:
   `--disable-builtin-mcps`, unrecorded `--deny-tool`, and other `--deny-*`.
 
 Unknown selectors such as `--profile` default too. Bare optional selectors also
-default: they may load persisted state. Thus a born root explicitly launched
-with `--resume` or `--session-id` no longer proves inherited allow-all from argv
-alone, even when `--yolo` is also present. Maestro-launched descendants still
-replay their recorded policy. This deliberately narrows implicit inheritance;
-the separately human-approved coordinator grant remains available.
+default except the admitted resume selectors above. The exception is limited to
+the requested CMUX restore path; `--continue`, `--connect` and remote modes have
+not been established as equivalent and retain their conservative refusal.
+Maestro-launched descendants still replay their recorded policy. The separately
+human-approved coordinator grant remains available.
 Maestro never reads plugin, agent, configuration or resumed-session definitions
 to try to prove them unrestricted.
 

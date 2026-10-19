@@ -2127,17 +2127,18 @@ def process_arguments(pid):
 def launch_flags_allow_all(arguments, recorded_denies=()):
     flags = {"--yolo", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls"}
     enabled, disabled = set(), set()
-    # Admit only data, model selection, output/UI and budgets, never loaders or
-    # selectors of unreplayed session/configuration/tool state.
+    # Session identity/resume selectors are an owner-accepted exception (ADR 0006);
+    # other unreplayed session/configuration/tool loaders and selectors default.
     benign_value_flags = {
         "--interactive", "-i", "--prompt", "-p", "--model", "--context", "--reasoning-effort",
         "--name", "-n", "--log-dir", "--log-level", "--auto-tier", "--stream", "--output-format",
         "--attachment", "--max-autopilot-continues", "--max-ai-credits", "--usage-output-file",
+        "--session-id",
     }
     # Optional/variadic values never consume another option. Unknown options fail closed,
     # so a future value-taking flag cannot reinterpret its value as an allow-all grant.
     benign_other_flags = {
-        "--share", "--mouse", "--allow-tool", "--allow-url", "--share-gist",
+        "--share", "--mouse", "--allow-tool", "--allow-url", "--share-gist", "--resume", "-r",
         "--silent", "-s", "--banner", "--screen-reader", "--plain-diff",
         "--enable-all-github-mcp-tools", "--autopilot", "--experimental",
         "--no-custom-instructions", "--no-auto-update", "--no-color", "--no-bash-env",
