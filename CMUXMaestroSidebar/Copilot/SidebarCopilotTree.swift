@@ -135,6 +135,9 @@ struct SidebarCopilotTree: Equatable {
     var nextHistoryExpiry: Date? = nil
     // Display records never participate in identity, attention or history authority.
     var statusSessions: [SidebarCopilotSession] = []
+    /// Name and appearance of controller-enrolled sessions, by exact session UUID, for rows the
+    /// observer has not bound yet (`managedDetails(id:now:)`). Never identity or state evidence.
+    var managedDetails: [UUID: CopilotManagedSessionDetails] = [:]
 
     static let waiting = SidebarCopilotTree(
         availability: .waiting, sessions: [], issues: [], generatedAt: nil
@@ -619,5 +622,17 @@ extension SidebarCopilotTree {
               lost.workspaceID == workspaceID, lost.surfaceID == surfaceID,
               lost.lastKnownLiveness == .alive else { return nil }
         return lost.sessionName
+    }
+
+    /// A controller-enrolled session's freshly read name and appearance, used only while the
+    /// observer has no evidence of that session at all. Copilot defers a resumed session's hooks
+    /// and lock until its first prompt; the controller's projection already holds its exact
+    /// workspace, surface and session (ADR 0022 amendment, #261). Any observation, live or not,
+    /// takes precedence; permission-denied or stale reads name nothing.
+    func managedDetails(id: UUID, now: Date) -> CopilotManagedSessionDetails? {
+        guard !issues.contains(.permissionDenied),
+              !sessions.contains(where: { $0.id == id }), !statusSessions.contains(where: { $0.id == id }),
+              let details = managedDetails[id], Self.isFresh(details.readAt, now: now) else { return nil }
+        return details
     }
 }

@@ -72,6 +72,7 @@ actor CopilotSessionReader {
     private var lastDiscoveryCycle: CopilotFileStamp?
     private var fastDiscoveryCycle = true
     private var sessionNames = CopilotSessionNameCache()
+    private var managedNames = CopilotSessionNameCache()
 
     init() {
         roots = { (try CopilotPaths.bindingDirectory(), try CopilotPaths.sessionStateRoot()) }
@@ -524,23 +525,69 @@ actor CopilotSessionReader {
         to observation: inout CopilotSessionObservation, index: BindingIndex, issues: inout [CopilotIssue]
     ) {
         do {
-            let data = try CopilotFileAccess.readStableRegular(
-                at: index.descriptor, filename: "appearance-\(observation.sessionID.uuidString.lowercased()).json",
-                owner: verifier.uid, maximum: 4096, permissions: 0o600
-            )
-            let appearance = try JSONDecoder().decode(CopilotSessionAppearance.self, from: data)
-            guard appearance.sessionID == observation.sessionID, appearance.isValid else {
-                issues.append(.appearanceUnavailable)
-                return
+            guard let appearance = try appearance(for: observation.sessionID, bindings: index.descriptor) else {
+                return  // No explicit standalone icon has been chosen.
             }
             observation.iconId = appearance.iconId
             observation.iconColor = appearance.iconColor
             observation.petId = appearance.petId
-        } catch CopilotFileError.missing {
-            // No explicit standalone icon has been chosen.
         } catch {
             issues.append(.appearanceUnavailable)
         }
+    }
+
+    private func appearance(for sessionID: UUID, bindings: Int32) throws -> CopilotSessionAppearance? {
+        let data: Data
+        do {
+            data = try CopilotFileAccess.readStableRegular(
+                at: bindings, filename: "appearance-\(sessionID.uuidString.lowercased()).json",
+                owner: verifier.uid, maximum: 4096, permissions: 0o600
+            )
+        } catch CopilotFileError.missing {
+            return nil
+        }
+        let appearance = try JSONDecoder().decode(CopilotSessionAppearance.self, from: data)
+        guard appearance.sessionID == sessionID, appearance.isValid else { throw CopilotFileError.changed }
+        return appearance
+    }
+
+    /// Name and own appearance of sessions the Maestro controller enrolled, read by their exact
+    /// session UUID from the controller's projection. Copilot defers a resumed session's
+    /// `sessionStart` hook and its `inuse.<PID>.lock` until the first prompt, so the observer hook
+    /// cannot bind it before then (#261). No transcript is read; a missing or refused file yields
+    /// no detail. Bounded like observed sessions.
+    func managedSessionDetails(_ ids: Set<UUID>) async -> [UUID: CopilotManagedSessionDetails] {
+        let selected = ids.sorted { $0.uuidString < $1.uuidString }.prefix(limits.maximumSessions)
+        managedNames.retain(only: Set(selected))
+        guard !selected.isEmpty, let directories = try? roots(),
+              let root = try? CopilotFileAccess.openDirectory(directories.sessions, owner: verifier.uid) else {
+            return [:]
+        }
+        defer { close(root) }
+        let bindings = try? CopilotFileAccess.openDirectory(directories.bindings, owner: verifier.uid)
+        defer { if let bindings { close(bindings) } }
+        let now = clock()
+        var result: [UUID: CopilotManagedSessionDetails] = [:]
+        for id in selected {
+            guard !Task.isCancelled else { break }
+            guard let session = try? CopilotFileAccess.openDirectory(
+                at: root, name: id.uuidString.lowercased(), owner: verifier.uid
+            ) else {
+                managedNames.forget(id)
+                continue
+            }
+            defer { close(session) }
+            var details = CopilotManagedSessionDetails(
+                sessionName: managedNames.name(for: id, sessionDirectory: session, owner: verifier.uid), readAt: now
+            )
+            if let bindings, let appearance = try? appearance(for: id, bindings: bindings) {
+                details.iconId = appearance.iconId
+                details.iconColor = appearance.iconColor
+                details.petId = appearance.petId
+            }
+            result[id] = details
+        }
+        return result
     }
 
     // A later session's I/O can race an earlier binding, including revocation.
