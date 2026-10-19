@@ -15,3 +15,7 @@ A fresh `--session-id` applies to new workers only. A managed session that CMUX 
 ## Amendment (2026-10-16, #252): born managed
 
 A Copilot session the human starts in a CMUX terminal is managed from its start under [ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md). Maestro does not launch it and does not give it a session ID. It is still a visible, interactive session. Already-running sessions are still never enrolled.
+
+## Amendment (2026-10-18, #261): already-running sessions
+
+Owner decision: every Copilot session in CMUX is managed, including one that was already running when Maestro was installed. It enrolls in place when Maestro's own extension next joins it ([ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md) amendment). Enrollment of a CMUX session by its own extension is not adoption: it adds Maestro's tools to that session and nothing else. Maestro still never controls, signals, restarts or types into a live session, and never triggers the extension join.

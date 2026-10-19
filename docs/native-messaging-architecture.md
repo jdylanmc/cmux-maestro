@@ -201,8 +201,9 @@ inferred. Cleanup must follow exact lifecycle ownership, not a guessed idle stat
 
 ### Born managed sessions (#252, ADR 0025)
 
-A Copilot session that starts in a CMUX terminal with no launcher inputs now
-enrolls itself as its own root coordinator. The loader joins once with the
+A Copilot session in a CMUX terminal with no launcher inputs enrolls itself as
+its own root coordinator when the loader joins it: at its start, at a resume,
+or, for a session already running, at its next extension join (#261). The loader joins once with the
 managed tools plus `maestro_readiness`. The managed tools refuse until
 enrollment succeeds. The loader then reads the session's own account with
 `gitHubAuth.getStatus()` and calls the controller's private `native-enroll`
@@ -214,14 +215,20 @@ generation, or `diagnostic-only` with that reason. See
 [ADR 0025](adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md) for
 the checks.
 
-Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrollment-window-passed`, `provider-process-unverified`, `account-unverified`,
-`integration-not-installed`, `session-started-before-install`,
-`cmux-identity-unverified`, `surface-owned`, `provider-already-enrolled`,
-`session-previously-managed`, `capacity-unavailable`, `enrollment-failed`.
+Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrolled-node-unavailable`,
+`provider-process-unverified`, `account-unverified`, `integration-not-installed`,
+`session-not-persisted`, `enrollment-busy`, `cmux-identity-unverified`, `surface-owned`,
+`provider-already-enrolled`, `session-previously-managed`, `capacity-unavailable`,
+`session-live-or-uncertain`, `enrollment-failed`.
 A resumed session also uses `surface-mismatch`, `account-mismatch` (with the
-recorded login), `account-unrecorded`, `session-ended` and
-`session-live-or-uncertain`; see
+recorded login) and `account-unrecorded`; see
 [Relaunch restore](reference/relaunch-restore.md).
+Readiness adds a plain-language `message` for each reason.
+`session-not-persisted` (Copilot's never-saved `--resume` startup placeholder, or a
+session not saved yet) and `enrollment-busy` are not recorded: the loader's
+`onUserPromptSubmitted` hook tries once more at the next prompt, without reading
+the prompt. Every other decision is recorded per session and Copilot process and
+repeated on reload. Enrollments are serialized on the host.
 Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
 
 The readiness-only branch below now applies only when launcher inputs are
