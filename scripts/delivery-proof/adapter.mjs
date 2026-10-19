@@ -328,7 +328,7 @@ function toolSpecs(managed) {
           model: { type: "string" },
           contextTier: { type: "string" },
           reasoningEffort: { type: "string" },
-          yolo: { type: "boolean", description: "Omit inherits; false narrows; true: explicit human approval" },
+          yolo: { type: "boolean", description: "Omit:inherit; false:narrow; true:human-approved coordinator" },
         },
         required: ["name", "cwd", "task"],
         additionalProperties: false,
