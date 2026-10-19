@@ -176,7 +176,7 @@ struct SidebarTagEditor: View {
                 .textFieldStyle(.roundedBorder)
                 .onSubmit(save)
                 .accessibilityIdentifier("sidebar-tag-input")
-            ForEach([error, preferences.tagNotice].compactMap { $0 }, id: \.self) { message in
+            ForEach(Self.messages(error: error, notice: preferences.tagNotice), id: \.self) { message in
                 Text(message).font(.caption).foregroundStyle(SidebarTone.red.color)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityIdentifier("sidebar-tag-error")
@@ -232,6 +232,13 @@ struct SidebarTagEditor: View {
                 .font(.caption)
                 .accessibilityIdentifier("sidebar-tag-automatic-color")
         }
+    }
+
+    /// The editor's own error and the store notice, each shown once; a failed save reports both the same.
+    static func messages(error: String?, notice: String?) -> [String] {
+        var result: [String] = []
+        for message in [error, notice].compactMap({ $0 }) where !result.contains(message) { result.append(message) }
+        return result
     }
 
     private func save() {
