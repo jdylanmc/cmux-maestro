@@ -330,6 +330,20 @@ struct HierarchySnapshotTests {
         #expect(Set(HierarchySurfaceKind.allCases.map(\.symbolName)).count == HierarchySurfaceKind.allCases.count)
     }
 
+    @Test func workspacePortsAreAvailableOnlyWithTheNetworkPortsScope() throws {
+        let workspaceID = UUID()
+        let model = SidebarConnectionModel()
+        let raw = CmuxSidebarWorkspace(id: workspaceID, title: "Ports", listeningPorts: [5173, 0, 3000, 5173, 70_000])
+        model.update(context: context(CmuxSidebarSnapshot(
+            sequence: 1, selectedWorkspaceID: nil, grantedReadScopes: [.workspaceMetadata], workspaces: [raw]
+        )))
+        #expect(model.hierarchy.workspaces[0].listeningPorts == .unavailable)
+        model.update(context: context(CmuxSidebarSnapshot(
+            sequence: 2, selectedWorkspaceID: nil, grantedReadScopes: [.workspaceMetadata, .networkPorts], workspaces: [raw]
+        )))
+        #expect(model.hierarchy.workspaces[0].listeningPorts == .available([3000, 5173]))
+    }
+
     private var allHierarchyScopes: Set<CmuxExtensionScope> {
         [.workspaceList, .workspaceMetadata, .surfaceMetadata, .workspacePaths]
     }

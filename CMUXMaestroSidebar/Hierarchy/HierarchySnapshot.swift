@@ -160,6 +160,8 @@ struct HierarchyWorkspace: Equatable, Identifiable {
     let rootPath: HierarchyAvailability<String?>
     let projectRootPath: HierarchyAvailability<String?>
     let surfaces: HierarchyAvailability<[HierarchySurface]>
+    /// CMUX's workspace-wide listening ports: no owner, address, protocol or completeness.
+    var listeningPorts: HierarchyAvailability<[Int]> = .unavailable
 }
 
 struct HierarchySurface: Equatable, Identifiable {
