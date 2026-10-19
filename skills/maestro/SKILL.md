@@ -261,9 +261,11 @@ sidebar. Resolve your exact session UUID as for Beats; the command proves owners
 - Only an **explicitly user-approved coordinator** launch may use `spawn --yolo`.
   It supplies Copilot `--allow-all` while retaining explicit denies. It is not
   required to use messaging and is never an implicit new grant or a recovery action.
-- Worker actors cannot request YOLO for descendants. Descendants retain bounded
-  explicit allows and inherited denies; no full parent-permission inheritance is
-  inferred. Message content never changes policy or persistent Copilot settings.
+- Worker actors cannot explicitly request `yolo: true`. Omitted `yolo` and
+  `allowTools` inherit the verified/recorded parent launch mode, with denies
+  replayed (ADR 0006). Runtime `/allow-all` toggles are not inherited; launch
+  evidence is not a full live-permission snapshot. Message content never changes
+  policy or persistent Copilot settings.
 - A failed or uncertain send may mean an offline, stale, unsupported, removed,
   wrong-workspace or wrong-generation route, missing native API, payload limit,
   or local error. Explain the uncertainty; do not automatically resend, repair
