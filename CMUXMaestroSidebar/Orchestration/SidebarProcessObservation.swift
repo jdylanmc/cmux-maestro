@@ -45,6 +45,7 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
     static let maximumProcesses = 32
     static let maximumEvents = 16
     static let maximumListeners = 8
+    static let maximumOmitted = Int(Int32.max)
 
     /// Entries for exactly the snapshot's node bindings; a malformed file contributes nothing.
     static func matching(_ data: Data, snapshot: SidebarOrchestrationSnapshot, now: Date) -> [UUID: Node] {
@@ -66,8 +67,10 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
               Set(nodes.map(\.nodeId)).count == nodes.count else { return false }
         return nodes.allSatisfy { node in
             let owned = node.processes.filter { $0.state == "owned-current" }
-            return Self.nodeStates.contains(node.state) && node.observedAt <= future && node.omittedCount >= 0
-                && (node.omittedHelperCount ?? 0) >= 0
+            // Bounded counts: a malformed optional file must never trap the hover's arithmetic.
+            return Self.nodeStates.contains(node.state) && node.observedAt <= future
+                && (0...Self.maximumOmitted).contains(node.omittedCount)
+                && (0...Self.maximumOmitted).contains(node.omittedHelperCount ?? 0)
                 && node.generation >= 0 && owned.count <= Self.maximumProcesses
                 && node.processes.count - owned.count <= Self.maximumEvents
                 && Set(node.processes.map { "\($0.pid):\($0.startMicros)" }).count == node.processes.count
@@ -88,11 +91,19 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
 
     private static func valid(_ listener: Listener) -> Bool {
         let address = listener.address
-        let shape = address == "*"
-            || address.range(of: #"^[0-9]{1,3}(\.[0-9]{1,3}){3}$"#, options: .regularExpression) != nil
+        let octets = address.split(separator: ".", omittingEmptySubsequences: false)
+        let ipv4 = octets.count == 4 && octets.allSatisfy { $0.count <= 3 && UInt8($0) != nil }
+        let shape = address == "*" || ipv4
             || address.range(of: #"^\[[0-9A-Fa-f:.]{2,45}\]$"#, options: .regularExpression) != nil
         return shape && listener.protocol == "tcp" && (1...65_535).contains(listener.port)
-            && ["loopback", "any", "other"].contains(listener.scope)
+            && listener.scope == scope(of: address)
+    }
+
+    /// The controller's rule; a scope that contradicts the bound address is rejected.
+    static func scope(of address: String) -> String {
+        if ["*", "0.0.0.0", "[::]"].contains(address) { return "any" }
+        if address.hasPrefix("127.") || address == "[::1]" { return "loopback" }
+        return "other"
     }
 }
 

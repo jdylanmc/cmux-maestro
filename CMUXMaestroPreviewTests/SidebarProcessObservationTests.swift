@@ -98,6 +98,12 @@ struct SidebarProcessObservationTests {
         #expect(SidebarProcessPresentation.lines(nil, now: now) == [.init(title: "Background processes", value: "Not observed")])
     }
 
+    @Test func anIncompleteScanWithOnlyOmittedWorkNeverClaimsZero() {
+        let result = lines(file(state: "scan-incomplete", processes: "", omitted: 4))
+        #expect(result.first == .init(title: "Background processes", value: "4 · Scan incomplete"))
+        #expect(result.contains(.init(title: "More background processes", value: "4")))
+    }
+
     @Test func omittedHelpersAreCountedAsHelpersNotBackgroundWork() {
         let data = Data(String(decoding: file(omitted: 3), as: UTF8.self)
             .replacingOccurrences(of: #""omittedCount":3"#, with: #""omittedCount":3,"omittedHelperCount":5"#).utf8)
@@ -116,9 +122,17 @@ struct SidebarProcessObservationTests {
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"http","address":"127.0.0.1","port":80,"scope":"loopback"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"localhost","port":80,"scope":"loopback"}]}"#,
             #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"escaped","listeners":[]}"#,
+            #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"0.0.0.0","port":80,"scope":"loopback"}]}"#,
+            #"{"pid":1,"startMicros":1,"name":"x","group":"separate","state":"owned-current","listeners":[{"protocol":"tcp","address":"999.1.1.1","port":80,"scope":"other"}]}"#,
         ] {
             #expect(snapshot(file(processes: unsafe)).processes.isEmpty, "\(unsafe)")
         }
+        // Counts that would overflow the hover's arithmetic are refused, not trapped on.
+        let nine = (1...9).map {
+            #"{"pid":\#($0),"startMicros":\#($0),"name":"w","group":"separate","state":"owned-current","listeners":[]}"#
+        }.joined(separator: ",")
+        #expect(snapshot(file(processes: nine, omitted: Int.max)).processes.isEmpty)
+        #expect(snapshot(file(processes: nine, omitted: 2)).processes[nodeID] != nil)
     }
 
     @Test func managedAgentHoverShowsTheMatchedProcessSection() throws {
