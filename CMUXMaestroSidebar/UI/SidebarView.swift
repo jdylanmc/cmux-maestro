@@ -1300,6 +1300,8 @@ struct ManagedHierarchyContent: View {
     var workspaceOrder: SidebarReorderContext? = nil
     /// The workspace's surface list; primary root agents are its managed block.
     var surfaceOrder: SidebarReorderContext? = nil
+    /// Shown flat (Worktrees) while its spawning parent is shown elsewhere: it moves with that parent.
+    var movesWithParent = false
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
     @Environment(\.sidebarPresentationNow) private var now
@@ -1375,6 +1377,7 @@ struct ManagedHierarchyContent: View {
                             attentionIncomplete: SidebarPresentation.attentionEvidenceIncomplete(retained),
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,
+                            movesWithParent: movesWithParent,
                             toggleExpanded: {
                                 setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
                             },
@@ -1483,6 +1486,7 @@ private struct ManagedNodeRow: View {
     var attentionIncomplete = false
     let navigation: SidebarNavigation
     var reorder: SidebarReorderHandle? = nil
+    var movesWithParent = false
     let toggleExpanded: () -> Void
     let select: () -> Void
     @Environment(\.sidebarDismissManaged) private var dismissManaged
@@ -1526,7 +1530,7 @@ private struct ManagedNodeRow: View {
     }
 
     private var placement: SidebarRowActionGroup {
-        if depth > 0 { return .placement(.movesWithParentAgent) }
+        if depth > 0 || movesWithParent { return .placement(.movesWithParentAgent) }
         return .placement(reorder)
     }
 
@@ -1965,7 +1969,9 @@ private struct WorkspaceRow: View {
     @ViewBuilder private func worktreeContent(
         sessionSurfaces: [(surface: HierarchySurface, session: SidebarCopilotSession)], context: SidebarReorderContext?
     ) -> some View {
-        let managed = managedNodes.sorted(by: ManagedHierarchyContent.rootOrder).map(SidebarWorktreeMember.managed)
+        // Saved Maestro order first (roots by surface), then the default order.
+        let managed = ManagedHierarchyContent.orderedRoots(managedNodes, visible: context?.visible)
+            .map(SidebarWorktreeMember.managed)
         let members = managed + sessionSurfaces.map { SidebarWorktreeMember.surface($0.surface, $0.session) }
         if !members.isEmpty {
             let order = context ?? SidebarReorderContext.empty(backend: reorderBackend, session: dragSession)
@@ -1974,7 +1980,7 @@ private struct WorkspaceRow: View {
                 hierarchy: hierarchy, navigation: navigation, layout: layout, setExpanded: setExpanded,
                 managedSelection: $managedSelection, dismiss: dismiss, acknowledge: acknowledge,
                 selection: $selection, countsComplete: countsComplete,
-                surfaceHandle: { order.handle(for: $0, noun: "surface") }
+                surfaceOrder: order
             )
         }
     }

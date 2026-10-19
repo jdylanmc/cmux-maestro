@@ -242,6 +242,7 @@ Taskboard temporarily toggles the existing sidebar view (its underline and
 accessible state indicate selection). Activate it again to return to the outline.
 A workspace's menu has **Rename… (⇧⌘R)** and its preview ends with "⇧⌘R to rename": the
 CMUX extension SDK has no rename action, so Maestro selects the workspace and reminds you of
+CMUX's own ⇧⌘R shortcut.
 
 ## Projections
 

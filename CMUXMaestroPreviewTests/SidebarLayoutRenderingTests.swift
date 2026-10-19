@@ -116,6 +116,14 @@ struct SidebarLayoutRenderingTests {
                     try #require(rows["Focus \($0)"]).minY
                 }
                 #expect(order == order.sorted())
+                // Root agents keep their move actions in Worktrees; spawned children move with their parent.
+                let buttons = Dictionary(nativeTitles(in: host).map { ($0.accessibilityLabel() ?? "", $0) },
+                                         uniquingKeysWith: { first, _ in first })
+                let moves: (String) -> [String] = { name in
+                    (buttons["Focus \(name)"]?.accessibilityCustomActions() ?? []).map(\.name)
+                }
+                #expect(!moves("Coordinator").isEmpty, "Root keeps move actions: \(moves("Coordinator"))")
+                #expect(moves("Left helper").isEmpty, "Child moves with its parent: \(moves("Left helper"))")
             }
             for key in projection.keys {
                 preferences.setExpanded(false, for: .worktreeGroup(key, workspaceID: projection.workspace))

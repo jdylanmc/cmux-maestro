@@ -148,4 +148,20 @@ struct SidebarWorktreeProjectionTests {
         #expect(fixture.preferences().projection == .subAgents)
         #expect(SidebarProjection.allCases.map(\.title) == ["Worktrees", "Sub-agents"])
     }
+
+    /// Worktrees keeps the saved Maestro order of root agents (by surface), then the default order.
+    @Test func savedRootOrderSurvivesGrouping() {
+        let worktree = verified(identity("0000000000000001"))
+        func root(_ label: String, age: Double) -> SidebarOrchestrationNode {
+            .init(id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: label, workspaceId: workspace,
+                  surfaceId: UUID(), generation: 1, phase: "turn-running", availability: "busy",
+                  copilotSessionId: UUID(), createdAt: now.addingTimeInterval(-age), updatedAt: now)
+        }
+        let older = root("A", age: 20), newer = root("B", age: 10)
+        let saved = ManagedHierarchyContent.orderedRoots([older, newer], visible: [newer.surfaceId, older.surfaceId])
+        let groups = SidebarWorktreeGrouping.groups(saved) { _ in worktree }
+        #expect(groups.first?.members.map(\.label) == ["B", "A"])
+        let unsaved = ManagedHierarchyContent.orderedRoots([older, newer], visible: nil)
+        #expect(SidebarWorktreeGrouping.groups(unsaved) { _ in worktree }.first?.members.map(\.label) == ["A", "B"])
+    }
 }

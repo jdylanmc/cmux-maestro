@@ -164,7 +164,8 @@ struct WorktreeProjectionContent: View {
     let acknowledge: (Set<SidebarAcknowledgedOutcome>) -> Void
     @Binding var selection: UnmanagedSelection?
     let countsComplete: Bool
-    let surfaceHandle: (UUID) -> SidebarReorderHandle
+    /// The workspace's surface list: root agents and Copilot surfaces keep their saved order and moves.
+    let surfaceOrder: SidebarReorderContext
     @Environment(\.sidebarPresentationNow) private var now
 
     var body: some View {
@@ -192,6 +193,10 @@ struct WorktreeProjectionContent: View {
         }
     }
 
+    private var managedIDs: Set<UUID> {
+        Set(members.compactMap { if case .managed(let node) = $0 { node.id } else { nil } })
+    }
+
     private func item(_ member: SidebarWorktreeMember) -> SidebarAgentIconCardItem {
         switch member {
         case .managed(let node):
@@ -204,15 +209,18 @@ struct WorktreeProjectionContent: View {
     @ViewBuilder private func row(_ member: SidebarWorktreeMember) -> some View {
         switch member {
         case .managed(let node):
+            // A spawned child whose parent is shown in this workspace moves with that parent.
+            let child = node.parentId.map(managedIDs.contains) ?? false
             ManagedHierarchyContent(
                 polling: orchestration, hierarchy: hierarchy, navigation: navigation, layout: layout,
                 setExpanded: setExpanded, selectedNode: $managedSelection, dismiss: dismiss,
                 acknowledge: acknowledge, selection: $selection, workspaceID: workspaceID,
-                showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree
+                showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree,
+                surfaceOrder: child ? nil : surfaceOrder, movesWithParent: child
             )
         case .surface(let surface, let session):
             SurfaceRow(
-                workspaceID: workspaceID, surface: surface, reorder: surfaceHandle(surface.id),
+                workspaceID: workspaceID, surface: surface, reorder: surfaceOrder.handle(for: surface.id, noun: "surface"),
                 sessions: [session], countsComplete: countsComplete, navigation: navigation, layout: layout,
                 setExpanded: setExpanded, dismiss: dismiss, acknowledge: acknowledge, selection: $selection
             )
