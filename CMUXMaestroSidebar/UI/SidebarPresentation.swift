@@ -618,8 +618,8 @@ enum SidebarPresentation {
                 notice: current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
                 isAgent: true,
                 needsInput: managedNeedsInput(node, tree: tree, now: now),
-                petSessionID: managedSession(for: node, in: tree, now: now)?.id,
-                petChoice: managedSession(for: node, in: tree, now: now)?.petId
+                petSessionID: managedPet(node, tree: tree, now: now)?.session,
+                petChoice: managedPet(node, tree: tree, now: now)?.choice
             )
         case .unmanaged(let selection):
             switch selection {
@@ -1188,6 +1188,17 @@ enum SidebarPresentation {
         guard isInteractiveSessionPhase(node) || (node.role == "coordinator" && node.phase == "registered"),
               [.ready, .partial, .stale].contains(availability), let tree else { return nil }
         return managedSession(for: node, in: tree, now: now)
+    }
+
+    /// The pet for a managed row: its observed session's, or, before the observer binds a running
+    /// node's exact session, that session's own (pets are chosen per session UUID).
+    static func managedPet(
+        _ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date
+    ) -> (session: UUID, choice: String?)? {
+        if let session = managedSession(for: node, in: tree, now: now) { return (session.id, session.petId) }
+        guard isInteractiveSessionPhase(node), let id = node.copilotSessionId,
+              let details = tree.managedDetails(id: id, now: now) else { return nil }
+        return (id, details.petId)
     }
 
     private static func managedSession(

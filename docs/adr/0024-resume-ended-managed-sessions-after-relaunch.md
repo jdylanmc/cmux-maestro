@@ -34,3 +34,11 @@ Relationship: amends [ADR 0004](0004-interactive-workers-only.md) (a fresh sessi
 Rejected: CMUX's own Copilot restore for Maestro launches (drops launch flags, account, and parent link; fails with `--name`); two restore owners for one node; automatic prefix approval; keystroke or paste replay; adopting on-disk sessions; resuming a live or uncertain session; credentials or temporary paths in a binding, its environment, or files; account fallback.
 
 Consequence: Maestro launches need one human approval of the prefix `<controller> resume` in CMUX (a prompt-time approval may be scoped to one folder; approving the prefix in CMUX's Resume Commands settings covers every launch). Node history gains one generation per resume. A launched node's recorded account is its pinned launch login, so older launched nodes resume too. Any mismatch leaves a plain shell (binding) or an unmanaged session (re-enrollment), plus one diagnostic. There is no opt-out (owner decision).
+
+## Amendment (2026-10-18, #261): resume after `/exit`
+
+Owner decision: a human-started root that the human resumes with `copilot --resume` after `/exit` re-enrolls as the next generation of its node, or as a new root if the node was archived. The `session-ended` refusal is removed.
+
+Unchanged: a relaunch never brings an `/exit`ed session back by itself. CMUX deletes its own restore record on `SessionEnd`, and a Maestro launch's `SessionEnd` clears its resume binding (the binding still refuses a user-ended generation). Maestro's extension still records the end, which also tells a later session in the same Copilot process that this session no longer holds it.
+
+Re-enrollment custody: Copilot writes `inuse.<PID>.lock` only at a resumed session's first prompt, after the extension joined. Re-enrollment therefore waits for it: the extension enrolls at the first hook event after the lock appears, and the controller still requires the new provider (or its direct child) to hold a live marker and no other process to. A crashed provider's stale marker no longer refuses. The resumed session must have a saved session directory; Copilot's `--resume` startup placeholder has none and never enrolls ([ADR 0025](0025-copilot-sessions-started-in-cmux-are-born-managed.md) amendment). The provider no longer needs to have started after install or within 120 seconds.

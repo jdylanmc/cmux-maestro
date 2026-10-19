@@ -10,7 +10,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
-  createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
+  ENROLLMENT_MESSAGES, createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
   startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
 
@@ -498,6 +498,10 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ok: true, ob
     const bin = path.join(home, "Library/Application Support/CMUXMaestroPreview/Orchestration/bin");
     await fs.mkdir(bin, { recursive: true, mode: 0o700 });
     const calls = path.join(root, "controller-calls");
+    // Copilot already holds the session (its lock appears at the first prompt).
+    const sessionState = path.join(home, ".copilot", "session-state", binding.sessionId);
+    await fs.mkdir(sessionState, { recursive: true, mode: 0o700 });
+    await fs.writeFile(path.join(sessionState, `inuse.${process.pid}.lock`), "");
     await fs.writeFile(path.join(bin, "cmux-maestro-orchestrator"), `#!/usr/bin/env node
 const { appendFileSync } = require("node:fs");
 const command = process.argv[2];
@@ -2548,26 +2552,31 @@ process.exitCode=packet.code;
 // ---- Born managed (ADR 0025) ------------------------------------------------------------------
 
 async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}, statusTimeoutMs,
-  startManagedRuntime, endGate = createSessionEndGate(), endSession } = {}) {
+  startManagedRuntime, endGate = createSessionEndGate(), endSession, hasSessionLock = async () => true,
+  checkCustody = async () => {} } = {}) {
   const f = await managedFixture(t, { owners: [0, 0] });
   const own = f.bindings[0];
   const env = {
     SESSION_ID: own.sessionId, CMUX_WORKSPACE_ID: own.workspaceId.toUpperCase(),
     CMUX_SURFACE_ID: randomUUID(), COPILOT_EXTENSION_PARENT_PID: String(parentPid), ...environment,
   };
-  const calls = { enroll: [], auth: 0, ended: [] };
+  const calls = { enroll: [], auth: 0, ended: [], sent: [], custody: [] };
   let tools;
   let hooks;
   const session = {
     sessionId: own.sessionId,
-    send: async () => {},
+    send: async (value) => { calls.sent.push(value); },
     rpc: { gitHubAuth: { getStatus: async () => {
       calls.auth++;
       return auth ?? { isAuthenticated: true, login: "human-account", host: "https://github.com" };
     } } },
   };
   const born = await startBornManaged({
-    environment: env, parentPid, controller: "/synthetic/controller",
+    environment: env, parentPid, controller: "/synthetic/controller", hasSessionLock,
+    diagnostic: () => f.events.emit("drop"),
+    checkCustody: async (request, controller) => { calls.custody.push({ request, controller }); return checkCustody(request); },
+    // A listener started by a later attempt (at a prompt) is closed with the fixture too.
+    onListener: (listener) => { if (!f.adapters.includes(listener)) f.adapters.push(listener); },
     ...(statusTimeoutMs === undefined ? {} : { statusTimeoutMs }),
     ...(startManagedRuntime === undefined ? {} : { startManagedRuntime }),
     endGate,
@@ -2590,8 +2599,8 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
         generation: own.generation, routes: f.root, peer: own.peer };
     },
   });
-  if (born?.listener) f.adapters.push(born.listener);
-  return { ...f, own, env, born, tools, hooks, calls, session, endGate };
+  if (born?.listener && !f.adapters.includes(born.listener)) f.adapters.push(born.listener);
+  return { ...f, peerTools: f.tools, own, env, born, tools, hooks, calls, session, endGate };
 }
 
 const readiness = async (f) => JSON.parse(await f.tools.maestro_readiness({}));
@@ -2609,7 +2618,7 @@ test("born managed: a CMUX session enrolls itself and gains the managed tools", 
   assert.equal(report.status, "managed");
   assert.deepEqual(report.managed, { status: "enrolled", origin: "born-managed", nodeId: f.own.nodeId, generation: 1 });
   assert.equal(report.capabilities.spawn, true);
-  assert.equal(report.capabilities.inPlaceEnrollment, false);
+  assert.equal(report.capabilities.inPlaceEnrollment, true);
   const identity = JSON.parse(await f.tools.maestro_identity({}));
   assert.deepEqual(identity, { nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId,
     generation: 1, account: { login: "human-account", host: "https://github.com" } });
@@ -2620,14 +2629,15 @@ test("born managed: a CMUX session enrolls itself and gains the managed tools", 
 test("born managed: a refused enrollment stays unmanaged with one stable reason", async (t) => {
   for (const [thrown, reason] of [
     [Object.assign(new Error("private detail"), { reason: "capacity-unavailable" }), "capacity-unavailable"],
-    [Object.assign(new Error("x"), { reason: "session-started-before-install" }), "session-started-before-install"],
+    [Object.assign(new Error("x"), { reason: "enrolled-node-unavailable" }), "enrolled-node-unavailable"],
     [Object.assign(new Error("x"), { reason: "invented" }), "enrollment-failed"],
     [new Error("private detail"), "enrollment-failed"],
   ]) {
     const f = await bornFixture(t, { enroll: async () => { throw thrown; } });
     const report = await readiness(f);
     assert.equal(report.status, "diagnostic-only");
-    assert.deepEqual(report.managed, { status: "unavailable", origin: "born-managed", reason });
+    assert.deepEqual(report.managed, { status: "unavailable", origin: "born-managed", reason,
+      message: ENROLLMENT_MESSAGES[reason] });
     assert.equal(JSON.stringify(report).includes("private detail"), false);
     for (const name of ["maestro_peers", "maestro_identity", "maestro_spawn", "maestro_close", "maestro_send"]) {
       const result = await f.tools[name]({});
@@ -2639,13 +2649,142 @@ test("born managed: a refused enrollment stays unmanaged with one stable reason"
   }
 });
 
+test("born managed: nothing is decided until Copilot holds the session, then one enrollment", async (t) => {
+  // Copilot writes the session's lock at its first prompt; two tabs resuming one session must not
+  // both look like its sole owner before then.
+  let held = false;
+  let release;
+  const f = await bornFixture(t, { hasSessionLock: async () => held, enroll: async (request) => {
+    await new Promise(resolve => { release = resolve; });
+    return { ok: true, nodeId: f.own.nodeId, workspaceId: request.workspaceId, sessionId: request.sessionId,
+      generation: 1, routes: f.root, peer: f.own.peer };
+  } });
+  assert.equal(f.calls.enroll.length, 0);
+  assert.deepEqual((await readiness(f)).managed, { status: "pending", origin: "born-managed",
+    reason: "awaiting-first-prompt", message: ENROLLMENT_MESSAGES["awaiting-first-prompt"] });
+  await f.hooks.onUserPromptSubmitted({ prompt: "PRIVATE" }, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 0);
+  held = true;
+  // Several events at once (sessionStart follows the first prompt): one enrollment.
+  const events = [f.hooks.onSessionStart({ source: "resume" }, { sessionId: f.own.sessionId }),
+    f.hooks.onPostToolUse({}, { sessionId: f.own.sessionId })];
+  await new Promise(resolve => setTimeout(resolve, 20));
+  release();
+  assert.deepEqual(await Promise.all(events), [undefined, undefined]);
+  assert.equal(f.calls.enroll.length, 1);
+  assert.equal(JSON.stringify(f.calls.enroll).includes("PRIVATE"), false);
+  assert.equal((await readiness(f)).status, "managed");
+  await f.hooks.onAgentStop({}, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 1);
+});
+
+// Tab A enrolled as the session's sole holder; tab B later resumes the same session. Each privileged
+// operation is the first call after that, on a fresh fixture, so its own custody check is what refuses.
+async function ambiguousCustody(t) {
+  let ambiguous = false;
+  const f = await bornFixture(t, { checkCustody: async () => {
+    if (ambiguous) throw new Error("Maestro session custody is ambiguous; management is unavailable.");
+  } });
+  await f.launch(1);
+  assert.equal((await readiness(f)).status, "managed");
+  ambiguous = true;
+  return { ...f, checks: f.calls.custody.length };
+}
+
+const otherTarget = (f) => ({ workerId: randomUUID(), workspaceId: f.own.workspaceId, surfaceId: randomUUID(),
+  sessionId: randomUUID(), generation: 1 });
+for (const [name, call] of [
+  ["maestro_identity", (f) => f.tools.maestro_identity({})],
+  ["maestro_peers", (f) => f.tools.maestro_peers({})],
+  ["maestro_send", (f) => f.tools.maestro_send({ destination: managedAddress(f.bindings[1]), body: "x" })],
+  ["maestro_spawn", (f) => f.tools.maestro_spawn({ name: "w", cwd: "/tmp", task: "t" })],
+  ["maestro_close", (f) => f.tools.maestro_close({ target: otherTarget(f) })],
+]) {
+  test(`born managed: ${name} first after a second session holder refuses by its own custody check`, async (t) => {
+    const f = await ambiguousCustody(t);
+    assert.equal((await call(f)).resultType, "failure");
+    assert.ok(f.calls.custody.length > f.checks, "the operation itself checked custody");
+    assert.equal(f.sends.length, 0, "nothing reached a peer");
+    assert.deepEqual((await readiness(f)).managed.reason, "session-custody-lost");
+  });
+}
+
+test("born managed: readiness first after a second session holder reports custody lost", async (t) => {
+  const f = await ambiguousCustody(t);
+  assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
+    reason: "session-custody-lost", message: ENROLLMENT_MESSAGES["session-custody-lost"] });
+  assert.ok(f.calls.custody.length > f.checks);
+});
+
+test("born managed: an inbound message first after a second session holder is not delivered", async (t) => {
+  const f = await ambiguousCustody(t);
+  let dropped = false;
+  f.events.once("drop", () => { dropped = true; });
+  await f.peerTools[1].maestro_send({ destination: managedAddress(f.own), body: "synthetic" });
+  for (let i = 0; i < 200 && !dropped && f.calls.sent.length === 0; i++) await delay(10);
+  assert.equal(f.calls.sent.length, 0);
+  assert.ok(dropped);
+  assert.ok(f.calls.custody.length > f.checks);
+  assert.equal((await readiness(f)).managed.reason, "session-custody-lost");
+});
+
+test("born managed: custody loss is latched; its end does not restore stale authority", async (t) => {
+  let ambiguous = false;
+  const f = await bornFixture(t, { checkCustody: async () => {
+    if (ambiguous) throw new Error("Maestro session custody is ambiguous; management is unavailable.");
+  } });
+  await f.launch(1);
+  const toA = { destination: managedAddress(f.own), body: "synthetic" };
+  f.peerTools[1].maestro_send(toA);
+  for (let i = 0; i < 200 && f.calls.sent.length === 0; i++) await delay(10);
+  assert.equal(f.calls.sent.length, 1, "delivered while held");
+  assert.deepEqual(f.calls.custody.at(-1), { controller: "/synthetic/controller", request: { identity: {
+    nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId, generation: 1,
+    capability: f.own.capability } } });
+  ambiguous = true;
+  assert.equal((await f.tools.maestro_peers({})).resultType, "failure");
+  ambiguous = false;
+  const checks = f.calls.custody.length;
+  for (const name of ["maestro_peers", "maestro_identity"]) {
+    assert.equal((await f.tools[name]({})).resultType, "failure");
+  }
+  assert.equal((await readiness(f)).status, "diagnostic-only");
+  assert.equal(f.calls.custody.length, checks);
+});
+
+test("the installed adapter fits setup's 64 KiB resource bound", async () => {
+  const size = (await fs.stat(fileURLToPath(new URL("./delivery-proof/adapter.mjs", import.meta.url)))).size;
+  assert.ok(size <= 65_536, `adapter.mjs is ${size} bytes`);
+});
+
+test("born managed: an unrecorded refusal is asked once more, then stands until the next join", async (t) => {
+  const f = await bornFixture(t, { enroll: async () => {
+    throw Object.assign(new Error("x"), { reason: "enrollment-busy" }); } });
+  assert.equal((await readiness(f)).managed.status, "pending");
+  for (let prompt = 0; prompt < 3; prompt++) {
+    await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  }
+  assert.equal(f.calls.enroll.length, 2);
+  assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
+    reason: "enrollment-busy", message: ENROLLMENT_MESSAGES["enrollment-busy"] });
+});
+
+test("born managed: a recorded refusal is never tried again at a prompt", async (t) => {
+  const f = await bornFixture(t, { enroll: async () => {
+    throw Object.assign(new Error("x"), { reason: "capacity-unavailable" }); } });
+  await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 1);
+  const report = await readiness(f);
+  assert.equal(report.managed.message, "Maestro is at its session limit.");
+});
+
 test("born managed: an unverified account is recorded as a refusal; an unverified provider never reaches the controller", async (t) => {
   for (const auth of [{ isAuthenticated: false }, { isAuthenticated: true, login: "--x", host: "github.com" },
     { isAuthenticated: true, login: "human", host: "example.com" }, new Promise(() => {})]) {
     const f = await bornFixture(t, { auth, statusTimeoutMs: 20,
       enroll: async () => { throw Object.assign(new Error("x"), { reason: "account-unverified" }); } });
     assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
-      reason: "account-unverified" });
+      reason: "account-unverified", message: ENROLLMENT_MESSAGES["account-unverified"] });
     assert.equal(f.calls.enroll.length, 1);
     assert.equal(f.calls.enroll[0].request.login, null);
     assert.equal(f.calls.enroll[0].request.host, null);
@@ -2653,7 +2792,7 @@ test("born managed: an unverified account is recorded as a refusal; an unverifie
   for (const pid of ["", "1", "4243", "abc"]) {
     const f = await bornFixture(t, { environment: { COPILOT_EXTENSION_PARENT_PID: pid } });
     assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
-      reason: "provider-process-unverified" });
+      reason: "provider-process-unverified", message: ENROLLMENT_MESSAGES["provider-process-unverified"] });
     assert.equal(f.calls.enroll.length + f.calls.auth, 0);
   }
 });
@@ -2684,7 +2823,11 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     ["enrollment refused: account-mismatch: bad/name", "enrollment-failed"],
     // Only account-mismatch may carry the recorded account to the human.
     ["enrollment refused: surface-owned: work-account", "surface-owned"],
-    ["enrollment refused: session-ended: work-account", "session-ended"],
+    ["enrollment refused: provider-already-enrolled: work-account", "provider-already-enrolled"],
+    // Reasons that can no longer occur are reported generically.
+    ["enrollment refused: session-ended", "enrollment-failed"],
+    ["enrollment refused: session-started-before-install", "enrollment-failed"],
+    ["enrollment refused: enrollment-window-passed", "enrollment-failed"],
     ["Traceback /private/path", "enrollment-failed"],
   ]) {
     const controller = path.join(directory, `controller-${reason}-${randomUUID()}`);
@@ -2694,7 +2837,7 @@ test("born managed: the controller transport keeps only known refusal reasons", 
     const session = { ...f.session };
     let tools;
     await startBornManaged({
-      environment: f.env, parentPid: 4242, controller,
+      environment: f.env, parentPid: 4242, controller, hasSessionLock: async () => true,
       joinSession: async (options) => { tools = options.tools; return session; },
     });
     const tool = tools.find((item) => item.name === "maestro_readiness");

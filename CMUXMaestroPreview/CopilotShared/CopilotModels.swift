@@ -128,3 +128,13 @@ nonisolated enum CopilotDisplayText {
         return text.isEmpty ? nil : String(text.prefix(limit))
     }
 }
+
+/// What a row may show for a session the Maestro controller enrolled by exact identity, before the
+/// observer hook can bind it (#261): its Copilot name and its own chosen appearance.
+nonisolated struct CopilotManagedSessionDetails: Equatable, Sendable {
+    var sessionName: String?
+    var iconId: String?
+    var iconColor: String?
+    var petId: String?
+    let readAt: Date
+}

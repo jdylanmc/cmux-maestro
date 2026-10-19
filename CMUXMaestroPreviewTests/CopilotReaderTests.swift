@@ -704,6 +704,30 @@ nonisolated struct CopilotReaderTests {
         #expect(invalid.sessions.first?.iconId == nil)
     }
 
+    /// #261: a resumed session has no observer binding and no inuse lock before its first prompt.
+    /// The controller's exact session UUID still yields its name and own appearance, never state.
+    @Test func managedSessionDetailsNameAnUnboundSessionByItsExactUUID() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let resumed = fixture.sessions.appendingPathComponent(UUID().uuidString.lowercased(), isDirectory: true)
+        let id = try #require(UUID(uuidString: resumed.lastPathComponent))
+        try FileManager.default.createDirectory(at: resumed, withIntermediateDirectories: true)
+        let yaml = resumed.appendingPathComponent(CopilotSessionName.filename)
+        try Data("name: Synthetic refactor\n".utf8).write(to: yaml)
+        let file = fixture.bindings.appendingPathComponent("appearance-\(id.uuidString.lowercased()).json")
+        try JSONEncoder().encode(CopilotSessionAppearance(sessionID: id, petId: "synthetic-pet")).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        let reader = fixture.reader()
+        let observed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(!observed.sessions.contains { $0.sessionID == id })
+        let details = await reader.managedSessionDetails([id, UUID()])
+        #expect(details.count == 1)
+        #expect(details[id]?.sessionName == "Synthetic refactor")
+        #expect(details[id]?.petId == "synthetic-pet")
+        #expect(details[id]?.readAt == Date(timeIntervalSince1970: 2_000))
+        #expect(await reader.managedSessionDetails([]).isEmpty)
+    }
+
     @Test func malformedAndOversizedRowsDoNotFabricateCurrentState() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

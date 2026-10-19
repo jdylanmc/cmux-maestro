@@ -8,26 +8,28 @@ CMUX restores windows, workspaces, and surfaces with the same UUIDs. It does not
 
 ## Born-managed roots
 
-A session you started in CMUX is a born-managed root. CMUX's own Copilot restore runs `copilot --resume <id>` in the restored surface. The Maestro extension then joins the resumed session and asks the controller to enroll it. The controller finds the node recorded for that exact session ID and resumes it as the next generation of the same node, in the same run. The root keeps its children.
+A session you started in CMUX is a born-managed root. CMUX's own Copilot restore runs `copilot --resume <id>` in the restored surface. The Maestro extension then joins the resumed session and asks the controller to enroll it. The controller finds the node recorded for that exact session ID and resumes it as the next generation of the same node, in the same run. The root keeps its children. The same happens when you run `copilot --resume <id>` yourself, including after `/exit`; if the node was archived, the session enrolls as a new root.
+
+Copilot 1.0.98 `--resume` first joins extensions to a startup placeholder: a session with a fresh ID that it never saves. About a second later it replaces the placeholder with the resumed session in the same process and joins extensions again. The placeholder has no `~/.copilot/session-state/<id>` directory, so the controller refuses it with `session-not-persisted` and records nothing: it takes no surface, archives no run, and does not hold the Copilot process (#261).
 
 The controller resumes only when all of these hold:
 
 - The node is a born root, and the session ID matches exactly. A Maestro launch refuses with `session-previously-managed`; it resumes through its binding instead.
 - The workspace and surface match the record exactly, and the provider's controlling TTY is that surface's TTY. A different surface refuses with `surface-mismatch`; a TTY mismatch with `cmux-identity-unverified`.
-- The prior generation ended without an observed user exit. Maestro's extension records a Copilot `SessionEnd` for its exact session only when it is `/exit`. After that, a manual `copilot --resume` refuses with `session-ended`; it is the human's new start, not a relaunch restore.
+- The session has a saved session-state directory. A startup placeholder has none and refuses with `session-not-persisted`.
+- The prior generation ended. An `/exit` does not block a later resume (#261): CMUX's restore forgets an `/exit`ed session, so only a human's own `copilot --resume` brings it back. Maestro's extension records a Copilot `SessionEnd` for its exact session only when it is `/exit`.
 
-  Copilot 1.0.98 reports reason `user_exit` for `/exit`, a terminal hangup, a closed terminal, and `SIGHUP` or `SIGTERM` alike, so the reason alone cannot tell a CMUX quit from `/exit`. Measured in a disposable Copilot (spike on #252): every signal or hangup sends the extension `SIGHUP` before `SessionEnd`; `/exit` sends only `SIGTERM`. So the extension records nothing once it has seen `SIGHUP`. `SIGKILL` delivers no `SessionEnd` at all. On `SIGTERM` the extension waits up to two seconds for the record, and a Maestro launch's binding clear, to land before it exits. The record is written first; the clear has one second. If Copilot changes this order, a quit could be recorded as an exit and the session would not come back managed; that fails closed.
-- The recorded process has ended, and the new provider (or its direct child) is the only owner of the session's `inuse.<PID>.lock`. Any other marker, live or stale, refuses with `session-live-or-uncertain`. This is checked again inside the state lock, right before the commit.
+  Copilot 1.0.98 reports reason `user_exit` for `/exit`, a terminal hangup, a closed terminal, and `SIGHUP` or `SIGTERM` alike, so the reason alone cannot tell a CMUX quit from `/exit`. Measured in a disposable Copilot (spike on #252): every signal or hangup sends the extension `SIGHUP` before `SessionEnd`; `/exit` sends only `SIGTERM`. So the extension records nothing once it has seen `SIGHUP`. `SIGKILL` delivers no `SessionEnd` at all. On `SIGTERM` the extension waits up to two seconds for the record, and a Maestro launch's binding clear, to land before it exits. The record is written first; the clear has one second. If Copilot changes this order, a quit could be recorded as an exit; CMUX then forgets the session, and a manual `copilot --resume` still re-enrolls it.
+- The recorded process has ended, or the session ended in this same Copilot process and came back to it. The new provider (or its direct child) holds the session's `inuse.<PID>.lock`, and no other live process does. Copilot writes that marker only at the resumed session's first prompt, so the session reports `awaiting-first-prompt` until then and enrolls at the first hook event after it (the prompt, or the `sessionStart` that follows it). A crashed provider's stale marker is ignored. A live marker of another process refuses with `session-live-or-uncertain`. This is checked again inside the state lock, right before the commit.
 - The session's current account matches the recorded account. A different account refuses with `account-mismatch`, and `maestro_readiness` names the recorded login. Sign in to that account and restart the session. Nodes without a recorded account refuse with `account-unrecorded`. If Copilot does not report the session's account in time, the resume refuses with `account-unverified`.
-- The resumed provider started after the Maestro integration was installed, like any new enrollment. Otherwise it refuses with `session-started-before-install`.
 - A root whose surface had been retired (`resource-retired`) needs a free workspace slot to come back. Otherwise it refuses with `capacity-unavailable`.
-- The resumed provider started at most 120 seconds before it asks to enroll. A later request refuses with `enrollment-window-passed`. A login or trust prompt answered after that window leaves the session unmanaged.
+- No other node holds the resumed Copilot process. Otherwise it refuses with `provider-already-enrolled`.
 
 The node keeps its run and children. Its provider executable and PATH are refreshed from the resumed process. The old generation's peer route and capability are retired; the new generation gets a new route. Peers see the new address. Addresses are exact per generation: a child's task prompt names its coordinator's address at launch, and that address stops working once the coordinator resumes. The child finds the coordinator's current address with `maestro_peers`.
 
 Policy: CMUX's own restore replays the session's original command line, so the born root keeps whatever flags the human started it with. Maestro's recorded policy for a born root is the default with no grants, which its children inherit.
 
-Any refusal leaves the session running but unmanaged. Maestro does not retry.
+Any refusal leaves the session running but unmanaged, and `maestro_readiness` explains it in plain words. The first decision for a session in a Copilot process is recorded and repeated, never replaced. `awaiting-first-prompt`, `session-not-persisted` and `enrollment-busy` are not recorded; the extension asks the controller at most twice per join, then the reason stands until the next join.
 
 CMUX's own restore needs its Copilot hooks. `cmux hooks copilot install` fails on Copilot 1.0.98 because Copilot writes comments in `config.json`. Maestro's setup therefore installs `~/.copilot/hooks/cmux-maestro-cmux-hooks.json`. It declares `SessionStart`, `Stop`, `Notification`, and `SessionEnd` with CMUX 0.65.1's exact `cmux hooks enqueue copilot <event>` commands and guards: they run only inside a CMUX surface, and never when `CMUX_COPILOT_HOOKS_DISABLED=1`. Setup writes it only once the plugin is verified (or in the same checkpointed transaction as the other owned files for a coordinated install), refuses (and names) a file at that name that Maestro did not write, and leaves every other hook alone. A file that appears at that name while setup runs, after the plugin is already published, is still never replaced: setup reports a named incomplete result, and running setup again (once the file is moved away) finishes. Setup also refuses before changing anything when the four CMUX hook rows (and the observer's three, if not yet reported) would push Copilot's hook discovery past the 256 rows Maestro can verify. Uninstall removes it only when its bytes are a manifest Maestro shipped; a file it did not write stays and is named. CMUX's `PreToolUse` Feed bridge is not included; restore needs only these four events. Setup checks the file on disk; Copilot loading it is a live check. Sessions started before setup are not recorded; restart them once.
 
@@ -67,7 +69,9 @@ CMUX runs a custom resume binding only after a human approves its command prefix
 
 A restored tab used to show as `Terminal`. The sidebar shows an unmanaged Copilot row only after Maestro's observer hook binds the session to its surface. A restored session can show the CMUX surface title until that binding exists. Live checks must confirm when the hook binds a resumed session.
 
-A born-managed or resumed managed session is expected not to wait for the hook: the controller's projection names its exact surface, so the sidebar should show a managed Copilot row as soon as the projection is read. This is not yet confirmed in a live CMUX (see [Live checks](#live-checks)). A born root's row shows its Copilot session name under ADR 0022's rules: one live, fresh observation of that exact session in that workspace and surface, or the last name read during observation loss while its grace lasts. Otherwise it shows `Copilot session`.
+A born-managed or resumed managed session is expected not to wait for the hook: the controller's projection names its exact surface, so the sidebar should show a managed Copilot row as soon as the projection is read. This is not yet confirmed in a live CMUX (see [Live checks](#live-checks)). A born root's row shows its Copilot session name under ADR 0022's rules: one live, fresh observation of that exact session in that workspace and surface, or the last name read during observation loss while its grace lasts.
+
+Copilot 1.0.98 defers a resumed session's `sessionStart` hook and its `inuse.<PID>.lock` until the first prompt, so the observer hook cannot bind a relaunched session before then. Until the observer has any evidence of that session, a running born root's row takes its name, and its pet, from the exact session UUID in the controller's projection (ADR 0022 amendment, #261). Otherwise it shows `Copilot session`.
 
 ## Known gaps
 
@@ -75,8 +79,10 @@ A born-managed or resumed managed session is expected not to wait for the hook: 
 - CMUX's Copilot restore keeps `--name` and adds `--resume`. Copilot 1.0.98 refuses that pair. A session started with `--name` does not come back through CMUX's restore. Rename the session inside Copilot instead.
 - Sessions launched through wrappers such as Agency are not covered.
 - Launches made before this change have no binding and do not resume.
-- A session started before the Maestro integration was installed is never enrolled, so it is not resumed as managed.
-- If recording a born root's `/exit` fails twice (for example the state lock stays busy), the extension logs it and the end stays unrecorded. A later manual `copilot --resume` in the same surface can then come back managed.
+- A session started before the Maestro integration was installed enrolls only at its next extension join (`/clear`, `/resume`, or an extension reload you run). Maestro never triggers one.
+- After `/clear` or an in-session `/resume`, the new session takes over the tab only when the previous session's end was recorded; otherwise it stays unmanaged with `provider-already-enrolled`. If the previous root still has live children, it releases the tab and keeps them: no row shows that run, its children appear as their own observed sessions, and the new root cannot close them. A later `/resume` of the released session in another tab refuses with `surface-mismatch`.
+- Before its first prompt, a new or resumed session reports `awaiting-first-prompt` and its Maestro tools refuse.
+- If a second tab resumes a session that is already managed, the first tab loses Maestro authority as soon as the second holds the session lock (`session-custody-lost`), and the second is refused. Neither is managed until one of them joins again (extension reload, `/resume`, or a relaunch) as the sole holder.
 - An unmanaged restored session can show the CMUX surface title (for example `Terminal`) until Maestro's observer hook binds it.
 
 ## Live checks
@@ -93,12 +99,12 @@ Prerequisites:
 Cases (quit CMUX with ⌘Q and reopen it unless noted):
 
 1. A session you start after setup: `maestro_readiness` says managed, it sees its peers, and its recorded account is yours. Its row shows its session name.
-2. A session that was running before setup stays unmanaged.
+2. A session that was running before setup stays unmanaged until its next extension join; after `/clear` (or an extension reload you run) it reports managed.
 3. After relaunch, the born root comes back managed as generation 2 and its row shows its session name, not `Terminal`.
 4. A `maestro_spawn` child comes back on its exact session after relaunch, keeps its deny rules, sees its peers, and its row shows its launch label. Send it a message and close it from its parent.
 5. An unmanaged restored session's row: record what it shows before and after the observer hook binds it.
 6. With two CMUX windows open, each window's rows come back in their own window.
-7. `/exit` a born root, then run `copilot --resume <id>` by hand: it stays unmanaged with `session-ended`.
+7. `/exit` a born root, then run `copilot --resume <id>` by hand: it comes back managed as the next generation. Relaunch CMUX after an `/exit` without resuming: the session does not come back.
 8. ⌘Q with a born root and a child running: neither records an end (`sessionEndedGeneration` absent); both come back managed.
 9. Sign in to a different account than the born root recorded, then relaunch: it stays unmanaged with `account-mismatch` naming the recorded login.
 10. `/exit` a child, then relaunch: it does not come back.

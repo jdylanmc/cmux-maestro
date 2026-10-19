@@ -102,11 +102,12 @@ declares only `sessionStart`, `userPromptSubmitted` and `postToolUse`, using
 unchanged silenced helper wrapper. Private generation/provenance and
 advisory setup lock live under existing application `Copilot/` support
 directory. Managed tools require matching launcher/session/workspace/generation
-bindings. A Copilot session that starts in CMUX after setup is
+bindings. Every Copilot session in CMUX after setup is
 [born managed](../native-messaging-architecture.md#born-managed-sessions-252-adr-0025)
-as its own root (ADR 0025). Sessions already running at setup are never
-enrolled; restart them to get Maestro. `maestro_readiness` reports why a
-session is not managed. Incomplete launcher inputs keep the nonprivileged
+as its own root (ADR 0025). A session already running at setup enrolls in
+place at its next extension join (`/clear`, `/resume`, or an extension reload
+you run); Maestro never triggers one. `maestro_readiness` reports why a
+session is not managed, in plain words. Incomplete launcher inputs keep the nonprivileged
 [`maestro_readiness` diagnostic](../native-messaging-architecture.md#ordinary-session-readiness-partial-162). Existing
 `maestro-cmux`, other plugins, provider settings, and sidebar selection
 never replaced automatically. Normal app updates refresh owned integration

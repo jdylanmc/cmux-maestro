@@ -34,7 +34,9 @@ workspace bindings and the native adapter. No fixture preparation is required.
 Explicit model selection is retained. Newly managed children inherit the
 invoking session's current verified account, not a saved account default.
 
-An already-running or unmanaged session is not automatically adopted. Registering
+A Copilot session in CMUX enrolls itself when its own Maestro extension joins it,
+including one already running at its next extension join; Maestro never reloads,
+restarts, or adopts a session to make that happen. Registering
 an existing coordinator for lifecycle control does **not** give it a native
 messaging address. Legacy bounded workers, other providers, other workspaces, and
 sessions whose native extension did not load are unsupported recipients.

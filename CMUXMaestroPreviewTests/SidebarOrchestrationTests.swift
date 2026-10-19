@@ -577,6 +577,70 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    /// #261: after a relaunch, Copilot defers a resumed session's hooks and lock until its first
+    /// prompt, so the observer has no evidence of it. The row must not stay generic until then.
+    @Test func resumedBornRootIsNamedBeforeItsFirstPrompt() {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let born = bornRoot(workspace: workspace, surface: surface, session: session)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born])
+        let details = CopilotManagedSessionDetails(sessionName: "Synthetic refactor", petId: "synthetic-pet",
+                                                   readAt: Date())
+        var unbound = tree([])
+        unbound.managedDetails = [session: details]
+        #expect(titles(snapshot, unbound) == ["Synthetic refactor"])
+        let pet = SidebarPresentation.managedPet(born, tree: unbound, now: Date())
+        #expect(pet?.session == session && pet?.choice == "synthetic-pet")
+
+        // Any observation of that session decides instead; stale, denied or ended nodes name nothing.
+        var observedDead = tree([observed(session, workspace: workspace, surface: surface, name: "Dead",
+                                          liveness: .dead)])
+        observedDead.managedDetails = [session: details]
+        var stale = tree([])
+        stale.managedDetails = [session: CopilotManagedSessionDetails(
+            sessionName: "Stale", readAt: Date().addingTimeInterval(-60))]
+        var denied = tree([], issues: [.permissionDenied])
+        denied.managedDetails = [session: details]
+        var other = tree([])
+        other.managedDetails = [UUID(): details]
+        for evidence in [observedDead, stale, denied, other] {
+            #expect(titles(snapshot, evidence) == ["Copilot session"])
+        }
+        var ended = born
+        ended = SidebarOrchestrationNode(
+            id: born.id, runId: born.runId, parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: workspace, surfaceId: surface, generation: 1, phase: "process-disappeared",
+            availability: "unavailable", copilotSessionId: session, executionMode: .interactive,
+            createdAt: born.createdAt, updatedAt: born.updatedAt)
+        ended.enrollment = "born"
+        let endedSnapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [ended])
+        #expect(titles(endedSnapshot, unbound) == ["Copilot session"])
+        #expect(SidebarPresentation.managedPet(ended, tree: unbound, now: Date()) == nil)
+    }
+
+    /// #261 wiring: copilot polling reads details for the managed subjects' exact sessions and
+    /// carries them on the tree it publishes.
+    @Test func pollingCarriesManagedDetailsForManagedSessions() async {
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        let requested = ManagedRequests()
+        let polling = SidebarCopilotPolling(
+            read: neutralRead { _ in CopilotSnapshot(generatedAt: Date(), sessions: [], issues: [], isComplete: true) },
+            readManaged: { ids in
+                await requested.append(ids)
+                return [session: CopilotManagedSessionDetails(sessionName: "Synthetic refactor", readAt: Date())]
+            },
+            pause: { try await Task.sleep(for: .milliseconds(20)) }
+        )
+        polling.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
+        polling.updateManagedSubjects(SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
+            nodes: [bornRoot(workspace: workspace, surface: surface, session: session)]))
+        polling.setVisible(true)
+        await sidebarEventually { polling.tree.managedDetails[session]?.sessionName == "Synthetic refactor" }
+        #expect(await requested.values.first == [session])
+    }
+
     @Test func bornRootKeepsItsNameDuringObservationLossOnlyWithinTheGrace() {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let snapshot = SidebarOrchestrationSnapshot(
@@ -777,4 +841,9 @@ private final class OrchestrationReadGate {
         pending.removeAll()
         for continuation in continuations { continuation.resume(throwing: CancellationError()) }
     }
+}
+
+private actor ManagedRequests {
+    private(set) var values: [Set<UUID>] = []
+    func append(_ ids: Set<UUID>) { values.append(ids) }
 }

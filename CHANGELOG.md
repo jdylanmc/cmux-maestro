@@ -62,6 +62,22 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Every Copilot session in a CMUX tab is Maestro-managed (#261, ADR 0025 amendment). A session
+  already running when Maestro was installed enrolls in place at its next extension join
+  (`/clear`, `/resume`, or an extension reload you run); Maestro never triggers one. A session the
+  human resumes after `/exit` re-enrolls as the next generation of its node, or as a new root if
+  the node was archived; a relaunch still never brings back an `/exit`ed session. The
+  `session-started-before-install`, `enrollment-window-passed` and `session-ended` refusals are
+  gone. `maestro_readiness` adds a plain-language `message` for every reason.
+- A session that replaces an ended session in the same Copilot process (`/clear`, `/resume`)
+  takes over the tab when the earlier session's end was recorded (#261). A root with live
+  children releases the tab and keeps its run; the new root has no authority over them.
+- A session enrolls once Copilot holds it, at its first prompt, never on the absence of
+  Copilot's session lock (#261): two tabs resuming one session cannot both look like its owner.
+  A managed root also loses authority (readiness `session-custody-lost`) as soon as another live
+  process holds its session; only the next extension join restores it.
+  Before then, readiness says `awaiting-first-prompt`. Refusals recorded by an earlier
+  controller that this one no longer makes are decided again after the upgrade.
 - Documentation-only pull requests no longer need a macOS runner (#191). The skill-override and
   policy-link checks moved to a new `validate-portable` job on Linux after a portability proof.
   The skill hash now sorts paths with an explicit en-US collation; Linux's default would report
@@ -152,6 +168,15 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- After a CMUX relaunch, a resumed Copilot session is managed again and its sidebar row shows its
+  name and pet before the first prompt (#261). Copilot 1.0.98 `--resume` first joins extensions
+  to a never-saved placeholder session in the same process. Maestro enrolled that placeholder,
+  archived the resumed session's ended run, and then refused the real session with a misleading
+  `provider-already-enrolled`. Enrollment now requires the session's saved state directory and
+  Copilot's own session lock. Enrollments are serialized, and a recorded decision is never
+  replaced. Until the observer can bind a resumed
+  session, its row uses the name and pet of the exact session in the controller's projection
+  (ADR 0022 amendment).
 - Each CMUX window's Maestro sidebar shows only its own window. Opening a second window no
   longer replaces the first window's workspaces, and focus or actions in one window no
   longer reach another (ADR 0023). A reviewed patch to the pinned SDK, applied by

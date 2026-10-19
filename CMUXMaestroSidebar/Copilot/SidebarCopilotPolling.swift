@@ -8,6 +8,7 @@ final class SidebarCopilotPolling {
     typealias Pause = @Sendable () async throws -> Void
     typealias PendingHistory = @Sendable () async -> Bool
     typealias ExpiryPause = @Sendable (TimeInterval) async throws -> Void
+    typealias ReadManaged = @Sendable (Set<UUID>) async -> [UUID: CopilotManagedSessionDetails]
 
     private(set) var tree: SidebarCopilotTree = .waiting
     private(set) var isReading = false
@@ -41,6 +42,8 @@ final class SidebarCopilotPolling {
         let surfaceID: UUID
     }
     private var managedSubjects: [ManagedSubject] = []
+    private var managedDetails: [UUID: CopilotManagedSessionDetails] = [:]
+    private let readManaged: ReadManaged
     private var history = SidebarHistorySettings()
     private var attention = SidebarAttentionSettings()
     private var revealingIdleTasksIn: Set<UUID> = []
@@ -54,6 +57,7 @@ final class SidebarCopilotPolling {
     init(
         reader: CopilotSessionReader = CopilotSessionReader(),
         read: Read? = nil,
+        readManaged: ReadManaged? = nil,
         hasPendingHistory: PendingHistory? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
         catchUpPause: @escaping Pause = { try await Task.sleep(for: .milliseconds(10)) },
@@ -64,6 +68,7 @@ final class SidebarCopilotPolling {
             let source = try await reader.read(surfaceIDs: Set(placements.keys))
             return CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements)
         }
+        self.readManaged = readManaged ?? (read == nil ? { await reader.managedSessionDetails($0) } : { _ in [:] })
         if let hasPendingHistory {
             self.hasPendingHistory = hasPendingHistory
         } else if read == nil {
@@ -133,6 +138,7 @@ final class SidebarCopilotPolling {
         cancelHistoryExpiry()
         snapshot = nil
         lastStatuses.removeAll()
+        managedDetails = [:]
         lastGeneratedAt = nil
         tree = SidebarCopilotTree(
             availability: !visible ? .hidden : !connected ? .disconnected
@@ -151,6 +157,7 @@ final class SidebarCopilotPolling {
         let token = generation
         let capturedTopology = topology
         let read = read
+        let readManaged = readManaged
         let hasPendingHistory = hasPendingHistory
         let pause = pause
         let catchUpPause = catchUpPause
@@ -162,6 +169,10 @@ final class SidebarCopilotPolling {
                     let snapshot = try await read(capturedTopology.workspaceBySurface)
                     let pending = await hasPendingHistory()
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    let managed = Set(self.managedSubjects.compactMap(\.sessionID))
+                    let details = managed.isEmpty ? [:] : await readManaged(managed)
+                    guard self.generation == token, !Task.isCancelled else { break }
+                    self.managedDetails = details
                     let accepted = self.accept(snapshot, topology: capturedTopology)
                     hasUnreadHistory = accepted && !snapshot.isComplete && pending
                 } catch {
@@ -236,6 +247,7 @@ final class SidebarCopilotPolling {
         self.snapshot = snapshot
         tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
                                          revealingIdleTasksIn: revealingIdleTasksIn)
+        tree.managedDetails = managedDetails
         if let invalidatedAt { tree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
         reconcileStatuses(snapshot)
         scheduleHistoryExpiry()
@@ -247,6 +259,7 @@ final class SidebarCopilotPolling {
         guard canPoll, let snapshot else { return }
         tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
                                          revealingIdleTasksIn: revealingIdleTasksIn)
+        tree.managedDetails = managedDetails
         if let invalidatedAt { tree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
         reconcileStatuses(snapshot)
         scheduleHistoryExpiry()

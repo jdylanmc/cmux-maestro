@@ -95,8 +95,16 @@ Interactive Copilot session Maestro launched and owns. Accepted only with a matc
 _Avoid_: bot, background job
 
 **Born managed**:
-A Copilot session that a human starts in CMUX and that enrolls itself, at its start, as its own root coordinator. (ADR 0025)
-_Avoid_: adopted, auto-managed, in-place enrollment (that is enrolling a running session, which never happens)
+A Copilot session that a human starts in CMUX and that enrolls itself as its own root coordinator through Maestro's extension, once Copilot holds the session (its first prompt): after a start, a resume, or, for a session already running, its next extension join. (ADR 0025)
+_Avoid_: adopted, auto-managed (enrollment by the session's own extension only adds tools; it is not adoption)
+
+**Session custody**:
+Copilot's own `inuse.<PID>.lock` for a session, written at its first prompt. Enrollment and every later managed operation need it held by the provider alone; its absence decides nothing, and a second live holder suspends authority until the next join.
+_Avoid_: session ownership (that is Maestro's node)
+
+**Startup placeholder**:
+The never-saved session Copilot's `--resume` opens first, in the same process, before the resumed session replaces it. It has no session-state directory and is never enrolled. (ADR 0025)
+_Avoid_: transient session, ghost session
 
 **Coordinator**:
 Managed top-level worker that may own nested workers.
@@ -147,7 +155,7 @@ Start an ended Maestro-launched session again in its restored surface through it
 _Avoid_: restart, reattach, adopt
 
 **Re-enrollment**:
-Maestro takes back a human-started root that CMUX's own restore resumed, by exact session, workspace and surface, as a new generation of the same node. (ADR 0024, ADR 0025)
+Maestro takes back a human-started root that CMUX's own restore or the human resumed (also after `/exit`), by exact session, workspace and surface, as a new generation of the same node. (ADR 0024, ADR 0025)
 _Avoid_: adoption
 
 **Workspace capacity**:
