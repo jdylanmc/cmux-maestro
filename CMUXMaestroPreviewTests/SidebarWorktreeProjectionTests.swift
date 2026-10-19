@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-/// Worktrees grouping comes only from each exact session's current-worktree evidence (ADR 0026).
+/// Worktrees grouping comes only from each exact session's current-worktree evidence (ADR 0027).
 @MainActor
 struct SidebarWorktreeProjectionTests {
     private let workspace = UUID()

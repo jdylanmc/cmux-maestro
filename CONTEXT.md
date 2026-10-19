@@ -181,7 +181,7 @@ Outline view of workspaces, surfaces, sessions, and agents.
 _Avoid_: tree view
 
 **Projection**:
-How the Hierarchy groups each workspace's agents: Worktrees (by current worktree) or Sub-agents (by spawning parent). One global choice; workspaces stay on top. (ADR 0027)
+How the Hierarchy groups each workspace's agents: Worktrees (by current worktree) or Sub-agents (by spawning parent). One global choice; workspaces stay on top. (ADR 0028)
 _Avoid_: view, mode, grouping workspace
 
 **Icon card**:

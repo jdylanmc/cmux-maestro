@@ -9,7 +9,7 @@ enum SidebarProjection: String, CaseIterable, Identifiable {
 }
 
 /// One Worktrees group. Keys come only from the exact session's current-worktree evidence
-/// (ADR 0026), never from a title, branch label, pane or parent.
+/// (ADR 0027), never from a title, branch label, pane or parent.
 nonisolated enum SidebarWorktreeGroupKey: Hashable, Sendable {
     case worktree(String)
     /// Verified earlier; the session's directory record changed since or was not read live.

@@ -1,6 +1,6 @@
 # Workspaces on top; Worktrees or Sub-agents below
 
-The Hierarchy always lists CMUX workspaces at the top level. Inside each workspace, one control chooses how agents are grouped: **Worktrees** (by the exact session's current worktree, [ADR 0026](0026-current-worktree-from-the-session-selected-directory.md)) or **Sub-agents** (by recorded spawning parent). The choice is one global, saved preference for every workspace in every window, as in the approved prototype. Default: Sub-agents, the earlier tree.
+The Hierarchy always lists CMUX workspaces at the top level. Inside each workspace, one control chooses how agents are grouped: **Worktrees** (by the exact session's current worktree, [ADR 0027](0027-current-worktree-from-the-session-selected-directory.md)) or **Sub-agents** (by recorded spawning parent). The choice is one global, saved preference for every workspace in every window, as in the approved prototype. Default: Sub-agents, the earlier tree.
 
 Interactive agents (managed agents and single-session Copilot surfaces) have one row each: icon, name, tag chips, state cue. No subtitle. A collapsed Worktrees group, or a collapsed parent in Sub-agents, is an icon card: every agent's icon and state in one row that scrolls inside the card, with a separate expand control. Each icon focuses its agent's surface. Internal tasks keep their subordinate text rows under their exact owner. Every row and icon is navigable.
 
