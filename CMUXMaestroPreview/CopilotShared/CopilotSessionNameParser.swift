@@ -46,10 +46,10 @@ nonisolated enum CopilotSessionName {
     private static func unclosedQuote(_ line: Substring) -> Character? {
         var candidate = line
         if candidate.first != "\"" && candidate.first != "'" {
-            if candidate.hasPrefix("- ") {
+            if candidate.hasPrefix("- ") || candidate.hasPrefix("-\t") {
                 candidate = candidate.dropFirst(2)
-            } else if let separator = candidate.range(of: ": ") {
-                candidate = candidate[separator.upperBound...]
+            } else if let separator = mappingSeparator(in: candidate) {
+                candidate = candidate[separator...]
             } else {
                 return nil
             }
@@ -57,6 +57,17 @@ nonisolated enum CopilotSessionName {
         }
         guard let quote = candidate.first, quote == "\"" || quote == "'" else { return nil }
         return closes(candidate.dropFirst(), quote: quote) ? nil : quote
+    }
+
+    /// Just past the first `:` followed by a YAML blank (space or tab): a key's value starts there.
+    private static func mappingSeparator(in line: Substring) -> Substring.Index? {
+        var index = line.startIndex
+        while let colon = line[index...].firstIndex(of: ":") {
+            let next = line.index(after: colon)
+            if next < line.endIndex, line[next] == " " || line[next] == "\t" { return line.index(after: next) }
+            index = next
+        }
+        return nil
     }
 
     /// Whether `text`, inside a scalar opened by `quote`, contains its closing quote.
@@ -102,18 +113,21 @@ nonisolated enum CopilotSessionName {
     }
 
     private static func plain(_ value: String) -> String? {
-        if ["-", "?", ":"].contains(value) || value.hasPrefix("- ") || value.hasPrefix("? ")
-            || value.hasPrefix(": ") { return nil }
-        var result = value
-        if let comment = result.range(of: " #") ?? result.range(of: "\t#") {
-            result = String(result[..<comment.lowerBound])
+        if ["-", "?", ":"].contains(value)
+            || ["- ", "-\t", "? ", "?\t", ": ", ":\t"].contains(where: value.hasPrefix) { return nil }
+        var result = Substring(value)
+        // A comment starts at the first `#` after a YAML blank.
+        if let hash = result.indices.first(where: {
+            result[$0] == "#" && $0 > result.startIndex && [" ", "\t"].contains(result[result.index(before: $0)])
+        }) {
+            result = result[..<hash]
         }
-        result = result.trimmingCharacters(in: yamlBlank)
+        let trimmed = String(result).trimmingCharacters(in: yamlBlank)
         // `key: value` inside a plain scalar is a nested mapping, not a title.
-        guard !result.isEmpty, !result.contains(": "), !result.hasSuffix(":") else { return nil }
+        guard !trimmed.isEmpty, mappingSeparator(in: Substring(trimmed)) == nil, !trimmed.hasSuffix(":") else { return nil }
         // Plain null is no name.
-        guard result != "~", result.lowercased() != "null" else { return nil }
-        return result
+        guard trimmed != "~", trimmed.lowercased() != "null" else { return nil }
+        return trimmed
     }
 
     private static func singleQuoted(_ value: String) -> String? {

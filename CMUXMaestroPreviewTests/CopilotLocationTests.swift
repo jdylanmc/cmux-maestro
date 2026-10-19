@@ -407,6 +407,25 @@ struct CopilotWorktreeResolverTests: Sendable {
         #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a\nb\n") == nil)
     }
 
+    /// A tab after `key:` opens a quoted value too; its continuation lines are never keys.
+    @Test func tabSeparatedQuotedNameCannotSmuggleACwd() {
+        let yaml = Data("name:\t\"intro\ncwd: /tmp/wrong\noutro\"\ncwd: /tmp/real\n".utf8)
+        #expect(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: yaml) == "/tmp/real")
+        let only = Data("name:\t'intro\ncwd: /tmp/wrong\noutro'\n".utf8)
+        #expect(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: only) == nil)
+    }
+
+    /// A plain scalar's comment starts at the first `#` after a space or a tab.
+    @Test func plainScalarCommentStartsAtTheFirstBlankHash() {
+        func cwd(_ line: String) -> String? {
+            CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: Data("cwd: \(line)\n".utf8))
+        }
+        #expect(cwd("/tmp/real\t# note # later") == "/tmp/real")
+        #expect(cwd("/tmp/real # note\t# later") == "/tmp/real")
+        #expect(cwd("/tmp/a#b") == "/tmp/a#b")
+        #expect(cwd("/tmp/x:\ty") == nil)
+    }
+
     /// YAML blanks are ASCII space and tab; a trailing NBSP is part of the path.
     @Test func trailingNoBreakSpaceInCwdStaysInThePath() throws {
         let scratch = try LocationScratch()
