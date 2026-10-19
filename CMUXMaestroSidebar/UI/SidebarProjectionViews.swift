@@ -166,6 +166,8 @@ struct WorktreeProjectionContent: View {
     let countsComplete: Bool
     /// The workspace's surface list: root agents and Copilot surfaces keep their saved order and moves.
     let surfaceOrder: SidebarReorderContext
+    /// Managed agents with spawned children anywhere in the window.
+    let parentIDs: Set<UUID>
     @Environment(\.sidebarPresentationNow) private var now
 
     var body: some View {
@@ -177,7 +179,9 @@ struct WorktreeProjectionContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     WorktreeGroupHeader(group: group, expanded: expanded) { setExpanded(expansion, !expanded) }
                     if expanded {
-                        ForEach(group.members) { member in row(member) }
+                        // Moves and drops stay among this group's rows; groups have their own order.
+                        let order = surfaceOrder.restricted(to: Set(group.members.map(surfaceID)))
+                        ForEach(group.members) { member in row(member, order: order) }
                             .padding(.leading, 6)
                     } else {
                         SidebarAgentIconCard(
@@ -206,7 +210,14 @@ struct WorktreeProjectionContent: View {
         }
     }
 
-    @ViewBuilder private func row(_ member: SidebarWorktreeMember) -> some View {
+    private func surfaceID(_ member: SidebarWorktreeMember) -> UUID {
+        switch member {
+        case .managed(let node): node.surfaceId
+        case .surface(let surface, _): surface.id
+        }
+    }
+
+    @ViewBuilder private func row(_ member: SidebarWorktreeMember, order: SidebarReorderContext) -> some View {
         switch member {
         case .managed(let node):
             // A spawned child whose parent is shown in this workspace moves with that parent.
@@ -216,11 +227,12 @@ struct WorktreeProjectionContent: View {
                 setExpanded: setExpanded, selectedNode: $managedSelection, dismiss: dismiss,
                 acknowledge: acknowledge, selection: $selection, workspaceID: workspaceID,
                 showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree,
-                surfaceOrder: child ? nil : surfaceOrder, movesWithParent: child
+                surfaceOrder: child ? nil : order, movesWithParent: child,
+                hasSpawnedChildren: parentIDs.contains(node.id)
             )
         case .surface(let surface, let session):
             SurfaceRow(
-                workspaceID: workspaceID, surface: surface, reorder: surfaceOrder.handle(for: surface.id, noun: "surface"),
+                workspaceID: workspaceID, surface: surface, reorder: order.handle(for: surface.id, noun: "surface"),
                 sessions: [session], countsComplete: countsComplete, navigation: navigation, layout: layout,
                 setExpanded: setExpanded, dismiss: dismiss, acknowledge: acknowledge, selection: $selection
             )

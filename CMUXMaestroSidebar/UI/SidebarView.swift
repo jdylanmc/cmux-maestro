@@ -1302,6 +1302,8 @@ struct ManagedHierarchyContent: View {
     var surfaceOrder: SidebarReorderContext? = nil
     /// Shown flat (Worktrees) while its spawning parent is shown elsewhere: it moves with that parent.
     var movesWithParent = false
+    /// Shown flat (Worktrees) with spawned children shown elsewhere: its failure is not dismissible.
+    var hasSpawnedChildren = false
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
     @Environment(\.sidebarPresentationNow) private var now
@@ -1378,6 +1380,7 @@ struct ManagedHierarchyContent: View {
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,
                             movesWithParent: movesWithParent,
+                            hasSpawnedChildren: hasSpawnedChildren || row.hasChildren,
                             toggleExpanded: {
                                 setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
                             },
@@ -1487,6 +1490,7 @@ private struct ManagedNodeRow: View {
     let navigation: SidebarNavigation
     var reorder: SidebarReorderHandle? = nil
     var movesWithParent = false
+    var hasSpawnedChildren = false
     let toggleExpanded: () -> Void
     let select: () -> Void
     @Environment(\.sidebarDismissManaged) private var dismissManaged
@@ -1520,7 +1524,7 @@ private struct ManagedNodeRow: View {
                         tags: beatSession.map { id in { editingTags = id } }),
             placement, .lifecycle()
         ]
-        if !hasChildren, let dismissManaged,
+        if !hasChildren, !hasSpawnedChildren, let dismissManaged,
            let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
             groups.append(.init(title: "History", actions: [
                 .init(title: "Dismiss failed result", perform: { dismissManaged(outcome) })
@@ -1562,7 +1566,7 @@ private struct ManagedNodeRow: View {
             }
             .agentHoverPreview(.managed(node.id, generation: node.generation))
             .sidebarTagEditor($editingTags)
-            if !hasChildren, let dismissManaged,
+            if !hasChildren, !hasSpawnedChildren, let dismissManaged,
                let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
                 Button { dismissManaged(outcome) } label: {
                     Image(systemName: "xmark").font(.caption2)
@@ -1980,7 +1984,7 @@ private struct WorkspaceRow: View {
                 hierarchy: hierarchy, navigation: navigation, layout: layout, setExpanded: setExpanded,
                 managedSelection: $managedSelection, dismiss: dismiss, acknowledge: acknowledge,
                 selection: $selection, countsComplete: countsComplete,
-                surfaceOrder: order
+                surfaceOrder: order, parentIDs: Set(displayManaged.compactMap(\.parentId))
             )
         }
     }

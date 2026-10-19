@@ -103,7 +103,7 @@ struct SidebarLayoutRenderingTests {
         for width in [280, 350] {
             preferences.projection = .worktrees
             try await render(model: projection.model, preferences: preferences, width: width, height: 640,
-                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
                              destination: folder.appendingPathComponent("worktrees-expanded-\(width).png")) { host in
                 let rows = titles(host)
                 // One line per agent: name and state, no subtitle.
@@ -122,14 +122,18 @@ struct SidebarLayoutRenderingTests {
                 let moves: (String) -> [String] = { name in
                     (buttons["Focus \(name)"]?.accessibilityCustomActions() ?? []).map(\.name)
                 }
-                #expect(!moves("Coordinator").isEmpty, "Root keeps move actions: \(moves("Coordinator"))")
+                // Coordinator and Reviewer are roots in one group and move among themselves; Unrelated is
+                // alone in its group, so no move crosses groups.
+                #expect(moves("Coordinator") == ["Move down in Maestro"], "\(moves("Coordinator"))")
+                #expect(moves("Reviewer") == ["Move up in Maestro"], "\(moves("Reviewer"))")
+                #expect(moves("Unrelated").isEmpty, "Alone in its group: \(moves("Unrelated"))")
                 #expect(moves("Left helper").isEmpty, "Child moves with its parent: \(moves("Left helper"))")
             }
             for key in projection.keys {
                 preferences.setExpanded(false, for: .worktreeGroup(key, workspaceID: projection.workspace))
             }
             try await render(model: projection.model, preferences: preferences, width: width, height: 640,
-                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
                              destination: folder.appendingPathComponent("worktrees-collapsed-\(width).png")) { host in
                 let rows = titles(host)
                 // Collapsed groups are icon cards: each icon focuses its own agent.
@@ -143,7 +147,7 @@ struct SidebarLayoutRenderingTests {
             }
             preferences.projection = .subAgents
             try await render(model: projection.model, preferences: preferences, width: width, height: 640,
-                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
                              destination: folder.appendingPathComponent("subagents-expanded-\(width).png")) { host in
                 let rows = titles(host)
                 let root = try #require(rows["Focus Coordinator"])
@@ -152,7 +156,7 @@ struct SidebarLayoutRenderingTests {
             }
             preferences.setExpanded(false, for: .managed(projection.root))
             try await render(model: projection.model, preferences: preferences, width: width, height: 640,
-                             appearance: .dark, managed: true, expectedSessions: 4, nativeBackground: true,
+                             appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
                              destination: folder.appendingPathComponent("subagents-collapsed-\(width).png")) { host in
                 let rows = titles(host)
                 #expect(rows["Focus Left helper"] == nil)
@@ -163,19 +167,20 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    private func makeProjectionModel() async -> (
-        model: SidebarConnectionModel, workspace: UUID, root: UUID, keys: [SidebarWorktreeGroupKey]
+    /// `failures` adds a failed worker with a spawned child and a failed leaf worker, all Unknown.
+    private func makeProjectionModel(failures: [String] = []) async -> (
+        model: SidebarConnectionModel, workspace: UUID, root: UUID, keys: [SidebarWorktreeGroupKey], extra: [UUID]
     ) {
         let now = Date()
         let workspace = UUID()
-        let surfaces = (0..<5).map { _ in UUID() }
-        let sessions = (0..<4).map { _ in UUID() }
-        let nodes = (0..<4).map { _ in UUID() }
+        let surfaces = (0..<(6 + failures.count)).map { _ in UUID() }
+        let sessions = (0..<5).map { _ in UUID() }
+        let nodes = (0..<5).map { _ in UUID() }
         let left = CopilotWorktreeIdentity(key: "0a1b2c3d4e5f6071", repository: "maestro", head: .branch("feat/sidebar"),
                                            linked: true)
         let right = CopilotWorktreeIdentity(key: "f0e1d2c3b4a59687", repository: "maestro", head: .branch("feat/sidebar"),
                                             linked: true)
-        let names = ["Coordinator", "Left helper", "Right helper", "Unrelated"]
+        let names = ["Coordinator", "Left helper", "Right helper", "Unrelated", "Reviewer"]
         let hierarchy = HierarchySnapshot(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
             workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
@@ -184,12 +189,13 @@ struct SidebarLayoutRenderingTests {
                 isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
                 rootPath: .available(nil), projectRootPath: .available(nil),
                 surfaces: .available(surfaces.enumerated().map { index, id in
-                    .init(id: id, title: index < 4 ? names[index] : "Build", kind: .terminal, isFocused: false,
+                    .init(id: id, title: index < 5 ? names[index] : index == 5 ? "Build" : failures[index - 6],
+                          kind: .terminal, isFocused: false,
                           isPinned: false, unreadCount: 0, workingDirectory: .available(nil))
                 })
             )], windowID: UUID()
         )
-        let managed = (0..<4).map { index in
+        let managed = (0..<5).map { index in
             SidebarOrchestrationNode(
                 id: nodes[index], runId: nodes[0], parentId: index == 1 || index == 2 ? nodes[0] : nil,
                 role: index == 1 || index == 2 ? "worker" : "coordinator", label: names[index],
@@ -198,11 +204,21 @@ struct SidebarLayoutRenderingTests {
                 createdAt: now.addingTimeInterval(Double(index - 10)), updatedAt: now
             )
         }
+        let extra = failures.map { _ in UUID() }
+        let failed = failures.enumerated().map { index, label in
+            SidebarOrchestrationNode(
+                id: extra[index], runId: nodes[0], parentId: label == "Spawned child" ? extra[0] : nil,
+                role: "worker", label: label, workspaceId: workspace, surfaceId: surfaces[6 + index], generation: 1,
+                phase: label == "Spawned child" ? "turn-running" : "turn-failed", availability: "busy",
+                executionMode: .interactive, createdAt: now.addingTimeInterval(Double(index)), updatedAt: now
+            )
+        }
         let worktrees: [AgentSessionWorktree?] = [
             .init(evidence: .verified(left), isCurrent: true), .init(evidence: .verified(left), isCurrent: true),
             .init(evidence: .verified(right), isCurrent: true), nil,
+            .init(evidence: .verified(left), isCurrent: true),
         ]
-        let observations: [CopilotSessionObservation] = (0..<4).map { index in
+        let observations: [CopilotSessionObservation] = (0..<5).map { index in
             var observation = CopilotSessionObservation(
                 sessionID: sessions[index], surfaceID: surfaces[index], launchWorkspaceID: workspace,
                 liveness: .alive, state: index == 3 ? .idle : .working, model: "synthetic-model",
@@ -219,7 +235,7 @@ struct SidebarLayoutRenderingTests {
             expiryPause: Self.suspendFrozenClock, now: { now }
         )
         let orchestration = SidebarOrchestrationPolling(
-            read: { .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: managed) },
+            read: { .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: managed + failed) },
             pause: { try await Task.sleep(for: .seconds(60)) }
         )
         let model = SidebarConnectionModel(copilot: copilot, orchestration: orchestration)
@@ -234,7 +250,31 @@ struct SidebarLayoutRenderingTests {
         await sidebarEventually { orchestration.snapshot.generatedAt == now }
         copilot.updateManagedSubjects(orchestration.snapshot)
         model.setVisible(true)
-        return (model, workspace, nodes[0], [.worktree(left.key), .worktree(right.key), .unknown])
+        return (model, workspace, nodes[0], [.worktree(left.key), .worktree(right.key), .unknown], extra)
+    }
+
+    /// Worktrees shows a parent flat, apart from its spawned child; its failure stays undismissible
+    /// there as in Sub-agents. A failed leaf stays dismissible.
+    @Test func worktreesHidesDismissForAFailedParentWithAChild() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        let projection = await makeProjectionModel(failures: ["Failed parent", "Spawned child", "Failed leaf"])
+        defer { projection.model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setRetention(.never)
+        preferences.projection = .worktrees
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/visual-target/projections")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        func views(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(views) }
+        func titles(_ menu: NSMenu) -> [String] { menu.items.flatMap { [$0.title] + ($0.submenu.map(titles) ?? []) } }
+        try await render(model: projection.model, preferences: preferences, width: 350, height: 900,
+                         appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
+                         destination: folder.appendingPathComponent("worktrees-failures-350.png")) { host in
+            let menus = views(host).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter?.menu() }
+            let dismissals = menus.filter { titles($0).contains("Dismiss failed result") }.map(titles)
+            // Only the failed leaf offers it; the failed parent with a spawned child does not.
+            #expect(dismissals.count == 1, "\(dismissals)")
+        }
     }
 
     private struct NativeRowGeometry: Codable {
