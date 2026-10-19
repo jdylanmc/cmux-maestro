@@ -171,8 +171,8 @@ Notable changes are recorded using Keep a Changelog categories.
 - A session's child list no longer flashes its whole history, skills, and shells for a refresh
   while a sub-agent starts a tool (#264). The reader stamped the snapshot before reading, so an
   event appended mid-read looked future-dated and voided every child. Snapshots are now stamped
-  after the read. Incomplete attention evidence on a child row is an icon with a tooltip, not an
-  inline "Attention evidence incomplete" line.
+  after the read. Incomplete attention evidence on a session or child row is an icon with a
+  tooltip, not an inline "Attention evidence incomplete" line.
 - After a CMUX relaunch, a resumed Copilot session is managed again and its sidebar row shows its
   name and pet before the first prompt (#261). Copilot 1.0.98 `--resume` first joins extensions
   to a never-saved placeholder session in the same process. Maestro enrolled that placeholder,

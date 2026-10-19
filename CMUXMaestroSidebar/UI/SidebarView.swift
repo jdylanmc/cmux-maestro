@@ -1358,6 +1358,7 @@ struct ManagedHierarchyContent: View {
                             evidenceDate: evidenceDate,
                             availability: polling.availability,
                             copilotTree: copilotTree,
+                            attentionIncomplete: SidebarPresentation.attentionEvidenceIncomplete(retained),
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,
                             toggleExpanded: {
@@ -1454,6 +1455,7 @@ private struct ManagedNodeRow: View {
     let evidenceDate: Date
     let availability: SidebarOrchestrationAvailability
     let copilotTree: SidebarCopilotTree
+    var attentionIncomplete = false
     let navigation: SidebarNavigation
     var reorder: SidebarReorderHandle? = nil
     let toggleExpanded: () -> Void
@@ -1527,6 +1529,7 @@ private struct ManagedNodeRow: View {
                         SidebarStateBadge(visual: stateVisual,
                                           needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
                                           detail: metadataHelp)
+                        if attentionIncomplete { AttentionEvidenceIncompleteIcon() }
                         Text(SidebarPresentation.rowMetadata(
                             kind: stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
                                 : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
@@ -2314,6 +2317,17 @@ private struct SessionStateBadge: View {
                           needsInput: SidebarPresentation.needsInput(session.attention),
                           detail: SidebarPresentation.sessionStatus(session))
             .accessibilityIdentifier("session-evidence-\(session.id)")
+        if SidebarPresentation.attentionEvidenceIncomplete([session]) { AttentionEvidenceIncompleteIcon() }
+    }
+}
+
+/// Degraded attention evidence is an icon, never an inline prose row (#264).
+private struct AttentionEvidenceIncompleteIcon: View {
+    var body: some View {
+        Image(systemName: "exclamationmark.circle")
+            .sidebarFont(.caption2).foregroundStyle(SidebarTone.attention.color)
+            .help("Attention evidence incomplete")
+            .accessibilityLabel("Attention evidence incomplete")
     }
 }
 
@@ -2727,12 +2741,7 @@ private struct CopilotWorkRow: View {
                         .help("Unresolved ancestry")
                         .accessibilityLabel("Unresolved ancestry")
                 }
-                if node.attentionDegraded {
-                    Image(systemName: "exclamationmark.circle")
-                        .sidebarFont(.caption2).foregroundStyle(SidebarTone.attention.color)
-                        .help("Attention evidence incomplete")
-                        .accessibilityLabel("Attention evidence incomplete")
-                }
+                if node.attentionDegraded { AttentionEvidenceIncompleteIcon() }
                 if hasOutcomeActions {
                     DismissOutcomeButton(node: node, sessionID: session.id, dismiss: dismiss)
                 }

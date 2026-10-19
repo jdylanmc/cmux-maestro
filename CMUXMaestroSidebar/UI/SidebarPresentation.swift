@@ -798,6 +798,12 @@ enum SidebarPresentation {
         return result
     }
 
+    /// Degraded session attention still counts as needing attention; the session's row
+    /// shows an icon for it instead of an inline prose row (#264).
+    static func attentionEvidenceIncomplete(_ sessions: [SidebarCopilotSession]) -> Bool {
+        sessions.contains(where: \.attentionDegraded)
+    }
+
     static func collapsed(_ summary: SidebarBranchSummary) -> [String] {
         var counts: [String] = []
         if summary.running > 0 { counts.append("\(summary.running) known working") }
