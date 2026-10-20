@@ -14,6 +14,7 @@ import {
   startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
 import { createProcessObserver, runProcessObserve, sessionNeedsWatching } from "./delivery-proof/processes.mjs";
+import { modelCapabilities } from "./delivery-proof/models.mjs";
 
 const base = await fs.realpath("/tmp");
 
@@ -1966,6 +1967,49 @@ test("native spawn carries optional caller launch preferences without changing o
   assert.equal(requests.length, 2);
 });
 
+test("native spawn projects Copilot 1.0.100 session catalog capabilities", async (t) => {
+  // Minimized public session.model.list projection, not models.list's typed Model shape.
+  const catalog = JSON.parse(await fs.readFile(new URL("./fixtures/model-list-1.0.100.json", import.meta.url)));
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const requests = [];
+  let tools;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+        }) },
+        model: { list: async () => catalog },
+      } };
+    },
+    launch: async request => { requests.push(request); return { ok: true, launchAccepted: true }; },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  for (const preferences of [
+    { model: "claude-sonnet-5" },
+    { model: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "low" },
+    { model: "gpt-5.4-mini", contextTier: "default", reasoningEffort: "low" },
+  ]) {
+    const result = await spawn({ name: "Child", cwd: "/synthetic", task: "Bounded", ...preferences },
+      { sessionId: own.sessionId });
+    assert.equal(typeof result, "string");
+    const request = requests.at(-1);
+    assert.deepEqual(request.launchCapabilities.models, [
+      { id: "claude-sonnet-5", contextTiers: ["default", "long_context"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "gpt-6.1-sol", contextTiers: ["default", "long_context"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "claude-haiku-4.5", contextTiers: ["default"], reasoningEfforts: [] },
+    ]);
+    assert.equal(request.assignment.model, preferences.model);
+    assert.equal(JSON.stringify(request).includes("billing"), false);
+  }
+});
+
 test("native preference API absence forwards unavailable evidence and preserves visible fallback warning", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
@@ -2038,6 +2082,10 @@ test("native model metadata errors and account drift refuse without a launch or 
         selected, { sessionId: own.sessionId },
       );
       assert.equal(result.resultType, "failure");
+      assert.ok(result.textResultForLlm.includes({
+        malformed: "model-list-invalid: list", duplicate: "model-list-invalid: duplicate-id",
+        "account-drift": "model-list-invalid: account-drift", "forged-evidence": "spawn-input-invalid: fields",
+      }[scenario]), result.textResultForLlm);
       assert.equal(launches, 0);
       assert.equal(queries, scenario === "forged-evidence" ? 0 : 1);
     });
@@ -2092,6 +2140,104 @@ test("native model projection keeps valid provider-native defaults from poisonin
         });
         assert.equal(JSON.stringify(requests[0]).includes("ultra"), false);
       }
+    });
+  }
+});
+
+test("model projection names malformed checks and keeps bounded provider metadata private", () => {
+  const model = { id: "provider/model.v1", supportedReasoningEfforts: ["ultra", "low"],
+    defaultReasoningEffort: "ultra", extra: "PRIVATE_IGNORED_METADATA" };
+  assert.deepEqual(modelCapabilities({ list: [model] }), [
+    { id: model.id, contextTiers: ["default"], reasoningEfforts: ["low"] },
+  ]);
+  for (const [change, reason] of [
+    [{ id: "bad\nid" }, "model-id"],
+    [{ supportedContextTiers: ["default", "default"] }, "context-options"],
+    [{ supportedReasoningEfforts: Array(33).fill("low") }, "effort-options"],
+    [{ supportedReasoningEfforts: [null] }, "effort-options"],
+    [{ capabilities: { supports: { reasoning_effort: true } } }, "capi-effort-options"],
+    [{ billing: { token_prices: { long_context: null } } }, "long-context"],
+    [{ defaultReasoningEffort: "max" }, "default-effort"],
+  ]) {
+    assert.throws(() => modelCapabilities({ list: [{ ...model, ...change }] }),
+      { message: `model-list-invalid: ${reason}` });
+  }
+  assert.throws(() => modelCapabilities({ list: [model, model] }),
+    { message: "model-list-invalid: duplicate-id" });
+  assert.throws(() => modelCapabilities({ list: Array(129).fill(model) }),
+    { message: "model-list-invalid: model-count" });
+  assert.deepEqual(modelCapabilities({ list: [{ id: "mixed", supportedReasoningEfforts: ["low", "high"],
+    capabilities: { supports: { reasoning_effort: ["medium", "high"] } } }] })[0].reasoningEfforts, ["high"]);
+});
+
+test("native preference evidence and request byte bounds name the failed check before launch", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let launches = 0;
+  const wideCatalog = Array.from({ length: 128 }, (_, i) => ({
+    id: `${i}`.padEnd(128, "x"), supportedContextTiers: ["default", "long_context"],
+    supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh", "max"],
+    defaultReasoningEffort: "medium",
+  }));
+  let catalog = wideCatalog.slice(0, 90);
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+        }) },
+        model: { list: async () => ({ list: catalog }) },
+      } };
+    },
+    launch: async () => { launches++; return { ok: true }; },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  const assignment = { name: "Child", cwd: "/synthetic", task: "Bounded", model: "safe" };
+  const invocation = { sessionId: own.sessionId };
+  assert.equal(typeof await spawn(assignment, invocation), "string");
+  catalog = wideCatalog;
+  assert.match((await spawn(assignment, invocation)).textResultForLlm, /model-list-invalid: evidence-size/);
+  catalog = [];
+  assert.match((await spawn({ ...assignment, task: "x".repeat(65536) }, invocation)).textResultForLlm,
+    /spawn-input-invalid: request-size/);
+  assert.equal(launches, 1);
+});
+
+test("native spawn distinguishes controller refusal and invalid replies without raw error leakage", async (t) => {
+  for (const [output, exitCode, reason] of [
+    ['{"error":"launch-capability-invalid: defaults."}', 1, "controller-refused: launch-capability-invalid: defaults"],
+    ['{"ok":false}', 0, "controller-invalid: result-ok"],
+    ["PRIVATE_CONTROLLER_OUTPUT", 0, "controller-invalid: result-json"],
+    ["PRIVATE_CONTROLLER_ERROR", 1, "controller-failed: execution-or-output"],
+  ]) {
+    await t.test(reason, async (t) => {
+      const f = await managedFixture(t);
+      const own = f.bindings[0];
+      const controller = path.join(f.root, "controller");
+      await fs.writeFile(controller, `#!/bin/sh\ncat >/dev/null\nprintf '%s' '${output}' ${exitCode ? ">&2" : ""}\nexit ${exitCode}\n`,
+        { mode: 0o700 });
+      let tools;
+      const adapter = await start({
+        root: f.root, peer: own.peer, managed: true, expected: { ...own, controller },
+        joinSession: async options => {
+          tools = options.tools;
+          return { sessionId: own.sessionId, rpc: { gitHubAuth: { getStatus: async () => ({
+            isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+          }) } } };
+        },
+      });
+      t.after(() => adapter.close());
+      const result = await tools.find(tool => tool.name === "maestro_spawn").handler({
+        name: "Child", cwd: "/synthetic", task: "Bounded", model: "safe",
+      }, { sessionId: own.sessionId });
+      assert.equal(result.resultType, "failure");
+      assert.ok(result.textResultForLlm.includes(reason), result.textResultForLlm);
+      assert.equal(result.textResultForLlm.includes("PRIVATE_CONTROLLER"), false);
+      assert.equal(result.textResultForLlm.includes("proof route"), false);
     });
   }
 });
@@ -2760,7 +2906,8 @@ test("born managed: custody loss is latched; its end does not restore stale auth
 });
 
 test("each installed module fits setup's resource bound", async () => {
-  for (const [name, limit] of [["adapter.mjs", 65_536], ["extension.mjs", 8192], ["processes.mjs", 16_384]]) {
+  for (const [name, limit] of [["adapter.mjs", 65_536], ["extension.mjs", 8192],
+    ["processes.mjs", 16_384], ["models.mjs", 16_384]]) {
     const size = (await fs.stat(fileURLToPath(new URL(`./delivery-proof/${name}`, import.meta.url)))).size;
     assert.ok(size <= limit, `${name} is ${size} bytes`);
   }

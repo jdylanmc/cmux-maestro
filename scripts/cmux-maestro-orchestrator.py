@@ -187,7 +187,8 @@ def messaging_configuration(root):
         if len(os.fsencode(routes / ("0" * 16 + ".sock"))) > 100:
             raise OrchestrationError("Messaging socket path is too long.")
         # extension.mjs imports both modules; a missing one stops the whole native extension.
-        for name, maximum in (("extension.mjs", 65_536), ("adapter.mjs", 65_536), ("processes.mjs", 16_384)):
+        for name, maximum in (("extension.mjs", 65_536), ("adapter.mjs", 65_536),
+                              ("processes.mjs", 16_384), ("models.mjs", 16_384)):
             descriptor = os.open(extension / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 info = os.fstat(descriptor)
@@ -411,38 +412,38 @@ def validate_launch_capabilities(value, identity):
             or not isinstance(identity, dict)
             or value["sessionId"] != identity.get("sessionId")
             or value["account"] != {"login": identity.get("login"), "host": identity.get("host")}):
-        raise OrchestrationError("Launch capability evidence session/account binding is invalid.")
+        raise OrchestrationError("launch-capability-invalid: binding; evidence session/account binding is invalid.")
     canonical_uuid(value["sessionId"], "launch capability session ID")
     if value["source"] not in ("session-model-list", "unavailable"):
-        raise OrchestrationError("Launch capability evidence source is invalid.")
+        raise OrchestrationError("launch-capability-invalid: source.")
     models = value["models"]
     if not isinstance(models, list) or len(models) > 128 or (
         value["source"] == "unavailable" and models
     ):
-        raise OrchestrationError("Launch capability model list is invalid.")
+        raise OrchestrationError("launch-capability-invalid: model-list.")
     ids = set()
     for model in models:
         if (not isinstance(model, dict)
                 or set(model) - {"id", "contextTiers", "reasoningEfforts", "defaultReasoningEffort"}
                 or not {"id", "contextTiers", "reasoningEfforts"}.issubset(model)):
-            raise OrchestrationError("Launch model capability fields are invalid.")
+            raise OrchestrationError("launch-capability-invalid: model-fields.")
         validate_launch_preferences({"model": model["id"]})
         if model["id"] in ids:
-            raise OrchestrationError("Launch model capability IDs must be unique.")
+            raise OrchestrationError("launch-capability-invalid: duplicate-model-id.")
         ids.add(model["id"])
         for field, supported in (("contextTiers", CONTEXT_TIERS), ("reasoningEfforts", REASONING_EFFORTS)):
             values = model[field]
             if (not isinstance(values, list) or len(values) > len(supported)
                     or any(not isinstance(item, str) or item not in supported for item in values)
                     or len(set(values)) != len(values)):
-                raise OrchestrationError("Launch model capability options are invalid.")
+                raise OrchestrationError(f"launch-capability-invalid: {field}.")
         if "default" not in model["contextTiers"] or (
             "defaultReasoningEffort" in model
             and model["defaultReasoningEffort"] not in model["reasoningEfforts"]
         ):
-            raise OrchestrationError("Launch model capability defaults are invalid.")
+            raise OrchestrationError("launch-capability-invalid: defaults.")
     if len(json.dumps(value, separators=(",", ":")).encode()) > 32768:
-        raise OrchestrationError("Launch capability evidence exceeds its size bound.")
+        raise OrchestrationError("launch-capability-invalid: evidence-size.")
     return value
 
 
@@ -485,7 +486,7 @@ def resolve_launch_preferences(requested, settings, capabilities=None, identity=
                 warnings.append("Requested model is unavailable; configured model retained.")
             selected = settings.get("model")
         if selected not in models:
-            raise OrchestrationError("Configured fallback model is not available in this session's model catalog.")
+            raise OrchestrationError("launch-preference-unavailable: configured-fallback; configured fallback model is not available in this session's model catalog.")
         configured["model"] = selected
         model = models[selected]
         if "contextTier" in requested:

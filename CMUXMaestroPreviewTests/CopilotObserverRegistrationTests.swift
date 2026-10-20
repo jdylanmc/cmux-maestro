@@ -587,7 +587,7 @@ final class InstallCheckpointFixture: @unchecked Sendable {
         try fixture.write(Data("---\nname: maestro-icon\n---\n".utf8), to: resources.appendingPathComponent("maestro-icon/SKILL.md"))
         try fixture.write(Data("---\nname: maestro-pet\n---\n".utf8), to: resources.appendingPathComponent("maestro-pet/SKILL.md"))
         try fixture.write(Data("# Pet kit fixture\n".utf8), to: resources.appendingPathComponent("maestro-pet/pet_kit.py"))
-        for name in ["adapter.mjs", "extension.mjs", "processes.mjs"] {
+        for name in ["adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"] {
             try FileManager.default.copyItem(at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
                                              to: resources.appendingPathComponent(name))
         }
@@ -596,11 +596,11 @@ final class InstallCheckpointFixture: @unchecked Sendable {
         if legacy { try fixture.legacy(helper: helper, disabled: disabled) }
     }
 
-    func checkpoint(id: UUID? = nil) -> CopilotInstallCheckpoint {
+    func checkpoint(id: UUID? = nil, afterResourceRestore: (@Sendable (URL) throws -> Void)? = nil) -> CopilotInstallCheckpoint {
         CopilotInstallCheckpoint(id: id ?? self.id, home: fixture.home, root: fixture.root,
             application: application, bundle: bundle, controller: resources.appendingPathComponent("controller.py"),
             skill: resources.appendingPathComponent("SKILL.md"), selected: fixture.helper, path: "/usr/bin:/bin",
-            runner: runner, messagingRoutes: routes)
+            runner: runner, messagingRoutes: routes, afterResourceRestore: afterResourceRestore)
     }
 
     func record() throws -> CopilotInstallCheckpoint.Record {
@@ -624,6 +624,63 @@ final class InstallCheckpointFixture: @unchecked Sendable {
 }
 
 struct CopilotInstallCheckpointTests {
+    @Test(arguments: [false, true], [false, true])
+    func coordinatedUpgradeRollbackKeepsNativeImportsAvailable(resourceOnly: Bool, interruptRestore: Bool) async throws {
+        enum Interruption: Error { case afterModels }
+        let value = try InstallCheckpointFixture(); defer { try? value.clean() }
+        for action in ["prepare", "apply", "finish", "release"] {
+            _ = try await value.checkpoint().perform(action)
+        }
+        let native = value.fixture.provider.appendingPathComponent("extensions/maestro")
+        let adapter = native.appendingPathComponent("adapter.mjs")
+        let models = native.appendingPathComponent("models.mjs")
+        let oldAdapter = Data("export const previousAdapter = true;\n".utf8)
+        let newAdapter = try Data(contentsOf: value.resources.appendingPathComponent("adapter.mjs"))
+        let newModels = try Data(contentsOf: value.resources.appendingPathComponent("models.mjs"))
+        try value.fixture.write(oldAdapter, to: adapter)
+        try FileManager.default.removeItem(at: models)
+        if resourceOnly {
+            await value.runner.nativePlugin(enabled: false)
+        } else {
+            try value.fixture.write(Data("---\nname: maestro-icon\n---\nUpdated fixture\n".utf8),
+                                    to: value.resources.appendingPathComponent("maestro-icon/SKILL.md"))
+        }
+        let id = UUID()
+        _ = try await value.checkpoint(id: id).perform("prepare")
+        let before = try value.record()
+        #expect(before.resourceOnly == resourceOnly)
+        if !resourceOnly { await value.runner.configure(afterMutationResult: .exited(9)) }
+        do {
+            _ = try await value.checkpoint(id: id).perform("apply")
+            #expect(resourceOnly, "The provider-mutation case must exercise a failed upgrade")
+        } catch is CopilotRegistrationConflict {
+            #expect(!resourceOnly)
+        }
+        #expect(try Data(contentsOf: adapter) == newAdapter)
+        #expect(try Data(contentsOf: models) == newModels)
+        let restoring = value.checkpoint(id: id, afterResourceRestore: { restored in
+            if try Data(contentsOf: adapter) == newAdapter {
+                #expect((try? Data(contentsOf: models)) == newModels,
+                        "Every coordinated rollback prefix must retain the new adapter's dependency")
+            }
+            if interruptRestore && restored == models { throw Interruption.afterModels }
+        })
+        do {
+            _ = try await restoring.perform("restore")
+            #expect(!interruptRestore)
+        } catch Interruption.afterModels {
+            #expect(interruptRestore)
+            #expect(try value.record().phase == "restoring")
+            #expect(try Data(contentsOf: adapter) == oldAdapter,
+                    "An interrupted rollback must restore the importer before removing its dependency")
+            _ = try await value.checkpoint(id: id).perform("restore")
+        }
+        try value.verifyRestored(before)
+        #expect(try Data(contentsOf: adapter) == oldAdapter)
+        #expect(!FileManager.default.fileExists(atPath: models.path))
+        _ = try await value.checkpoint(id: id).perform("release")
+    }
+
     @Test(arguments: [false, true])
     func resourceOnlyRestoreRemovesTheCMUXHooksItWrote(absolute: Bool) async throws {
         let value = try InstallCheckpointFixture(); defer { try? value.clean() }

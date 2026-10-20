@@ -1,0 +1,22 @@
+{
+  "list": [
+    {
+      "id": "claude-sonnet-5",
+      "capabilities": {
+        "supports": { "reasoning_effort": ["low", "medium", "high", "xhigh", "max"] }
+      },
+      "billing": { "token_prices": { "long_context": {} } }
+    },
+    {
+      "id": "gpt-6.1-sol",
+      "capabilities": {
+        "supports": { "reasoning_effort": ["low", "medium", "high", "xhigh", "max"] }
+      },
+      "billing": { "token_prices": { "long_context": {} } }
+    },
+    {
+      "id": "claude-haiku-4.5",
+      "capabilities": { "supports": {} }
+    }
+  ]
+}

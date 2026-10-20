@@ -1183,7 +1183,7 @@ struct CopilotSetupTests {
             at: repository.appendingPathComponent(".agents/skills/maestro-pet/pet_kit.py"),
             to: petKit
         )
-        for name in ["adapter.mjs", "extension.mjs", "processes.mjs"] {
+        for name in ["adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"] {
             try FileManager.default.copyItem(
                 at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
                 to: directory.appendingPathComponent(name)
@@ -1203,6 +1203,26 @@ struct CopilotSetupTests {
         #expect(!FileManager.default.fileExists(atPath: integration.path))
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("Orchestration").path))
         #expect(!FileManager.default.fileExists(atPath: local.nativeExtensions.path))
+        let upgrade = try local.resources(
+            root: integration, helper: executable, controller: controller, skill: skill, includeCMUXHooks: false
+        )
+        let native = local.nativeExtensions.appendingPathComponent("maestro")
+        let adapter = native.appendingPathComponent("adapter.mjs")
+        let models = native.appendingPathComponent("models.mjs")
+        let previous = CopilotPluginResources(writes: [
+            .init(file: adapter, data: Data("export const previousAdapter = true;\n".utf8)),
+        ], routes: routes)
+        try previous.publish()
+        let newAdapter = try Data(contentsOf: directory.appendingPathComponent("adapter.mjs"))
+        let newModels = try Data(contentsOf: directory.appendingPathComponent("models.mjs"))
+        // Inspect every on-disk prefix, including one left by an interrupted upgrade.
+        for write in upgrade.writes {
+            try CopilotPluginResources(writes: [write], routes: routes).publish()
+            if try Data(contentsOf: adapter) == newAdapter {
+                #expect((try? Data(contentsOf: models)) == newModels,
+                        "A published adapter's required static import must already exist")
+            }
+        }
         let plugin = try local.preparePlugin(
             root: integration, helper: executable, controller: controller, skill: skill
         )
@@ -1218,13 +1238,14 @@ struct CopilotSetupTests {
         #expect(try Data(contentsOf: installedKit) == Data(contentsOf: petKit))
         #expect((try FileManager.default.attributesOfItem(atPath: installedKit.path)[.posixPermissions] as? Int) == 0o600)
         #expect(!FileManager.default.fileExists(atPath: plugin.appendingPathComponent("skills/maestro").path))
-        let native = local.nativeExtensions.appendingPathComponent("maestro")
         #expect(try Data(contentsOf: native.appendingPathComponent("extension.mjs"))
             == Data(contentsOf: directory.appendingPathComponent("extension.mjs")))
         #expect(try Data(contentsOf: native.appendingPathComponent("adapter.mjs"))
             == Data(contentsOf: directory.appendingPathComponent("adapter.mjs")))
         #expect(try Data(contentsOf: native.appendingPathComponent("processes.mjs"))
             == Data(contentsOf: directory.appendingPathComponent("processes.mjs")))
+        #expect(try Data(contentsOf: native.appendingPathComponent("models.mjs"))
+            == Data(contentsOf: directory.appendingPathComponent("models.mjs")))
         #expect(try routes.resourceValues(forKeys: [.isDirectoryKey]).isDirectory == true)
         let installed = directory.appendingPathComponent(
             "Orchestration/bin/cmux-maestro-orchestrator"

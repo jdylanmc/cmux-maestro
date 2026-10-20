@@ -608,6 +608,26 @@ Root model precedence stays unchanged, and new options without joined evidence
 warn without injecting unsupported flags. These are synthetic source contracts,
 not observed child model/context settings, entitlements or a numeric long-context
 window; full catalog/billing data is absent from persisted selection metadata.
+For #152, a disposable extension-free SDK session using installed CLI and SDK
+1.0.100 returned 23 public model entries. Its raw CAPI snake_case effort and
+pricing-tier fields differ from `models.list`'s typed camelCase `Model` shape.
+A minimized projection in `scripts/fixtures/model-list-1.0.100.json` reproduces
+the previous loss of all effort/long-context support. Native adapter tests and
+the real Python selection/argument path now preserve those capabilities for
+model-only and model+tier+effort requests. An absent `gpt-5.4-mini` request warns
+and falls back to a configured model present in the catalog; it does not bypass
+the configured-fallback requirement.
+
+The original installed generic proof-route refusal was **not reproduced** by
+that isolated catalog. No affected live session was modified or retried; #199's
+root cause remains unproven. Separate negative controls name account drift,
+malformed/foreign evidence, the 32-KiB evidence and 64-KiB request bounds,
+controller refusal, invalid success/JSON replies and process-output failure.
+The real 23-entry projection fits both bounds. These controls distinguish
+failure stages; they do not establish which stage failed in the reported session.
+The new parser module participates in app resources, coordinated setup,
+installed readiness and resource-size checks. No live installation is evidence
+from this repair; an authorized post-install native attempt remains outstanding.
 Mixed-catalog controls distinguish valid provider-native effort defaults from
 malformed non-advertised defaults before known-CLI projection. Unrepresentable
 valid defaults are omitted without poisoning another supported model; selected

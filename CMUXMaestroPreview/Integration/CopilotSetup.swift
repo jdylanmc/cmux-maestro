@@ -363,6 +363,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         let adapterData = try boundedResource(resources.appendingPathComponent("adapter.mjs"), maximum: 65_536)
         let loaderData = try boundedResource(resources.appendingPathComponent("extension.mjs"), maximum: 8192)
         let processesData = try boundedResource(resources.appendingPathComponent("processes.mjs"), maximum: 16_384)
+        let modelsData = try boundedResource(resources.appendingPathComponent("models.mjs"), maximum: 16_384)
         guard FileManager.default.isExecutableFile(atPath: (helperExecutable ?? helper).path),
               FileManager.default.isReadableFile(atPath: controller.path),
               FileManager.default.isReadableFile(atPath: skill.path),
@@ -404,6 +405,8 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
                   data: try JSONSerialization.data(withJSONObject: ["helper": helper.path], options: [.sortedKeys])),
             .init(file: bin.appendingPathComponent("cmux-maestro-orchestrator"), data: controllerData,
                   permissions: 0o700, maximum: 1_048_576),
+            // Publish required static imports before their importer, including on upgrades.
+            .init(file: nativeRoot.appendingPathComponent("models.mjs"), data: modelsData),
             .init(file: nativeRoot.appendingPathComponent("adapter.mjs"), data: adapterData),
             .init(file: nativeRoot.appendingPathComponent("extension.mjs"), data: loaderData),
             .init(file: nativeRoot.appendingPathComponent("processes.mjs"), data: processesData),
@@ -848,6 +851,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
     let path: String
     let runner: any CopilotSetupProcessRunner
     let messagingRoutes: URL?
+    private let afterResourceRestore: (@Sendable (URL) throws -> Void)?
     private var record: Record?
     private var journal: CopilotSetupFileState?
     private var lease: Int32 = -1
@@ -871,11 +875,13 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
 
     init(id: UUID, home: URL, root: URL, application: URL, bundle: URL,
          controller: URL, skill: URL, selected: URL?, path: String,
-         runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner(), messagingRoutes: URL? = nil) {
+         runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner(), messagingRoutes: URL? = nil,
+         afterResourceRestore: (@Sendable (URL) throws -> Void)? = nil) {
         self.id = id; self.home = home; self.root = root; self.application = application
         self.bundle = bundle; self.controller = controller; self.skill = skill
         self.selected = selected; self.path = path; self.runner = runner
         self.messagingRoutes = messagingRoutes
+        self.afterResourceRestore = afterResourceRestore
     }
 
     deinit {
@@ -1525,15 +1531,26 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         return true
     }
 
+    private func restorationEntries(_ record: Record, states: [CopilotSetupFileState]) -> [(Entry, CopilotSetupFileState)] {
+        var entries = Array(zip(record.entries, states))
+        let nativeRoot = files.nativeExtensions.appendingPathComponent("maestro").path + "/"
+        let slots = entries.indices.filter { entries[$0].0.path.hasPrefix(nativeRoot) }
+        let reversed = slots.map { entries[$0] }.reversed()
+        // Undo native imports before dependencies without moving hooks, observer, or receipt writes.
+        for (slot, entry) in zip(slots, reversed) { entries[slot] = entry }
+        return entries
+    }
+
     private func restoreResources(_ record: Record, observed: CopilotSetupMetadata) throws {
         let settings = try verifyForeign(observed)
         try verifyProvider(observed)
         let states = try readEntries()
         try verifyAllowed(states)
         try phase(.restoring)
-        for (entry, state) in zip(record.entries, states) {
+        for (entry, state) in restorationEntries(record, states: states) {
             if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
+            try afterResourceRestore?(state.url)
         }
         _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
     }
@@ -1578,11 +1595,12 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         let observer = try owned.replacing(with: record.generation.manifest(disabled: true))
         let receipt = try CopilotSetupFileState.read(registration.receiptFile)
         let states = try readEntries()
-        for (entry, state) in zip(record.entries, states) where
+        for (entry, state) in restorationEntries(record, states: states) where
             entry.path != registration.file.path && entry.path != registration.receiptFile.path {
             if !plan.priorInstalled && installed && entry.path.hasPrefix(registration.plugin.path + "/") { continue }
             if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
+            try afterResourceRestore?(state.url)
         }
         if replaceProvider {
             // Reinstall the previous selected payload at the same source,
