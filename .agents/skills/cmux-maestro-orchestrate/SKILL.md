@@ -276,7 +276,8 @@ Check both `remaining` and `nodeSlotsRemaining`, plus `admissionAvailable`.
 The workspace node limit includes retained history, even resource-retired nodes;
 positive live-workspace room does not establish a free node. Exhaustion is not
 permission to erase history, raise a ceiling, or retry fan-out automatically.
-Also check `hostNodeSlotsRemaining` and advisory `hostStateBytesRemaining`;
+Also check `hostNodeSlotsRemaining`, advisory `hostStateBytesRemaining` and
+`hostStateByteWarning` (80% of the state byte limit);
 host protection is distinct from another workspace consuming your node quota.
 Capacity reconciliation requires CMUX's atomic `surface.list` workspace
 snapshot, not separate pane inventories that can miss a moving terminal.

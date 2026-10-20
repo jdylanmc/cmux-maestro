@@ -1512,10 +1512,11 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
             root, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, "Other")
             state["nodes"][root["id"]] = root
             for index in range(31):
+                # Reported (not ended) workers keep their task; ended ones are compacted (#280).
                 retired, _ = CONTROLLER_API["new_root"](other, str(uuid.uuid4()), self.h.pane, f"Retired {index}")
                 retired.update(
                     role="worker", parentId=root["id"], runId=root["runId"],
-                    executionMode="bounded", phase="resource-retired", availability="unavailable",
+                    executionMode="bounded", phase="reported-completed", availability="idle",
                     generation=1, copilotSessionId=str(uuid.uuid4()),
                     task="x" * 32_768 if index < 30 else "",
                 )
@@ -1676,6 +1677,162 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         self.assertTrue(self.capacity()["capacity"]["admissionAvailable"])
         self.configure(1)
         self.assertEqual(self.capacity()["capacity"]["used"], 2)
+
+
+class LaunchPayloadCompactionTests(unittest.TestCase):
+    """Ended nodes' launch payload leaves control state for a private per-node archive (#280)."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve() / "Orchestration"
+        self.archive = self.root / "control" / "retired"
+        self.workspace = str(uuid.uuid4())
+        self.pane = str(uuid.uuid4())
+
+    def run_root(self, state):
+        root, _ = CONTROLLER_API["new_root"](self.workspace, str(uuid.uuid4()), self.pane, "Root")
+        state["nodes"][root["id"]] = root
+        return root
+
+    def worker(self, state, root, phase, availability, task):
+        node, _ = CONTROLLER_API["new_root"](self.workspace, str(uuid.uuid4()), self.pane, "Worker")
+        node.update(
+            role="worker", parentId=root["id"], runId=root["runId"], executionMode="bounded",
+            phase=phase, availability=availability, generation=1, copilotSessionId=str(uuid.uuid4()),
+            task=task, copilotExecutable="/synthetic/bin/copilot", launchPath="/synthetic/bin:/usr/bin",
+        )
+        state["nodes"][node["id"]] = node
+        return node
+
+    def size(self):
+        return (self.root / "control" / "state.json").stat().st_size
+
+    def test_sustained_spawn_and_retire_cycle_stays_bounded(self):
+        state = CONTROLLER_API["empty_state"]()
+        root = self.run_root(state)
+        task = "x" * CONTROLLER_API["MAX_TASK"]
+        with CONTROLLER_API["Store"](self.root) as store:
+            for _ in range(CONTROLLER_API["MAX_NODES"] - 1):
+                worker = self.worker(state, root, "turn-running", "busy", task)
+                store.write(state)
+                worker.update(phase="resource-retired", availability="unavailable")
+                store.write(state)
+        self.assertLess(self.size(), CONTROLLER_API["STATE_BYTE_WARNING"])
+        saved = CONTROLLER_API["read_state"](self.root)
+        workers = [node for node in saved["nodes"].values() if node["role"] == "worker"]
+        self.assertEqual(len(workers), CONTROLLER_API["MAX_NODES"] - 1)
+        for node in workers:
+            self.assertIsNone(node["task"])
+            self.assertNotIn("copilotExecutable", node)
+            self.assertNotIn("launchPath", node)
+            record = json.loads((self.archive / f"{node['id']}.json").read_text())
+            self.assertEqual(record["generations"]["1"],
+                             {"task": task, "copilotExecutable": "/synthetic/bin/copilot"})
+
+    def test_a_near_full_existing_state_compacts_on_its_next_write(self):
+        # Shaped like an affected install: mostly retired history, some live workers, a few
+        # ended workers, all a few KB under the cap.
+        state = CONTROLLER_API["empty_state"]()
+        root = self.run_root(state)
+        shape = ([("resource-retired", "unavailable")] * 70 + [("turn-running", "busy")] * 30
+                 + [("terminal-disappeared", "unavailable")] * 7 + [("process-disappeared", "unavailable")] * 6)
+        nodes = [self.worker(state, root, phase, availability, "") for phase, availability in shape]
+        base = len(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) + 1
+        room = CONTROLLER_API["MAX_BYTES"] - 2_700 - base
+        for index, node in enumerate(nodes):
+            node["task"] = f"{index}:" + "x" * (room // len(nodes) - len(f"{index}:"))
+        encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+        self.assertGreater(len(encoded) + 8_192, CONTROLLER_API["MAX_BYTES"])
+        with CONTROLLER_API["Store"](self.root) as store:
+            store._atomic(store.control_fd, "state.json", encoded)
+        original = json.loads(encoded)
+        capacity = CONTROLLER_API["workspace_capacity"](CONTROLLER_API["read_state"](self.root), self.workspace)
+        self.assertTrue(capacity["hostStateByteWarning"])
+
+        def spawn(current):
+            self.worker(current, current["nodes"][root["id"]], "turn-running", "busy", "y" * 8_192)
+        CONTROLLER_API["mutate"](self.root, spawn)
+        self.assertLess(self.size(), CONTROLLER_API["STATE_BYTE_WARNING"])
+        saved = CONTROLLER_API["read_state"](self.root)
+        self.assertFalse(CONTROLLER_API["workspace_capacity"](saved, self.workspace)["hostStateByteWarning"])
+        payload = {"task", "copilotExecutable", "launchPath"}
+        for identifier, before in original["nodes"].items():
+            after = saved["nodes"][identifier]
+            # Identity, lineage, outcome and timestamps are unchanged.
+            self.assertEqual({k: v for k, v in after.items() if k not in payload},
+                             {k: v for k, v in before.items() if k not in payload})
+            if before["phase"] in CONTROLLER_API["LAUNCH_PAYLOAD_COMPACTED_PHASES"] and before["task"]:
+                self.assertIsNone(after["task"])
+                record = json.loads((self.archive / f"{identifier}.json").read_text())
+                self.assertEqual(record["generations"]["1"]["task"], before["task"])
+            else:
+                self.assertEqual(after, before)
+
+    def test_compacted_node_keeps_its_row_and_its_archive_is_private_and_follows_it(self):
+        state = CONTROLLER_API["empty_state"]()
+        root = self.run_root(state)
+        worker = self.worker(state, root, "resource-retired", "unavailable", "Synthetic private task")
+        with CONTROLLER_API["Store"](self.root) as store:
+            expected = json.loads(store._projection(json.loads(json.dumps(state))))["nodes"]
+            store.write(state)
+            published = json.loads((self.root / "observer" / "current.json").read_text())["nodes"]
+            self.assertEqual(published, expected)
+            archived = self.archive / f"{worker['id']}.json"
+            self.assertEqual(self.archive.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(archived.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(self.archive.stat().st_uid, os.getuid())
+            self.assertEqual(set(json.loads(archived.read_text())["generations"]["1"]),
+                             set(CONTROLLER_API["ARCHIVED_LAUNCH_FIELDS"]))
+            self.assertNotIn(worker["tokenHash"], archived.read_text())
+            self.assertEqual(store.archived_launch(worker["id"])["generations"]["1"]["task"],
+                             "Synthetic private task")
+            del state["nodes"][worker["id"]]
+            store.write(state)
+        self.assertFalse(archived.exists())
+
+    def test_an_unusable_archive_keeps_the_payload_and_never_blocks_a_write(self):
+        def invalid(path):
+            path.write_text("not json")
+            path.chmod(0o600)
+
+        def nested(path):
+            path.write_text("[" * 100_000 + "]" * 100_000)
+            path.chmod(0o600)
+
+        def unreadable(path):
+            path.write_text("{}")
+            path.chmod(0o000)
+
+        def symlink(path):
+            target = path.parent.parent / "elsewhere.json"
+            target.write_text("{}")
+            path.symlink_to(target)
+
+        def directory_symlink(path):
+            path.parent.rmdir()
+            elsewhere = path.parent.parent / "elsewhere"
+            elsewhere.mkdir(mode=0o700)
+            path.parent.symlink_to(elsewhere)
+
+        for name, damage in (("invalid", invalid), ("nested", nested), ("unreadable", unreadable),
+                             ("symlink", symlink), ("directory-symlink", directory_symlink)):
+            with self.subTest(name):
+                self.setUp()
+                state = CONTROLLER_API["empty_state"]()
+                root = self.run_root(state)
+                worker = self.worker(state, root, "turn-running", "busy", "Synthetic task")
+                with CONTROLLER_API["Store"](self.root) as store:
+                    store.write(state)
+                    self.archive.mkdir(mode=0o700)
+                    damage(self.archive / f"{worker['id']}.json")
+                    worker.update(phase="resource-retired", availability="unavailable")
+                    unrelated = self.worker(state, root, "turn-running", "busy", "Unrelated spawn")
+                    store.write(state)
+                saved = CONTROLLER_API["read_state"](self.root)["nodes"]
+                self.assertIn(unrelated["id"], saved)
+                self.assertEqual(saved[worker["id"]]["task"], "Synthetic task")
+                self.assertEqual(saved[worker["id"]]["copilotExecutable"], "/synthetic/bin/copilot")
 
 
 class AdmissionGateTests(unittest.TestCase):
@@ -3262,7 +3419,11 @@ class ChildResumeTests(unittest.TestCase):
     def test_upgraded_copilot_resolves_from_the_terminal_path_or_refuses_by_name(self):
         _, child = self.ended_child()
         missing = str(self.h.path / "old-version" / "copilot")
-        self.h.change_state(lambda state: state["nodes"][child["id"]].update(copilotExecutable=missing))
+        # The ended node's recorded executable is in its launch archive (#280).
+        archive = self.h.root / "control" / "retired" / f"{child['id']}.json"
+        record = json.loads(archive.read_text())
+        record["generations"]["1"]["copilotExecutable"] = missing
+        archive.write_text(json.dumps(record))
         completed = self.resume(child)
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(self.h.state()["nodes"][child["id"]]["copilotExecutable"], str(self.h.copilot.resolve()))
@@ -3404,6 +3565,27 @@ class ChildResumeTests(unittest.TestCase):
                 self.assertEqual((node["generation"], node["phase"]), (2, "turn-running"))
                 self.assertTrue((self.routes / f"{CONTROLLER_API['message_peer'](node)}.json").exists())
                 self.assertFalse(old.exists())
+
+    def test_an_ended_child_is_compacted_and_resumes_with_its_archived_executable(self):
+        _, child = self.ended_child()
+        self.assertIsNone(child["task"])
+        self.assertNotIn("copilotExecutable", child)
+        self.assertNotIn("launchPath", child)
+        archive = self.h.root / "control" / "retired" / f"{child['id']}.json"
+        record = json.loads(archive.read_text())
+        self.assertEqual(record["generations"]["1"]["task"], "Synthetic child task")
+        recorded = self.h.path / "recorded-bin" / "copilot"
+        recorded.parent.mkdir()
+        shutil.copy2(self.h.copilot, recorded)
+        recorded.chmod(0o755)
+        record["generations"]["1"]["copilotExecutable"] = str(recorded)
+        archive.write_text(json.dumps(record))
+        completed = self.resume(child)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        node = self.h.state()["nodes"][child["id"]]
+        self.assertEqual((node["generation"], node["phase"], node["copilotExecutable"]),
+                         (2, "turn-running", str(recorded)))
+        self.assertEqual(node["launchPath"], self.h.env["PATH"])
 
     def test_resume_removes_the_earlier_generation_launch_script(self):
         _, child = self.ended_child()
