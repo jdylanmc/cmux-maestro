@@ -374,7 +374,7 @@ struct CopilotWorktreeResolverTests: Sendable {
         let tabbed = try scratch.repo("a\tb")
         let spaced = try scratch.repo("a b")
         let yaml = Data("name: \"x\\ty\"\ncwd: \"\(scratch.root.path)/a\\tb\"\n".utf8)
-        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: yaml))
+        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: yaml))
         #expect(cwd == tabbed.path)
         #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: cwd) == resolve(tabbed))
         #expect(resolve(tabbed) != resolve(spaced))
@@ -410,15 +410,39 @@ struct CopilotWorktreeResolverTests: Sendable {
     /// A tab after `key:` opens a quoted value too; its continuation lines are never keys.
     @Test func tabSeparatedQuotedNameCannotSmuggleACwd() {
         let yaml = Data("name:\t\"intro\ncwd: /tmp/wrong\noutro\"\ncwd: /tmp/real\n".utf8)
-        #expect(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: yaml) == "/tmp/real")
+        // An unclosed quoted value spans lines: the scanner does not model it, so cwd is unknown.
+        #expect(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: yaml) == nil)
         let only = Data("name:\t'intro\ncwd: /tmp/wrong\noutro'\n".utf8)
-        #expect(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: only) == nil)
+        #expect(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: only) == nil)
+    }
+
+    /// cwd is read only from a workspace.yaml that is wholly a flat mapping the scanner models.
+    @Test func cwdFailsClosedOnUnmodeledYAML() {
+        func cwd(_ text: String) -> String? {
+            CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: Data(text.utf8))
+        }
+        let modeled = "id: x\nname: |\n  First line\n\n  cwd: /tmp/inside\nuser_named: false\n# note\ncwd: '/tmp/real'\n"
+        #expect(cwd(modeled) == "/tmp/real")
+        #expect(cwd("name: >-\n  folded\ncwd: /tmp/real # comment\n") == "/tmp/real")
+        for refused in [
+            "meta: {\ncwd: /tmp/wrong\n}\n",                                   // flow mapping spanning lines
+            "meta: [\ncwd: /tmp/wrong\n]\ncwd: /tmp/real\n",                   // flow sequence spanning lines
+            "\"key\": \"a\ncwd: /tmp/wrong\nb\"\ncwd: /tmp/real\n",                // quoted key, multi-line value
+            "summary: 'a\ncwd: /tmp/wrong\nb'\ncwd: /tmp/real\n",              // multi-line quoted value
+            "name: &anchor x\ncwd: /tmp/real\n", "cwd: *alias\n", "cwd: !tag /tmp/real\n",
+            "---\ncwd: /tmp/real\n", "cwd: /tmp/real\n...\n",
+            "cwd: /tmp/a\ncwd: /tmp/b\n", "id: 1\nid: 2\ncwd: /tmp/real\n",       // duplicate root keys
+            "cwd: /tmp/a\n  continued\n", "meta:\n  cwd: /tmp/wrong\n", "- cwd: /tmp/wrong\n",
+            "? cwd\n: /tmp/wrong\n", "cwd: |\n  /tmp/block\n",
+        ] {
+            #expect(cwd(refused) == nil, "\(refused.debugDescription)")
+        }
     }
 
     /// A plain scalar's comment starts at the first `#` after a space or a tab.
     @Test func plainScalarCommentStartsAtTheFirstBlankHash() {
         func cwd(_ line: String) -> String? {
-            CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: Data("cwd: \(line)\n".utf8))
+            CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: Data("cwd: \(line)\n".utf8))
         }
         #expect(cwd("/tmp/real\t# note # later") == "/tmp/real")
         #expect(cwd("/tmp/real # note\t# later") == "/tmp/real")
@@ -433,7 +457,7 @@ struct CopilotWorktreeResolverTests: Sendable {
         let plain = try scratch.repo("app")
         let spaced = try scratch.repo("app\u{00A0}")
         let yaml = Data("name: Synthetic\u{00A0}\ncwd: \(spaced.path)\n".utf8)
-        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.scalar(forKey: "cwd", in: yaml))
+        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: yaml))
         #expect(cwd == spaced.path)
         #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: cwd) == resolve(spaced))
         #expect(resolve(spaced) != resolve(plain))

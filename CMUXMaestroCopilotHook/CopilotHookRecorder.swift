@@ -571,7 +571,7 @@ nonisolated enum CopilotWorktreeResolver {
               after.modifiedNanoseconds == stamp.modifiedNanoseconds
         else { return .init(evidence: .unknown, source: nil) }
         let source = CopilotWorktreeSource(stamp)
-        guard let cwd = CopilotSessionName.scalar(forKey: "cwd", in: data) else {
+        guard let cwd = CopilotSessionName.rootScalar(forKey: "cwd", in: data) else {
             return .init(evidence: .unknown, source: source)
         }
         return .init(evidence: resolve(directory: cwd), source: source)

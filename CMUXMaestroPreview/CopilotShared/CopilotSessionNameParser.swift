@@ -42,6 +42,88 @@ nonisolated enum CopilotSessionName {
         return found.flatMap { $0 }
     }
 
+    /// A top-level scalar from a `workspace.yaml` that is entirely a flat mapping this parser models;
+    /// anything else makes the value unavailable, never a guess (ADR 0027). Modeled: blank and comment
+    /// lines; `plain_key: value` at column 0 with each key once; plain values on one line; quoted values
+    /// closed on their own line; and block scalars (`|`, `>`) whose content is indented. Refused:
+    /// documents markers, quoted or complex keys, flow collections, anchors, aliases, tags, multi-line
+    /// plain or quoted values, nested mappings and sequences, and duplicate keys.
+    static func rootScalar(forKey key: String, in data: Data, escapedTab: String = "\t") -> String? {
+        guard data.count <= maximumFileBytes, var text = String(data: data, encoding: .utf8) else { return nil }
+        if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+        let lines = text.split(omittingEmptySubsequences: false) { ["\n", "\r\n", "\r"].contains($0) }
+        var keys: Set<Substring> = []
+        var found: Substring?
+        var inBlockScalar = false
+        for line in lines {
+            if line.allSatisfy({ $0 == " " || $0 == "\t" }) { continue }
+            if line.first == " " || line.first == "\t" {
+                // Only a block scalar's content is indented.
+                guard inBlockScalar else { return nil }
+                continue
+            }
+            inBlockScalar = false
+            if line.first == "#" { continue }
+            guard !line.hasPrefix("---"), !line.hasPrefix("..."), let colon = line.firstIndex(of: ":") else { return nil }
+            let name = line[..<colon]
+            guard let head = name.unicodeScalars.first, CharacterSet.letters.contains(head) || head == "_",
+                  name.unicodeScalars.allSatisfy({
+                      ($0.isASCII && CharacterSet.alphanumerics.contains($0)) || $0 == "_" || $0 == "-"
+                  }),
+                  keys.insert(name).inserted else { return nil }
+            let rest = line[line.index(after: colon)...]
+            guard rest.isEmpty || rest.first == " " || rest.first == "\t" else { return nil }
+            let value = rest.drop { $0 == " " || $0 == "\t" }
+            switch value.first {
+            case nil, "#":
+                break
+            case "|", ">":
+                guard value.dropFirst().prefix(while: { $0 != " " && $0 != "\t" && $0 != "#" })
+                        .allSatisfy({ "+-123456789".contains($0) }),
+                      blankOrComment(value.drop { $0 != " " && $0 != "\t" && $0 != "#" }) else { return nil }
+                inBlockScalar = true
+            case "\"", "'":
+                guard let quote = value.first, let end = quotedEnd(value.dropFirst(), quote: quote),
+                      blankOrComment(value[end...]) else { return nil }
+            case "{", "[", "&", "*", "!", "%", "@", "`", "-", "?", ":", ",", "]", "}":
+                return nil
+            default:
+                guard mappingSeparator(in: value) == nil else { return nil }
+            }
+            if name == key { found = value }
+        }
+        guard let found, !found.isEmpty, found.first != "|", found.first != ">" else { return nil }
+        return scalar(found, continued: false, escapedTab: escapedTab)
+    }
+
+    private static func blankOrComment(_ text: Substring) -> Bool {
+        let rest = text.drop { $0 == " " || $0 == "\t" }
+        return rest.isEmpty || rest.first == "#"
+    }
+
+    /// Just past the quote that closes a scalar opened by `quote`, on this line.
+    private static func quotedEnd(_ text: Substring, quote: Character) -> Substring.Index? {
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            let next = text.index(after: index)
+            if quote == "\"" && character == "\\" {
+                guard next < text.endIndex else { return nil }
+                index = text.index(after: next)
+                continue
+            }
+            if character == quote {
+                if quote == "'", next < text.endIndex, text[next] == "'" {
+                    index = text.index(after: next)
+                    continue
+                }
+                return next
+            }
+            index = next
+        }
+        return nil
+    }
+
     /// The quote character of a top-level quoted key or value left open at the end of `line`.
     private static func unclosedQuote(_ line: Substring) -> Character? {
         var candidate = line
