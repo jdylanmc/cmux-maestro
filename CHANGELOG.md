@@ -199,6 +199,7 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Managed agent rows no longer offer an empty disclosure or collapsed info marker
   when their only internal tasks are hidden and counts are incomplete (#277).
+  Incomplete internal-task evidence still prevents dismissing a failed worker.
 
 - A session's child list no longer flashes its whole history, skills, and shells for a refresh
   while a sub-agent starts a tool (#264). The reader stamped the snapshot before reading, so an

@@ -79,7 +79,8 @@ presentation-only: raw activity evidence, lifecycle state and counts unchanged.
 Incomplete-history context and collapsed-branch counts stay with owning
 row, not on standalone diagnostic rows. Managed rows offer disclosure and a
 collapsed work summary only for visible child content; incomplete counts alone
-do not make an empty branch expandable. Chevron needs no "Branch collapsed"
+do not make an empty branch expandable. Incomplete internal-task counts still
+prevent failed-worker dismissal, independently of disclosure. Chevron needs no "Branch collapsed"
 caption. Registration is neutral, not a claim that an agent runs. Stale
 managed evidence and unconfirmed/ended process ownership cannot show a live state.
 
