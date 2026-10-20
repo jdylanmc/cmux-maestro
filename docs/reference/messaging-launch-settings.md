@@ -146,7 +146,9 @@ controller refusal. Controller capability validation uses
 `launch-preference-unavailable: configured-fallback`. These are diagnostic
 categories, not permission to retry or bypass a refused check.
 The bounded parser is installed as `models.mjs` alongside `adapter.mjs`;
-missing or oversized modules make integration readiness fail closed.
+setup publishes the required parser before its importing adapter, so an
+interrupted upgrade never exposes the new adapter without its dependency.
+Missing or oversized modules make integration readiness fail closed.
 
 Supported selections feed actual `--model`, `--context` and
 `--reasoning-effort` arguments. Unsupported safe optional requests **warn**:

@@ -405,10 +405,11 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
                   data: try JSONSerialization.data(withJSONObject: ["helper": helper.path], options: [.sortedKeys])),
             .init(file: bin.appendingPathComponent("cmux-maestro-orchestrator"), data: controllerData,
                   permissions: 0o700, maximum: 1_048_576),
+            // Publish required static imports before their importer, including on upgrades.
+            .init(file: nativeRoot.appendingPathComponent("models.mjs"), data: modelsData),
             .init(file: nativeRoot.appendingPathComponent("adapter.mjs"), data: adapterData),
             .init(file: nativeRoot.appendingPathComponent("extension.mjs"), data: loaderData),
             .init(file: nativeRoot.appendingPathComponent("processes.mjs"), data: processesData),
-            .init(file: nativeRoot.appendingPathComponent("models.mjs"), data: modelsData),
             .init(file: bin.appendingPathComponent("messaging.json"), data: try JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
             ], options: [.sortedKeys])),
