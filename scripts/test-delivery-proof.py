@@ -147,7 +147,7 @@ class WorkspaceCapacityTests(unittest.TestCase):
             "hostRetainedResources": 2, "hostRetainedResourceLimit": 1024,
             "hostRetainedResourceSlotsRemaining": 1022,
             "hostStateBytes": len(json.dumps(state, sort_keys=True, separators=(",", ":")).encode()) + 1,
-            "hostStateByteLimit": 1_048_576,
+            "hostStateByteLimit": 1_048_576, "hostStateByteWarning": False,
             "hostCapacitySettings": 1, "hostCapacitySettingLimit": 128,
         }
         expected["hostStateBytesRemaining"] = 1_048_576 - expected["hostStateBytes"]

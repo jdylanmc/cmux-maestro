@@ -80,6 +80,15 @@ PROJECTED_PHASES = {
     "resource-retired",
 }
 REPORT_PROTOCOL = "cmux-maestro.worker-report"
+# Control state at or above this size is reported as near its byte limit.
+STATE_BYTE_WARNING = MAX_BYTES * 4 // 5
+# Ended nodes' launch-only payload lives in control/retired/<node-id>.json (#280).
+LAUNCH_ARCHIVE_DIRECTORY = "retired"
+ARCHIVED_LAUNCH_FIELDS = ("task", "copilotExecutable")
+LAUNCH_PAYLOAD_COMPACTED_PHASES = frozenset({
+    "process-disappeared", "terminal-disappeared", "launch-failed", "startup-failed",
+    "resource-retired",
+})
 REPORT_KEYS = {
     "protocol", "version", "workerId", "generation", "state", "summary",
 }
@@ -971,6 +980,16 @@ def is_direct_launch(node):
     return node.get("launchMethod") == "direct"
 
 
+def launch_payload_compactable(state, node):
+    """An ended node holds no lease or unresolved launch, so no reader needs its launch payload."""
+    return (
+        node["phase"] in LAUNCH_PAYLOAD_COMPACTED_PHASES and node["availability"] == "unavailable"
+        and node["id"] not in state["launches"] and not node.get("archiving")
+        and not node.get("surfaceUnknown")
+        and (node.get("task") is not None or "copilotExecutable" in node)
+    )
+
+
 class _StateIndex:
     """Cross-record facts accumulated while each stored node is validated."""
 
@@ -1457,13 +1476,15 @@ class Store:
             raise OrchestrationError(f"Unsafe state path: {path}")
         return descriptor
 
-    def _ensure_child(self, name):
-        try:
-            os.mkdir(name, mode=0o700, dir_fd=self.root_fd)
-        except FileExistsError:
-            pass
+    def _ensure_child(self, name, parent=None, *, create=True):
+        parent = self.root_fd if parent is None else parent
+        if create:
+            try:
+                os.mkdir(name, mode=0o700, dir_fd=parent)
+            except FileExistsError:
+                pass
         descriptor = os.open(
-            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=self.root_fd
+            name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent
         )
         info = os.fstat(descriptor)
         if info.st_uid != os.getuid() or not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o077:
@@ -1585,6 +1606,7 @@ class Store:
         if self.read_only:
             raise OrchestrationError("Read-only orchestration access cannot publish mutations.")
         validate_state(state)
+        self._compact_launch_payloads(state)
         encoded = json.dumps(state, sort_keys=True, separators=(",", ":")).encode() + b"\n"
         if len(encoded) > MAX_BYTES:
             raise OrchestrationError("Host control-state byte safety limit reached.")
@@ -1601,6 +1623,7 @@ class Store:
             {"version": 1, "icons": icons}, sort_keys=True, separators=(",", ":")
         ).encode() + b"\n"
         self._atomic(self.control_fd, "state.json", encoded)
+        self._prune_launch_archives(state)
         try:
             self._atomic(self.observer_fd, "current.json", projection)
         except (OSError, OrchestrationError) as error:
@@ -1615,6 +1638,92 @@ class Store:
                 self._atomic(self.observer_fd, "icons.json", icon_data)
             except (OSError, OrchestrationError):
                 pass
+
+    def _launch_archive_directory(self, *, create):
+        try:
+            return self._ensure_child(LAUNCH_ARCHIVE_DIRECTORY, self.control_fd, create=create)
+        except FileNotFoundError:
+            return None
+
+    def _read_launch_archive(self, directory, identifier):
+        """One node's archived launch payload, an empty record when absent, or None when unusable."""
+        try:
+            payload = self._read_regular(f"{identifier}.json", MAX_BYTES, private=True, directory=directory)
+        except OrchestrationError:
+            return None
+        if payload is None:
+            return {"version": 1, "nodeId": identifier, "generations": {}}
+        try:
+            record = json.loads(payload)
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        if (not isinstance(record, dict) or set(record) != {"version", "nodeId", "generations"}
+                or record["version"] != 1 or record["nodeId"] != identifier
+                or not isinstance(record["generations"], dict)
+                or not all(re.fullmatch(r"[0-9]{1,9}", key) and isinstance(entry, dict)
+                           and set(entry) <= set(ARCHIVED_LAUNCH_FIELDS)
+                           for key, entry in record["generations"].items())):
+            return None
+        return record
+
+    def archived_launch(self, identifier):
+        """The node's archived launch payload by generation (ADR 0010 amendment), or None."""
+        directory = self._launch_archive_directory(create=False)
+        if directory is None:
+            return None
+        try:
+            record = self._read_launch_archive(directory, identifier)
+        finally:
+            os.close(directory)
+        return None if record is None or not record["generations"] else record
+
+    def _compact_launch_payloads(self, state):
+        """Move ended nodes' launch-only payload out of control state (#280).
+
+        The task text and provider executable move to a private per-node archive before the state
+        that drops them commits; the launch PATH is dropped (a resume uses its own terminal's PATH).
+        A node whose archive cannot be read or would exceed the byte bound keeps its payload.
+        """
+        nodes = [node for node in state["nodes"].values() if launch_payload_compactable(state, node)]
+        if not nodes:
+            return
+        directory = self._launch_archive_directory(create=True)
+        try:
+            for node in nodes:
+                record = self._read_launch_archive(directory, node["id"])
+                if record is None:
+                    continue
+                entry = record["generations"].setdefault(str(node["generation"]), {})
+                moved = {key: node[key] for key in ARCHIVED_LAUNCH_FIELDS if node.get(key) is not None}
+                if any(entry.get(key) != value for key, value in moved.items()):
+                    entry.update(moved)
+                    encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n"
+                    if len(encoded) > MAX_BYTES:
+                        continue
+                    self._atomic(directory, f"{node['id']}.json", encoded)
+                node["task"] = None
+                node.pop("copilotExecutable", None)
+                node.pop("launchPath", None)
+        finally:
+            os.close(directory)
+
+    def _prune_launch_archives(self, state):
+        """Archive removed a node: its launch payload goes with it, as its launch scripts do."""
+        try:
+            directory = self._launch_archive_directory(create=False)
+        except (OSError, OrchestrationError):
+            return
+        if directory is None:
+            return
+        try:
+            for name in os.listdir(directory):
+                identifier = name[:-len(".json")] if name.endswith(".json") else None
+                if identifier is not None and identifier not in state["nodes"]:
+                    os.unlink(name, dir_fd=directory)
+        except OSError:
+            pass
+        finally:
+            os.close(directory)
 
     def _projection(self, state):
         # A born root that released its surface to a later session has no row, so neither has its
@@ -1756,6 +1865,18 @@ def read_state(root, *, wait=1):
     return Store._decode_state(payload)
 
 
+def archived_executable(root, node):
+    """The latest recorded provider executable moved to the node's launch archive, or None."""
+    try:
+        record = with_store(root, lambda store: store.archived_launch(node["id"]), read_only=True)
+    except (OrchestrationError, OSError):
+        return None
+    generations = sorted(((int(key), entry) for key, entry in (record or {}).get("generations", {}).items()
+                          if int(key) <= node["generation"] and isinstance(entry.get("copilotExecutable"), str)),
+                         key=lambda item: item[0])
+    return generations[-1][1]["copilotExecutable"] if generations else None
+
+
 def validate_capacity_limit(limit):
     if type(limit) is not int or not 1 <= limit <= MAX_LIVE_WORKERS_CEILING:
         raise OrchestrationError("Workspace capacity must be an integer from 1 to 128.")
@@ -1796,6 +1917,7 @@ def workspace_capacity(state, workspace):
         "hostRetainedResourceSlotsRemaining": host_retained_slots,
         "hostStateBytes": state_bytes, "hostStateByteLimit": MAX_BYTES,
         "hostStateBytesRemaining": max(0, MAX_BYTES - state_bytes),
+        "hostStateByteWarning": state_bytes >= STATE_BYTE_WARNING,
         "hostCapacitySettings": len(state.get("workspaceCapacity", {})),
         "hostCapacitySettingLimit": MAX_WORKSPACE_CAPACITY_SETTINGS,
         "admissionAvailable": used < limit and node_slots > 0 and host_slots > 0
@@ -3678,9 +3800,10 @@ def command_resume_managed(args, root, cmux):
         raise ResumeRefused("the recorded launch policy is unavailable") from error
     require_placement()
     # The recorded executable may be gone after an upgrade; this terminal's PATH is current.
+    # An ended node's recorded executable is in its launch archive (#280).
     launch_path = os.environ.get("PATH", "/usr/bin:/bin")
     executable = None
-    for candidate in (node.get("copilotExecutable"), "copilot"):
+    for candidate in (node.get("copilotExecutable") or archived_executable(root, node), "copilot"):
         try:
             if candidate and len(launch_path) <= MAX_LAUNCH_PATH:
                 executable = trusted_executable(candidate)

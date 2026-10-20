@@ -25,7 +25,7 @@ The controller resumes only when all of these hold:
 - A root whose surface had been retired (`resource-retired`) needs a free workspace slot to come back. Otherwise it refuses with `capacity-unavailable`.
 - No other node holds the resumed Copilot process. Otherwise it refuses with `provider-already-enrolled`.
 
-The node keeps its run and children. Its provider executable and PATH are refreshed from the resumed process. The old generation's peer route and capability are retired; the new generation gets a new route. Peers see the new address. Addresses are exact per generation: a child's task prompt names its coordinator's address at launch, and that address stops working once the coordinator resumes. The child finds the coordinator's current address with `maestro_peers`.
+The node keeps its run and children. Its provider executable and PATH are refreshed from the resumed process. An ended node's recorded executable is read from its launch archive (`control/retired/<node-id>.json`) when compaction moved it there. The old generation's peer route and capability are retired; the new generation gets a new route. Peers see the new address. Addresses are exact per generation: a child's task prompt names its coordinator's address at launch, and that address stops working once the coordinator resumes. The child finds the coordinator's current address with `maestro_peers`.
 
 Policy: CMUX's own restore replays the session's original command line, so the born root keeps whatever flags the human started it with. Maestro's recorded policy for a born root is the default with no grants, which its children inherit.
 

@@ -231,6 +231,15 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Control state no longer fills its 1 MiB cap and refuses every spawn (#280). When a node ends
+  (resource-retired, terminal- or process-disappeared, launch or startup failure), its task
+  text and provider executable move to a private per-node archive, `control/retired/<node-id>.json`
+  (owner-only), and its launch PATH is dropped. Identity, lineage, outcome, timestamps, account,
+  policy, messaging and Git counts stay, so resume, archive and the sidebar work unchanged; a
+  resume uses the archived executable. Existing installs compact on their next state write.
+  Archive removes a node's archive with its launch scripts. Capacity preflight adds
+  `hostStateByteWarning` at 80% of the cap.
+
 - Managed agent rows no longer offer an empty disclosure or collapsed info marker
   when their only internal tasks are hidden and counts are incomplete (#277).
   Incomplete internal-task evidence still prevents dismissing a failed worker.
