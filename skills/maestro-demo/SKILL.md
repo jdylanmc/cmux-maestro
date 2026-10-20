@@ -19,7 +19,9 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
    Maestro-launched sessions do not expose readiness: only for that documented
    case, use successful `maestro_identity({})` plus available `maestro_spawn`,
    `maestro_peers`, `maestro_send`, and `maestro_close`. Verify own identity in
-   either case. Missing identity or lifecycle tools blocks the demo; never use
+   either case. Retain your own returned workspace/session/generation as
+   `demoParent`: the exact spawning parent, which may differ from the run's root
+   coordinator. Missing identity or lifecycle tools blocks the demo; never use
    `task`, shell spawn, guessed bindings, or terminal input instead.
 2. Follow the lifecycle guide's capacity check for the exact bound workspace;
    require room for the whole requested cast within live, stored-node, depth and
@@ -33,7 +35,27 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
    after setup they can reload their own extensions or start/resume the intended
    Copilot session in CMUX with `/resume`, then rerun preflight. Never perform
    that recovery for them or promise it will fix another failure.
-3. Search the installed catalog; select a distinct returned Nerd Fonts glyph for
+3. Establish an already-trusted launch directory before creating anything.
+   Prefer the coordinator's exact current directory, used read-only. Check only
+   `trustedFolders` in this session's effective Copilot configuration, using a
+   bounded read-only JSON5-aware parser (comments/trailing commas are valid).
+   On macOS, Foundation's `JSONSerialization` with `.json5Allowed` handles this.
+   Never dump the config, other values, or unrelated paths. Do not rely on
+   `copilot config trustedFolders`: some versions document but reject that key.
+   Account for an explicitly selected config directory; if its location or
+   format cannot be resolved safely, stop rather than guess. An exact existing
+   trusted-folder entry is sufficient; do not assume a new descendant inherits
+   trust. If only an ancestor is listed, use the closest trusted ancestor itself
+   as `cwd`, not a new child directory. Otherwise use a presenter-selected exact
+   existing folder from that value.
+   Resolve paths before comparison; never select a directory by title or recency.
+   If no suitable trusted directory is established, stop before spawning and
+   tell the presenter to open Copilot in one chosen folder and approve its
+   **Trust this directory** prompt once, then rerun preflight. Never edit Copilot
+   config, auto-approve trust, or broaden grants. YOLO covers tools/paths/URLs,
+   not configuration trust; `--trust-folder` is prompt-mode-only, not a fix for
+   interactive workers. Other permission prompts can still occur.
+4. Search the installed catalog; select a distinct returned Nerd Fonts glyph for
    each role (prefer outlines). Never send an unverified SF Symbol or invented ID.
 
    ```sh
@@ -50,10 +72,13 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
 
 ## Launch the cast
 
-Create one fresh local temporary demo directory with `mktemp -d`, then separate
-`scout`, `builder`, and (only if requested) `critic` subdirectories. Use their
-resolved absolute paths as `cwd`; never put demo artwork in the repository.
-Keep the directory for evidence; this skill does not delete it.
+Use that same exact already-trusted directory as every worker's `cwd`. Do not
+create a new launch directory or a `.maestro-demo` directory inside a repository.
+Separately create one fresh local temporary artifact directory with `mktemp -d`,
+then `scout`, `builder`, and (only if requested) `critic` subdirectories. Pass
+each resolved absolute artifact path in its task, **not** as `cwd`. Repository
+directories stay read-only; artwork and results stay outside real repositories.
+Keep the artifacts for evidence; this skill does not delete them.
 
 | Name | Color | Tiny task (generic, no repository or network access) |
 | --- | --- | --- |
@@ -70,12 +95,16 @@ Leave model preferences omitted. On refusal or uncertainty, stop further launche
 retain exact accepted ownership, and report the partial cast; no launch retry.
 Creation acceptance is not readiness, delivery, or task completion.
 
-Include this entire worker contract, its role/task, and its own assigned directory:
+Include this entire worker contract, its role/task, launch directory, artifact
+directory, verified installed pet-guide path, and the concrete `demoParent`
+address from your own identity call:
 
 > You are one visible demo worker. Do not spawn children, read repository/work
 > content, access the network, start services, install packages, change configuration,
-> or close any session. Write only your drawing script, artwork and result in your
-> assigned demo directory. Use native `maestro_identity({})` for your exact own
+> or close any session. Your launch directory is read-only. Write only your
+> drawing script, artwork and result in your assigned artifact directory, apart
+> from the explicitly requested controller self-tag and self-pet operations.
+> Use native `maestro_identity({})` for your exact own
 > session UUID; never infer it from another session or private binding files.
 > Set MAESTRO to
 > `$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator`
@@ -83,7 +112,10 @@ Include this entire worker contract, its role/task, and its own assigned directo
 > Tag yourself, preserving existing tags:
 > `"$MAESTRO" tags add --self --session-id "$SESSION" --tag demo --tag <your-role>`.
 > Require command success; never write the tag store directly or change tag colors.
-> Load `cmux-maestro-native:maestro-pet`. Invent and name an original creature
+> Load `cmux-maestro-native:maestro-pet`; if the skill name is not discovered,
+> read the exact installed guide path verified and supplied by the demo parent,
+> without reloading extensions or substituting an unverified kit.
+> Invent and name an original creature
 > appropriate to your role. Draw it yourself with the loaded skill's dependency-free
 > `pet_kit.py`: simple bold silhouette, 3-4 colors, visible face, distinct idle,
 > running, waiting, waving and failed states, every required frame. No stock pet,
@@ -94,8 +126,12 @@ Include this entire worker contract, its role/task, and its own assigned directo
 > Require `ok: true` and the returned `petId`; respect human overrides/hidden pets.
 > Complete your tiny task. Save a short `result.md` with the task answer, tags,
 > pet name/ID, artifact paths, successful commands and any unresolved failures.
-> Discover the launch-context coordinator's exact address with `maestro_peers`;
-> match its workspace/session/generation, never its display name. Send one
+> For your initial milestone, find the supplied `demoParent` address with
+> `maestro_peers`; require an exact workspace/session/generation match, never a
+> display-name match. This is your spawning parent, NOT the root coordinator
+> address that a generic launch wrapper may also show. Do not replace it with
+> that root address. If absent or ambiguous, keep the result and report the route
+> blocker in your own chat; never guess, resend, or route to someone else. Send one
 > **candidate ready** milestone via `maestro_send`: outcome, result path, pet
 > name/ID, tags, and "Review my result and send the encore." No commit is expected.
 > If blocked, send **blocking failure** with evidence and required action instead.
@@ -139,8 +175,8 @@ Preserve all result/artwork files; closing is not deleting evidence.
 
 - "These are real interactive Copilot sessions; I can continue in any surface."
 - "Distinct Nerd Fonts icons and colors make the cast recognizable in icon cards."
-- "Worktrees groups by repository; Sub-agents shows who spawned whom. This safe
-  scratch-directory demo belongs under No repository in Worktrees."
+- "Worktrees groups by repository; Sub-agents shows who spawned whom. We reuse
+  a trusted launch folder read-only; all artwork lives in separate scratch space."
 - "Each worker assigned its own demo and role tags; the encore tag shows steering."
 - "Each invented and drew its own animated pet locally. Hover its card to see it;
   a human pet override or hidden pet can still win."

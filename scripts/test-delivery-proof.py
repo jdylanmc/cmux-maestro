@@ -284,6 +284,12 @@ class ProofTests(unittest.TestCase):
             "one substantive encore", "Only specific approval permits serialized",
             "owned direct-child launch identities", "no launch retry",
             "no sleeps", "No subtree close", "Preserve all result/artwork files",
+            "`trustedFolders`", "not configuration trust",
+            "already-trusted directory as every worker's `cwd`",
+            "artifact path in its task, **not** as `cwd`",
+            "stop before spawning", "NOT the root coordinator",
+            "`demoParent`", "exact workspace/session/generation match",
+            "JSON5-aware parser", "closest trusted ancestor itself",
         ):
             self.assertIn(contract, skill)
         notes = skill.split("## Presenter notes\n", 1)[1]

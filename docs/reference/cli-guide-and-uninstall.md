@@ -34,6 +34,12 @@ own tags and original locally drawn pets, and one native-message encore each.
 It uses the installed lifecycle and pet skills; it does not install them or add
 permissions. Closing is a separate human choice. Its presenter notes describe
 sidebar features without driving the UI or restarting CMUX.
+Preflight selects an exact already-trusted launch folder; workers reuse it
+read-only, with separate temporary artwork/result directories. If trust cannot
+be established, the presenter must trust one chosen folder before the demo.
+YOLO does not suppress Copilot's configuration-trust prompt.
+Initial worker reports target the exact spawning demo parent, not a nested
+launch wrapper's root coordinator; replies use the genuine envelope sender.
 The Settings status and `maestro-guide.sha256` remain **`/maestro`-only**; they
 do not attest to the demo guide's contents or session discovery.
 
