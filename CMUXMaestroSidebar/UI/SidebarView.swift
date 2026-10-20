@@ -1441,7 +1441,7 @@ struct ManagedHierarchyContent: View {
     }
 
     private func showsRetainedWork(_ retained: [SidebarCopilotSession]) -> Bool {
-        retained.contains { $0.hasShownOutline(layout) || $0.internalTaskCountsIncomplete }
+        retained.contains { $0.hasShownOutline(layout) }
     }
 
     private func descendantCount(of id: UUID) -> Int {

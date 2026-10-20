@@ -301,7 +301,7 @@ enum SidebarPresentation {
               }),
               !tree.sessions.contains(where: {
                   $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
-                      && ($0.hasBlockingEvidence
+                      && ($0.hasBlockingEvidence || $0.internalTaskCountsIncomplete
                           || ($0.liveness == .alive && ($0.state == .working
                               || (node.copilotSessionId != nil && node.copilotSessionId != $0.id)))
                           || $0.nodes.contains(where: { $0.kind == .subagent && !$0.state.isTerminal }))
