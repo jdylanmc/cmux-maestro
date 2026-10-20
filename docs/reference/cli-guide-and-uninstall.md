@@ -15,24 +15,41 @@ local-guide verdict. Different content may be newer or customized, not outdated.
 Run this command in your own terminal to install or update:
 
 ```sh
-npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
+npx skills add jdylanmc/cmux-maestro --skill maestro maestro-demo --agent github-copilot --global --copy
 ```
 
 Review the installer's interactive confirmation. Command deliberately omits
 `--yes`. Settings only reads guide content and copies text. It does not execute `npx`, open a terminal,
 install a skill, or change global configuration. This is the **single canonical
-guide distribution**, from `skills/maestro/{SKILL.md,intent.md}`. Invoke global
+guide distribution**, from `skills/maestro/{SKILL.md,intent.md}` and
+`skills/maestro-demo/SKILL.md`. Invoke global
 **`/maestro`**, or use the skill tool with `{"skill":"maestro"}`. No extra
 skill-activation grants required. Guide never secretly installs runtime;
 native messaging works without it. Runtime stays the separate **Enable Copilot
 Integration** action, including the existing lifecycle and icon plugin skills.
+
+**`/maestro-demo`** is an optional, human-requested live demonstration: two visible
+interactive workers by default, three on request, distinct icons/colors, their
+own tags and original locally drawn pets, and one native-message encore each.
+It uses the installed lifecycle and pet skills; it does not install them or add
+permissions. Closing is a separate human choice. Its presenter notes describe
+sidebar features without driving the UI or restarting CMUX.
+Preflight selects an exact launch folder trusted in the child's configuration;
+an explicit parent `--config-dir` is not assumed to propagate. Workers reuse it
+read-only, with separate temporary artwork/result directories. If trust cannot
+be established, the presenter must trust one chosen folder before the demo.
+YOLO does not suppress Copilot's configuration-trust prompt.
+Initial worker reports target the exact spawning demo parent, not a nested
+launch wrapper's root coordinator; replies use the genuine envelope sender.
+The Settings status and `maestro-guide.sha256` remain **`/maestro`-only**; they
+do not attest to the demo guide's contents or session discovery.
 
 **Development / PR acceptance before merge:** repository command above cannot
 install the unpublished skill from `main`. From this checkout's root, human
 may run the same installer against local source instead:
 
 ```sh
-npx skills add . --skill maestro --agent github-copilot --global --copy
+npx skills add . --skill maestro maestro-demo --agent github-copilot --global --copy
 ```
 
 Settings embeds no branch refs, automatic refresh, or release machinery.

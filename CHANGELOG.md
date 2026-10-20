@@ -6,6 +6,13 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- `/maestro-demo` runs a human-requested live demo with two visible workers (three
+  on request), distinct icons, self-assigned tags, original self-drawn pets, and
+  one native-message follow-up each. Closing stays optional and human-approved.
+  Workers reuse an already-trusted folder read-only, keep artwork in separate
+  scratch space, and report to the exact spawning parent, including nested demos.
+  The manual CLI Integration install command now includes both global skills;
+  guide-content comparison still checks only `/maestro`.
 - Worktrees follows the repository an agent most recently touched, even when launched outside
   Git (#279). A new user turn keeps the previous repository as last known until another touch;
   sessions without a touch retain the selected-directory fallback. Pinned details no longer

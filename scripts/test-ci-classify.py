@@ -232,6 +232,8 @@ WORKFLOW = ROOT / ".github/workflows/ci.yml"
 ALLOWED_CONTRACT_REFERENCES = {
     # Reads the merge policy; merge-policy-doc selects validate-contracts.
     ("scripts/test-build-metadata.py", "docs/agents/merge-policy.md"),
+    # Reads the manual install command; global-guide-install-docs selects validate-contracts.
+    ("scripts/test-delivery-proof.py", "docs/reference/cli-guide-and-uninstall.md"),
     # Command strings in the workflow guards (VALIDATION_JOBS and its mutations); never read.
     ("scripts/test-build-metadata.py", "scripts/test-skill-overrides.mjs"),
     ("scripts/test-build-metadata.py", "test-skill-overrides.mjs"),
@@ -360,7 +362,7 @@ class ClassificationTests(unittest.TestCase):
         return record, rows
 
     def test_markdown_docs_only_change_runs_only_the_portable_suite(self):
-        record, rows = self.record(["docs/reference/build-and-test.md", "README.md", "CHANGELOG.md"])
+        record, rows = self.record(["docs/reference/build-and-test.md", "CONTEXT.md", "CHANGELOG.md"])
         self.assertEqual(record["mode"], "selective")
         self.assertEqual(applicable(record), {PORTABLE})
         self.assertEqual({row[1] for row in rows}, {"markdown-docs"})
@@ -379,9 +381,15 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(applicable(record), {CONTRACTS, PORTABLE})
         self.assertEqual(rows[0][1], "merge-policy-doc")
 
+    def test_global_install_docs_select_the_contract_suite_that_reads_them(self):
+        for path in ("README.md", "docs/reference/cli-guide-and-uninstall.md"):
+            with self.subTest(path=path):
+                record, rows = self.record([path])
+                self.assertEqual(applicable(record), {CONTRACTS, PORTABLE})
+                self.assertEqual(rows[0][1], "global-guide-install-docs")
+
     def test_contract_suites_name_no_path_the_map_keeps_from_them(self):
-        # Dependency edge: docs select only validate-portable, so a validate-contracts suite that reads
-        # README.md, AGENTS.md or anything under docs/ would be skipped by a docs-only change.
+        # Contract-read docs need explicit mapping; other docs select only validate-portable.
         rules = classify.load_map(MAP_TEXT, SUITES)
         workflow = WORKFLOW.read_text()
         commands, names = job_scripts(workflow, "validate-contracts")
@@ -404,7 +412,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertIn(beats, files)
         self.assertIn(setup, files)
         for name, (path, addition) in {
-            "README read in test-beats.py": (beats, 'GUIDE = REPO / "README.md"\n'),
+            "CONTEXT read in test-beats.py": (beats, 'GUIDE = REPO / "CONTEXT.md"\n'),
             "docs directory join": (beats, 'GUIDE = REPO / "docs" / "reference" / "x.md"\n'),
             "AGENTS read": (beats, 'GUIDE = (REPO / "AGENTS.md").read_text()\n'),
             "docs file in test-copilot-setup.sh": (setup, 'cat "$ROOT/docs/x.md"\n'),
@@ -539,7 +547,7 @@ class ClassificationTests(unittest.TestCase):
 
     def test_symlink_to_an_every_suite_path_keeps_the_selection(self):
         record, _ = self.record(["README.md"], links=[("Resources/hook", "../scripts/test.sh")])
-        self.assertEqual(applicable(record), {PORTABLE})
+        self.assertEqual(applicable(record), {CONTRACTS, PORTABLE})
 
     def test_checked_in_tree_has_no_symlink_into_a_narrower_mapped_path(self):
         rules = classify.load_map(MAP_TEXT, SUITES)
@@ -693,7 +701,7 @@ class MainTests(unittest.TestCase):
                          ["classification", "run_validate_native", "run_validate_contracts",
                           "run_validate_portable", "run_guide_ui_consumer_probe"])
         flags = dict(line.split("=", 1) for line in lines[1:])
-        self.assertEqual(flags, {"run_validate_native": "false", "run_validate_contracts": "false",
+        self.assertEqual(flags, {"run_validate_native": "false", "run_validate_contracts": "true",
                                  "run_validate_portable": "true", "run_guide_ui_consumer_probe": "false"})
         record = json.loads(lines[0].split("=", 1)[1])
         self.assertEqual((record["event"], record["run_id"], record["sha"]), ("pull_request", "7", MERGE))
@@ -701,7 +709,8 @@ class MainTests(unittest.TestCase):
         self.assertEqual(summary, "## Suite selection\n\n" + stdout)
         self.assertIn("| Suite | Selected | Reason |", stdout)
         self.assertIn("| validate-native | no (not applicable) | no changed file maps to it;", stdout)
-        self.assertIn("| validate-portable | yes | markdown-docs: 1 file(s), e.g. README.md |", stdout)
+        self.assertIn("| validate-portable | yes | global-guide-install-docs: 1 file(s), e.g. README.md |", stdout)
+        self.assertIn("| validate-contracts | yes | global-guide-install-docs: 1 file(s), e.g. README.md |", stdout)
         self.assertIn("| docs/images/x.png | docs-images | none |", stdout)
 
     def test_main_escapes_paths_in_the_summary(self):

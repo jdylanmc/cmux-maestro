@@ -266,6 +266,48 @@ class ProofTests(unittest.TestCase):
         with mock.patch.dict(arguments.__globals__, {"trusted_executable": lambda _: "/synthetic/copilot"}):
             self.assertNotIn("--plugin-dir", arguments(self.node, "Synthetic"))
 
+    def test_demo_guide_keeps_launch_appearance_and_encore_bounded(self):
+        skill = (REPO / "skills/maestro-demo/SKILL.md").read_text()
+        frontmatter = skill.split("---", 2)[1]
+        self.assertEqual({line.split(":", 1)[0] for line in frontmatter.splitlines() if line},
+                         {"name", "description"})
+        self.assertIn("name: maestro-demo", frontmatter)
+        for contract in (
+            "Use two workers by default", "third only when requested",
+            'status: "managed"', "capabilities.spawn: true",
+            "Maestro-launched sessions do not expose readiness",
+            "maestro_identity({})", "messagingInstalled: true",
+            "icons --search", "Omit `yolo` and `allowTools`",
+            "tags add --self", "pet_kit.py", "preview.png",
+            'pet --self --session-id "$SESSION" --add',
+            "genuine received envelope's sender address", "No commit is expected",
+            "one substantive encore", "Only specific approval permits serialized",
+            "owned direct-child launch identities", "no launch retry",
+            "no sleeps", "No subtree close", "Preserve all result/artwork files",
+            "`trustedFolders`", "not configuration trust",
+            "already-trusted directory as every worker's `cwd`",
+            "artifact path in its task, **not** as `cwd`",
+            "stop before spawning", "NOT the root coordinator",
+            "`demoParent`", "exact workspace/session/generation match",
+            "JSON5-aware parser", "closest trusted ancestor itself",
+            "Do not assume a parent's `--config-dir` is forwarded",
+            "Never copy trust entries between configurations",
+        ):
+            self.assertIn(contract, skill)
+        notes = skill.split("## Presenter notes\n", 1)[1]
+        self.assertEqual(sum(line.startswith("- ") for line in notes.splitlines()), 8)
+
+    def test_demo_distribution_is_manual_and_does_not_extend_guide_digest_scope(self):
+        command = "npx skills add jdylanmc/cmux-maestro --skill maestro maestro-demo --agent github-copilot --global --copy"
+        for path in ("README.md", "docs/reference/cli-guide-and-uninstall.md",
+                     "CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift"):
+            self.assertIn(command, (REPO / path).read_text())
+        for path in ("CMUXMaestroPreview/Integration/CopilotSetup.swift",
+                     "CMUXMaestroPreview.xcodeproj/project.pbxproj",
+                     "scripts/verify-build-metadata.py"):
+            self.assertNotIn("maestro-demo", (REPO / path).read_text())
+        self.assertFalse((REPO / ".agents/skills/maestro-demo").exists())
+
     def test_preparation_is_disposable_private_and_outside_source_discovery(self):
         self.assertEqual(self.root.stat().st_mode & 0o777, 0o700)
         for peer in ("a", "b"):

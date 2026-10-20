@@ -16,7 +16,7 @@ struct CLIIntegrationSettingsView: View {
     var body: some View {
         Form {
             Section("Maestro CLI guide content") {
-                Text("Add the global /maestro skill to GitHub Copilot for peer discovery, sending messages, and replies.")
+                Text("Add /maestro for peer messaging and /maestro-demo for a small live demo. Content checks below cover /maestro only.")
                 if model.isChecking {
                     Text("Checking guide content...")
                         .accessibilityIdentifier("cli-integration-checking")

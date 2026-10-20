@@ -21,19 +21,27 @@
         "docs/agents/merge-policy.md"
       ],
       "suites": ["validate-contracts", "validate-portable"],
-      "reason": "Markdown, so validate-portable's link check reads it; scripts/test-build-metadata.py (validate-contracts, macOS-only because it runs /usr/bin/plutil) also checks the workflow's command lists, triggers and gate against it. It is the only file under docs/ a validate-contracts suite reads."
+      "reason": "Markdown, so validate-portable's link check reads it; scripts/test-build-metadata.py (validate-contracts, macOS-only because it runs /usr/bin/plutil) also checks the workflow's command lists, triggers and gate against it."
+    },
+    {
+      "id": "global-guide-install-docs",
+      "paths": [
+        "README.md",
+        "docs/reference/cli-guide-and-uninstall.md"
+      ],
+      "suites": ["validate-contracts", "validate-portable"],
+      "reason": "The global demo-guide distribution contract in scripts/test-delivery-proof.py reads both manual install commands. Markdown policy-link checks also apply."
     },
     {
       "id": "markdown-docs",
       "paths": [
         "docs/**/*.md",
-        "README.md",
         "CHANGELOG.md",
         "CONTEXT.md",
         "AGENTS.md"
       ],
       "suites": ["validate-portable"],
-      "reason": "Markdown outside the bundled skills and scripts. check-skill-overrides.mjs checks policy-anchor links in every tracked Markdown file, so validate-portable applies. No Xcode resource, build phase, test.sh input, guide probe input or validate-contracts suite reads these files; the merge policy, which one does, matches merge-policy-doc first."
+      "reason": "Markdown outside the bundled skills and scripts. check-skill-overrides.mjs checks policy-anchor links in every tracked Markdown file, so validate-portable applies. No Xcode resource, build phase, test.sh input, guide probe input or validate-contracts suite reads these files; contract-read documentation matches merge-policy-doc or global-guide-install-docs first."
     },
     {
       "id": "docs-images",
