@@ -66,10 +66,11 @@ nonisolated enum CopilotIdentityJSON {
     }
 }
 
-/// The only location fact the hook publishes: a branch name and whether it is a
-/// linked worktree. Never a path or repository name.
+/// The branch fact the hook publishes from tool paths: a branch name and whether it is a
+/// linked worktree. Never a path. Schema 2 records add the session's current worktree
+/// (`CopilotSessionLocationRecord`, CopilotWorktree.swift).
 nonisolated struct CopilotSessionLocation: Equatable, Sendable {
-    static let maximumBytes = 1024
+    static let maximumBytes = 2048
     static let maximumBranchBytes = 200
     static let keys: Set<String> = ["schemaVersion", "sessionID", "branch", "worktree", "recordedAt"]
 

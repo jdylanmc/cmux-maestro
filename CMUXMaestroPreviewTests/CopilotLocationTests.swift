@@ -35,6 +35,8 @@ private struct LocationScratch {
 
     func repo(_ name: String, head: String = "ref: refs/heads/main\n") throws -> URL {
         try write(head, "\(name)/.git/HEAD")
+        _ = try directory("\(name)/.git/objects")
+        _ = try directory("\(name)/.git/refs")
         try write("", "\(name)/src/file.swift")
         return root.appendingPathComponent(name)
     }
@@ -205,8 +207,11 @@ struct CopilotLocationHookTests: Sendable {
         }
     }
 
-    private func run(_ scratch: LocationScratch, _ payload: [String: Any]) throws -> CMUXMaestroPreview.HookOutcome {
+    private func run(
+        _ scratch: LocationScratch, _ payload: [String: Any], workspaceYAML: String? = nil
+    ) throws -> CMUXMaestroPreview.HookOutcome {
         let state = try scratch.directory("state/\(session.uuidString.lowercased())")
+        if let workspaceYAML { try Data(workspaceYAML.utf8).write(to: state.appendingPathComponent("workspace.yaml")) }
         try Data().write(to: state.appendingPathComponent("inuse.101.lock"))
         let recorder = CMUXMaestroPreview.CopilotHookRecorder(
             integrationRoot: scratch.root.appendingPathComponent("integration"),
@@ -233,7 +238,7 @@ struct CopilotLocationHookTests: Sendable {
         #expect(try run(hook, ["cwd": repo.path]) == .recorded)
         let file = record(hook)
         let data = try Data(contentsOf: file)
-        #expect(CMUXMaestroPreview.CopilotSessionLocation.decode(data, sessionID: session) == .init(branch: "topic", worktree: false))
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(data, sessionID: session)?.location == .init(branch: "topic", worktree: false))
         #expect(!String(decoding: data, as: UTF8.self).contains(scratch.root.path))
         var info = stat()
         #expect(stat(file.path, &info) == 0 && info.st_mode & 0o777 == 0o600)
@@ -243,10 +248,299 @@ struct CopilotLocationHookTests: Sendable {
         #expect(try Data(contentsOf: file) == before)
         let outside = try scratch.directory("not-a-repo")
         #expect(try run(hook, ["cwd": outside.path]) == .recorded)
-        #expect(!FileManager.default.fileExists(atPath: file.path))
+        // The record stays for the session's current worktree; the tool-path branch fact is gone.
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(try Data(contentsOf: file), sessionID: session)?
+            .location == nil)
         let tree = try scratch.worktree("wt", branch: "w")
         #expect(try run(hook, ["cwd": tree.path]) == .recorded)
-        #expect(CMUXMaestroPreview.CopilotSessionLocation.decode(try Data(contentsOf: file), sessionID: session)
-            == .init(branch: "w", worktree: true))
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(try Data(contentsOf: file), sessionID: session)?
+            .location == .init(branch: "w", worktree: true))
+    }
+
+    /// The session's own selected directory decides its worktree, not the tool path or payload cwd.
+    @Test func publishesCurrentWorktreeFromTheSessionSelectedDirectory() throws {
+        let scratch = try LocationScratch()
+        let hook = try LocationScratch(underBuild: true)
+        defer { scratch.remove(); hook.remove() }
+        let repo = try scratch.repo("repo", head: "ref: refs/heads/main\n")
+        let first = try WorktreeFixture.linked(scratch, repository: "repo", name: "first", branch: "topic")
+        let second = try WorktreeFixture.linked(scratch, repository: "repo", name: "second", branch: "topic")
+        func current() throws -> CMUXMaestroPreview.CopilotSessionWorktree? {
+            CMUXMaestroPreview.CopilotSessionLocationRecord.decode(try Data(contentsOf: record(hook)), sessionID: session)?.current
+        }
+        #expect(try run(hook, ["cwd": repo.path], workspaceYAML: "id: x\ncwd: \(first.path)\n") == .recorded)
+        guard case .verified(let one) = try current()?.evidence else { Issue.record("not verified"); return }
+        #expect(one.repository == "repo" && one.head == .branch("topic") && one.linked)
+        #expect(try current()?.source != nil)
+        #expect(try run(hook, ["cwd": repo.path], workspaceYAML: "id: x\ncwd: \(second.path)\n") == .recorded)
+        guard case .verified(let two) = try current()?.evidence else { Issue.record("not verified"); return }
+        #expect(two.key != one.key && two.repository == one.repository && two.head == one.head)
+        let text = String(decoding: try Data(contentsOf: record(hook)), as: UTF8.self)
+        #expect(!text.contains(scratch.root.path))
+        #expect(try run(hook, ["cwd": repo.path], workspaceYAML: "id: x\n") == .recorded)
+        #expect(try current()?.evidence == .unknown)
+        try FileManager.default.removeItem(
+            at: hook.root.appendingPathComponent("state/\(session.uuidString.lowercased())/workspace.yaml"))
+        #expect(try run(hook, ["cwd": repo.path]) == .recorded)
+        #expect(try current() == .init(evidence: .unknown, source: nil))
+    }
+}
+
+private enum WorktreeFixture {
+    /// `git worktree add` layout: a `.git` file naming the private Git directory, which names the common one.
+    static func linked(_ scratch: LocationScratch, repository: String, name: String, branch: String? = nil,
+                       detached: String? = nil) throws -> URL {
+        let admin = "\(repository)/.git/worktrees/\(name)"
+        try scratch.write(branch.map { "ref: refs/heads/\($0)\n" } ?? "\(detached ?? "")\n", "\(admin)/HEAD")
+        try scratch.write("../..\n", "\(admin)/commondir")
+        try scratch.write("gitdir: \(scratch.root.path)/\(admin)\n", "\(name)/.git")
+        try scratch.write("", "\(name)/src/file.swift")
+        return scratch.root.appendingPathComponent(name)
+    }
+}
+
+struct CopilotWorktreeResolverTests: Sendable {
+    private typealias Evidence = CMUXMaestroPreview.CopilotWorktreeEvidence
+    private func resolve(_ url: URL) -> Evidence { CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: url.path) }
+    private func identity(_ url: URL) -> CMUXMaestroPreview.CopilotWorktreeIdentity? {
+        if case .verified(let identity) = resolve(url) { return identity }
+        return nil
+    }
+
+    @Test func worktreesOfOneRepositoryAtOneCommitStayDistinct() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let commit = "0123456789abcdef0123456789abcdef01234567"
+        let main = try scratch.repo("repo", head: "\(commit)\n")
+        let left = try WorktreeFixture.linked(scratch, repository: "repo", name: "left", detached: commit)
+        let right = try WorktreeFixture.linked(scratch, repository: "repo", name: "right", branch: "topic")
+        let mainID = try #require(identity(main))
+        let leftID = try #require(identity(left))
+        let rightID = try #require(identity(right))
+        #expect(Set([mainID.key, leftID.key, rightID.key]).count == 3)
+        #expect([mainID, leftID, rightID].allSatisfy { $0.repository == "repo" })
+        #expect(mainID.head == .detached("0123456") && !mainID.linked)
+        #expect(leftID.head == .detached("0123456") && leftID.linked)
+        #expect(rightID.head == .branch("topic") && rightID.linked)
+        // Nested directories and a later branch change keep the worktree's key.
+        #expect(identity(right.appendingPathComponent("src"))?.key == rightID.key)
+        try scratch.write("ref: refs/heads/other\n", "repo/.git/worktrees/right/HEAD")
+        #expect(identity(right)?.key == rightID.key && identity(right)?.head == .branch("other"))
+    }
+
+    @Test func sameNameAndBranchInDifferentRepositoriesStayDistinct() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let one = try scratch.repo("a/app")
+        let two = try scratch.repo("b/app")
+        #expect(identity(one)?.repository == "app" && identity(two)?.repository == "app")
+        #expect(identity(one)?.key != identity(two)?.key)
+    }
+
+    @Test func onlyAReadableWalkToRootProvesNoRepository() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let plain = try scratch.directory("plain/deeper")
+        #expect(resolve(plain) == .nonRepository)
+        #expect(resolve(scratch.root.appendingPathComponent("missing")) == .unknown)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: "relative") == .unknown)
+        // A bare repository or a Git administrative directory is unsupported, never "no repository".
+        try scratch.write("ref: refs/heads/main\n", "bare.git/HEAD")
+        _ = try scratch.directory("bare.git/objects")
+        _ = try scratch.directory("bare.git/refs")
+        #expect(resolve(scratch.root.appendingPathComponent("bare.git")) == .unknown)
+        let repo = try scratch.repo("repo")
+        #expect(resolve(repo.appendingPathComponent(".git")) == .unknown)
+        // Malformed or symlinked Git entries are unknown.
+        try scratch.write("garbage\n", "garbage/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("garbage")) == .unknown)
+        let broken = try scratch.repo("broken", head: "ref: refs/remotes/origin/main\n")
+        #expect(resolve(broken) == .unknown)
+        let linked = try scratch.directory("linked")
+        try FileManager.default.createSymbolicLink(at: linked.appendingPathComponent(".git"),
+                                                   withDestinationURL: repo.appendingPathComponent(".git"))
+        #expect(resolve(linked) == .unknown)
+        // Denied traversal proves nothing.
+        let denied = try scratch.directory("denied/inner")
+        chmod(scratch.root.appendingPathComponent("denied").path, 0o000)
+        defer { chmod(scratch.root.appendingPathComponent("denied").path, 0o755) }
+        #expect(resolve(denied) == .unknown)
+    }
+
+    /// A quoted `cwd:` keeps its escaped tab; only name display turns it into a space.
+    @Test func escapedTabInCwdNamesTheTabbedDirectoryNotItsSpacedSibling() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let tabbed = try scratch.repo("a\tb")
+        let spaced = try scratch.repo("a b")
+        let yaml = Data("name: \"x\\ty\"\ncwd: \"\(scratch.root.path)/a\\tb\"\n".utf8)
+        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: yaml))
+        #expect(cwd == tabbed.path)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: cwd) == resolve(tabbed))
+        #expect(resolve(tabbed) != resolve(spaced))
+        #expect(CMUXMaestroPreview.CopilotSessionName.parse(yaml) == "x y")
+    }
+
+    /// Git keeps spaces in a gitfile path and drops only trailing CR/LF; so does the resolver.
+    @Test func gitfilePathKeepsTrailingSpacesLikeGit() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        for (directory, branch) in [("admin ", "spaced"), ("admin", "sibling")] {
+            try scratch.write("ref: refs/heads/\(branch)\n", "\(directory)/HEAD")
+            _ = try scratch.directory("\(directory)/objects")
+            _ = try scratch.directory("\(directory)/refs")
+        }
+        try scratch.write("gitdir: \(scratch.root.path)/admin \r\n", "tree/.git")
+        guard case .verified(let tree) = resolve(scratch.root.appendingPathComponent("tree")) else {
+            Issue.record("gitfile with a trailing-space path must verify that directory"); return
+        }
+        #expect(tree.head == .branch("spaced"))
+        try scratch.write("gitdir: \(scratch.root.path)/admin\n", "other/.git")
+        guard case .verified(let other) = resolve(scratch.root.appendingPathComponent("other")) else {
+            Issue.record("control gitfile must verify"); return
+        }
+        #expect(other.head == .branch("sibling") && other.key != tree.key)
+        // Without the exact `gitdir: ` prefix, Git refuses the file; so do we.
+        try scratch.write("gitdir:\(scratch.root.path)/admin\n", "loose/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("loose")) == .unknown)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a b \t\r\n\n") == "a b \t")
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.gitPathFile("a\nb\n") == nil)
+    }
+
+    /// A tab after `key:` opens a quoted value too; its continuation lines are never keys.
+    @Test func tabSeparatedQuotedNameCannotSmuggleACwd() {
+        let yaml = Data("name:\t\"intro\ncwd: /tmp/wrong\noutro\"\ncwd: /tmp/real\n".utf8)
+        // An unclosed quoted value spans lines: the scanner does not model it, so cwd is unknown.
+        #expect(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: yaml) == nil)
+        let only = Data("name:\t'intro\ncwd: /tmp/wrong\noutro'\n".utf8)
+        #expect(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: only) == nil)
+    }
+
+    /// cwd is read only from a workspace.yaml that is wholly a flat mapping the scanner models.
+    @Test func cwdFailsClosedOnUnmodeledYAML() {
+        func cwd(_ text: String) -> String? {
+            CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: Data(text.utf8))
+        }
+        let modeled = "id: x\nname: |\n  First line\n\n  cwd: /tmp/inside\nuser_named: false\n# note\ncwd: '/tmp/real'\n"
+        #expect(cwd(modeled) == "/tmp/real")
+        #expect(cwd("name: >-\n  folded\ncwd: /tmp/real # comment\n") == "/tmp/real")
+        for refused in [
+            "meta: {\ncwd: /tmp/wrong\n}\n",                                   // flow mapping spanning lines
+            "meta: [\ncwd: /tmp/wrong\n]\ncwd: /tmp/real\n",                   // flow sequence spanning lines
+            "\"key\": \"a\ncwd: /tmp/wrong\nb\"\ncwd: /tmp/real\n",                // quoted key, multi-line value
+            "summary: 'a\ncwd: /tmp/wrong\nb'\ncwd: /tmp/real\n",              // multi-line quoted value
+            "name: &anchor x\ncwd: /tmp/real\n", "cwd: *alias\n", "cwd: !tag /tmp/real\n",
+            "---\ncwd: /tmp/real\n", "cwd: /tmp/real\n...\n",
+            "cwd: /tmp/a\ncwd: /tmp/b\n", "id: 1\nid: 2\ncwd: /tmp/real\n",       // duplicate root keys
+            "cwd: /tmp/a\n  continued\n", "meta:\n  cwd: /tmp/wrong\n", "- cwd: /tmp/wrong\n",
+            "? cwd\n: /tmp/wrong\n", "cwd: |\n  /tmp/block\n",
+        ] {
+            #expect(cwd(refused) == nil, "\(refused.debugDescription)")
+        }
+    }
+
+    /// A plain scalar's comment starts at the first `#` after a space or a tab.
+    @Test func plainScalarCommentStartsAtTheFirstBlankHash() {
+        func cwd(_ line: String) -> String? {
+            CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: Data("cwd: \(line)\n".utf8))
+        }
+        #expect(cwd("/tmp/real\t# note # later") == "/tmp/real")
+        #expect(cwd("/tmp/real # note\t# later") == "/tmp/real")
+        #expect(cwd("/tmp/a#b") == "/tmp/a#b")
+        #expect(cwd("/tmp/x:\ty") == nil)
+    }
+
+    /// YAML blanks are ASCII space and tab; a trailing NBSP is part of the path.
+    @Test func trailingNoBreakSpaceInCwdStaysInThePath() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        let plain = try scratch.repo("app")
+        let spaced = try scratch.repo("app\u{00A0}")
+        let yaml = Data("name: Synthetic\u{00A0}\ncwd: \(spaced.path)\n".utf8)
+        let cwd = try #require(CMUXMaestroPreview.CopilotSessionName.rootScalar(forKey: "cwd", in: yaml))
+        #expect(cwd == spaced.path)
+        #expect(CMUXMaestroPreview.CopilotWorktreeResolver.resolve(directory: cwd) == resolve(spaced))
+        #expect(resolve(spaced) != resolve(plain))
+        #expect(CMUXMaestroPreview.CopilotSessionName.parse(yaml) == "Synthetic")
+    }
+
+    /// Git's repository test: the shared Git directory must hold `objects` and `refs`.
+    @Test func headOnlyGitDirectoriesAreUnknown() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        try scratch.write("ref: refs/heads/main\n", "bare-head/.git/HEAD")
+        #expect(resolve(scratch.root.appendingPathComponent("bare-head")) == .unknown)
+        try scratch.write("ref: refs/heads/main\n", "target/HEAD")
+        try scratch.write("gitdir: \(scratch.root.path)/target\n", "gitfile/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("gitfile")) == .unknown)
+        _ = try scratch.directory("plain-common")
+        try scratch.write("ref: refs/heads/main\n", "admin/HEAD")
+        try scratch.write("../plain-common\n", "admin/commondir")
+        try scratch.write("gitdir: \(scratch.root.path)/admin\n", "linked/.git")
+        #expect(resolve(scratch.root.appendingPathComponent("linked")) == .unknown)
+        // Control: the same linked layout with a real shared directory verifies.
+        _ = try scratch.directory("plain-common/objects")
+        _ = try scratch.directory("plain-common/refs")
+        guard case .verified = resolve(scratch.root.appendingPathComponent("linked")) else {
+            Issue.record("control must verify"); return
+        }
+    }
+
+    /// A bare repository stops the walk even when its layout uses symlinks Git would follow.
+    @Test func symlinkedBareRepositoryIsUnknownAloneOrNested() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        func bare(_ path: String) throws -> URL {
+            try scratch.write("ref: refs/heads/main\n", "\(path)/HEAD")
+            _ = try scratch.directory("\(path)/refs")
+            let store = try scratch.directory("\(path)-objects")
+            try FileManager.default.createSymbolicLink(
+                at: scratch.root.appendingPathComponent("\(path)/objects"), withDestinationURL: store)
+            return scratch.root.appendingPathComponent(path)
+        }
+        #expect(resolve(try bare("alone.git")) == .unknown)
+        let outer = try scratch.repo("outer")
+        guard case .verified = resolve(outer) else { Issue.record("outer worktree must verify"); return }
+        #expect(resolve(try bare("outer/inner.git")) == .unknown)
+        #expect(resolve(scratch.root.appendingPathComponent("outer/inner.git/refs")) == .unknown)
+    }
+
+    @Test func headIsReadAsGitReadsIt() {
+        let parse = CMUXMaestroPreview.CopilotWorktreeResolver.parseHead
+        #expect(parse("ref: refs/heads/topic \n") == .branch("topic"))
+        #expect(parse("ref: refs/heads/a..b\n") == nil)
+        #expect(parse("\nref: refs/heads/main\n") == nil)
+        #expect(parse("ref: refs/heads/main\njunk\n") == nil)
+        for bad in ["a@{b", "a.lock", ".hidden", "a/.b", "a b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a\\b", "a/", "a.", "@", "-a", "a//b"] {
+            #expect(parse("ref: refs/heads/\(bad)\n") == nil, "\(bad)")
+        }
+        #expect(parse("ref: refs/heads/feat/x-1.2\n") == .branch("feat/x-1.2"))
+        #expect(parse("0123456789abcdef0123456789abcdef01234567\n") == .detached("0123456"))
+    }
+
+    @Test func currentWorktreeRecordRoundTripsAndRejectsDeviations() throws {
+        let session = UUID()
+        let identity = CMUXMaestroPreview.CopilotWorktreeIdentity(
+            key: "0123456789abcdef", repository: "repo", head: .branch("topic"), linked: true
+        )
+        let source = CMUXMaestroPreview.CopilotWorktreeSource(device: 1, inode: 2, size: 3, modifiedSeconds: 4, modifiedNanoseconds: 5)
+        let current = CMUXMaestroPreview.CopilotSessionWorktree(evidence: .verified(identity), source: source)
+        let data = try Location.encode(sessionID: session, location: nil, current: current, recordedAt: Date(timeIntervalSince1970: 5))
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(data, sessionID: session)
+            == .init(location: nil, current: current))
+        #expect(Location.decode(data, sessionID: session) == nil)
+        let text = String(decoding: data, as: UTF8.self)
+        for variant in [text.replacingOccurrences(of: "\"linked\":true", with: "\"linked\":1"),
+                        text.replacingOccurrences(of: "0123456789abcdef", with: "0123456789ABCDEF"),
+                        text.replacingOccurrences(of: "\"status\":\"verified\"", with: "\"status\":\"maybe\""),
+                        text.replacingOccurrences(of: "\"repository\":\"repo\"", with: "\"repository\":\"a/b\""),
+                        text.replacingOccurrences(of: "\"schemaVersion\":2", with: "\"schemaVersion\":3"),
+                        text.dropLast() + ",\"path\":\"/x\"}"] {
+            #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(Data(variant.utf8), sessionID: session) == nil)
+        }
+        let unknown = try Location.encode(sessionID: session, location: .init(branch: "b", worktree: false),
+                                          current: .init(evidence: .unknown, source: nil), recordedAt: Date())
+        #expect(CMUXMaestroPreview.CopilotSessionLocationRecord.decode(unknown, sessionID: session)
+            == .init(location: .init(branch: "b", worktree: false), current: .init(evidence: .unknown, source: nil)))
     }
 }

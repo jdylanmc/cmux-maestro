@@ -6,12 +6,17 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- The observer hook records each session's current worktree from its own selected directory,
+  `workspace.yaml` `cwd:`, which follows Copilot's `/cwd` (#59, ADR 0027). It reads Git's plain
+  files there: an opaque key that tells worktrees of one repository apart, the repository name,
+  and the branch or detached commit. It reports `nonRepository` only after reading every
+  directory up to `/`, and `unknown` otherwise. The sidebar treats it as current only while
+  `workspace.yaml` is unchanged; otherwise it is last known. No path reaches the sidebar.
 - Agent hover cards show the hovered session's own pet, independent of the active
   window's footer pet (#50). Children, terminals, browsers and workspaces show none.
   Row **Appearance > Choose pet…** opens the pet picker for that exact session. The
   picker adds **Reset to default**, distinct from **Reset to agent's pet**, and a
   per-session **Hide pet** / **Show pet**, persisted by session UUID.
-
 - Agent tags (#51, ADR 0026). **Edit tags…** in an agent row's actions, pinned details and the
   details popover sets your tags for that exact session; agents tag their own session with
   `cmux-maestro-orchestrator tags add|remove|list|clear --self`. Tags show as compact chips inline

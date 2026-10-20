@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -320,7 +321,8 @@ nonisolated struct CopilotHookRecorder {
             directory: ownership.bindings
         )
         // Best effort: a location failure never changes the recording outcome.
-        recordLocation(object: ownership.request.object, session: ownership.request.session)
+        recordLocation(object: ownership.request.object, session: ownership.request.session,
+                       sessionDirectory: ownership.currentSource)
         return .recorded
     }
 
@@ -359,24 +361,24 @@ nonisolated struct CopilotHookRecorder {
         return .recorded
     }
 
-    func recordLocation(object: [String: Any], session: UUID) {
+    /// `sessionDirectory` is the exact session's state directory this hook just proved it owns.
+    func recordLocation(object: [String: Any], session: UUID, sessionDirectory: Int32) {
         let home = (try? CopilotPaths.realUserHome().path) ?? "/"
         let location = CopilotLocationResolver.resolve(payload: object, home: home)
+        let current = CopilotWorktreeResolver.observe(sessionDirectory: sessionDirectory, owner: getuid())
         guard let directory = try? HookFiles.privateDirectory(
             integrationRoot.appendingPathComponent("locations", isDirectory: true)
         ) else { return }
         defer { close(directory) }
         let name = session.uuidString.lowercased() + ".json"
-        guard let location else {
-            unlinkat(directory, name, 0)
-            return
-        }
         let existing = try? CopilotFileAccess.readStableRegular(
             at: directory, filename: name, owner: getuid(), maximum: CopilotSessionLocation.maximumBytes, permissions: 0o600
         )
-        if let existing, CopilotSessionLocation.decode(existing, sessionID: session) == location { return }
-        guard let data = try? CopilotSessionLocation.encode(sessionID: session, location: location, recordedAt: Date())
-        else { return }
+        if let existing, CopilotSessionLocationRecord.decode(existing, sessionID: session)
+            == CopilotSessionLocationRecord(location: location, current: current) { return }
+        guard let data = try? CopilotSessionLocation.encode(
+            sessionID: session, location: location, current: current, recordedAt: Date()
+        ) else { return }
         try? HookFiles.atomicWrite(data, name: name, directory: directory)
     }
 
@@ -544,6 +546,178 @@ nonisolated enum CopilotLocationResolver {
         var buffer = [UInt8](repeating: 0, count: maximumReadBytes + 1)
         let count = read(fd, &buffer, buffer.count)
         guard count > 0, count <= maximumReadBytes, !buffer.prefix(count).contains(0) else { return nil }
+        return String(bytes: buffer.prefix(count), encoding: .utf8)
+    }
+}
+
+/// The worktree a session's own selected directory is in (ADR 0027). Reads `workspace.yaml`
+/// `cwd:` from the session's state directory, then only Git's plain files under that directory:
+/// no `git` process, no environment, bounded depth and size. Any surprise is `unknown`, never
+/// `nonRepository`.
+nonisolated enum CopilotWorktreeResolver {
+    static let maximumDepth = 64
+
+    static func observe(sessionDirectory: Int32, owner: UInt32) -> CopilotSessionWorktree {
+        guard let stamp = try? CopilotFileAccess.statEntry(at: sessionDirectory, name: CopilotSessionName.filename),
+              stamp.isRegular, stamp.uid == owner, stamp.size > 0,
+              stamp.size <= Int64(CopilotSessionName.maximumFileBytes),
+              let data = try? CopilotFileAccess.readStableRegular(
+                at: sessionDirectory, filename: CopilotSessionName.filename, owner: owner,
+                maximum: CopilotSessionName.maximumFileBytes
+              ),
+              let after = try? CopilotFileAccess.statEntry(at: sessionDirectory, name: CopilotSessionName.filename),
+              after.sameFile(as: stamp), after.size == stamp.size,
+              after.modifiedSeconds == stamp.modifiedSeconds,
+              after.modifiedNanoseconds == stamp.modifiedNanoseconds
+        else { return .init(evidence: .unknown, source: nil) }
+        let source = CopilotWorktreeSource(stamp)
+        guard let cwd = CopilotSessionName.rootScalar(forKey: "cwd", in: data) else {
+            return .init(evidence: .unknown, source: source)
+        }
+        return .init(evidence: resolve(directory: cwd), source: source)
+    }
+
+    static func resolve(directory: String) -> CopilotWorktreeEvidence {
+        guard directory.hasPrefix("/"), directory.utf8.count <= 4096, !directory.utf8.contains(0),
+              let start = canonical(directory), isDirectory(start) else { return .unknown }
+        var current = start
+        for _ in 0..<maximumDepth {
+            var entry = stat()
+            if lstat(join(current, ".git"), &entry) == 0 {
+                switch entry.st_mode & S_IFMT {
+                case S_IFDIR: return verified(gitDirectory: join(current, ".git"), root: current)
+                case S_IFREG: return linked(file: join(current, ".git"), root: current)
+                default: return .unknown
+                }
+            }
+            // Only "not there" continues upward; denied or failed reads prove nothing.
+            guard errno == ENOENT else { return .unknown }
+            // Inside a bare repository or a Git administrative directory: unsupported, not "no repository".
+            if looksLikeGitDirectory(current) || current.split(separator: "/").contains(".git") { return .unknown }
+            if current == "/" { return .nonRepository }
+            current = (current as NSString).deletingLastPathComponent
+            if current.isEmpty { return .unknown }
+        }
+        return .unknown
+    }
+
+    private static func linked(file: String, root: String) -> CopilotWorktreeEvidence {
+        // As Git reads a gitfile: exact `gitdir: ` prefix, only trailing CR/LF removed.
+        guard let text = readSmallFile(file).flatMap(gitPathFile), text.hasPrefix("gitdir: ") else { return .unknown }
+        let path = String(text.dropFirst(8))
+        guard !path.isEmpty,
+              let gitDirectory = canonical(path.hasPrefix("/") ? path : join(root, path)),
+              isDirectory(gitDirectory) else { return .unknown }
+        return verified(gitDirectory: gitDirectory, root: root)
+    }
+
+    private static func verified(gitDirectory path: String, root: String) -> CopilotWorktreeEvidence {
+        guard let gitDirectory = canonical(path), let head = readSmallFile(join(gitDirectory, "HEAD")),
+              let parsedHead = parseHead(head) else { return .unknown }
+        // A linked worktree's Git directory names the shared one in `commondir`.
+        var common = gitDirectory
+        var isLinked = false
+        var entry = stat()
+        if lstat(join(gitDirectory, "commondir"), &entry) == 0 {
+            guard let line = readSmallFile(join(gitDirectory, "commondir")).flatMap(gitPathFile),
+                  !line.isEmpty,
+                  let resolved = canonical(line.hasPrefix("/") ? line : join(gitDirectory, line)),
+                  isDirectory(resolved) else { return .unknown }
+            common = resolved
+            isLinked = true
+        } else if errno != ENOENT {
+            return .unknown
+        }
+        // Git's own test (`is_git_directory`): the shared directory holds `objects` and `refs`.
+        guard hasRepositoryLayout(common) else { return .unknown }
+        let commonName = (common as NSString).lastPathComponent
+        let repositoryPath = commonName == ".git" ? (common as NSString).deletingLastPathComponent
+            : isLinked ? common : root
+        var repository = (repositoryPath as NSString).lastPathComponent
+        if repository.hasSuffix(".git"), repository.count > 4 { repository.removeLast(4) }
+        guard let label = CopilotDisplayText.sanitize(repository, limit: 100),
+              CopilotWorktreeIdentity.validLabel(label) else { return .unknown }
+        return .verified(.init(key: key(gitDirectory), repository: label, head: parsedHead, linked: isLinked))
+    }
+
+    static func key(_ gitDirectory: String) -> String {
+        let digest = SHA256.hash(data: Data(("cmux-maestro-worktree-v1\u{0}" + gitDirectory).utf8))
+        return digest.prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// The whole `HEAD` file, as Git reads it: trailing ASCII whitespace dropped, one line only.
+    static func parseHead(_ text: String) -> CopilotWorktreeHead? {
+        var scalars = Substring(text).unicodeScalars
+        while let last = scalars.last, [" ", "\t", "\n", "\r"].contains(last) { scalars.removeLast() }
+        let line = String(scalars)
+        guard !line.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" }) else { return nil }
+        if line.hasPrefix("ref: refs/heads/") {
+            let name = String(line.dropFirst(16))
+            return validBranchRef(name) && CopilotSessionLocation.validBranch(name) ? .branch(name) : nil
+        }
+        guard [40, 64].contains(line.utf8.count),
+              line.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+        return .detached(String(line.prefix(7)))
+    }
+
+    /// Git's ref-name rules for a branch under `refs/heads/` (`git check-ref-format --branch`).
+    static func validBranchRef(_ name: String) -> Bool {
+        guard !name.isEmpty, name != "@", !name.hasPrefix("-"), !name.hasSuffix("/"), !name.hasSuffix("."),
+              !name.contains(".."), !name.contains("@{"), !name.contains("//"),
+              !name.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F || " ~^:?*[\\".unicodeScalars.contains($0) })
+        else { return false }
+        return name.split(separator: "/").allSatisfy { !$0.hasPrefix(".") && !$0.hasSuffix(".lock") }
+    }
+
+    /// A one-path Git file (`.git` gitfile, `commondir`): Git drops only trailing CR and LF, so
+    /// spaces and tabs are part of the path. Any other line break makes it unreadable here.
+    static func gitPathFile(_ text: String) -> String? {
+        var scalars = Substring(text).unicodeScalars
+        while let last = scalars.last, last == "\n" || last == "\r" { scalars.removeLast() }
+        let value = String(scalars)
+        guard !value.unicodeScalars.contains(where: { $0 == "\n" || $0 == "\r" || $0 == "\0" }) else { return nil }
+        return value
+    }
+
+    private static func hasRepositoryLayout(_ path: String) -> Bool {
+        var objects = stat(), refs = stat()
+        return lstat(join(path, "objects"), &objects) == 0 && objects.st_mode & S_IFMT == S_IFDIR
+            && lstat(join(path, "refs"), &refs) == 0 && refs.st_mode & S_IFMT == S_IFDIR
+    }
+
+    /// Stops the walk: `HEAD`, `objects` and `refs` all present, of any type, never followed. Git
+    /// would accept symlinked ones, so this fails closed where `hasRepositoryLayout` is strict.
+    private static func looksLikeGitDirectory(_ path: String) -> Bool {
+        var entry = stat()
+        return ["HEAD", "objects", "refs"].allSatisfy { lstat(join(path, $0), &entry) == 0 }
+    }
+
+    private static func canonical(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(validatingCString: resolved)
+    }
+
+    private static func isDirectory(_ path: String) -> Bool {
+        var entry = stat()
+        return stat(path, &entry) == 0 && entry.st_mode & S_IFMT == S_IFDIR
+    }
+
+    private static func join(_ directory: String, _ name: String) -> String {
+        directory == "/" ? "/" + name : directory + "/" + name
+    }
+
+    /// Regular file only (never a symlink), at most 4 KiB, valid UTF-8.
+    private static func readSmallFile(_ path: String) -> String? {
+        let fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var entry = stat()
+        guard fstat(fd, &entry) == 0, entry.st_mode & S_IFMT == S_IFREG,
+              entry.st_size > 0, entry.st_size <= 4096 else { return nil }
+        var buffer = [UInt8](repeating: 0, count: 4097)
+        let count = read(fd, &buffer, buffer.count)
+        guard count > 0, count <= 4096, !buffer.prefix(count).contains(0) else { return nil }
         return String(bytes: buffer.prefix(count), encoding: .utf8)
     }
 }

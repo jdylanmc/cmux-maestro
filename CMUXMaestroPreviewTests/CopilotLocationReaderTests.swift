@@ -86,4 +86,24 @@ struct CopilotLocationReaderTests: Sendable {
         #expect(snapshot.sessions.first?.liveness == .alive)
         #expect(snapshot.sessions.first?.branch == nil)
     }
+
+    /// Current only while the session's `workspace.yaml` is the exact version the hook observed.
+    @Test func currentWorktreeIsCurrentUntilTheSessionDirectoryRecordChanges() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let yaml = fixture.session.appendingPathComponent("workspace.yaml")
+        try Data("id: x\ncwd: /synthetic/a\n".utf8).write(to: yaml)
+        let directory = try CopilotFileAccess.openDirectory(fixture.session, owner: getuid())
+        defer { close(directory) }
+        let stamp = try CopilotFileAccess.statEntry(at: directory, name: "workspace.yaml")
+        let identity = CopilotWorktreeIdentity(key: "0123456789abcdef", repository: "repo", head: .branch("topic"), linked: true)
+        let current = CopilotSessionWorktree(evidence: .verified(identity), source: CopilotWorktreeSource(stamp))
+        _ = try publish(fixture, data: try CopilotSessionLocation.encode(
+            sessionID: fixture.sessionID, location: nil, current: current, recordedAt: Date()))
+        let fresh = try #require(try await read(fixture))
+        #expect(fresh.currentWorktree == .init(evidence: .verified(identity), isCurrent: true))
+        #expect(fresh.branch == nil)
+        try Data("id: x\ncwd: /synthetic/elsewhere\n".utf8).write(to: yaml)
+        #expect(try await read(fixture)?.currentWorktree == .init(evidence: .verified(identity), isCurrent: false))
+    }
 }

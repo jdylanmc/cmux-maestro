@@ -51,6 +51,7 @@ nonisolated enum CopilotSnapshotAdapter {
                     location: observation.branch.map { .init(branch: $0, worktree: observation.worktree ?? false) }
                 )
                 item.sessionIssues = observation.sessionIssues?.map { .init(rawValue: $0.rawValue) }
+                item.currentWorktree = observation.currentWorktree
                 return item
             },
             issues: source.issues.map { .init(rawValue: $0.rawValue) },

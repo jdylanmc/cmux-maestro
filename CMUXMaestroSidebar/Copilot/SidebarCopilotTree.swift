@@ -79,6 +79,8 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var petId: String? = nil
     var branch: String? = nil
     var worktree = false
+    /// Current worktree of this exact session (ADR 0027); nil when no record was published.
+    var currentWorktree: AgentSessionWorktree? = nil
     /// Copilot's own session name (ADR 0022); nil when unavailable.
     var sessionName: String? = nil
     let id: UUID
@@ -168,6 +170,8 @@ struct SidebarCopilotTree: Equatable {
         )
         result.statusOnly = true
         result.sessionName = session.sessionName
+        // Observation loss keeps the last worktree evidence, never as current.
+        result.currentWorktree = session.currentWorktree.map { .init(evidence: $0.evidence, isCurrent: false) }
         result.lastKnownState = retainingStatus ? session.state : nil
         result.lastKnownLiveness = retainingStatus ? session.liveness : nil
         result.statusOwnerID = session.statusOwnerID
@@ -392,6 +396,7 @@ struct SidebarCopilotTree: Equatable {
                 iconId: observation.appearance?.iconId, iconColor: observation.appearance?.iconColor,
                 petId: observation.appearance?.petId,
                 branch: observation.location?.branch, worktree: observation.location?.worktree ?? false,
+                currentWorktree: observation.currentWorktree,
                 sessionName: displayMetadata(observation.title.knownValue, limit: 200),
                 id: sessionID,
                 workspaceID: workspaceID,
