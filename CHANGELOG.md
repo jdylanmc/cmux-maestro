@@ -235,6 +235,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Native spawn recognizes Copilot 1.0.100's session-catalog context and reasoning
+  capabilities instead of silently discarding them (#152). Launch refusals name
+  the failed admission check; unsupported optional choices still warn and use
+  verified configured defaults. The original installed proof-route refusal
+  still needs a fresh, authorized live reproduction.
+
 - Control state no longer fills its 1 MiB cap and refuses every spawn (#280). When a node ends
   (resource-retired, terminal- or process-disappeared, launch or startup failure), its task
   text and provider executable move to a private per-node archive, `control/retired/<node-id>.json`

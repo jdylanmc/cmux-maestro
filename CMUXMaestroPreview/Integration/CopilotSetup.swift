@@ -363,6 +363,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         let adapterData = try boundedResource(resources.appendingPathComponent("adapter.mjs"), maximum: 65_536)
         let loaderData = try boundedResource(resources.appendingPathComponent("extension.mjs"), maximum: 8192)
         let processesData = try boundedResource(resources.appendingPathComponent("processes.mjs"), maximum: 16_384)
+        let modelsData = try boundedResource(resources.appendingPathComponent("models.mjs"), maximum: 16_384)
         guard FileManager.default.isExecutableFile(atPath: (helperExecutable ?? helper).path),
               FileManager.default.isReadableFile(atPath: controller.path),
               FileManager.default.isReadableFile(atPath: skill.path),
@@ -407,6 +408,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             .init(file: nativeRoot.appendingPathComponent("adapter.mjs"), data: adapterData),
             .init(file: nativeRoot.appendingPathComponent("extension.mjs"), data: loaderData),
             .init(file: nativeRoot.appendingPathComponent("processes.mjs"), data: processesData),
+            .init(file: nativeRoot.appendingPathComponent("models.mjs"), data: modelsData),
             .init(file: bin.appendingPathComponent("messaging.json"), data: try JSONSerialization.data(withJSONObject: [
                 "version": 1, "routes": routes.path, "extension": nativeRoot.path,
             ], options: [.sortedKeys])),

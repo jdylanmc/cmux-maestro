@@ -493,7 +493,7 @@ class ProofTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, routes)
         extension = self.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs", "processes.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         config = {"version": 1, "routes": str(routes), "extension": str(extension)}
@@ -3872,6 +3872,35 @@ class LifecycleFailureTests(unittest.TestCase):
                 for value in selected.values():
                     if value.startswith("unknown"):
                         self.assertNotIn(value, argv)
+
+    def test_real_shaped_adapter_catalog_reaches_native_argv_and_unknown_model_fallback(self):
+        projection = subprocess.run(["node", "--input-type=module", "-e",
+            "import fs from 'node:fs';"
+            "import {modelCapabilities} from './scripts/delivery-proof/models.mjs';"
+            "console.log(JSON.stringify(modelCapabilities(JSON.parse("
+            "fs.readFileSync('./scripts/fixtures/model-list-1.0.100.json')))));"],
+            cwd=REPO, check=True, capture_output=True, text=True)
+        initial = copy.deepcopy(self.state)
+        for selected, expected, warned in (
+            ({"model": "claude-sonnet-5"}, {"--model": "claude-sonnet-5"}, False),
+            ({"model": "gpt-6.1-sol", "contextTier": "long_context", "reasoningEffort": "low"},
+             {"--model": "gpt-6.1-sol", "--context": "long_context", "--reasoning-effort": "low"}, False),
+            ({"model": "gpt-5.4-mini", "contextTier": "default", "reasoningEffort": "low"},
+             {"--model": "synthetic-model", "--context": "default", "--reasoning-effort": "low"}, True),
+        ):
+            with self.subTest(selected=selected):
+                self.state = copy.deepcopy(initial)
+                self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+                identity = self.model_launch_identity()
+                evidence = self.model_launch_capabilities(identity)
+                evidence["models"] = evidence["models"][:1] + json.loads(projection.stdout)
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                receipt, argv = self.model_preference_spawn(identity, selected, evidence, launcher)
+                for flag, value in expected.items():
+                    self.assertEqual(argv[argv.index(flag) + 1], value)
+                self.assertEqual(bool(receipt.get("warnings")), warned)
+                self.assertIsNone(receipt["launchSelection"]["observed"])
+                launcher.assert_called_once()
 
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]

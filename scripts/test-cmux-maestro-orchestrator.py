@@ -2039,7 +2039,7 @@ class BornFixture:
         self.addCleanup(shutil.rmtree, self.routes, True)
         self.extension = self.h.path / "installed-extension"
         self.extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, self.extension / name)
             (self.extension / name).chmod(0o600)
         self.install(age=10)
@@ -2053,7 +2053,7 @@ class BornFixture:
         config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(self.extension)}))
         config.chmod(0o600)
         stamp = time.time() - age
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
@@ -2587,7 +2587,7 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
 
     def test_reload_after_an_update_reuses_the_enrolled_node(self):
         touch = ("import time\n"
-                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs'):\n"
+                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs'):\n"
                  f"    os.utime(os.path.join({str(self.extension)!r}, name), (time.time() + 5, time.time() + 5))")
         first, reload = self.enroll(repeat=2, env={"FAKE_BETWEEN": touch})
         self.assertTrue(first["ok"], first)
@@ -3171,7 +3171,7 @@ class ChildResumeTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.routes, True)
         extension = self.h.path / "installed-extension"
         extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (self.h.root / "bin").mkdir(mode=0o700, exist_ok=True)
@@ -4012,7 +4012,7 @@ class OrchestratorTests(unittest.TestCase):
         try:
             extension = h.root / "extension"
             extension.mkdir(mode=0o700)
-            for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
+            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
                 shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
                 (extension / name).chmod(0o600)
             (h.root / "bin").mkdir(mode=0o700)
@@ -6220,7 +6220,7 @@ class DirectLaunchTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, routes)
         extension = h.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs", "processes.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (h.root / "bin").mkdir(mode=0o700)
@@ -7165,7 +7165,7 @@ class ProcessObservationTests(unittest.TestCase):
                              previous)[0]["a"]
         self.assertEqual([item["state"] for item in again["processes"] if item["pid"] == 103], ["escaped"])
 
-    def test_messaging_configuration_requires_the_installed_process_module(self):
+    def test_messaging_configuration_requires_the_installed_leaf_modules(self):
         home = tempfile.TemporaryDirectory()
         self.addCleanup(home.cleanup)
         root = Path(os.path.realpath(home.name))
@@ -7175,17 +7175,20 @@ class ProcessObservationTests(unittest.TestCase):
         (root / "bin/messaging.json").write_text(json.dumps(
             {"version": 1, "routes": str(routes), "extension": str(extension)}))
         (root / "bin/messaging.json").chmod(0o600)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         configuration = CONTROLLER_API["messaging_configuration"]
         self.assertEqual(configuration(root)["extension"], str(extension))
-        (extension / "processes.mjs").write_bytes(b"x" * 16_385)
-        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "adapter is unavailable"):
-            configuration(root)
-        (extension / "processes.mjs").unlink()
-        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Messaging"):
-            configuration(root)
+        for name in ("processes.mjs", "models.mjs"):
+            (extension / name).write_bytes(b"x" * 16_385)
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "adapter is unavailable"):
+                configuration(root)
+            (extension / name).unlink()
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "Messaging"):
+                configuration(root)
+            shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
+            (extension / name).chmod(0o600)
 
     def test_listener_parsing_keeps_bind_addresses_and_never_guesses_protocols(self):
         parse = CONTROLLER_API["parse_tcp_listeners"]

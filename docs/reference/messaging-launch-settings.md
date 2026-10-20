@@ -122,9 +122,31 @@ evidence. Raw model/billing/quota data does not enter state, prompts, or host
 commands. Provider-native defaults are validated against raw advertised support.
 Valid defaults outside current CLI's effort levels are omitted from the
 projection. They are not invented as CLI flags and not used to reject unrelated selections.
+Copilot 1.0.100's session API returns raw CAPI entries, not the separate
+`models.list` API's typed `Model` objects: efforts come from
+`capabilities.supports.reasoning_effort`, and long context from
+`billing.token_prices.long_context`. The adapter also retains support for
+`supportedReasoningEfforts`, `supportedContextTiers` and
+`billing.tokenPrices.longContext` on SDK-shaped entries. Missing defaults stay
+omitted; a default is never inferred from list order. When both effort
+representations appear, only their common supported values are admitted.
 Malformed, duplicate, oversized, or foreign evidence and account drift
 refuse before launch. This is a capability snapshot, not atomic account/provider
 admission or an observation of the child's running settings.
+
+Refusals use bounded check names: `model-list-invalid` identifies list/count,
+ID/duplicate-ID, context/effort/default, pricing-tier shape, account drift or
+32-KiB projected-evidence checks. `spawn-input-invalid` identifies invocation,
+assignment, field, preference or 64-KiB request checks. Account and route
+checks use `account-*` and `route-*`; an unavailable binding operation names its
+spawn stage without exposing filesystem errors. `controller-*` distinguishes
+path/file checks, timeout, execution/output failure, invalid reply and a
+controller refusal. Controller capability validation uses
+`launch-capability-invalid`; a missing configured fallback uses
+`launch-preference-unavailable: configured-fallback`. These are diagnostic
+categories, not permission to retry or bypass a refused check.
+The bounded parser is installed as `models.mjs` alongside `adapter.mjs`;
+missing or oversized modules make integration readiness fail closed.
 
 Supported selections feed actual `--model`, `--context` and
 `--reasoning-effort` arguments. Unsupported safe optional requests **warn**:

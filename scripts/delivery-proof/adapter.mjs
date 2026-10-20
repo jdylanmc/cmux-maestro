@@ -5,6 +5,7 @@ import { timingSafeEqual } from "node:crypto";
 import { TextDecoder } from "node:util";
 import { execFile } from "node:child_process";
 import os from "node:os";
+import { MODEL_ID, CONTEXT_TIERS, PREFERENCES, validatePreferences, modelCapabilities } from "./models.mjs";
 
 const PEERS = ["a", "b"];
 const MANAGED_PEER = /^[0-9a-f]{16}$/;
@@ -14,54 +15,7 @@ const MAX_BODY = 4096;
 const MAX_FRAME = 8192;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CAPABILITY = /^[0-9a-f]{64}$/;
-const MODEL_ID = /^[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}$/;
-const CONTEXT_TIERS = ["default", "long_context"];
-const REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
-const PREFERENCES = ["model", "contextTier", "reasoningEffort"];
 const decoder = new TextDecoder("utf-8", { fatal: true });
-
-function validatePreferences(assignment) {
-  for (const key of PREFERENCES) {
-    if (!(key in assignment)) continue;
-    const pattern = key === "model" ? MODEL_ID : /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
-    requireCondition(typeof assignment[key] === "string" && pattern.test(assignment[key]));
-  }
-}
-
-function modelCapabilities(response) {
-  requireCondition(response && Array.isArray(response.list) && response.list.length <= 128);
-  const ids = new Set();
-  function options(value, supported) {
-    if (value === undefined) return [];
-    requireCondition(Array.isArray(value) && value.length <= 32 &&
-      value.every(item => typeof item === "string" && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(item)) &&
-      new Set(value).size === value.length);
-    return value.filter(item => supported.includes(item));
-  }
-  return response.list.map(model => {
-    requireCondition(model && typeof model === "object" && !Array.isArray(model) &&
-      typeof model.id === "string" && MODEL_ID.test(model.id) && !ids.has(model.id));
-    ids.add(model.id);
-    const contextTiers = options(model.supportedContextTiers, CONTEXT_TIERS);
-    if (!contextTiers.includes("default")) contextTiers.unshift("default");
-    const longContext = model.billing?.tokenPrices?.longContext;
-    if (longContext !== undefined) {
-      requireCondition(longContext !== null && typeof longContext === "object" && !Array.isArray(longContext));
-      if (!contextTiers.includes("long_context")) contextTiers.push("long_context");
-    }
-    if (model.defaultReasoningEffort !== undefined) {
-      requireCondition(typeof model.defaultReasoningEffort === "string" &&
-        Array.isArray(model.supportedReasoningEfforts) &&
-        model.supportedReasoningEfforts.includes(model.defaultReasoningEffort));
-    }
-    const reasoningEfforts = options(model.supportedReasoningEfforts, REASONING_EFFORTS);
-    const result = { id: model.id, contextTiers, reasoningEfforts };
-    if (reasoningEfforts.includes(model.defaultReasoningEffort)) {
-      result.defaultReasoningEffort = model.defaultReasoningEffort;
-    }
-    return result;
-  });
-}
 
 function modelObservation(snapshot) {
   if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
@@ -84,20 +38,20 @@ function modelObservation(snapshot) {
   };
 }
 
-function requireCondition(condition) {
-  if (!condition) throw new Error("Invalid or unavailable proof route.");
+function requireCondition(condition, reason = "Invalid or unavailable proof route.") {
+  if (!condition) throw new Error(reason);
 }
 
 function exactKeys(value, keys) {
-  requireCondition(value !== null && typeof value === "object" && !Array.isArray(value));
-  requireCondition(Object.keys(value).sort().join(",") === [...keys].sort().join(","));
+  requireCondition(value !== null && typeof value === "object" && !Array.isArray(value), "route-invalid: object");
+  requireCondition(Object.keys(value).sort().join(",") === [...keys].sort().join(","), "route-invalid: fields");
 }
 
 function address(value, managed = false) {
   exactKeys(value, managed ? ["workspaceId", "sessionId", "generation"] : ["workspaceId", "sessionId"]);
   requireCondition(typeof value.workspaceId === "string" && typeof value.sessionId === "string" &&
-    UUID.test(value.workspaceId) && UUID.test(value.sessionId));
-  if (managed) requireCondition(Number.isSafeInteger(value.generation) && value.generation > 0);
+    UUID.test(value.workspaceId) && UUID.test(value.sessionId), "route-invalid: address");
+  if (managed) requireCondition(Number.isSafeInteger(value.generation) && value.generation > 0, "route-invalid: generation");
   return value;
 }
 
@@ -112,8 +66,8 @@ function publicAddress(binding) {
 
 async function privateDirectory(directory) {
   const info = await fs.lstat(directory);
-  requireCondition(info.isDirectory() && info.uid === process.getuid() && !(info.mode & 0o077));
-  requireCondition(await fs.realpath(directory) === directory);
+  requireCondition(info.isDirectory() && info.uid === process.getuid() && !(info.mode & 0o077), "route-invalid: directory");
+  requireCondition(await fs.realpath(directory) === directory, "route-invalid: directory-realpath");
 }
 
 async function privateJSON(file) {
@@ -121,26 +75,30 @@ async function privateJSON(file) {
   try {
     const info = await handle.stat();
     requireCondition(info.isFile() && info.uid === process.getuid() &&
-      !(info.mode & 0o077) && info.size <= MAX_FRAME);
+      !(info.mode & 0o077) && info.size <= MAX_FRAME, "route-invalid: file");
     const buffer = Buffer.alloc(MAX_FRAME + 1);
     const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    requireCondition(bytesRead <= MAX_FRAME);
-    return JSON.parse(decoder.decode(buffer.subarray(0, bytesRead)));
+    requireCondition(bytesRead <= MAX_FRAME, "route-invalid: file-size");
+    try {
+      return JSON.parse(decoder.decode(buffer.subarray(0, bytesRead)));
+    } catch {
+      throw new Error("route-invalid: json");
+    }
   } finally {
     await handle.close();
   }
 }
 
 async function bindingAt(root, peer, managed = false) {
-  requireCondition(managed ? MANAGED_PEER.test(peer) : PEERS.includes(peer));
+  requireCondition(managed ? MANAGED_PEER.test(peer) : PEERS.includes(peer), "route-invalid: peer");
   const binding = await privateJSON(path.join(root, `${peer}.json`));
   exactKeys(binding, ["peer", "workspaceId", "sessionId", "capability",
     ...(managed ? ["generation", "nodeId", "name"] : [])]);
   requireCondition(binding.peer === peer && typeof binding.capability === "string" &&
-    CAPABILITY.test(binding.capability));
+    CAPABILITY.test(binding.capability), "route-invalid: capability");
   address(publicAddress(binding), managed);
   if (managed) requireCondition(UUID.test(binding.nodeId) && typeof binding.name === "string" &&
-    binding.name.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(binding.name));
+    binding.name.length <= 100 && !/[\u0000-\u001f\u007f]/u.test(binding.name), "route-invalid: node");
   return binding;
 }
 
@@ -200,38 +158,46 @@ async function writeOnce(endpoint, frame) {
 }
 
 async function invokeController(command, request, controller, signal) {
-  requireCondition(typeof controller === "string" && path.isAbsolute(controller));
-  const info = await fs.lstat(controller);
+  requireCondition(typeof controller === "string" && path.isAbsolute(controller), "controller-invalid: path");
+  let info, realpath;
+  try {
+    info = await fs.lstat(controller);
+    realpath = await fs.realpath(controller);
+  } catch {
+    throw new Error("controller-unavailable: file");
+  }
   requireCondition(info.isFile() && [0, process.getuid()].includes(info.uid) &&
-    !(info.mode & 0o022) && await fs.realpath(controller) === controller);
+    !(info.mode & 0o022) && realpath === controller, "controller-invalid: file");
   return new Promise((resolve, reject) => {
     const child = execFile(controller, [command], {
       timeout: 60_000, maxBuffer: 65_536, signal,
     }, (error, stdout, stderr) => {
       if (error?.killed && !signal?.aborted) {
-        reject(Object.assign(new Error("Controller timed out."), { timedOut: true }));
+        reject(Object.assign(new Error(command === "native-close" ? "Controller timed out." : "controller-timeout"), { timedOut: true }));
         return;
       }
       if (error) {
         try {
           const failure = JSON.parse(stderr);
-          reject(new Error(typeof failure.error === "string" ? failure.error :
+          reject(new Error(typeof failure.error === "string"
+            ? `${command === "native-close" ? "" : "controller-refused: "}${failure.error}` :
             command === "native-close" ? "Native close failed; request outcome is uncertain." : "Native launch failed."));
         } catch {
           reject(new Error(command === "native-close"
             ? "Native close failed, timed out, or was cancelled; request outcome is uncertain. Do not automatically retry."
-            : "Native launch failed or timed out; reconcile owned resources before retrying."));
+            : "controller-failed: execution-or-output; reconcile owned resources before retrying"));
         }
         return;
       }
       try {
         const result = JSON.parse(stdout);
-        requireCondition(result.ok === true);
+        requireCondition(result?.ok === true, "controller-invalid: result-ok");
         resolve(result);
       } catch (parseError) {
         reject(command === "native-close"
           ? new Error("Native close reply is invalid; request outcome is uncertain. Do not automatically retry.")
-          : parseError);
+          : new Error(parseError.message === "controller-invalid: result-ok"
+            ? parseError.message : "controller-invalid: result-json"));
       }
     });
     child.stdin.on("error", reject);
@@ -358,30 +324,38 @@ export async function start({ root, peer, joinSession, managed = false, expected
     requireCondition(expected && sameAddress(ownAddress, expected) && own.nodeId === expected.nodeId);
   }
   async function currentBinding() {
-    await privateDirectory(root);
-    const current = await bindingAt(root, peer, managed);
-    requireCondition(sameAddress(publicAddress(current), ownAddress) &&
-      current.capability === own.capability && current.nodeId === own.nodeId);
-    // Born roots: their provider must still alone hold the session (#261).
-    await custody?.({ nodeId: own.nodeId, ...ownAddress, capability: own.capability });
+    let check = "directory";
+    try {
+      await privateDirectory(root);
+      check = "binding-read";
+      const current = await bindingAt(root, peer, managed);
+      requireCondition(sameAddress(publicAddress(current), ownAddress) &&
+        current.capability === own.capability && current.nodeId === own.nodeId, "route-invalid: binding-drift");
+      // Born roots: their provider must still alone hold the session (#261).
+      check = "custody";
+      await custody?.({ nodeId: own.nodeId, ...ownAddress, capability: own.capability });
+    } catch (error) {
+      throw new Error(error.message?.startsWith("route-invalid:") ? error.message : `route-unavailable: ${check}`);
+    }
   }
   let session;
   let observation;
   const specs = toolSpecs(managed);
   async function currentAccount(invocation) {
-    requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
+    requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId,
+      "account-invalid: invocation");
     if (observation) await observation;
     await currentBinding();
     let auth;
     try {
       auth = await session.rpc.gitHubAuth.getStatus();
     } catch {
-      throw new Error("The invoking session account API is unavailable; no terminal was created");
+      throw new Error("account-unavailable: status-api");
     }
     if (!(auth?.isAuthenticated === true && typeof auth.login === "string" &&
       /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
       ["github.com", "https://github.com"].includes(auth.host))) {
-      throw new Error("The invoking session account cannot be verified; no terminal was created");
+      throw new Error("account-invalid: status");
     }
     await currentBinding();
     return { login: auth.login, host: auth.host };
@@ -395,15 +369,15 @@ export async function start({ root, peer, joinSession, managed = false, expected
         source = "session-model-list";
       } catch (error) {
         if (error?.code !== -32601) {
-          throw new Error("The invoking session model API failed; no terminal was created");
+          throw new Error("model-list-unavailable: api");
         }
       }
     }
     const models = source === "session-model-list" ? modelCapabilities(response) : [];
     const current = await currentAccount(invocation);
-    requireCondition(current.login === account.login && current.host === account.host);
+    requireCondition(current.login === account.login && current.host === account.host, "model-list-invalid: account-drift");
     const evidence = { version: 1, sessionId: own.sessionId, account, source, models };
-    requireCondition(Buffer.byteLength(JSON.stringify(evidence), "utf8") <= 32768);
+    requireCondition(Buffer.byteLength(JSON.stringify(evidence), "utf8") <= 32768, "model-list-invalid: evidence-size");
     return evidence;
   }
   async function currentModel(invocation, account) {
@@ -516,13 +490,19 @@ export async function start({ root, peer, joinSession, managed = false, expected
   if (managed) tools.push({
     ...specs.maestro_spawn,
     handler: async (assignment, invocation) => {
+      let stage = "input";
       try {
-        requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId);
-        requireCondition(assignment && typeof assignment === "object" && !Array.isArray(assignment));
+        requireCondition(session?.sessionId === own.sessionId && invocation?.sessionId === own.sessionId,
+          "spawn-input-invalid: invocation");
+        requireCondition(assignment && typeof assignment === "object" && !Array.isArray(assignment),
+          "spawn-input-invalid: assignment");
         requireCondition(Object.keys(assignment).every(key =>
-          ["name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color", ...PREFERENCES].includes(key)));
+          ["name", "cwd", "task", "allowTools", "denyTools", "yolo", "icon", "color", ...PREFERENCES].includes(key)),
+        "spawn-input-invalid: fields");
         validatePreferences(assignment);
+        stage = "account-binding";
         const auth = await currentAccount(invocation);
+        stage = "model-list-account-binding";
         const evidence = PREFERENCES.some(key => key in assignment)
           ? await launchCapabilities(invocation, auth) : undefined;
         const request = {
@@ -534,13 +514,16 @@ export async function start({ root, peer, joinSession, managed = false, expected
           assignment,
           ...(evidence === undefined ? {} : { launchCapabilities: evidence }),
         };
-        requireCondition(Buffer.byteLength(JSON.stringify(request), "utf8") <= 65536);
+        requireCondition(Buffer.byteLength(JSON.stringify(request), "utf8") <= 65536, "spawn-input-invalid: request-size");
+        stage = "controller";
         const result = await launch(request, expected.controller);
         return JSON.stringify(result);
       } catch (error) {
+        const reason = /^(spawn-input-invalid|model-list-(invalid|unavailable)|account-(invalid|unavailable)|controller-|route-)/.test(error.message)
+          ? error.message : `spawn-unavailable: ${stage}`;
         return {
           resultType: "failure",
-          textResultForLlm: `Maestro launch refused or uncertain: ${error.message}. No fallback or retry was made.`,
+          textResultForLlm: `Maestro launch refused or uncertain: ${reason}. No fallback or retry was made.`,
         };
       }
     },
