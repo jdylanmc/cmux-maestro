@@ -6786,6 +6786,20 @@ class ProcessObservationTests(unittest.TestCase):
                 self.assertEqual((node["state"], [(item["pid"], item["state"]) for item in node["processes"]]),
                                  ("scan-incomplete", [(101, "owned-current")]))
 
+    def test_a_session_ended_in_place_never_owns_its_providers_later_work(self):
+        table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "vite")}
+        identities = {100: (int(self.start), 0), 101: (int(self.start) + 1, 0)}
+        listener = [{"protocol": "tcp", "address": "127.0.0.1", "port": 5173, "scope": "loopback"}]
+        # Copilot keeps the old session's lock after switching sessions in the same process.
+        markers = {"s-a": [(100, self.start + 5)], "s-b": [(100, self.start + 50)]}
+        ended = {**self.node("a", 100, "s-a"), "enrollment": "born", "sessionEndedGeneration": 1}
+        nodes = self.observe(self.state(ended), FakeProcessProbe([table], identities, {101: listener}, markers))[0]
+        self.assertNotIn("a", nodes)
+        later = self.node("b", 100, "s-b")
+        nodes = self.observe(self.state(ended, later), FakeProcessProbe([table], identities, {101: listener}, markers))[0]
+        self.assertEqual(set(nodes), {"b"})
+        self.assertEqual((nodes["b"]["state"], [item["pid"] for item in nodes["b"]["processes"]]), ("owned-current", [101]))
+
     def test_an_unreadable_session_directory_keeps_the_last_list(self):
         table = {100: self.row(1, 100, "copilot"), 101: self.row(100, 101, "server")}
         identities = {100: (int(self.start), 0), 101: (int(self.start) + 1, 3)}

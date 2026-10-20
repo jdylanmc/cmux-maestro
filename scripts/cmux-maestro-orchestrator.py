@@ -3960,7 +3960,9 @@ def process_observation_nodes(state):
     nodes = [node for node in state["nodes"].values()
              if node.get("surfaceId") is not None and node["phase"] in PROJECTED_PHASES
              and node["runId"] not in released and node.get("copilotSessionId")
-             and _valid_process_identity(node.get("providerProcess"))]
+             and _valid_process_identity(node.get("providerProcess"))
+             # Its provider now runs another session; that session's work is not this node's.
+             and not session_ended_in_place(node)]
     return sorted(nodes, key=lambda item: (item["createdAt"], item["id"]))[:MAX_HOST_NODES]
 
 
