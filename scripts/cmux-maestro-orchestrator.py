@@ -1649,13 +1649,13 @@ class Store:
         """One node's archived launch payload, an empty record when absent, or None when unusable."""
         try:
             payload = self._read_regular(f"{identifier}.json", MAX_BYTES, private=True, directory=directory)
-        except OrchestrationError:
+        except (OrchestrationError, OSError):
             return None
         if payload is None:
             return {"version": 1, "nodeId": identifier, "generations": {}}
         try:
             record = json.loads(payload)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
             return None
         if (not isinstance(record, dict) or set(record) != {"version", "nodeId", "generations"}
                 or record["version"] != 1 or record["nodeId"] != identifier
@@ -1668,7 +1668,10 @@ class Store:
 
     def archived_launch(self, identifier):
         """The node's archived launch payload by generation (ADR 0010 amendment), or None."""
-        directory = self._launch_archive_directory(create=False)
+        try:
+            directory = self._launch_archive_directory(create=False)
+        except (OrchestrationError, OSError):
+            return None
         if directory is None:
             return None
         try:
@@ -1682,12 +1685,18 @@ class Store:
 
         The task text and provider executable move to a private per-node archive before the state
         that drops them commits; the launch PATH is dropped (a resume uses its own terminal's PATH).
-        A node whose archive cannot be read or would exceed the byte bound keeps its payload.
+        A node whose archive cannot be read, written or would exceed the byte bound keeps its
+        payload; an unusable archive directory skips compaction. Neither blocks the write.
         """
         nodes = [node for node in state["nodes"].values() if launch_payload_compactable(state, node)]
         if not nodes:
             return
-        directory = self._launch_archive_directory(create=True)
+        try:
+            directory = self._launch_archive_directory(create=True)
+        except (OrchestrationError, OSError):
+            directory = None
+        if directory is None:
+            return
         try:
             for node in nodes:
                 record = self._read_launch_archive(directory, node["id"])
@@ -1700,7 +1709,10 @@ class Store:
                     encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode() + b"\n"
                     if len(encoded) > MAX_BYTES:
                         continue
-                    self._atomic(directory, f"{node['id']}.json", encoded)
+                    try:
+                        self._atomic(directory, f"{node['id']}.json", encoded)
+                    except (OrchestrationError, OSError):
+                        continue
                 node["task"] = None
                 node.pop("copilotExecutable", None)
                 node.pop("launchPath", None)

@@ -1791,22 +1791,48 @@ class LaunchPayloadCompactionTests(unittest.TestCase):
             store.write(state)
         self.assertFalse(archived.exists())
 
-    def test_an_unreadable_archive_keeps_the_payload_in_state(self):
-        state = CONTROLLER_API["empty_state"]()
-        root = self.run_root(state)
-        worker = self.worker(state, root, "turn-running", "busy", "Synthetic task")
-        with CONTROLLER_API["Store"](self.root) as store:
-            store.write(state)
-            self.archive.mkdir(mode=0o700)
-            corrupt = self.archive / f"{worker['id']}.json"
-            corrupt.write_text("not json")
-            corrupt.chmod(0o600)
-            worker.update(phase="resource-retired", availability="unavailable")
-            store.write(state)
-        saved = CONTROLLER_API["read_state"](self.root)["nodes"][worker["id"]]
-        self.assertEqual(saved["task"], "Synthetic task")
-        self.assertEqual(saved["copilotExecutable"], "/synthetic/bin/copilot")
-        self.assertEqual(corrupt.read_text(), "not json")
+    def test_an_unusable_archive_keeps_the_payload_and_never_blocks_a_write(self):
+        def invalid(path):
+            path.write_text("not json")
+            path.chmod(0o600)
+
+        def nested(path):
+            path.write_text("[" * 100_000 + "]" * 100_000)
+            path.chmod(0o600)
+
+        def unreadable(path):
+            path.write_text("{}")
+            path.chmod(0o000)
+
+        def symlink(path):
+            target = path.parent.parent / "elsewhere.json"
+            target.write_text("{}")
+            path.symlink_to(target)
+
+        def directory_symlink(path):
+            path.parent.rmdir()
+            elsewhere = path.parent.parent / "elsewhere"
+            elsewhere.mkdir(mode=0o700)
+            path.parent.symlink_to(elsewhere)
+
+        for name, damage in (("invalid", invalid), ("nested", nested), ("unreadable", unreadable),
+                             ("symlink", symlink), ("directory-symlink", directory_symlink)):
+            with self.subTest(name):
+                self.setUp()
+                state = CONTROLLER_API["empty_state"]()
+                root = self.run_root(state)
+                worker = self.worker(state, root, "turn-running", "busy", "Synthetic task")
+                with CONTROLLER_API["Store"](self.root) as store:
+                    store.write(state)
+                    self.archive.mkdir(mode=0o700)
+                    damage(self.archive / f"{worker['id']}.json")
+                    worker.update(phase="resource-retired", availability="unavailable")
+                    unrelated = self.worker(state, root, "turn-running", "busy", "Unrelated spawn")
+                    store.write(state)
+                saved = CONTROLLER_API["read_state"](self.root)["nodes"]
+                self.assertIn(unrelated["id"], saved)
+                self.assertEqual(saved[worker["id"]]["task"], "Synthetic task")
+                self.assertEqual(saved[worker["id"]]["copilotExecutable"], "/synthetic/bin/copilot")
 
 
 class AdmissionGateTests(unittest.TestCase):
