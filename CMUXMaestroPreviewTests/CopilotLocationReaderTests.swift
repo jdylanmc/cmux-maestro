@@ -3,6 +3,24 @@ import Testing
 @testable import CMUXMaestroPreview
 
 struct CopilotLocationReaderTests: Sendable {
+    @Test(arguments: [true, false], [true, false])
+    func activeTouchPrecedesSessionDirectoryAndPreservesStaleLabel(current: Bool, bindingMatches: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let identity = CopilotWorktreeIdentity(
+            key: "0123456789abcdef", repository: "touched", head: .branch("topic"), linked: false
+        )
+        _ = try publish(fixture, data: CopilotSessionLocation.encode(
+            sessionID: fixture.sessionID, location: nil,
+            current: .init(evidence: .nonRepository, source: nil), recordedAt: Date(),
+            active: .init(identity: identity, touchedAt: 1_800_000_000_000, isCurrent: current,
+                          bindingKey: bindingMatches ? CopilotActiveWorktree.bindingKey(fixture.record)
+                              : String(repeating: "0", count: 64))
+        ))
+        #expect(try await read(fixture)?.currentWorktree
+            == .init(evidence: .verified(identity), isCurrent: current && bindingMatches))
+    }
+
     private func publish(_ fixture: CopilotReaderFixture, name: String? = nil, data: Data, mode: mode_t = 0o600) throws -> URL {
         let directory = fixture.root.appendingPathComponent("locations", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

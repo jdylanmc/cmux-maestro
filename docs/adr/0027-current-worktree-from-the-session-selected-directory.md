@@ -17,3 +17,41 @@ Why: on 2026-10-02 two sessions changed directory with Copilot's `/cwd`. Their p
 Rejected: Git in the sidebar. The controller probing Git, since it runs only when a control command does. The process or shell working directory. Deriving a child session's worktree from its parent. Using the repository or branch name as the grouping key. A second Git collector.
 
 Consequence: a session shows no current worktree until its first hook after this release. A branch switch made outside the session (another terminal) is seen only at that session's next hook; the sandboxed sidebar cannot read the worktree's `HEAD`, so until then the branch label can lag. The grouping key, the worktree's own Git directory, does not change with the branch, so membership stays right. Copilot's `workspace.yaml` is not a documented interface. `cwd:` is read only when the whole file is a flat mapping the hook models (plain keys once each, one-line plain or quoted values, indented block scalars); a flow collection, quoted key, multi-line value, anchor, alias, tag, document marker or duplicate key makes the evidence unknown, never wrong. All 1,375 local session files checked on 2026-10-19 fit that shape. A `workspace.yaml` rewrite that does not change the directory still marks the evidence last known until the next hook. This amends ADR 0014: the sidebar now receives a repository directory name and an opaque worktree key, still no path. It amends ADR 0022 only in that the hook, outside the sandbox, reads one more `workspace.yaml` field; the sidebar still reads only `name:`.
+
+## Amendment: active repository from tool touches (#279, 2026-10-20)
+
+The owner launches sessions outside Git and works across repositories without changing
+Copilot's selected directory. Worktrees therefore groups by the **last verified tool touch
+in the current user turn**, then the last verified touch marked last known, then the
+selected-directory observation above, then Unknown/No repository. Only one group per
+session; repository labels, titles, branches, panes and parents remain non-evidence.
+
+The already registered post-tool hook resolves explicit file/directory path arguments,
+or shell `possiblePaths` when supplied, using the same `CopilotWorktreeResolver`. When
+the hook provides only shell command text, the existing bounded leading `cd` parser supplies
+the path; it does not execute or persist the command. The hook never opens an event log to
+recover missing arguments. A failed, absent or non-repository touch cannot erase a verified
+touch. Within a multi-path call, the last verified path in provider order wins; this order
+is not evidence of chronological execution inside the tool.
+
+`userPromptSubmitted` and `sessionStart` close the previous window. Those two registered
+hooks have no tool name; only `postToolUse` has one. Missing/malformed tool metadata thus
+fails conservatively to last known. A successful touch starts the current window again.
+New process bindings cannot make an old touch current.
+
+Schema 3 keeps only one sanitized worktree identity, last-touch milliseconds, current-window
+flag and exact binding fingerprint alongside schema 2's selected-directory fallback.
+There is no touched-file list or history. Storage stays at 2 KiB per session. At most eight
+path hints are admitted per hook; oversized lists contribute no touch. Resolution results
+are memoized by containing directory for that invocation only, so repeated paths share a
+Git walk. No paths, filenames, commands, argv, or persistent path cache are written. The
+existing 64-level/4-KiB resolver bounds and exact session ownership proof stay in force.
+Relative paths and paths containing `..` contribute no new touch: lexically removing a
+parent component across a symlink can select the wrong repository. Ambiguous later `cd`
+targets invalidate the shell hint instead of reusing an earlier directory in that command.
+
+The optional live-process cwd supplement is deferred: ADR 0029's Python observer currently
+collects a process table, start identities and listeners, not cwd. Resolving those paths
+would require another probe and a new cross-language helper route or a second Git collector.
+Neither is a cheap addition to the existing pass. Tool touches remain the only new producer;
+no process observer, adapter, sandbox grant, or installed configuration changes here.

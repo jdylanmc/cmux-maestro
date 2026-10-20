@@ -1,18 +1,21 @@
+import CryptoKit
 import Foundation
 
-// Location record schema 2: the branch fact plus the session's current worktree (ADR 0027).
+// Schema 2: selected-directory worktree. Schema 3: one last tool touch (ADR 0027).
 
 extension CopilotSessionLocation {
     static let currentKeys: Set<String> = ["schemaVersion", "sessionID", "recordedAt", "current"]
 
     /// Schema 2 adds the session's current worktree; the branch fact stays optional.
     static func encode(
-        sessionID: UUID, location: CopilotSessionLocation?, current: CopilotSessionWorktree, recordedAt: Date
+        sessionID: UUID, location: CopilotSessionLocation?, current: CopilotSessionWorktree, recordedAt: Date,
+        active: CopilotActiveWorktree? = nil
     ) throws -> Data {
         var object: [String: Any] = [
-            "schemaVersion": 2, "sessionID": sessionID.uuidString.lowercased(),
+            "schemaVersion": active == nil ? 2 : 3, "sessionID": sessionID.uuidString.lowercased(),
             "recordedAt": Int64((recordedAt.timeIntervalSince1970 * 1000).rounded()), "current": current.wire,
         ]
+        if let active { object["active"] = active.wire }
         if let location {
             object["branch"] = location.branch
             object["worktree"] = location.worktree
@@ -25,6 +28,7 @@ extension CopilotSessionLocation {
 nonisolated struct CopilotSessionLocationRecord: Equatable, Sendable {
     let location: CopilotSessionLocation?
     let current: CopilotSessionWorktree?
+    var active: CopilotActiveWorktree? = nil
 
     static func decode(_ data: Data, sessionID: UUID) -> CopilotSessionLocationRecord? {
         guard data.count <= CopilotSessionLocation.maximumBytes,
@@ -41,11 +45,13 @@ nonisolated struct CopilotSessionLocationRecord: Equatable, Sendable {
             guard keys == CopilotSessionLocation.keys, let branch, let worktree,
                   CopilotSessionLocation.validBranch(branch) else { return nil }
             return .init(location: .init(branch: branch, worktree: worktree), current: nil)
-        case 2:
+        case 2, 3:
+            let expected = version == 3 ? CopilotSessionLocation.currentKeys.union(["active"])
+                : CopilotSessionLocation.currentKeys
             let legacy: CopilotSessionLocation?
-            if keys == CopilotSessionLocation.currentKeys {
+            if keys == expected {
                 legacy = nil
-            } else if keys == CopilotSessionLocation.currentKeys.union(["branch", "worktree"]),
+            } else if keys == expected.union(["branch", "worktree"]),
                       let branch, let worktree, CopilotSessionLocation.validBranch(branch) {
                 legacy = .init(branch: branch, worktree: worktree)
             } else {
@@ -53,10 +59,58 @@ nonisolated struct CopilotSessionLocationRecord: Equatable, Sendable {
             }
             guard let wire = object["current"] as? [String: Any],
                   let current = CopilotSessionWorktree(wire: wire) else { return nil }
-            return .init(location: legacy, current: current)
+            var active: CopilotActiveWorktree?
+            if version == 3 {
+                guard let wire = object["active"] as? [String: Any],
+                      let decoded = CopilotActiveWorktree(wire: wire) else { return nil }
+                active = decoded
+            }
+            return .init(location: legacy, current: current, active: active)
         default:
             return nil
         }
+    }
+}
+
+/// One last verified touch, not a history of tool calls or paths.
+nonisolated struct CopilotActiveWorktree: Equatable, Sendable {
+    let identity: CopilotWorktreeIdentity
+    let touchedAt: Int64
+    var isCurrent: Bool
+    let bindingKey: String
+
+    init(identity: CopilotWorktreeIdentity, touchedAt: Int64, isCurrent: Bool, bindingKey: String) {
+        self.identity = identity
+        self.touchedAt = touchedAt
+        self.isCurrent = isCurrent
+        self.bindingKey = bindingKey
+    }
+
+    static func bindingKey(_ record: CopilotIdentityRecord) -> String {
+        let value = [
+            "cmux-maestro-worktree-binding-v1", record.sessionID.uuidString,
+            record.surfaceID.uuidString, record.launchWorkspaceID.uuidString,
+            String(record.ownerPID), String(record.ownerStartSeconds), String(record.ownerStartMicroseconds),
+        ].joined(separator: "\0")
+        return SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    fileprivate var wire: [String: Any] {
+        ["worktree": CopilotSessionWorktree(evidence: .verified(identity), source: nil).wire,
+         "touchedAt": touchedAt, "current": isCurrent, "bindingKey": bindingKey]
+    }
+
+    fileprivate init?(wire: [String: Any]) {
+        guard Set(wire.keys) == ["worktree", "touchedAt", "current", "bindingKey"],
+              let raw = wire["worktree"] as? [String: Any],
+              let worktree = CopilotSessionWorktree(wire: raw), worktree.source == nil,
+              case .verified(let identity) = worktree.evidence,
+              let touchedAt = CopilotJSONValue.integer(wire["touchedAt"]), touchedAt > 0,
+              let current = CopilotJSONValue.boolean(wire["current"]),
+              let bindingKey = wire["bindingKey"] as? String, bindingKey.utf8.count == 64,
+              bindingKey.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) })
+        else { return nil }
+        self.init(identity: identity, touchedAt: touchedAt, isCurrent: current, bindingKey: bindingKey)
     }
 }
 

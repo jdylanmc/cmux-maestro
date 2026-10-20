@@ -450,7 +450,7 @@ enum SidebarPresentation {
                   if case .available(let surfaces) = workspace.surfaces { return surfaces.first { $0.id == surfaceID } }
                   return nil
               }) else {
-            return .init(title: "No uniquely focused surface", notice: "Current window identity or focus is unavailable.")
+            return .init(title: "No uniquely focused surface")
         }
         let paths = paths(hierarchy.pathContext(workspaceID: workspaceID, surfaceID: surfaceID))
         var result = SidebarDetailContent(
@@ -471,9 +471,6 @@ enum SidebarPresentation {
             let retained = tree.statusSessions.filter { $0.workspaceID == workspaceID && $0.surfaceID == surfaceID }
             if sessions.isEmpty, retained.count == 1, let status = retained.first {
                 result.visual = sessionState(status)
-            }
-            if !sessions.isEmpty || surface.kind == .agentSession {
-                result.notice = "Agent identity is stale, unavailable or unconfirmed."
             }
             return result
         }
@@ -516,8 +513,6 @@ enum SidebarPresentation {
                 for: .managed(node), hierarchy: hierarchy, connected: connected,
                 tree: tree, managed: managed, availability: availability, now: now
             )
-        } else if !nodes.isEmpty {
-            result.notice = "Managed metadata is not current or uniquely bound. Showing the observed session."
         }
         return result
     }

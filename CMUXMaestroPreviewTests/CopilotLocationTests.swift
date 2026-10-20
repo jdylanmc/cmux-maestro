@@ -257,7 +257,7 @@ struct CopilotLocationHookTests: Sendable {
             .location == .init(branch: "w", worktree: true))
     }
 
-    /// The session's own selected directory decides its worktree, not the tool path or payload cwd.
+    /// The selected-directory fallback stays independent of tool touches and payload cwd.
     @Test func publishesCurrentWorktreeFromTheSessionSelectedDirectory() throws {
         let scratch = try LocationScratch()
         let hook = try LocationScratch(underBuild: true)

@@ -246,12 +246,12 @@ struct SidebarPinnedDetailsTests {
                          [session(), session(id: fixtures.sessionID, other: true, liveness: .dead)],
                          [session(observedAt: now.addingTimeInterval(-9))]] {
             let result = pinned(sessions: sessions, nodes: [managed()])
-            #expect(!result.isAgent && result.notice != nil)
+            #expect(!result.isAgent && result.notice == nil)
             #expect(!result.lines.contains { $0.copyableSessionID != nil || $0.title == "Model" })
         }
         #expect(!pinned(generatedAt: now.addingTimeInterval(-9)).isAgent)
         #expect(!pinned(sessions: [session(), session(id: fixtures.sessionID, other: true)]).isAgent)
-        #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice != nil)
+        #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice == nil)
     }
 
     @Test func freshDeadRootInspectorQualifiesItsOwnModelAsLastReported() throws {
@@ -352,10 +352,10 @@ struct SidebarPinnedDetailsTests {
             let unbound = pinned(nodes: nodes)
             #expect(unbound.title == "Same title" && unbound.isAgent)
             #expect(!unbound.lines.contains { $0.title == "Branch" || $0.title == "Worktree" })
-            #expect(unbound.notice != nil)
+            #expect(unbound.notice == nil)
         }
         let stale = pinned(nodes: [node], availability: .stale)
-        #expect(stale.title == "Same title" && stale.notice != nil)
+        #expect(stale.title == "Same title" && stale.notice == nil)
         let replaced = pinned(sessions: [session(id: fixtures.otherSessionID)], nodes: [node])
         #expect(replaced.lines.filter { $0.copyableSessionID != nil } == [.sessionID(fixtures.otherSessionID)])
         #expect(replaced.title != node.label)
