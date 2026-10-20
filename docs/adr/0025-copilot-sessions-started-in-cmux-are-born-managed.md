@@ -13,7 +13,9 @@ How: Maestro's installed native extension joins every session. When CMUX workspa
 - No node holds the surface, the session, or the provider process. A retained resource or launch lease on the surface also refuses.
 - Node, workspace, and host capacity admit one more root.
 
-The new root records a default launch policy with no grants and no YOLO ([ADR 0006](0006-recorded-launch-policy-deny-wins.md)). Its children inherit that policy.
+The new root records a default launch policy unless its exact provider's launch flags
+prove allow-all ([ADR 0006 amendment](0006-recorded-launch-policy-deny-wins.md)).
+Its children inherit that mode and recorded denies; runtime permission toggles are not observed.
 
 Any failed check leaves the session unmanaged. `maestro_readiness` names one stable reason, such as `capacity-unavailable` or `session-started-before-install`; `enrollment-pending` shows while enrollment runs. There is no retry and no fallback. The decision is recorded per session and provider process (session ID, PID, and start time): a later extension reload in that process returns the same refusal, or reuses the same node after an enrollment, even when the extension files changed since. Records go once the provider process is proven ended. With no recorded decision, a provider is admitted only within 120 seconds of its own start (`enrollment-window-passed` otherwise), so an unrecorded refusal cannot reopen later. Known limit: the window counts from the provider's start, so a login or trust prompt answered more than 120 seconds later leaves that session unmanaged; restart it. If the controller committed an enrollment but this extension's runtime failed, the reason is `enrolled-runtime-unavailable`. A session archived earlier and enrolled again continues its generations from a bounded per-session high-water mark that survives archive trimming, so its peer address never repeats. When the record is full, the lowest mark is evicted into one stored floor, and every later generation starts above that floor. Addresses stay unique, every proven-ended run stays archivable, and the record never blocks.
 

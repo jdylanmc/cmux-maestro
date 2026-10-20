@@ -1083,6 +1083,11 @@ def _validate_node_launch_configuration(node, mode):
     if (not isinstance(node.get("permissionMode", "default"), str)
             or node.get("permissionMode", "default") not in {"default", "yolo"}):
         raise OrchestrationError("Stored launch permission mode is invalid.")
+    if "permissionSource" in node and (not isinstance(node["permissionSource"], str) or node["permissionSource"] not in {
+        "launch-flags", "unverified", "parent-launch-flags", "parent-unverified",
+        "parent-recorded-policy", "explicit-yolo", "explicit-default", "default",
+    }):
+        raise OrchestrationError("Stored launch permission source is invalid.")
     if node.get("permissionMode") == "yolo" and mode != "interactive":
         raise OrchestrationError("YOLO requires an explicitly launched interactive session.")
     if "enrollment" in node and (
@@ -2074,6 +2079,120 @@ def process_start(pid):
         return None
     value = result.stdout.strip()
     return value if result.returncode == 0 and value else None
+
+
+def darwin_process_arguments(raw):
+    """KERN_PROCARGS2 contains argc, executable, padding, argv, then environment."""
+    if len(raw) < 4:
+        return None
+    count = int.from_bytes(raw[:4], sys.byteorder, signed=True)
+    executable_end = raw.find(b"\0", 4)
+    if not 1 <= count <= 65_536 or executable_end < 0:
+        return None
+    offset = executable_end + 1
+    while offset < len(raw) and raw[offset] == 0:
+        offset += 1
+    arguments = []
+    for _ in range(count):
+        end = raw.find(b"\0", offset)
+        if end < 0:
+            return None
+        arguments.append(os.fsdecode(raw[offset:end]))
+        offset = end + 1
+    return arguments
+
+
+def process_arguments(pid):
+    """Read bounded, NUL-delimited argv privately, never a ps-rendered prompt or environment."""
+    try:
+        if sys.platform == "darwin":
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            mib = (ctypes.c_int * 3)(1, 49, pid)  # CTL_KERN, KERN_PROCARGS2
+            size = ctypes.c_size_t(MAX_BYTES)
+            buffer = ctypes.create_string_buffer(size.value)
+            if libc.sysctl(mib, 3, buffer, ctypes.byref(size), None, 0) != 0:
+                return None
+            return darwin_process_arguments(buffer.raw[:size.value])
+        if sys.platform.startswith("linux"):
+            with open(f"/proc/{pid}/cmdline", "rb") as stream:
+                raw = stream.read(MAX_BYTES + 1)
+            if not raw or len(raw) > MAX_BYTES or not raw.endswith(b"\0"):
+                return None
+            return [os.fsdecode(value) for value in raw[:-1].split(b"\0")]
+    except (OSError, ValueError):
+        return None
+    return None
+
+
+def launch_flags_allow_all(arguments, recorded_denies=()):
+    flags = {"--yolo", "--allow-all", "--allow-all-tools", "--allow-all-paths", "--allow-all-urls"}
+    enabled, disabled = set(), set()
+    # Session identity/resume selectors are an owner-accepted exception (ADR 0006);
+    # other unreplayed session/configuration/tool loaders and selectors default.
+    benign_value_flags = {
+        "--interactive", "-i", "--prompt", "-p", "--model", "--context", "--reasoning-effort",
+        "--name", "-n", "--log-dir", "--log-level", "--auto-tier", "--stream", "--output-format",
+        "--attachment", "--max-autopilot-continues", "--max-ai-credits", "--usage-output-file",
+        "--session-id",
+    }
+    # Optional/variadic values never consume another option. Unknown options fail closed,
+    # so a future value-taking flag cannot reinterpret its value as an allow-all grant.
+    benign_other_flags = {
+        "--share", "--mouse", "--allow-tool", "--allow-url", "--share-gist", "--resume", "-r",
+        "--silent", "-s", "--banner", "--screen-reader", "--plain-diff",
+        "--enable-all-github-mcp-tools", "--autopilot", "--experimental",
+        "--no-custom-instructions", "--no-auto-update", "--no-color", "--no-bash-env",
+        "--no-mouse", "--no-eager-powershell-resolution",
+    }
+    index = 1
+    while index < len(arguments):
+        argument = arguments[index]
+        index += 1
+        if argument == "--":
+            break
+        flag, separator, value = argument.partition("=")
+        if flag in flags:
+            if not separator or value == "true":
+                enabled.add(flag)
+            else:
+                disabled.add(flag)
+        elif flag == "--deny-tool":
+            if not separator:
+                if index == len(arguments):
+                    return False
+                value = arguments[index]
+                index += 1
+            # Do not drop manually supplied denies that Maestro cannot replay.
+            if value not in recorded_denies:
+                return False
+            while index < len(arguments) and not arguments[index].startswith("-"):
+                if arguments[index] not in recorded_denies:
+                    return False
+                index += 1
+        elif flag in benign_value_flags:
+            if not separator:
+                index += 1
+        elif flag not in benign_other_flags and argument.startswith("-"):
+            return False
+    if disabled:
+        return False
+    return bool(enabled & {"--yolo", "--allow-all"}) or {
+        "--allow-all-tools", "--allow-all-paths", "--allow-all-urls",
+    }.issubset(enabled)
+
+
+def observe_launch_permissions(actor):
+    """Only derived mode and provenance survive this exact provider-identity observation."""
+    unavailable = {"permissionMode": "default", "permissionSource": "unverified"}
+    process = actor.get("providerProcess")
+    if not _valid_process_identity(process) or process_start(process["pid"]) != process["start"]:
+        return unavailable
+    arguments = process_arguments(process["pid"])
+    if process_start(process["pid"]) != process["start"] or arguments is None:
+        return unavailable
+    allowed = launch_flags_allow_all(arguments, actor["toolPolicy"]["deny"])
+    return {"permissionMode": "yolo" if allowed else "default", "permissionSource": "launch-flags"}
 
 
 def process_matches(node):
@@ -3153,6 +3272,7 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         "messaging": messaging, "permissionMode": "default", "providerProcess": anchor,
         "phase": "turn-running", "availability": "busy",
     })
+    node.update(observe_launch_permissions(node))
     archived = []
     stale_routes = []
 
@@ -3334,6 +3454,7 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
                      "providerProcess", "copilotAccount", "enrollment", "sessionEndedGeneration")
     resumed = {**previous, "generation": previous["generation"] + 1, "messaging": messaging,
                "providerProcess": anchor}
+    permissions = observe_launch_permissions(resumed)
 
     def clear_orphan(state):
         # A controller that died between binding and committing left the next generation's route.
@@ -3376,6 +3497,7 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
         current.update(generation=resumed["generation"], providerProcess=anchor, messaging=messaging,
                        copilotExecutable=copilot, launchPath=launch_path,
                        phase="turn-running", availability="busy", result=None, updatedAt=now())
+        current.update(permissions)
         state["enrollmentAttempts"][key] = {"outcome": "enrolled", "nodeId": current["id"], "at": now()}
         return receipt(current)
     try:
@@ -4364,13 +4486,23 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     require_node_capacity(snapshot, actor["workspaceId"])
     inherited_permissions = None
     permission_mode = "yolo" if yolo else "default"
+    permission_source = "explicit-yolo" if yolo else "default"
+    observed_permissions = None
     if native_identity is not None and actor.get("executionMode") == "interactive":
         if yolo and args.allow_tool is not None:
             raise OrchestrationError("Explicit YOLO and a narrowing tool policy cannot be combined.")
         inherited_permissions = recorded_native_permissions(actor)
         parent_mode, parent_policy = inherited_permissions
+        parent_source = "recorded-policy"
+        if actor.get("enrollment") == "born":
+            observed_permissions = observe_launch_permissions(actor)
+            parent_mode = observed_permissions["permissionMode"]
+            parent_source = observed_permissions["permissionSource"]
         if not yolo and args.allow_tool is None and args.yolo is not False:
             permission_mode = parent_mode
+            permission_source = f"parent-{parent_source}"
+        elif not yolo:
+            permission_source = "explicit-default"
         allowed = parent_policy["allow"] if args.allow_tool is None else args.allow_tool
         tool_policy = normalize_tool_policy(
             allowed, args.deny_tool, parent_policy, parent_yolo=parent_mode == "yolo",
@@ -4418,6 +4550,12 @@ def command_spawn(args, root, cmux, *, native_identity=None):
             raise OrchestrationError("Only an explicitly authorized coordinator launch can request YOLO.")
         if inherited_permissions is not None and recorded_native_permissions(current) != inherited_permissions:
             raise OrchestrationError("Recorded parent permission policy changed during spawn.")
+        if observed_permissions is not None:
+            process = current.get("providerProcess")
+            if (process != actor.get("providerProcess") or current["generation"] != actor["generation"]
+                    or not process or process_start(process["pid"]) != process["start"]):
+                raise OrchestrationError("Parent provider identity changed during spawn.")
+            current.update(observed_permissions)
         if (
             current["runId"], current["workspaceId"], current.get("surfaceId")
         ) != (actor["runId"], actor["workspaceId"], actor["surfaceId"]):
@@ -4462,6 +4600,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
         if messaging is not None:
             state["nodes"][identifier]["messaging"] = messaging
         state["nodes"][identifier]["permissionMode"] = permission_mode
+        state["nodes"][identifier]["permissionSource"] = permission_source
         if selection is not None:
             state["nodes"][identifier]["launchSelection"] = selection
         state["launches"][identifier] = {
@@ -4489,6 +4628,7 @@ def command_spawn(args, root, cmux, *, native_identity=None):
     result = launch_reserved_session(
         root, cmux, identifier, session_id, worker_token, actor["workspaceId"], pane, cwd, label
     )
+    result = {**result, "permissionMode": permission_mode, "permissionSource": permission_source}
     return ({**result, "launchSelection": selection, "warnings": selection["warnings"]}
             if selection is not None else result)
 

@@ -328,7 +328,7 @@ function toolSpecs(managed) {
           model: { type: "string" },
           contextTier: { type: "string" },
           reasoningEffort: { type: "string" },
-          yolo: { type: "boolean", description: "Only with explicit human approval for a coordinator launch." },
+          yolo: { type: "boolean", description: "Omit:inherit; false:narrow; true:human-approved coordinator" },
         },
         required: ["name", "cwd", "task"],
         additionalProperties: false,

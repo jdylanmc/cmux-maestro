@@ -1900,7 +1900,7 @@ class BornFixture:
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
-               env=None, repeat=1, sessions=(), **request):
+               env=None, repeat=1, sessions=(), provider_flags=(), **request):
         surface = surface or str(uuid.uuid4())
         if surface not in self.h.cmux_data()["surfaces"]:
             self.h.add_surface(surface)
@@ -1912,7 +1912,7 @@ class BornFixture:
             fcntl.flock(lifetime, fcntl.LOCK_SH)
             completed = subprocess.run(
                 [sys.executable, str(self.provider), str(self.h.driver), json.dumps(body), json.dumps(overrides),
-                 str(repeat), json.dumps(list(sessions))],
+                 str(repeat), json.dumps(list(sessions)), *provider_flags],
                 env={**self.h.env, "FAKE_PROCESS_LIFETIME_FD": str(lifetime.fileno())},
                 pass_fds=(lifetime.fileno(),), capture_output=True, text=True, timeout=20,
             )
@@ -1952,8 +1952,146 @@ class BornFixture:
 
 
 
+class LaunchFlagPermissionsTests(unittest.TestCase):
+    def test_only_complete_positive_launch_flags_grant_allow_all(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        for flags in (
+            ["--yolo"], ["--allow-all"], ["--allow-all=true"], ["--yolo=true"],
+            ["--allow-all-tools", "--allow-all-paths", "--allow-all-urls"],
+            ["--allow-all-paths=true", "--allow-all-tools=true", "--allow-all-urls=true"],
+            ["--share", "--yolo"], ["--mouse", "--allow-all"], ["--share-gist", "--yolo"],
+            ["--allow-tool", "--yolo"],
+            ["--yolo", "--model", "synthetic", "--context=default", "--reasoning-effort=low",
+             "--name", "Review", "--log-dir", "/synthetic/log", "--max-ai-credits=10",
+             "--no-auto-update", "--experimental"],
+        ):
+            with self.subTest(flags=flags):
+                self.assertTrue(parse(["copilot", *flags]))
+        for flags in (
+            [], ["--allow-all-tools"], ["--allow-all-paths"], ["--yolo=false"],
+            ["--allow-all=0"], ["--allow-all=false"], ["--allow-all-tools=false", "--allow-all-paths"],
+            ["--allow-all", "--allow-all=false"], ["--", "--yolo"],
+            ["--interactive", "--yolo"], ["--prompt=--allow-all"],
+            ["--interactive", "a task mentions --allow-all"], ["--yolo-extra"],
+            ["--allow-all-tools", "--allow-all-paths"],
+            ["-n", "--yolo"], ["--stream", "--yolo"], ["--attachment", "--allow-all"],
+            ["--new-value-option", "--yolo"], ["--yolo", "--assisted-approval"],
+            ["--yolo", "--excluded-tools=write"], ["--yolo", "--disallow-temp-dir"],
+            ["--yolo", "--disable-mcp-server", "github-mcp-server"],
+            ["--yolo", "--disable-builtin-mcps"],
+            ["--allow-all", "--agent", "readonly"],
+            ["--agent=readonly", "--allow-all"],
+            ["--allow-all", "--config-dir", "/synthetic/restricted"],
+            ["--config-dir=/synthetic/restricted", "--yolo"],
+            ["--allow-all", "--profile", "readonly"],
+            ["--profile=readonly", "--allow-all"],
+        ):
+            with self.subTest(flags=flags):
+                self.assertFalse(parse(["copilot", *flags]))
+
+    def test_loading_or_selecting_unreplayed_configuration_never_proves_allow_all(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        selectors = {
+            "--plugin-dir": "/synthetic/guard",
+            "--extension-sdk-path": "/synthetic/sdk",
+            "--additional-mcp-config": '{"mcpServers":{}}',
+            "--add-dir": "/synthetic/trusted",
+            "-C": "/synthetic/workspace",
+            "--add-github-mcp-toolset": "repos",
+            "--add-github-mcp-tool": "get_file_contents",
+            "--enable-mcp-server": "guard",
+            "--mcp-github-auth": "guard=https://example.test",
+            "--dynamic-retrieval": "skills=on",
+            "--mode": "plan",
+            "--connect": "00000000-0000-4000-8000-000000000001",
+            "--bash-env": "on",
+            "--secret-env-vars": "SYNTHETIC_SECRET",
+        }
+        for flag, value in selectors.items():
+            forms = ([flag, value], [f"{flag}={value}"]) if flag.startswith("--") else ([flag, value],)
+            for form in forms:
+                for grant in ("--allow-all", "--yolo"):
+                    with self.subTest(flag=flag, form=form, grant=grant):
+                        self.assertFalse(parse(["copilot", grant, *form]))
+        for flag in (
+            "--continue", "--fleet", "--enable-memory", "--plan", "--acp", "--remote",
+            "--remote-export", "--no-ask-user", "--no-experimental",
+            "--allow-all-mcp-server-instructions",
+            "--connect", "--bash-env", "--no-remote", "--no-remote-export",
+        ):
+            with self.subTest(flag=flag):
+                self.assertFalse(parse(["copilot", "--yolo", flag]))
+
+    def test_resume_and_session_id_preserve_launch_mode_without_hiding_restrictions(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        session = "00000000-0000-4000-8000-000000000001"
+        for selector in (
+            ["--resume", session], [f"--resume={session}"], ["-r", session],
+            ["--session-id", session], [f"--session-id={session}"], ["--resume"], ["-r"],
+        ):
+            for grant in ("--yolo", "--allow-all"):
+                with self.subTest(selector=selector, grant=grant):
+                    self.assertTrue(parse(["copilot", *selector, grant]))
+                    self.assertTrue(parse(["copilot", grant, *selector, "--deny-tool=web"], ["web"]))
+                    self.assertFalse(parse(["copilot", *selector]))
+                    self.assertFalse(parse(["copilot", *selector, grant, "--agent", "readonly"]))
+                    self.assertFalse(parse(["copilot", *selector, grant, "--plugin-dir=/synthetic/guard"]))
+                    self.assertFalse(parse(["copilot", *selector, grant, "--deny-tool=web"]))
+        for selector in (["--session-id", "--yolo"], ["--session-id=--yolo"], ["--resume=--yolo"]):
+            with self.subTest(selector=selector):
+                self.assertFalse(parse(["copilot", *selector]))
+
+    def test_unrecorded_deny_flags_do_not_widen_the_parent(self):
+        parse = CONTROLLER_API["launch_flags_allow_all"]
+        self.assertFalse(parse(["copilot", "--yolo", "--deny-tool", "shell(rm)"]))
+        self.assertTrue(parse(["copilot", "--yolo", "--deny-tool=shell(rm)"], ["shell(rm)"]))
+        self.assertFalse(parse(["copilot", "--yolo", "--deny-tool", "web", "shell(rm)"], ["web"]))
+        self.assertFalse(parse(["copilot", "--yolo", "--deny-url=example.test"]))
+        self.assertFalse(parse(["copilot", "--yolo", "--resume", "--deny-tool", "shell(rm)"]))
+        self.assertFalse(parse(["copilot", "--resume", "--deny-tool=web", "--yolo"]))
+        self.assertFalse(parse(["copilot", "--share", "--deny-tool=web", "--yolo"]))
+
+    def test_process_arguments_keep_boundaries_and_exclude_environment(self):
+        parse = CONTROLLER_API["darwin_process_arguments"]
+        raw = (int(3).to_bytes(4, sys.byteorder, signed=True)
+               + b"/bin/copilot\0\0copilot\0--interactive\0private text --yolo\0TOKEN=--allow-all\0")
+        self.assertEqual(parse(raw), ["copilot", "--interactive", "private text --yolo"])
+        for invalid in (b"", b"\0" * 8, raw[:25], raw[:-len(b"TOKEN=--allow-all\0") - 1]):
+            with self.subTest(raw=invalid):
+                self.assertIsNone(parse(invalid))
+
+    def test_pid_reuse_or_unavailable_argv_never_proves_allow_all(self):
+        observe = CONTROLLER_API["observe_launch_permissions"]
+        actor = {"providerProcess": {"pid": 123, "start": "original"}, "toolPolicy": {"deny": []}}
+        for starts, argv, expected in (
+            (["original", "original"], ["copilot", "--yolo"], ("yolo", "launch-flags")),
+            (["original", "original"], ["copilot"], ("default", "launch-flags")),
+            (["reused"], ["copilot", "--yolo"], ("default", "unverified")),
+            (["original", "reused"], ["copilot", "--yolo"], ("default", "unverified")),
+            (["original", "original"], None, ("default", "unverified")),
+        ):
+            with self.subTest(starts=starts, argv=argv):
+                read = unittest.mock.Mock(return_value=argv)
+                with patch.dict(observe.__globals__, {
+                    "process_start": unittest.mock.Mock(side_effect=starts),
+                    "process_arguments": read,
+                }):
+                    self.assertEqual(observe(actor), {"permissionMode": expected[0], "permissionSource": expected[1]})
+                self.assertLessEqual(read.call_count, 1)
+
+
 class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
     """Copilot sessions started in CMUX enroll as their own root (ADR 0025)."""
+
+    def test_launch_flags_record_allow_all_without_retaining_argv(self):
+        outcome = self.enroll(provider_flags=["--allow-all", "--interactive", "private-argv-sentinel"])
+        self.assertTrue(outcome["ok"], outcome)
+        node = self.h.state()["nodes"][outcome["nodeId"]]
+        self.assertEqual(node["permissionMode"], "yolo")
+        self.assertEqual(node["permissionSource"], "launch-flags")
+        for directory in (self.h.root, self.routes):
+            for path in directory.rglob("*.json"):
+                self.assertNotIn("private-argv-sentinel", path.read_text(), str(path))
 
     def test_session_born_in_cmux_becomes_its_own_root_with_recorded_account(self):
         outcome = self.enroll()
@@ -2509,6 +2647,16 @@ class BornRootResumeTests(BornFixture, unittest.TestCase):
         self.assertFalse((self.routes / f"{first['peer']}.json").exists())
         self.assertTrue((self.routes / f"{resumed['peer']}.json").exists())
         self.assertEqual(len([n for n in self.h.state()["nodes"].values() if n.get("enrollment")]), 1)
+
+    def test_reenrollment_uses_new_provider_flags_not_the_previous_mode(self):
+        first = self.enroll(provider_flags=["--yolo"])
+        self.assertTrue(first["ok"], first)
+        self.assertEqual(self.h.state()["nodes"][first["nodeId"]]["permissionMode"], "yolo")
+        resumed = self.resume(first)
+        self.assertTrue(resumed["ok"], resumed)
+        node = self.h.state()["nodes"][resumed["nodeId"]]
+        self.assertEqual((node["permissionMode"], node["permissionSource"]), ("default", "launch-flags"))
+        self.assertEqual(node["generation"], 2)
 
     def test_live_or_uncertain_previous_process_refuses(self):
         first = self.first()

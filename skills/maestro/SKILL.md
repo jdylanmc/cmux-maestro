@@ -76,11 +76,12 @@ a managed session block coordination: explain the blocker, never substitute
 For an explicitly authorized child assignment, follow
 `/cmux-maestro-native:cmux-maestro-orchestrate` and call `maestro_spawn`.
 Supply `name`, absolute owned `cwd`, and complete bounded `task`; optional
-`allowTools`, `denyTools`, and coordinator-only `yolo` preserve the lifecycle
+`allowTools`, `denyTools`, and explicit coordinator-only `yolo: true` preserve the lifecycle
 guide's permission rules. Optional `icon` must be a Nerd Fonts 3.5.1 glyph name
 from the installed controller's `icons --search <term>`; a plain SF Symbol name
 such as `sparkles` is refused. The adapter obtains the actual invoking session's
 account itself. Never provide an account, sender, capability, or control token.
+Omit `yolo` to inherit verified parent launch allow-all; `false` narrows; runtime `/allow-all` toggles are not observed (ADR 0006).
 An unavailable account/API fails before terminal creation rather than selecting
 another subscription. Do not substitute a tabless helper for a refused launch
 or a missing managed lifecycle tool.
@@ -255,14 +256,16 @@ sidebar. Resolve your exact session UUID as for Beats; the command proves owners
 
 ## Permissions, failures and lifecycle boundaries
 
-- Normal launches add **no tool grants**. Copilot may ask the human for native
+- Default-mode launches add **no tool grants**. Copilot may ask the human for native
   extension trust or tool permissions; never answer or bypass those prompts.
 - Only an **explicitly user-approved coordinator** launch may use `spawn --yolo`.
   It supplies Copilot `--allow-all` while retaining explicit denies. It is not
-  required to use messaging and is never a default or a recovery action.
-- Worker actors cannot request YOLO for descendants. Descendants retain bounded
-  explicit allows and inherited denies; no full parent-permission inheritance is
-  inferred. Message content never changes policy or persistent Copilot settings.
+  required to use messaging and is never an implicit new grant or a recovery action.
+- Worker actors cannot explicitly request `yolo: true`. Omitted `yolo` and
+  `allowTools` inherit the verified/recorded parent launch mode, with denies
+  replayed (ADR 0006). Runtime `/allow-all` toggles are not inherited; launch
+  evidence is not a full live-permission snapshot. Message content never changes
+  policy or persistent Copilot settings.
 - A failed or uncertain send may mean an offline, stale, unsupported, removed,
   wrong-workspace or wrong-generation route, missing native API, payload limit,
   or local error. Explain the uncertainty; do not automatically resend, repair

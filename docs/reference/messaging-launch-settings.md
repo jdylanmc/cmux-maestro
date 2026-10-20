@@ -32,6 +32,21 @@ plugin slash commands stay namespaced. Global messaging guide is not namespaced.
 
 Prospective native children of an interactive managed parent: omitted
 `allowTools` and `yolo` inherit parent's explicit **recorded launch policy**.
+Born-managed parents additionally derive allow-all from their exact provider's
+launch flags, with bound PID/start-time checks. `--yolo`, `--allow-all`, or all of
+`--allow-all-tools`, `--allow-all-paths`, and `--allow-all-urls` qualify (`=true`
+supported). Tools plus paths alone stay default rather than widen URL access.
+Only mode and source are retained; never argv. Missing evidence defaults,
+and an unrecorded manual deny prevents inherited allow-all. Only the controller's
+audited benign-option allowlists qualify alongside the allow-all flags.
+Unreplayed plugins, configuration/workspace loaders, tool selectors, and other
+session selectors default rather than drop unknown restrictions. Owner-approved
+exception: `--resume` / `-r` and `--session-id` are benign for launch allow-all
+detection, including CMUX-restored sessions; persisted session state is not
+inspected. Other refusals still apply. See ADR 0006 for the option boundary.
+Spawn reports `permissionMode` and `permissionSource`; descendants retain the
+recorded mode. Runtime `/allow-all` toggles are invisible: off-to-on does not
+enable inheritance, and on-to-off cannot invalidate recorded launch flags.
 Deny-only request keeps recorded mode/allows and adds denies. Explicit
 `allowTools` list (including `[]`) or `yolo: false` selects requested default mode
 without `--allow-all`. Omitted allows still inherit. Parent denies survive.

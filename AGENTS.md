@@ -86,6 +86,10 @@ do not copy its source or history, modify it, or make this project depend on it.
 - Keep Copilot tool policy explicit, bounded and private. Root and legacy
   defaults add no grants; prospective native interactive children inherit
   explicit recorded parent launch policy, preserving denies and non-escalation.
+  Owner-approved inheritance also uses born parents' exact provider launch flags:
+  verify the bound PID/start time, retain only derived mode and provenance, never
+  argv. Omitted `yolo` inherits verified allow-all; `yolo: false` narrows.
+  Unknown flags and runtime `/allow-all` changes do not grant inherited YOLO.
   Missing provenance or recorded-policy drift refuses. Explicit narrowing
   selects requested default mode, not a proven actual manual startup.
   Provider policy flags
@@ -112,7 +116,7 @@ Moved here from the README. Reasons are in the ADRs.
 
 - Never infer ownership from titles, paths, focus, chronology, or terminal text. Unknown stays unknown. ([ADR 0002](docs/adr/0002-exact-identity-evidence-never-heuristics.md))
 - Never infer success, progress, hang, or completion from process presence, idle time, file timestamps, terminal output, launch acceptance, or expired history. ([ADR 0003](docs/adr/0003-liveness-work-attention-completion-stay-separate.md))
-- Never read, store, or display raw transcripts, observed session prompts, tool arguments or results, credentials, tokens, or unsanitized errors. Beat prompts are authored Beat definitions, not observed session content. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md)) Narrow owner-approved exception: Copilot's session name (`workspace.yaml` `name:` only) may be displayed for its exact session, although an automatic name can reproduce the first prompt, because the CMUX terminal title already shows it. ([ADR 0022](docs/adr/0022-agent-rows-use-copilot-session-name.md))
+- Never read, store, or display raw transcripts, observed session prompts, tool arguments or results, credentials, tokens, or unsanitized errors. Beat prompts are authored Beat definitions, not observed session content. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md)) Narrow owner-approved exceptions: read exact bound provider argv transiently to derive launch-mode evidence, never persist or display it ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md)); Copilot's session name (`workspace.yaml` `name:` only) may be displayed for its exact session, although an automatic name can reproduce the first prompt, because the CMUX terminal title already shows it. ([ADR 0022](docs/adr/0022-agent-rows-use-copilot-session-name.md))
 - Never use terminal keystrokes as a messaging or control fallback. Never restart, control, or signal live sessions, and never trigger their extension reload. A CMUX session's own Maestro extension enrolls it when it joins, including a running session; that only adds tools and is not adoption ([ADR 0025](docs/adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md)). An ended managed session comes back only by exact recorded identity as a new generation: a Maestro launch through its own human-approved resume binding after a CMUX relaunch, and a human-started root when CMUX or the human resumes it. ([ADR 0004](docs/adr/0004-interactive-workers-only.md), [0005](docs/adr/0005-native-peer-messaging-is-fire-and-forget.md), [0024](docs/adr/0024-resume-ended-managed-sessions-after-relaunch.md))
 - Never treat recorded launch policy as live permissions. Deny wins. Explicit worker YOLO refuses. ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md))
 - Never key dismissal by label, path, or timestamp. Keep history presentation limits apart from ingestion limits. ([ADR 0009](docs/adr/0009-dismissal-by-event-identity.md))
