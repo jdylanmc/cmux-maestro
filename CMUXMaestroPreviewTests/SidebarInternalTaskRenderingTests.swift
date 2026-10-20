@@ -55,7 +55,8 @@ struct SidebarInternalTaskRenderingTests {
         let hidden = try render(model.copilot.tree)
         #expect(hidden.buttons == empty.buttons, "Incomplete counts alone must not add a disclosure button")
         #expect(hidden.height == empty.height)
-        #expect(hidden.pixels == empty.pixels, "An empty branch has neither a chevron nor a collapsed info marker")
+        let samePixels = hidden.pixels == empty.pixels
+        #expect(samePixels, "An empty branch has neither a chevron nor a collapsed info marker")
         #expect(model.copilot.tree.sessions.first?.internalTaskCountsIncomplete == true,
                 "Presentation must preserve incomplete-count evidence")
         #expect(model.navigation.status == .idle)
