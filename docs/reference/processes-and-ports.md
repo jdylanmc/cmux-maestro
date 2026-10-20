@@ -58,11 +58,22 @@ A hook event is never dropped by the debounce or by another session's pass: it s
 
 It stops at `sessionEnd` and on shutdown. Unmanaged sessions never ask. Output is ignored; a failed pass waits for the next. If the module is missing, `extension.mjs` runs without it, and `messaging_configuration` refuses the install (`processes.mjs`, at most 16 KiB).
 
+## Sidebar
+
+The sidebar reads `processes.json` with the existing read-only `observer/` grant, like `icons.json`. A missing or malformed file shows no list, never an error. It keeps an entry only when its node, session and generation match a node in `current.json`.
+
+The managed agent hover shows:
+- **Background processes**: the count of `separate` processes (including `omittedCount`), `None`, `Scan incomplete`, `Denied`, `Unavailable`, `Not observed` or `Session ended`, with `Stale` after 60 s. After 5 minutes it shows `Unavailable`.
+- One line per `separate` process: its name and `PID <n>`, copyable only on a complete, current (`owned-current`, not stale) list. Detached and exited `separate` processes show `· Detached` or `· Exited`, never copyable; retained helpers are not listed. At most 8 lines, then **More background processes**.
+- **Copilot helpers**: the count of `provider` processes plus `omittedHelperCount`. Not listed.
+- **Listening (loopback | all interfaces | network)**: one line per listener of any owned process, as `127.0.0.1:5173 · TCP · python3.12 4242`. Copy (complete, current list only) gives the bound endpoint exactly (`127.0.0.1:5173`, `[::1]:9000`, `*:3000`). No open action, no probe, no URL. `Listening: None` only for a complete, current list.
+
+CMUX's workspace-wide port numbers (`networkPorts`) carry no owner, address, protocol or completeness, so they never appear on the agent hover.
+
 ## Known limits
 
 - A process that detaches before the first pass (`nohup … &`, a double fork) is never attributed.
 - Same-user processes and TCP only.
 - After a session switch inside one Copilot process, both nodes are `ambiguous`.
 - Sub-agent work is attributed to its session.
-- The sidebar does not read this file yet.
-- Live trigger timing is not yet verified in CMUX.
+- The live hosted hover and live trigger timing are not yet verified in CMUX.

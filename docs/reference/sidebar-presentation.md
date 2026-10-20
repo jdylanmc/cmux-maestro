@@ -115,6 +115,8 @@ or ambiguous evidence unavailable. **Ports (CMUX, workspace-wide)** lists the po
 CMUX's `networkPorts` scope reports for the whole workspace, sorted and copyable, or
 `None reported` (not proof that nothing listens) or `Not granted`. CMUX gives no owner,
 address, protocol or completeness, so agent previews never show it.
+Managed agent previews add background processes and
+listeners ([background processes and ports](processes-and-ports.md)).
 
 `SidebarHoverRegion` and `SidebarHoverCard` accept presentation data, independent
 of sessions, navigation, preferences, and the bottom details. Passive panels

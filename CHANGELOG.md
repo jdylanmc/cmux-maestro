@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- The managed agent hover shows the agent's background processes (#78) and the TCP ports they
+  listen on (#75): copyable PIDs and bound endpoints, with loopback, all-interface and network
+  listeners labelled apart. Copilot's own helpers are counted, not listed. Stale, incomplete,
+  denied and unproven observations never show a current list. Never a URL, open action or probe.
 - The Hierarchy has a **Worktrees | Sub-agents** control (#58, ADR 0028). Workspaces stay on top.
   Worktrees groups each workspace's agents by their exact session's current worktree: a header
   with the repository, `branch · tree` or `Detached HEAD · commit · tree`, and the agent count,
