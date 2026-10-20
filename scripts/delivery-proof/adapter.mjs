@@ -180,7 +180,7 @@ async function invokeController(command, request, controller, signal) {
         try {
           const failure = JSON.parse(stderr);
           reject(new Error(typeof failure.error === "string"
-            ? `${command === "native-close" ? "" : "controller-refused: "}${failure.error}` :
+            ? `${command === "native-spawn" ? "controller-refused: " : ""}${failure.error}` :
             command === "native-close" ? "Native close failed; request outcome is uncertain." : "Native launch failed."));
         } catch {
           reject(new Error(command === "native-close"
