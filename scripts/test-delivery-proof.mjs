@@ -2042,6 +2042,61 @@ test("native preference API absence forwards unavailable evidence and preserves 
   });
 });
 
+test("native spawn tolerates optional model shapes without widening capability evidence", async (t) => {
+  const { variants } = JSON.parse(await fs.readFile(new URL("./fixtures/model-list-optional-shapes.json", import.meta.url)));
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tools;
+  let model;
+  const requests = [];
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+        }) },
+        model: { list: async () => ({ list: [model] }) },
+      } };
+    },
+    launch: async request => { requests.push(request); return { ok: true, launchAccepted: true }; },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  for (const variant of variants) {
+    await t.test(variant.name, async () => {
+      model = { id: "claude-sonnet-5", ...variant.model };
+      const count = requests.length;
+      const result = await spawn({
+        name: "Child", cwd: "/synthetic", task: "Bounded", model: model.id,
+        contextTier: "default", reasoningEffort: "low",
+      }, { sessionId: own.sessionId });
+      assert.equal(typeof result, "string", JSON.stringify(result));
+      assert.equal(JSON.parse(result).launchAccepted, true);
+      assert.equal(requests.length, count + 1);
+      assert.deepEqual(requests.at(-1).launchCapabilities.models, [{ id: model.id, ...variant.expected }]);
+      assert.equal(JSON.stringify(requests.at(-1)).includes("PRIVATE_OPTION"), false);
+    });
+  }
+  const oversized = Array(4097).fill({ PRIVATE_OPTION: "never disclose provider fields" });
+  for (const [field, extra] of [
+    ["context-options", { supportedContextTiers: oversized }],
+    ["effort-options", { supportedReasoningEfforts: oversized }],
+    ["capi-effort-options", { capabilities: { supports: { reasoning_effort: oversized } } }],
+  ]) {
+    model = { id: "claude-sonnet-5", ...extra };
+    const count = requests.length;
+    const result = await spawn({ name: "Child", cwd: "/synthetic", task: "Bounded", model: model.id },
+      { sessionId: own.sessionId });
+    assert.equal(result.resultType, "failure");
+    assert.ok(result.textResultForLlm.includes(
+      `model-list-invalid: ${field} (type=array,length=4097,max=4096)`), result.textResultForLlm);
+    assert.equal(result.textResultForLlm.includes("PRIVATE_OPTION"), false);
+    assert.equal(requests.length, count);
+  }
+});
+
 test("native model metadata errors and account drift refuse without a launch or fallback", async (t) => {
   for (const scenario of ["malformed", "duplicate", "account-drift", "forged-evidence"]) {
     await t.test(scenario, async (t) => {
@@ -2128,18 +2183,13 @@ test("native model projection keeps valid provider-native defaults from poisonin
         name: "Known selected", cwd: "/synthetic", task: "Bounded", model: "gpt-6.1-sol",
         contextTier: "long_context", reasoningEffort: "medium",
       }, { sessionId: own.sessionId });
-      if (providerDefault === "max") {
-        assert.equal(result.resultType, "failure");
-        assert.equal(requests.length, 0);
-      } else {
-        assert.equal(typeof result, "string");
-        assert.equal(JSON.parse(result).launchAccepted, true);
-        assert.equal(requests.length, 1);
-        assert.deepEqual(requests[0].launchCapabilities.models[1], {
-          id: "provider/custom", contextTiers: ["default"], reasoningEfforts: [],
-        });
-        assert.equal(JSON.stringify(requests[0]).includes("ultra"), false);
-      }
+      assert.equal(typeof result, "string");
+      assert.equal(JSON.parse(result).launchAccepted, true);
+      assert.equal(requests.length, 1);
+      assert.deepEqual(requests[0].launchCapabilities.models[1], {
+        id: "provider/custom", contextTiers: ["default"], reasoningEfforts: [],
+      });
+      assert.equal(JSON.stringify(requests[0]).includes("ultra"), false);
     });
   }
 });
@@ -2152,12 +2202,7 @@ test("model projection names malformed checks and keeps bounded provider metadat
   ]);
   for (const [change, reason] of [
     [{ id: "bad\nid" }, "model-id"],
-    [{ supportedContextTiers: ["default", "default"] }, "context-options"],
-    [{ supportedReasoningEfforts: Array(33).fill("low") }, "effort-options"],
-    [{ supportedReasoningEfforts: [null] }, "effort-options"],
-    [{ capabilities: { supports: { reasoning_effort: true } } }, "capi-effort-options"],
     [{ billing: { token_prices: { long_context: null } } }, "long-context"],
-    [{ defaultReasoningEffort: "max" }, "default-effort"],
   ]) {
     assert.throws(() => modelCapabilities({ list: [{ ...model, ...change }] }),
       { message: `model-list-invalid: ${reason}` });
@@ -2168,6 +2213,21 @@ test("model projection names malformed checks and keeps bounded provider metadat
     { message: "model-list-invalid: model-count" });
   assert.deepEqual(modelCapabilities({ list: [{ id: "mixed", supportedReasoningEfforts: ["low", "high"],
     capabilities: { supports: { reasoning_effort: ["medium", "high"] } } }] })[0].reasoningEfforts, ["high"]);
+});
+
+test("model option projection scans only the bounded prefix and never infers a default", () => {
+  const values = Array(4096).fill("PRIVATE_OPTION");
+  values[255] = "low";
+  values[256] = "high";
+  assert.deepEqual(modelCapabilities({ list: [{ id: "bounded",
+    supportedReasoningEfforts: values, defaultReasoningEffort: "high" }] }), [
+    { id: "bounded", contextTiers: ["default"], reasoningEfforts: ["low"] },
+  ]);
+  assert.deepEqual(modelCapabilities({ list: [{ id: "capi", supportedReasoningEfforts: null,
+    capabilities: { supports: { reasoning_effort: values } } }] })[0].reasoningEfforts, ["low"]);
+  values[255] = "long_context";
+  assert.deepEqual(modelCapabilities({ list: [{ id: "context", supportedContextTiers: values }] })[0].contextTiers,
+    ["default", "long_context"]);
 });
 
 test("native preference evidence and request byte bounds name the failed check before launch", async (t) => {

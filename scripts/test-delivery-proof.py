@@ -3902,6 +3902,37 @@ class LifecycleFailureTests(unittest.TestCase):
                 self.assertIsNone(receipt["launchSelection"]["observed"])
                 launcher.assert_called_once()
 
+    def test_optional_catalog_shapes_reach_native_argv_with_visible_effort_fallback(self):
+        projection = subprocess.run(["node", "--input-type=module", "-e",
+            "import fs from 'node:fs';"
+            "import {modelCapabilities} from './scripts/delivery-proof/models.mjs';"
+            "const {variants}=JSON.parse(fs.readFileSync('./scripts/fixtures/model-list-optional-shapes.json'));"
+            "console.log(JSON.stringify(variants.map(v=>({name:v.name,"
+            "models:modelCapabilities({list:[{id:'claude-sonnet-5',...v.model}]})}))));"],
+            cwd=REPO, check=True, capture_output=True, text=True)
+        initial = copy.deepcopy(self.state)
+        for variant in json.loads(projection.stdout):
+            with self.subTest(shape=variant["name"]):
+                self.state = copy.deepcopy(initial)
+                self.state["nodes"][self.worker["id"]]["permissionMode"] = "default"
+                identity = self.model_launch_identity()
+                evidence = self.model_launch_capabilities(identity)
+                evidence["models"] = evidence["models"][:1] + variant["models"]
+                launcher = mock.Mock(return_value={"launchAccepted": True})
+                receipt, argv = self.model_preference_spawn(identity, {
+                    "model": "claude-sonnet-5", "contextTier": "default", "reasoningEffort": "low",
+                }, evidence, launcher)
+                self.assertEqual(argv[argv.index("--model") + 1], "claude-sonnet-5")
+                self.assertEqual(argv[argv.index("--context") + 1], "default")
+                supports_low = "low" in variant["models"][0]["reasoningEfforts"]
+                if supports_low:
+                    self.assertEqual(argv[argv.index("--reasoning-effort") + 1], "low")
+                else:
+                    self.assertNotIn("--reasoning-effort", argv)
+                self.assertEqual(bool(receipt.get("warnings")), not supports_low)
+                self.assertIsNone(receipt["launchSelection"]["observed"])
+                launcher.assert_called_once()
+
     def test_atomic_census_distinguishes_removed_and_surviving_exited_surface(self):
         observe = CONTROLLER["resource_observations"]
         for present in (True, False):

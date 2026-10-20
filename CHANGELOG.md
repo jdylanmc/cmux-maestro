@@ -238,10 +238,11 @@ Notable changes are recorded using Keep a Changelog categories.
 - Native spawn recognizes Copilot 1.0.100's session-catalog context and reasoning
   capabilities instead of silently discarding them (#152). Launch refusals name
   the failed admission check; unsupported optional choices still warn and use
-  verified configured defaults. Setup publishes the required parser before its
-  importing adapter during upgrades and restores the adapter first during
-  rollback. The original installed proof-route refusal
-  still needs a fresh, authorized live reproduction.
+  verified configured defaults. Heterogeneous optional catalog fields are
+  filtered instead of rejecting unrelated model selections; oversized option
+  arrays report only their type, length, and bound. Setup publishes the required
+  parser before its importing adapter during upgrades and restores the adapter
+  first during rollback.
 
 - Control state no longer fills its 1 MiB cap and refuses every spawn (#280). When a node ends
   (resource-retired, terminal- or process-disappeared, launch or startup failure), its task

@@ -1,0 +1,73 @@
+{
+  "source": "Synthetic variants for the live context-options refusal; exact live metadata shape is unobserved.",
+  "variants": [
+    {
+      "name": "null-options",
+      "model": {
+        "supportedContextTiers": null,
+        "supportedReasoningEfforts": null,
+        "defaultReasoningEffort": null,
+        "capabilities": { "supports": { "reasoning_effort": null } }
+      },
+      "expected": { "contextTiers": ["default"], "reasoningEfforts": [] }
+    },
+    {
+      "name": "non-array-options",
+      "model": {
+        "supportedContextTiers": { "PRIVATE_OPTION": "long_context" },
+        "supportedReasoningEfforts": "high",
+        "defaultReasoningEffort": { "PRIVATE_OPTION": "high" },
+        "capabilities": { "supports": { "reasoning_effort": 200000 } }
+      },
+      "expected": { "contextTiers": ["default"], "reasoningEfforts": [] }
+    },
+    {
+      "name": "mixed-options",
+      "model": {
+        "supportedContextTiers": ["default", "1m", "200k", "1.0", 200000, null, {}, "long_context", "default"],
+        "supportedReasoningEfforts": ["low", "high", "high", "provider.v1", 3, null, { "PRIVATE_OPTION": "max" }],
+        "defaultReasoningEffort": "max",
+        "capabilities": { "supports": { "reasoning_effort": ["high", "max", {}, "provider.v1", "high"] } }
+      },
+      "expected": { "contextTiers": ["default", "long_context"], "reasoningEfforts": ["high"] }
+    },
+    {
+      "name": "more-than-32-options",
+      "model": {
+        "supportedContextTiers": [
+          "tier01", "tier02", "tier03", "tier04", "tier05", "tier06", "tier07", "tier08",
+          "tier09", "tier10", "tier11", "tier12", "tier13", "tier14", "tier15", "tier16",
+          "tier17", "tier18", "tier19", "tier20", "tier21", "tier22", "tier23", "tier24",
+          "tier25", "tier26", "tier27", "tier28", "tier29", "tier30", "tier31", "tier32", "long_context"
+        ],
+        "supportedReasoningEfforts": [
+          "effort01", "effort02", "effort03", "effort04", "effort05", "effort06", "effort07", "effort08",
+          "effort09", "effort10", "effort11", "effort12", "effort13", "effort14", "effort15", "effort16",
+          "effort17", "effort18", "effort19", "effort20", "effort21", "effort22", "effort23", "effort24",
+          "effort25", "effort26", "effort27", "effort28", "effort29", "effort30", "effort31", "effort32", "low"
+        ]
+      },
+      "expected": { "contextTiers": ["default", "long_context"], "reasoningEfforts": ["low"] }
+    },
+    {
+      "name": "null-sdk-options-with-capi-support",
+      "model": {
+        "supportedContextTiers": null,
+        "supportedReasoningEfforts": null,
+        "defaultReasoningEffort": "low",
+        "capabilities": { "supports": { "reasoning_effort": ["low", {}, "low"] } },
+        "billing": { "token_prices": { "long_context": {} } }
+      },
+      "expected": { "contextTiers": ["default", "long_context"], "reasoningEfforts": ["low"], "defaultReasoningEffort": "low" }
+    },
+    {
+      "name": "empty-sdk-advertisement-still-intersects",
+      "model": {
+        "supportedReasoningEfforts": [],
+        "defaultReasoningEffort": "high",
+        "capabilities": { "supports": { "reasoning_effort": ["high"] } }
+      },
+      "expected": { "contextTiers": ["default"], "reasoningEfforts": [] }
+    }
+  ]
+}
