@@ -851,6 +851,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
     let path: String
     let runner: any CopilotSetupProcessRunner
     let messagingRoutes: URL?
+    private let afterResourceRestore: (@Sendable (URL) throws -> Void)?
     private var record: Record?
     private var journal: CopilotSetupFileState?
     private var lease: Int32 = -1
@@ -874,11 +875,13 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
 
     init(id: UUID, home: URL, root: URL, application: URL, bundle: URL,
          controller: URL, skill: URL, selected: URL?, path: String,
-         runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner(), messagingRoutes: URL? = nil) {
+         runner: any CopilotSetupProcessRunner = LocalCopilotSetupRunner(), messagingRoutes: URL? = nil,
+         afterResourceRestore: (@Sendable (URL) throws -> Void)? = nil) {
         self.id = id; self.home = home; self.root = root; self.application = application
         self.bundle = bundle; self.controller = controller; self.skill = skill
         self.selected = selected; self.path = path; self.runner = runner
         self.messagingRoutes = messagingRoutes
+        self.afterResourceRestore = afterResourceRestore
     }
 
     deinit {
@@ -1537,6 +1540,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         for (entry, state) in zip(record.entries, states) {
             if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
+            try afterResourceRestore?(state.url)
         }
         _ = try settings.replacing(with: record.settings.data, permissions: record.settings.permissions)
     }
@@ -1586,6 +1590,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             if !plan.priorInstalled && installed && entry.path.hasPrefix(registration.plugin.path + "/") { continue }
             if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
+            try afterResourceRestore?(state.url)
         }
         if replaceProvider {
             // Reinstall the previous selected payload at the same source,
