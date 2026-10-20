@@ -1,4 +1,4 @@
-// When to ask the controller for an owned-process pass (#75, #78, ADR 0027). One pass covers
+// When to ask the controller for an owned-process pass (#75, #78, ADR 0029). One pass covers
 // every managed session and throttles itself; this decides only when this session asks, and
 // checks the shared projection first so idle sessions never start the controller.
 import { spawn } from "node:child_process";

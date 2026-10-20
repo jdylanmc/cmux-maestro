@@ -9,7 +9,7 @@ const diagnosticCodes = new Set([
 let listener;
 let beats;
 let stopping = false;
-// Owned-process passes run only while this session is managed (ADR 0027). A missing or broken
+// Owned-process passes run only while this session is managed (ADR 0029). A missing or broken
 // module costs only process observation, never messaging, Beats or enrollment.
 const processes = await import("./processes.mjs").then(module => module.createProcessObserver(), () => null);
 const join = config => joinSession(processes ? processes.hooks(config) : config);

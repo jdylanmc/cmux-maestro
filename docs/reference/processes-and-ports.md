@@ -1,6 +1,6 @@
 # Background processes and ports
 
-What the agent hover shows about processes an agent started (#78) and the TCP ports they listen on (#75). Terms: [CONTEXT](../../CONTEXT.md). Decision: [ADR 0027](../adr/0027-owned-processes-come-from-the-session-binding.md).
+What the agent hover shows about processes an agent started (#78) and the TCP ports they listen on (#75). Terms: [CONTEXT](../../CONTEXT.md). Decision: [ADR 0029](../adr/0029-owned-processes-come-from-the-session-binding.md).
 
 ## Producer
 

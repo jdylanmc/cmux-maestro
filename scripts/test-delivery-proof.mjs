@@ -561,7 +561,7 @@ for (const [signal, recorded] of [["SIGHUP", false], ["SIGTERM", true]]) {
     const f = await loaderFixture(t);
     const born = await f.launchBorn();
     await f.listening();
-    // Once managed, the session also asks for one owned-process pass (ADR 0027).
+    // Once managed, the session also asks for one owned-process pass (ADR 0029).
     await f.waitFor(async () => (await born.calls()).includes("process-observe"));
     const calls = async () => (await born.calls()).filter(call => call !== "process-observe");
     assert.deepEqual(await calls(), ["native-enroll"]);

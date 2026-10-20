@@ -99,7 +99,7 @@ A Copilot session that a human starts in CMUX and that enrolls itself as its own
 _Avoid_: adopted, auto-managed (enrollment by the session's own extension only adds tools; it is not adoption)
 
 **Owned process**:
-A descendant of a managed node's recorded provider process, for its exact session and generation, identified by PID plus microsecond start time (ADR 0027). A process that leaves the tree is detached and never owned again.
+A descendant of a managed node's recorded provider process, for its exact session and generation, identified by PID plus microsecond start time (ADR 0029). A process that leaves the tree is detached and never owned again.
 _Avoid_: child process, background job (when ownership matters)
 
 **Session custody**:
