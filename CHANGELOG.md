@@ -6,6 +6,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Worktrees follows the repository an agent most recently touched, even when launched outside
+  Git (#279). A new user turn keeps the previous repository as last known until another touch;
+  sessions without a touch retain the selected-directory fallback. Pinned details no longer
+  show explanatory identity or binding prose.
 - The managed agent hover shows the agent's background processes (#78) and the TCP ports they
   listen on (#75): copyable PIDs and bound endpoints, with loopback, all-interface and network
   listeners labelled apart. Copilot's own helpers are counted, not listed. Stale, incomplete,

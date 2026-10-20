@@ -44,6 +44,15 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   `workspace.yaml` device, inode, size and modification time. Sidebar marks it current
   only while that file is unchanged and the session was read live; otherwise last
   known.
+- Schema 3 adds one active worktree touch (ADR 0027 amendment): sanitized identity,
+  last-touch milliseconds, current-turn flag and exact session/process/placement binding
+  fingerprint. The unsandboxed post-tool hook resolves at most eight explicit path hints
+  through the existing resolver, memoizing repeated directories within the invocation.
+  Shell hints use `shellToolInfo.possiblePaths` when supplied, otherwise the existing leading
+  `cd` parser. Raw arguments never reach disk; the hook does not read event logs.
+  Prompt/session-start hooks reset current-turn status; last-known touch precedes the
+  selected-directory fallback. Changed bindings cannot revive a prior touch. The whole
+  record remains private and capped at 2 KiB. The process observer is unchanged.
 - Terminal control runs in installed standard-library Python controller at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.
   Private prompts, results, control tokens, process identities stay under

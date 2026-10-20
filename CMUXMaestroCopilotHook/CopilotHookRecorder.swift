@@ -321,7 +321,7 @@ nonisolated struct CopilotHookRecorder {
             directory: ownership.bindings
         )
         // Best effort: a location failure never changes the recording outcome.
-        recordLocation(object: ownership.request.object, session: ownership.request.session,
+        recordLocation(object: ownership.request.object, binding: ownership.record,
                        sessionDirectory: ownership.currentSource)
         return .recorded
     }
@@ -362,7 +362,9 @@ nonisolated struct CopilotHookRecorder {
     }
 
     /// `sessionDirectory` is the exact session's state directory this hook just proved it owns.
-    func recordLocation(object: [String: Any], session: UUID, sessionDirectory: Int32) {
+    func recordLocation(object: [String: Any], binding: CopilotIdentityRecord, sessionDirectory: Int32) {
+        let session = binding.sessionID
+        let bindingKey = CopilotActiveWorktree.bindingKey(binding)
         let home = (try? CopilotPaths.realUserHome().path) ?? "/"
         let location = CopilotLocationResolver.resolve(payload: object, home: home)
         let current = CopilotWorktreeResolver.observe(sessionDirectory: sessionDirectory, owner: getuid())
@@ -374,11 +376,34 @@ nonisolated struct CopilotHookRecorder {
         let existing = try? CopilotFileAccess.readStableRegular(
             at: directory, filename: name, owner: getuid(), maximum: CopilotSessionLocation.maximumBytes, permissions: 0o600
         )
-        if let existing, CopilotSessionLocationRecord.decode(existing, sessionID: session)
-            == CopilotSessionLocationRecord(location: location, current: current) { return }
+        let previous = existing.flatMap { CopilotSessionLocationRecord.decode($0, sessionID: session) }
+        var active = previous?.active
+        let now = Date()
+        // Of the three registered hooks, only postToolUse carries a tool name.
+        // Prompt submission and session start both end the previous touch window.
+        let isTool = object["toolName"] is String || object["tool_name"] is String
+        if active?.bindingKey != bindingKey || !isTool {
+            active?.isCurrent = false
+        }
+        var cache: [String: CopilotWorktreeEvidence] = [:]
+        if isTool {
+            for path in CopilotLocationResolver.touchedPaths(payload: object, home: home) {
+                guard let directory = CopilotWorktreeResolver.toolDirectory(path) else { continue }
+                let evidence: CopilotWorktreeEvidence
+                if let cached = cache[directory] { evidence = cached }
+                else {
+                    evidence = CopilotWorktreeResolver.resolve(directory: directory)
+                    cache[directory] = evidence
+                }
+                guard case .verified(let identity) = evidence else { continue }
+                active = .init(identity: identity, touchedAt: Int64(now.timeIntervalSince1970 * 1000),
+                               isCurrent: true, bindingKey: bindingKey)
+            }
+        }
+        if previous == CopilotSessionLocationRecord(location: location, current: current, active: active) { return }
         guard let data = try? CopilotSessionLocation.encode(
-            sessionID: session, location: location, current: current, recordedAt: Date()
-        ) else { return }
+            sessionID: session, location: location, current: current, recordedAt: now, active: active
+        ), data.count <= CopilotSessionLocation.maximumBytes else { diagnose(.unavailable); return }
         try? HookFiles.atomicWrite(data, name: name, directory: directory)
     }
 
@@ -425,11 +450,46 @@ nonisolated enum CopilotLocationResolver {
 
     static func toolArguments(_ payload: [String: Any]) -> [String: Any]? {
         let raw = payload["toolArgs"] ?? payload["tool_args"] ?? payload["toolInput"] ?? payload["tool_input"]
+            ?? payload["arguments"]
         if let object = raw as? [String: Any] { return object }
         guard let text = raw as? String, text.utf8.count <= 65_536,
               let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
         else { return nil }
         return object
+    }
+
+    /// Eight path hints per invocation; raw paths and the resolution cache never leave this process.
+    static func touchedPaths(payload: [String: Any], home: String) -> [String] {
+        guard let name = payload["toolName"] as? String ?? payload["tool_name"] as? String,
+              let tool = name.lowercased().split(separator: ".").last.map(String.init),
+              let arguments = toolArguments(payload) else { return [] }
+        var paths: [String] = []
+        if shellTools.contains(tool) {
+            let info = payload["shellToolInfo"] as? [String: Any]
+                ?? arguments["shellToolInfo"] as? [String: Any]
+            if let hints = info?["possiblePaths"] {
+                guard let values = hints as? [String], values.count <= 8 else { return [] }
+                paths = values
+            } else if let command = arguments["command"] as? String,
+                      let path = lastLeadingChange(command, home: home, rejectAmbiguousPaths: true) {
+                paths = [path]
+            }
+        } else if ["view", "edit", "create", "grep", "glob", "rg"].contains(tool) {
+            if let path = pathKeys.lazy.compactMap({ arguments[$0] as? String }).first {
+                paths = [path]
+            } else if let value = arguments["paths"] as? String {
+                paths = [value]
+            } else if let values = arguments["paths"] as? [String], values.count <= 8 {
+                paths = values
+            }
+        }
+        return paths.compactMap { touchPath($0, home: home) }
+    }
+
+    private static func touchPath(_ value: String, home: String) -> String? {
+        // Lexical '..' removal is not filesystem resolution when a prefix contains a symlink.
+        guard !value.split(separator: "/").contains("..") else { return nil }
+        return absolute(value, home: home)
     }
 
     static func absolute(_ value: String, home: String) -> String? {
@@ -446,7 +506,7 @@ nonisolated enum CopilotLocationResolver {
     }
 
     /// Target of the last `cd` in the leading `cd … && cd … && command` chain.
-    static func lastLeadingChange(_ command: String, home: String) -> String? {
+    static func lastLeadingChange(_ command: String, home: String, rejectAmbiguousPaths: Bool = false) -> String? {
         guard command.utf8.count <= 16_384 else { return nil }
         var found: String?
         var rest = Substring(command)
@@ -456,27 +516,36 @@ nonisolated enum CopilotLocationResolver {
             rest = rest.dropFirst(2).drop { $0 == " " || $0 == "\t" }
             while rest.hasPrefix("-") && !rest.hasPrefix("--") {
                 let flag = rest.prefix { $0 != " " && $0 != "\t" }
-                guard ["-P", "-L", "-e", "-@"].contains(String(flag)) else { return found }
+                guard ["-P", "-L", "-e", "-@"].contains(String(flag)) else {
+                    return rejectAmbiguousPaths ? nil : found
+                }
                 rest = rest.dropFirst(flag.count).drop { $0 == " " || $0 == "\t" }
             }
             var target = ""
             if let quote = rest.first, quote == "\"" || quote == "'" {
                 let body = rest.dropFirst()
-                guard let end = body.firstIndex(of: quote) else { return found }
+                guard let end = body.firstIndex(of: quote) else { return rejectAmbiguousPaths ? nil : found }
                 target = String(body[..<end])
                 rest = body[body.index(after: end)...]
+                if rejectAmbiguousPaths, let next = rest.first, !" \t\n;&".contains(next) {
+                    return nil
+                }
             } else {
                 let token = rest.prefix { !" \t\n;&|<>()".contains($0) }
                 target = String(token)
                 rest = rest.dropFirst(token.count)
             }
             guard !target.isEmpty, !target.contains(where: { "$`*?[\\".contains($0) }),
-                  let path = absolute(target, home: home) else { return found }
+                  let path = rejectAmbiguousPaths ? touchPath(target, home: home) : absolute(target, home: home)
+            else { return rejectAmbiguousPaths ? nil : found }
             found = path
             rest = rest.drop { $0 == " " || $0 == "\t" }
             if rest.hasPrefix("&&") { rest = rest.dropFirst(2) }
             else if rest.hasPrefix(";") || rest.hasPrefix("\n") { rest = rest.dropFirst() }
-            else { break }
+            else {
+                if rejectAmbiguousPaths && !rest.isEmpty { return nil }
+                break
+            }
         }
         return found
     }
@@ -556,6 +625,22 @@ nonisolated enum CopilotLocationResolver {
 /// `nonRepository`.
 nonisolated enum CopilotWorktreeResolver {
     static let maximumDepth = 64
+
+    /// A file touch (including a not-yet-created file) starts at its nearest existing directory.
+    /// Denied reads and symlinks do not turn into a successful ancestor lookup.
+    static func toolDirectory(_ path: String) -> String? {
+        var current = path
+        for _ in 0..<maximumDepth {
+            var entry = stat()
+            if lstat(current, &entry) == 0 {
+                if entry.st_mode & S_IFMT == S_IFDIR { return current }
+                guard entry.st_mode & S_IFMT == S_IFREG else { return nil }
+            } else if errno != ENOENT { return nil }
+            guard current != "/" else { return nil }
+            current = (current as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
 
     static func observe(sessionDirectory: Int32, owner: UInt32) -> CopilotSessionWorktree {
         guard let stamp = try? CopilotFileAccess.statEntry(at: sessionDirectory, name: CopilotSessionName.filename),

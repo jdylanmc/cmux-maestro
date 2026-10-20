@@ -256,7 +256,8 @@ only: nothing is focused, moved, acknowledged or adopted.
 - **Sub-agents**: agents by recorded spawning parent, as before. A collapsed parent
   shows an icon card of every spawned descendant instead of a count.
 - **Worktrees**: each workspace's agents grouped by their exact session's current
-  worktree (ADR 0027). Header: branch glyph, repository name, `branch · tree` or
+  worktree (ADR 0027): most recent verified tool touch this turn, last-known touch,
+  then selected-directory fallback. Header: branch glyph, repository name, `branch · tree` or
   `Detached HEAD · commit · tree` (tree = first 7 hex of the opaque key), agent count.
   When members' observations report different heads, the second line shows only `tree`.
   Groups order: current worktrees (by repository, branch, key), last-known worktrees
@@ -264,8 +265,13 @@ only: nothing is focused, moved, acknowledged or adopted.
   worktree; an agent with no evidence, a non-current non-repository result, or no
   recorded session is `Unknown`. Same repository and branch in two worktrees are two
   groups. Plain terminals and browsers follow the groups.
+
 - A collapsed group or parent is an **icon card**: each agent's state cue and icon in
   one row that scrolls inside the card, plus a separate expand control. Each icon
   focuses its agent's surface and previews like its row. Group disclosure is saved
   per workspace and group (`worktreeGroup` in the layout record), expanded by default.
 - Internal tasks stay subordinate text rows under their exact owner in both views.
+
+Pinned details show labels and values only, not identity/binding explanation paragraphs.
+Unconfirmed identity still withholds agent fields; unavailable managed metadata still falls
+back to the exact observed session. The details inspector retains its own stale notices.

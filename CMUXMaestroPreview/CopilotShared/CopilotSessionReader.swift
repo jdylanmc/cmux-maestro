@@ -520,8 +520,8 @@ actor CopilotSessionReader {
         batch.observations = decorated
     }
 
-    /// The current worktree is current only while the session's `workspace.yaml` is the exact file
-    /// version the hook observed; any change, or no live read this cycle, makes it last known.
+    /// A turn's touch wins over the selected-directory fallback. Changed bindings and non-live
+    /// observations cannot revive a previous touch; the fallback retains its workspace-file fence.
     private func applyLocation(
         to observation: inout CopilotSessionObservation, locations: Int32, source: CopilotWorktreeSource?
     ) {
@@ -533,7 +533,15 @@ actor CopilotSessionReader {
             observation.branch = location.branch
             observation.worktree = location.worktree
         }
-        if let current = record.current {
+        if let active = record.active {
+            let bound = bindingsByID[observation.sessionID].map {
+                CopilotActiveWorktree.bindingKey($0.record) == active.bindingKey
+            } ?? false
+            observation.currentWorktree = .init(
+                evidence: .verified(active.identity),
+                isCurrent: active.isCurrent && bound && observation.liveness == .alive
+            )
+        } else if let current = record.current {
             observation.currentWorktree = .init(
                 evidence: current.evidence, isCurrent: current.source != nil && current.source == source
             )
