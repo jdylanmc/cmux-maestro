@@ -148,6 +148,9 @@ categories, not permission to retry or bypass a refused check.
 The bounded parser is installed as `models.mjs` alongside `adapter.mjs`;
 setup publishes the required parser before its importing adapter, so an
 interrupted upgrade never exposes the new adapter without its dependency.
+Coordinated rollback restores native modules in reverse publication order,
+restoring the previous adapter before removing a newly introduced parser.
+Hook, observer, receipt, and settings restoration retain their existing order.
 Missing or oversized modules make integration readiness fail closed.
 
 Supported selections feed actual `--model`, `--context` and

@@ -1531,13 +1531,23 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         return true
     }
 
+    private func restorationEntries(_ record: Record, states: [CopilotSetupFileState]) -> [(Entry, CopilotSetupFileState)] {
+        var entries = Array(zip(record.entries, states))
+        let nativeRoot = files.nativeExtensions.appendingPathComponent("maestro").path + "/"
+        let slots = entries.indices.filter { entries[$0].0.path.hasPrefix(nativeRoot) }
+        let reversed = slots.map { entries[$0] }.reversed()
+        // Undo native imports before dependencies without moving hooks, observer, or receipt writes.
+        for (slot, entry) in zip(slots, reversed) { entries[slot] = entry }
+        return entries
+    }
+
     private func restoreResources(_ record: Record, observed: CopilotSetupMetadata) throws {
         let settings = try verifyForeign(observed)
         try verifyProvider(observed)
         let states = try readEntries()
         try verifyAllowed(states)
         try phase(.restoring)
-        for (entry, state) in zip(record.entries, states) {
+        for (entry, state) in restorationEntries(record, states: states) {
             if try restoreCMUXHooksEntry(entry) { continue }
             _ = try state.replacing(with: entry.before.data, permissions: entry.before.permissions)
             try afterResourceRestore?(state.url)
@@ -1585,7 +1595,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
         let observer = try owned.replacing(with: record.generation.manifest(disabled: true))
         let receipt = try CopilotSetupFileState.read(registration.receiptFile)
         let states = try readEntries()
-        for (entry, state) in zip(record.entries, states) where
+        for (entry, state) in restorationEntries(record, states: states) where
             entry.path != registration.file.path && entry.path != registration.receiptFile.path {
             if !plan.priorInstalled && installed && entry.path.hasPrefix(registration.plugin.path + "/") { continue }
             if try restoreCMUXHooksEntry(entry) { continue }

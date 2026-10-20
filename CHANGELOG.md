@@ -239,7 +239,8 @@ Notable changes are recorded using Keep a Changelog categories.
   capabilities instead of silently discarding them (#152). Launch refusals name
   the failed admission check; unsupported optional choices still warn and use
   verified configured defaults. Setup publishes the required parser before its
-  importing adapter during upgrades. The original installed proof-route refusal
+  importing adapter during upgrades and restores the adapter first during
+  rollback. The original installed proof-route refusal
   still needs a fresh, authorized live reproduction.
 
 - Control state no longer fills its 1 MiB cap and refuses every spawn (#280). When a node ends
