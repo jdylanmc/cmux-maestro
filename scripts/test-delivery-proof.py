@@ -290,6 +290,8 @@ class ProofTests(unittest.TestCase):
             "stop before spawning", "NOT the root coordinator",
             "`demoParent`", "exact workspace/session/generation match",
             "JSON5-aware parser", "closest trusted ancestor itself",
+            "Do not assume a parent's `--config-dir` is forwarded",
+            "Never copy trust entries between configurations",
         ):
             self.assertIn(contract, skill)
         notes = skill.split("## Presenter notes\n", 1)[1]

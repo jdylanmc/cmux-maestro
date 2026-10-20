@@ -37,14 +37,19 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
    that recovery for them or promise it will fix another failure.
 3. Establish an already-trusted launch directory before creating anything.
    Prefer the coordinator's exact current directory, used read-only. Check only
-   `trustedFolders` in this session's effective Copilot configuration, using a
-   bounded read-only JSON5-aware parser (comments/trailing commas are valid).
+   `trustedFolders` in the effective configuration the native **child launch**
+   will use, with a bounded read-only JSON5-aware parser (comments/trailing commas
+   are valid).
    On macOS, Foundation's `JSONSerialization` with `.json5Allowed` handles this.
    Never dump the config, other values, or unrelated paths. Do not rely on
    `copilot config trustedFolders`: some versions document but reject that key.
-   Account for an explicitly selected config directory; if its location or
-   format cannot be resolved safely, stop rather than guess. An exact existing
-   trusted-folder entry is sufficient; do not assume a new descendant inherits
+   Do not assume a parent's `--config-dir` is forwarded: Maestro does not replay
+   that selector. If the parent uses one, independently establish the child's
+   configuration or stop before spawning and ask the presenter to prepare trust
+   in the child's configuration. Never copy trust entries between configurations.
+   If the child's configuration location or format cannot be resolved safely,
+   stop rather than guess. An exact existing trusted-folder entry is sufficient;
+   do not assume a new descendant inherits
    trust. If only an ancestor is listed, use the closest trusted ancestor itself
    as `cwd`, not a new child directory. Otherwise use a presenter-selected exact
    existing folder from that value.
