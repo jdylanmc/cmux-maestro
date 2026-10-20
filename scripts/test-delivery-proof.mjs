@@ -2067,11 +2067,14 @@ test("native spawn tolerates optional model shapes without widening capability e
   for (const variant of variants) {
     await t.test(variant.name, async () => {
       model = { id: "claude-sonnet-5", ...variant.model };
+      const count = requests.length;
       const result = await spawn({
         name: "Child", cwd: "/synthetic", task: "Bounded", model: model.id,
         contextTier: "default", reasoningEffort: "low",
       }, { sessionId: own.sessionId });
       assert.equal(typeof result, "string", JSON.stringify(result));
+      assert.equal(JSON.parse(result).launchAccepted, true);
+      assert.equal(requests.length, count + 1);
       assert.deepEqual(requests.at(-1).launchCapabilities.models, [{ id: model.id, ...variant.expected }]);
       assert.equal(JSON.stringify(requests.at(-1)).includes("PRIVATE_OPTION"), false);
     });

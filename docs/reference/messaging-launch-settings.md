@@ -119,23 +119,29 @@ For explicit preferences, existing joined extension reads
 checks the invoking account before and after. Only bounded model IDs,
 supported tiers/efforts, and advertised default effort enter private launch
 evidence. Raw model/billing/quota data does not enter state, prompts, or host
-commands. Provider-native defaults are validated against raw advertised support.
-Valid defaults outside current CLI's effort levels are omitted from the
-projection. They are not invented as CLI flags and not used to reject unrelated selections.
+commands. Optional option fields are advisory: missing, null, or non-array
+fields contribute no options. Arrays are scanned through their first 256 items;
+only unique supported CLI strings survive. Unknown strings, numeric tiers,
+objects, and other malformed items are ignored, not interpreted as capability
+claims. Arrays longer than 4,096 items refuse with the field name, type, length,
+and bound, never provider values. Unsupported requested preferences still
+produce the controller's visible fallback warning.
 Copilot 1.0.100's session API returns raw CAPI entries, not the separate
 `models.list` API's typed `Model` objects: efforts come from
 `capabilities.supports.reasoning_effort`, and long context from
 `billing.token_prices.long_context`. The adapter also retains support for
 `supportedReasoningEfforts`, `supportedContextTiers` and
 `billing.tokenPrices.longContext` on SDK-shaped entries. Missing defaults stay
-omitted; a default is never inferred from list order. When both effort
-representations appear, only their common supported values are admitted.
-Malformed, duplicate, oversized, or foreign evidence and account drift
+omitted; a default is retained only if it belongs to the projected effort set,
+never inferred from list order. When both effort representations are arrays,
+only their common supported values are admitted; a non-array representation
+does not suppress the other representation's verified options.
+Malformed model identities, duplicate IDs, oversized or foreign evidence, and account drift
 refuse before launch. This is a capability snapshot, not atomic account/provider
 admission or an observation of the child's running settings.
 
 Refusals use bounded check names: `model-list-invalid` identifies list/count,
-ID/duplicate-ID, context/effort/default, pricing-tier shape, account drift or
+ID/duplicate-ID, context/effort array bounds, pricing-tier shape, account drift or
 32-KiB projected-evidence checks. `spawn-input-invalid` identifies invocation,
 assignment, field, preference or 64-KiB request checks. Account and route
 checks use `account-*` and `route-*`; an unavailable binding operation names its
