@@ -6,7 +6,7 @@ import SwiftUI
 
 struct WorkerLaunchSettingsTests {
     @Test(SidebarAppKitTestScope()) @MainActor func cliGuideCopiesExactUserRunGlobalCommand() throws {
-        let expected = "npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy"
+        let expected = "npx skills add jdylanmc/cmux-maestro --skill maestro maestro-demo --agent github-copilot --global --copy"
         let pasteboard = NSPasteboard(name: .init("maestro-settings-test-\(UUID().uuidString)"))
         defer { pasteboard.releaseGlobally() }
         #expect(CLIIntegrationGuide.installCommand == expected)

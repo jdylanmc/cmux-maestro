@@ -51,11 +51,16 @@ That installs `~/Applications/CMUX Maestro Preview.app` and the Copilot integrat
 - Interrupted? `python3 scripts/local-preview.py recover`.
 - Update, rollback, uninstall: [install and recovery](docs/reference/install-update-recovery.md).
 
-Optional peer messaging guide, installed by you, never by the app:
+Optional peer messaging and live-demo guides, installed by you, never by the app:
 
 ```sh
-npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy
+npx skills add jdylanmc/cmux-maestro --skill maestro maestro-demo --agent github-copilot --global --copy
 ```
+
+With integration enabled, `/maestro-demo` launches two visible workers with
+icons, tags and original self-drawn pets, then steers each with one message.
+Three workers on request; closing requires separate approval.
+For pre-merge local-source installation, see [CLI guides](docs/reference/cli-guide-and-uninstall.md).
 
 ## Use
 

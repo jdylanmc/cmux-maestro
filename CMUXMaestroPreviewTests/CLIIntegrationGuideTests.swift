@@ -112,7 +112,7 @@ struct CLIIntegrationGuideTests {
         #expect(model.copyNotice == "Copied. Run the command in your terminal when ready.")
         model.copyCommand { CLIIntegrationGuide.copyInstallCommand { _ in false } }
         #expect(model.copyNotice == "Could not copy the command. Select and copy the text above.")
-        #expect(commands == ["npx skills add jdylanmc/cmux-maestro --skill maestro --agent github-copilot --global --copy"])
+        #expect(commands == ["npx skills add jdylanmc/cmux-maestro --skill maestro maestro-demo --agent github-copilot --global --copy"])
         #expect(try Data(contentsOf: fixture.guide(0)) == fixture.content)
         #expect(!FileManager.default.fileExists(atPath: fixture.guide(1).path))
     }
