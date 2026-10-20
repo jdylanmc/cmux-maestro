@@ -250,7 +250,7 @@ def verify_orchestration_resources(app, *, required=True):
 
 def verify_messaging_resources(app):
     resources = Path(app) / "Contents/Resources"
-    for name, maximum in (("adapter.mjs", 65_536), ("extension.mjs", 8192)):
+    for name, maximum in (("adapter.mjs", 65_536), ("extension.mjs", 8192), ("processes.mjs", 16_384)):
         resource = resources / name
         require(resource.is_file() and not resource.is_symlink() and 0 < resource.stat().st_size <= maximum,
                 f"Bundled messaging resource {name} is missing or oversized.")

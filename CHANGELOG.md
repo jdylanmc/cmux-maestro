@@ -25,6 +25,13 @@ Notable changes are recorded using Keep a Changelog categories.
   Colors are automatic per tag, or one of 14 swatches you choose for that tag everywhere; agents
   cannot set colors. Text contrast is at least 4.5:1. See
   [agent tags](docs/reference/agent-tags.md).
+- A new controller command, `process-observe`, publishes each managed agent's owned background
+  processes and their TCP listeners to `observer/processes.json` (#78, #75, ADR 0029). Ownership
+  comes from the node's recorded session, generation and provider process; identity is PID plus
+  microsecond start time. Names only, never argv or environment. A process that leaves the tree is
+  reported once as detached and never attributed again. The installed adapter gains
+  `processes.mjs`, which asks for a pass when a session becomes managed, after tool use and agent
+  stops, and every 10 s until it ends. See `docs/reference/processes-and-ports.md`.
 - Setup installs CMUX's Copilot hooks in a separate owned file,
   `~/.copilot/hooks/cmux-maestro-cmux-hooks.json`, with CMUX 0.65.1's exact commands (#252), so
   CMUX's own restore can bring back sessions you start. CMUX's own installer fails on Copilot's

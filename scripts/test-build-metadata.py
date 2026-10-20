@@ -1704,10 +1704,11 @@ class BuildMetadataTests(unittest.TestCase):
         (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
         (resources / "adapter.mjs").write_text("// synthetic adapter\n")
         (resources / "extension.mjs").write_text("// synthetic loader\n")
+        (resources / "processes.mjs").write_text("// synthetic process passes\n")
         self.save()
 
     def test_messaging_resources_are_required_for_every_build_profile(self):
-        for name in ("adapter.mjs", "extension.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs"):
             with self.subTest(name=name):
                 self.fixture("tests")
                 (self.app / "Contents/Resources" / name).unlink()

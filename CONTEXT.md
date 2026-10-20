@@ -102,6 +102,10 @@ _Avoid_: bot, background job
 A Copilot session that a human starts in CMUX and that enrolls itself as its own root coordinator through Maestro's extension, once Copilot holds the session (its first prompt): after a start, a resume, or, for a session already running, its next extension join. (ADR 0025)
 _Avoid_: adopted, auto-managed (enrollment by the session's own extension only adds tools; it is not adoption)
 
+**Owned process**:
+A descendant of a managed node's recorded provider process, for its exact session and generation, identified by PID plus microsecond start time (ADR 0029). A process that leaves the tree is detached and never owned again.
+_Avoid_: child process, background job (when ownership matters)
+
 **Session custody**:
 Copilot's own `inuse.<PID>.lock` for a session, written at its first prompt. Enrollment and every later managed operation need it held by the provider alone; its absence decides nothing, and a second live holder suspends authority until the next join.
 _Avoid_: session ownership (that is Maestro's node)

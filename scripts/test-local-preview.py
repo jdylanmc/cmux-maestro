@@ -1054,6 +1054,7 @@ with installer.locked():
             (resources / "SKILL.md").write_text("---\nname: cmux-maestro-orchestrate\n---\n")
             (resources / "adapter.mjs").write_text("// synthetic adapter\n")
             (resources / "extension.mjs").write_text("// synthetic loader\n")
+            (resources / "processes.mjs").write_text("// synthetic process passes\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview",
                   "CMUXMaestroInstallBridge": "copilot-install-v1",
