@@ -139,6 +139,26 @@ try:
     ]:
         invoke("synthetic-hook", args, json.dumps({"sessionId": session, **tool}).encode())
         assert json.loads(location_file.read_text())["active"]["worktree"]["repository"] == "second"
+    # Shell words can continue after a closing quote; never publish just the quoted prefix.
+    child = repository / "child"
+    (child / ".git/objects").mkdir(parents=True)
+    (child / ".git/refs").mkdir()
+    (child / ".git/HEAD").write_text("ref: refs/heads/nested\n")
+    actual = subprocess.check_output(
+        ["/bin/sh", "-c", f'cd "{repository}"/child && /bin/pwd'], text=True, timeout=5,
+    ).strip()
+    assert Path(actual).resolve() == child.resolve()
+    prior_touch = json.loads(location_file.read_text())["active"]
+    for command in [
+        f'cd "{repository}"/child && git status',
+        f"cd '{repository}'/child && git status",
+        f'cd "{repository}" extra && git status',
+        f"cd {repository} || git status",
+    ]:
+        invoke("synthetic-hook", args, json.dumps({
+            "sessionId": session, "toolName": "bash", "toolArgs": {"command": command},
+        }).encode())
+        assert json.loads(location_file.read_text())["active"] == prior_touch
     # A placement change cannot keep a previous binding's touch current.
     changed = {**environment, "CMUX_SURFACE_ID": "44444444-4444-4444-8444-444444444444"}
     invoke("synthetic-hook", args, json.dumps({

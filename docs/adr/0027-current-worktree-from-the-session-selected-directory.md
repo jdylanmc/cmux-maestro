@@ -49,6 +49,8 @@ existing 64-level/4-KiB resolver bounds and exact session ownership proof stay i
 Relative paths and paths containing `..` contribute no new touch: lexically removing a
 parent component across a symlink can select the wrong repository. Ambiguous later `cd`
 targets invalidate the shell hint instead of reusing an earlier directory in that command.
+Quoted targets followed by concatenated word fragments, extra arguments or unsupported
+shell separators likewise contribute no hint; a quoted prefix is not a complete shell path.
 
 The optional live-process cwd supplement is deferred: ADR 0029's Python observer currently
 collects a process table, start identities and listeners, not cwd. Resolving those paths

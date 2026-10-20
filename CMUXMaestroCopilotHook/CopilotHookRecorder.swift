@@ -527,6 +527,9 @@ nonisolated enum CopilotLocationResolver {
                 guard let end = body.firstIndex(of: quote) else { return rejectAmbiguousPaths ? nil : found }
                 target = String(body[..<end])
                 rest = body[body.index(after: end)...]
+                if rejectAmbiguousPaths, let next = rest.first, !" \t\n;&".contains(next) {
+                    return nil
+                }
             } else {
                 let token = rest.prefix { !" \t\n;&|<>()".contains($0) }
                 target = String(token)
@@ -539,7 +542,10 @@ nonisolated enum CopilotLocationResolver {
             rest = rest.drop { $0 == " " || $0 == "\t" }
             if rest.hasPrefix("&&") { rest = rest.dropFirst(2) }
             else if rest.hasPrefix(";") || rest.hasPrefix("\n") { rest = rest.dropFirst() }
-            else { break }
+            else {
+                if rejectAmbiguousPaths && !rest.isEmpty { return nil }
+                break
+            }
         }
         return found
     }
