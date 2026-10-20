@@ -6,6 +6,61 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test(arguments: [false, true])
+    func hiddenUnknownTaskDoesNotMakeManagedLeafExpandable(_ expanded: Bool) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures(), now = Date()
+        let model = await makeModel(data, children: [
+            data.child("hidden", state: .unknown)
+        ], now: now, managed: true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        let session = try #require(model.copilot.tree.sessions.first)
+        #expect(session.nodes.isEmpty && session.internalTaskCountsIncomplete)
+        let owner = try #require(model.orchestration.snapshot.nodes.first)
+        preferences.setExpanded(expanded, for: .managed(owner.id))
+        var emptyTree = model.copilot.tree
+        emptyTree.sessions[0].internalTaskCountsIncomplete = false
+
+        func render(_ tree: SidebarCopilotTree) throws -> (pixels: Data, buttons: Int, height: CGFloat) {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 180),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            let host = NSHostingView(rootView: ManagedHierarchyContent(
+                polling: model.orchestration, hierarchy: model.hierarchy, navigation: model.navigation,
+                layout: preferences.layout, setExpanded: { _, _ in },
+                selectedNode: .constant(nil), dismiss: { _ in }, acknowledge: { _ in },
+                selection: .constant(nil), showsWorkspaceHeaders: false, copilotTree: tree
+            )
+            .environment(preferences)
+            .environment(\.sidebarPresentationNow, { now })
+            .frame(width: 350, height: 180, alignment: .topLeading)
+            .background(Color.white))
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            #expect(buttons(host).contains { $0.accessibilityLabel() == "Focus Managed owner" },
+                    "The leaf keeps its native navigation control")
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let pixels = try #require(bitmap.bitmapData)
+            return (Data(bytes: pixels, count: bitmap.bytesPerRow * bitmap.pixelsHigh),
+                    descendants(host).filter { $0 is NSButton }.count, host.fittingSize.height)
+        }
+
+        let empty = try render(emptyTree)
+        let hidden = try render(model.copilot.tree)
+        #expect(hidden.buttons == empty.buttons, "Incomplete counts alone must not add a disclosure button")
+        #expect(hidden.height == empty.height)
+        #expect(hidden.pixels == empty.pixels, "An empty branch has neither a chevron nor a collapsed info marker")
+        #expect(model.copilot.tree.sessions.first?.internalTaskCountsIncomplete == true,
+                "Presentation must preserve incomplete-count evidence")
+        #expect(model.navigation.status == .idle)
+    }
+
     @Test(arguments: [SidebarMode.hierarchy])
     func review001EndedSessionOnManagedSurfaceHasNoRow(_ mode: SidebarMode) async throws {
         let fixture = try SidebarPreferenceFixture()
