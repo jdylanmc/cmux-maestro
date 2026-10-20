@@ -75,7 +75,7 @@ struct SidebarReorderContext {
     let authority: SidebarReorderAuthority
     let capabilities: SidebarReorderCapabilities
     let items: [SidebarOrderItem]
-    let visible: [UUID]
+    private(set) var visible: [UUID]
     let hasCustomOrder: Bool
     let titles: [UUID: String]
     let session: SidebarReorderDragSession
@@ -111,6 +111,14 @@ struct SidebarReorderContext {
 
     func handle(for id: UUID, noun: String) -> SidebarReorderHandle {
         .init(context: self, id: id, noun: noun)
+    }
+
+    /// The same list, with moves and drops limited to `ids` (rows shown together). Saving still
+    /// uses the whole list.
+    func restricted(to ids: Set<UUID>) -> Self {
+        var copy = self
+        copy.visible = visible.filter(ids.contains)
+        return copy
     }
 }
 
@@ -165,6 +173,7 @@ struct SidebarReorderHandle {
     /// Accepts only this sidebar's own drag of a sibling in the same group (block and pin).
     func accepts(dragging: (scope: SidebarOrderScope, id: UUID)?) -> Bool {
         guard unavailable == nil, let dragging, dragging.scope == context.scope, dragging.id != id,
+              context.visible.contains(dragging.id),
               let item, let moving = context.items.first(where: { $0.id == dragging.id }) else { return false }
         return moving.pinned == item.pinned && moving.block == item.block
     }

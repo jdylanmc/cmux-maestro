@@ -686,6 +686,10 @@ struct SidebarView: View {
     private func content(pinnedHeight: CGFloat, pinnedDragLimit: CGFloat) -> some View {
         VStack(alignment: .leading, spacing: preferences.layout.density.spacing(6)) {
             headerBar
+            if preferences.selectedMode == .hierarchy {
+                SidebarProjectionPicker(selection: $preferences.projection)
+                    .padding(.horizontal, preferences.layout.density.spacing(5))
+            }
             if model.orchestration.availability == .unavailable {
                 Label("Managed orchestration evidence is unavailable.", systemImage: "exclamationmark.circle")
                     .font(.caption2).foregroundStyle(.secondary)
@@ -1274,7 +1278,6 @@ private struct ManagedDisplayNode: Identifiable {
     let node: SidebarOrchestrationNode
     let depth: Int
     let hasChildren: Bool
-    let activeDescendants: Int
     var id: UUID { node.id }
 }
 
@@ -1297,6 +1300,10 @@ struct ManagedHierarchyContent: View {
     var workspaceOrder: SidebarReorderContext? = nil
     /// The workspace's surface list; primary root agents are its managed block.
     var surfaceOrder: SidebarReorderContext? = nil
+    /// Shown flat (Worktrees) while its spawning parent is shown elsewhere: it moves with that parent.
+    var movesWithParent = false
+    /// Shown flat (Worktrees) with spawned children shown elsewhere: its failure is not dismissible.
+    var hasSpawnedChildren = false
     @Environment(\.sidebarDensity) private var density
     @Environment(\.sidebarContentWidth) private var contentWidth
     @Environment(\.sidebarPresentationNow) private var now
@@ -1309,11 +1316,7 @@ struct ManagedHierarchyContent: View {
         var result: [ManagedDisplayNode] = []
         func append(_ node: SidebarOrchestrationNode, depth: Int) {
             let children = children(of: node.id).sorted(by: sort)
-            let descendants = descendantCount(of: node.id)
-            result.append(.init(
-                node: node, depth: min(depth, 8), hasChildren: !children.isEmpty,
-                activeDescendants: descendants
-            ))
+            result.append(.init(node: node, depth: min(depth, 8), hasChildren: !children.isEmpty))
             if layout.isExpanded(.managed(node.id)) {
                 for child in children { append(child, depth: depth + 1) }
             }
@@ -1368,7 +1371,6 @@ struct ManagedHierarchyContent: View {
                         ManagedNodeRow(
                             node: row.node, depth: row.depth,
                             hasChildren: hasDisclosure(row, retained: retained),
-                            activeDescendants: row.activeDescendants,
                             expanded: expanded,
                             selected: selectedNode?.id == row.node.id,
                             evidenceDate: evidenceDate,
@@ -1377,11 +1379,26 @@ struct ManagedHierarchyContent: View {
                             attentionIncomplete: SidebarPresentation.attentionEvidenceIncomplete(retained),
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,
+                            movesWithParent: movesWithParent,
+                            hasSpawnedChildren: hasSpawnedChildren || row.hasChildren,
                             toggleExpanded: {
                                 setExpanded(.managed(row.node.id), !layout.isExpanded(.managed(row.node.id)))
                             },
                             select: { selectedNode = row.node }
                         )
+                        if !expanded && row.hasChildren {
+                            // A collapsed parent shows its spawned agents as icons, not a summary line.
+                            SidebarAgentIconCard(
+                                items: descendants(of: row.node.id).map {
+                                    .managed($0, availability: polling.availability, tree: copilotTree, now: evidenceDate)
+                                },
+                                navigation: navigation, expandLabel: "Expand \(row.node.title)"
+                            ) { setExpanded(.managed(row.node.id), true) }
+                            .padding(.leading, 22 + density.indentation(
+                                depth: row.depth, unresolved: false, width: contentWidth
+                            ))
+                            .padding(.vertical, 2)
+                        }
                         if !expanded && showsRetainedWork(retained) {
                             CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
                                 .padding(.leading, 22 + density.indentation(
@@ -1444,10 +1461,9 @@ struct ManagedHierarchyContent: View {
         retained.contains { $0.hasShownOutline(layout) }
     }
 
-    private func descendantCount(of id: UUID) -> Int {
-        children(of: id).reduce(0) {
-            $0 + ($1.isActive ? 1 : 0) + descendantCount(of: $1.id)
-        }
+    /// Every spawned descendant, depth first in display order.
+    private func descendants(of id: UUID) -> [SidebarOrchestrationNode] {
+        children(of: id).sorted(by: sort).flatMap { [$0] + descendants(of: $0.id) }
     }
 
     private func sort(_ lhs: SidebarOrchestrationNode, _ rhs: SidebarOrchestrationNode) -> Bool {
@@ -1465,7 +1481,6 @@ private struct ManagedNodeRow: View {
     let node: SidebarOrchestrationNode
     let depth: Int
     let hasChildren: Bool
-    let activeDescendants: Int
     let expanded: Bool
     let selected: Bool
     let evidenceDate: Date
@@ -1474,6 +1489,8 @@ private struct ManagedNodeRow: View {
     var attentionIncomplete = false
     let navigation: SidebarNavigation
     var reorder: SidebarReorderHandle? = nil
+    var movesWithParent = false
+    var hasSpawnedChildren = false
     let toggleExpanded: () -> Void
     let select: () -> Void
     @Environment(\.sidebarDismissManaged) private var dismissManaged
@@ -1507,7 +1524,7 @@ private struct ManagedNodeRow: View {
                         tags: beatSession.map { id in { editingTags = id } }),
             placement, .lifecycle()
         ]
-        if !hasChildren, let dismissManaged,
+        if !hasChildren, !hasSpawnedChildren, let dismissManaged,
            let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
             groups.append(.init(title: "History", actions: [
                 .init(title: "Dismiss failed result", perform: { dismissManaged(outcome) })
@@ -1517,7 +1534,7 @@ private struct ManagedNodeRow: View {
     }
 
     private var placement: SidebarRowActionGroup {
-        if depth > 0 { return .placement(.movesWithParentAgent) }
+        if depth > 0 || movesWithParent { return .placement(.movesWithParentAgent) }
         return .placement(reorder)
     }
 
@@ -1539,39 +1556,17 @@ private struct ManagedNodeRow: View {
                 label: SidebarPresentation.taggedLabel("Focus \(node.title)", tags: tags),
                 detail: metadataHelp, inspection: .managed(node)
             ) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(spacing: 4) {
-                        SidebarTaggedTitle(tags: tags) {
-                            Text(node.title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
-                        }
-                        Spacer(minLength: 0)
-                        if activeDescendants > 0 && !expanded {
-                            Label("\(activeDescendants)", systemImage: SidebarPresentation.state(.working).symbol)
-                                .sidebarFont(.caption2).foregroundStyle(.secondary)
-                                .help("\(activeDescendants) active descendant\(activeDescendants == 1 ? "" : "s")")
-                        }
-                    }
-                    HStack(spacing: 4) {
-                        SidebarStateBadge(visual: stateVisual,
-                                          needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
-                                          detail: metadataHelp)
-                        if attentionIncomplete { AttentionEvidenceIncompleteIcon() }
-                        Text(SidebarPresentation.rowMetadata(
-                            kind: stateVisual.tone == .red || stateVisual.tone == .attention ? stateCaption
-                                : node.role == "worker" && node.executionMode != .interactive ? "Legacy worker" : "Agent",
-                            directory: assignedWorktree
-                        )).lineLimit(1).truncationMode(.tail)
-                    }
-                    .font(.system(size: density.rowMetadataSize))
-                    .foregroundStyle(.secondary)
-                    .frame(height: 14, alignment: .leading)
-                    .help(metadataHelp)
+                SidebarAgentTitleLine(title: node.title, tags: tags) {
+                    if attentionIncomplete { AttentionEvidenceIncompleteIcon() }
+                    SidebarStateBadge(visual: stateVisual,
+                                      needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
+                                      detail: metadataHelp)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .help(metadataHelp)
             }
             .agentHoverPreview(.managed(node.id, generation: node.generation))
             .sidebarTagEditor($editingTags)
-            if !hasChildren, let dismissManaged,
+            if !hasChildren, !hasSpawnedChildren, let dismissManaged,
                let outcome = SidebarPresentation.dismissibleManagedFailure(node, tree: copilotTree) {
                 Button { dismissManaged(outcome) } label: {
                     Image(systemName: "xmark").font(.caption2)
@@ -1583,7 +1578,7 @@ private struct ManagedNodeRow: View {
                 .accessibilityIdentifier("dismiss-managed-\(node.id)-\(node.generation)")
             }
         }
-        .frame(minHeight: density.rowHeight)
+        .frame(minHeight: density.agentRowHeight)
         .sidebarPetPicker(session: $petPicker, agentChoice: pet?.choice)
         .environment(\.sidebarReorderSource, reorder?.dragSource)
         .sidebarRowActions(title: node.title, groups: actions) {
@@ -1619,20 +1614,6 @@ private struct ManagedNodeRow: View {
         return id
     }
 
-    private var assignedWorktree: String? {
-        guard node.gitEvidenceStatus == "verified", node.gitEvidenceAt != nil else { return nil }
-        return node.worktreeLabel.map(SidebarPathDisplay.text)
-    }
-
-    private var stateCaption: String {
-        if node.role == "worker", node.executionMode != .interactive {
-            return "Legacy worker · \(stateVisual.title)"
-        }
-        if stateVisual.title.hasPrefix("State unverified") { return "State unverified" }
-        if stateVisual.title.hasPrefix("Registered") { return "Registered" }
-        return stateVisual.title
-    }
-
     private var stateVisual: SidebarVisual {
         SidebarPresentation.managedState(node, availability: availability, now: evidenceDate, tree: copilotTree)
     }
@@ -1641,7 +1622,8 @@ private struct ManagedNodeRow: View {
         let ownState = SidebarPresentation.statusDescription(
             stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
         )
-        return "\(ownState). \(SidebarPresentation.managedGitMetadataHelp(node, now: evidenceDate))"
+        let legacy = node.role == "worker" && node.executionMode != .interactive ? "Legacy worker. " : ""
+        return "\(legacy)\(ownState). \(SidebarPresentation.managedGitMetadataHelp(node, now: evidenceDate))"
     }
 }
 
@@ -1900,6 +1882,7 @@ private struct WorkspaceRow: View {
     @Environment(\.sidebarHoverConnected) private var connected
     @Environment(\.sidebarPrepareSeen) private var prepareSeen
     @Environment(\.sidebarPresentationNow) private var now
+    @Environment(SidebarPreferences.self) private var preferences
     @State private var renameHintShown = false
     private var expanded: Bool { layout.isExpanded(.workspace(workspace.id)) }
     private var managedNodes: [SidebarOrchestrationNode] {
@@ -1974,6 +1957,38 @@ private struct WorkspaceRow: View {
         }
     }
 
+    /// Surfaces showing exactly one unmanaged Copilot session: Worktrees groups them as agents.
+    private func unmanagedSessionSurfaces(
+        _ surfaces: [HierarchySurface], placements: [SidebarSessionPlacement]
+    ) -> [(surface: HierarchySurface, session: SidebarCopilotSession)] {
+        surfaces.compactMap { surface in
+            let sessions = placements.filter {
+                $0.contentOwnerID == nil && !$0.hasNoSurfaceRow && $0.session.surfaceID == surface.id
+            }
+            guard sessions.count == 1, let session = sessions.first?.session else { return nil }
+            return (surface, session)
+        }
+    }
+
+    @ViewBuilder private func worktreeContent(
+        sessionSurfaces: [(surface: HierarchySurface, session: SidebarCopilotSession)], context: SidebarReorderContext?
+    ) -> some View {
+        // Saved Maestro order first (roots by surface), then the default order.
+        let managed = ManagedHierarchyContent.orderedRoots(managedNodes, visible: context?.visible)
+            .map(SidebarWorktreeMember.managed)
+        let members = managed + sessionSurfaces.map { SidebarWorktreeMember.surface($0.surface, $0.session) }
+        if !members.isEmpty {
+            let order = context ?? SidebarReorderContext.empty(backend: reorderBackend, session: dragSession)
+            WorktreeProjectionContent(
+                workspaceID: workspace.id, members: members, tree: copilotTree, orchestration: orchestration,
+                hierarchy: hierarchy, navigation: navigation, layout: layout, setExpanded: setExpanded,
+                managedSelection: $managedSelection, dismiss: dismiss, acknowledge: acknowledge,
+                selection: $selection, countsComplete: countsComplete,
+                surfaceOrder: order, parentIDs: Set(displayManaged.compactMap(\.parentId))
+            )
+        }
+    }
+
     var body: some View {
         let placements = sessionPlacements
         VStack(alignment: .leading, spacing: 0) {
@@ -2015,7 +2030,13 @@ private struct WorkspaceRow: View {
             if expanded {
                 let arranged: (surfaces: [HierarchySurface], context: SidebarReorderContext)? =
                     if case .available(let surfaces) = workspace.surfaces, !surfaces.isEmpty { surfaceOrder(surfaces) } else { nil }
-                managedContent(surfaceOrder: arranged?.context)
+                let byWorktree = preferences.projection == .worktrees
+                let sessionSurfaces = byWorktree ? unmanagedSessionSurfaces(arranged?.surfaces ?? [], placements: placements) : []
+                if byWorktree {
+                    worktreeContent(sessionSurfaces: sessionSurfaces, context: arranged?.context)
+                } else {
+                    managedContent(surfaceOrder: arranged?.context)
+                }
                 switch workspace.surfaces {
                 case .unavailable:
                     Text("Surface metadata unavailable").font(.caption2).foregroundStyle(.secondary)
@@ -2023,7 +2044,8 @@ private struct WorkspaceRow: View {
                     Text("No shared surfaces").font(.caption2).foregroundStyle(.secondary)
                 case .available:
                     let list = arranged ?? ([], SidebarReorderContext.empty(backend: reorderBackend, session: dragSession))
-                    ForEach(list.surfaces) { surface in
+                    let grouped = Set(sessionSurfaces.map(\.surface.id))
+                    ForEach(list.surfaces.filter { !grouped.contains($0.id) }) { surface in
                         SurfaceRow(
                             workspaceID: workspace.id, surface: surface,
                             reorder: list.context.handle(for: surface.id, noun: "surface"),
@@ -2046,7 +2068,7 @@ private struct WorkspaceRow: View {
     }
 }
 
-private struct SurfaceRow: View {
+struct SurfaceRow: View {
     let workspaceID: UUID
     let surface: HierarchySurface
     let reorder: SidebarReorderHandle
@@ -2166,21 +2188,23 @@ private struct SurfaceRow: View {
                     label: SidebarPresentation.taggedLabel("Focus \(surface.kind.title) \(title)", tags: preferences.tags(for: tagSession)),
                     detail: rowMetadataHelp
                 ) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        SidebarTaggedTitle(tags: preferences.tags(for: tagSession)) {
-                            Text(title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
+                    if let singleSession {
+                        SidebarAgentTitleLine(title: title, tags: preferences.tags(for: tagSession)) {
+                            SessionStateBadge(session: singleSession)
                         }
-                        HStack(spacing: 4) {
-                            if let singleSession {
-                                SessionStateBadge(session: singleSession)
+                        .help(rowMetadataHelp)
+                    } else {
+                        VStack(alignment: .leading, spacing: 4) {
+                            SidebarTaggedTitle(tags: preferences.tags(for: tagSession)) {
+                                Text(title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
                             }
                             Text(rowMetadata).font(.system(size: density.rowMetadataSize)).foregroundStyle(.secondary)
                                 .lineLimit(1).truncationMode(.tail)
                                 .help(rowMetadataHelp)
+                                .frame(height: 14, alignment: .leading)
                         }
-                        .frame(height: 14, alignment: .leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .accessibilityValue(accessibilityStatus)
                 .sidebarTagEditor($editingTags)
@@ -2191,7 +2215,7 @@ private struct SurfaceRow: View {
                 if surface.isPinned { StatusBadge(symbol: "pin.fill", label: "Pinned") }
                 if surface.unreadCount > 0 { UnreadBadge(count: surface.unreadCount) }
             }
-            .frame(minHeight: density.rowHeight)
+            .frame(minHeight: singleSession == nil ? density.rowHeight : density.agentRowHeight)
             .sidebarPetPicker(session: $petPicker, agentChoice: singleSession?.petId)
             .environment(\.sidebarReorderSource, reorder.dragSource)
             .sidebarRowActions(title: title, groups: actions) {
@@ -2247,8 +2271,11 @@ private struct SurfaceRow: View {
     }
 
     private var rowMetadataHelp: String {
-        let state = singleSession.map {
-            SidebarPresentation.sessionStatus($0) + ". "
+        let state = singleSession.map { session in
+            let activity = SidebarPresentation.activityCaption(
+                session.activity, runningShells: session.foldedShellCount(parentID: nil)
+            )
+            return SidebarPresentation.sessionStatus(session) + ". " + (activity.map { "\($0). " } ?? "")
         } ?? ""
         let kind = singleSession == nil ? surface.kind.title : "Agent"
         guard let directoryLabel else { return state + kind }

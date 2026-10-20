@@ -18,6 +18,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     "$ROOT/CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift" \
     "$ROOT/CMUXMaestroSidebar/Copilot/SidebarCopilotHistory.swift" \
     "$ROOT/CMUXMaestroSidebar/Copilot/SidebarCopilotTree.swift" \
+    "$ROOT/CMUXMaestroSidebar/Copilot/SidebarWorktreeGroups.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferenceStore.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferences.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarIconPreferences.swift" \

@@ -76,15 +76,16 @@ enum SidebarRenderingEvidence {
 
     static func recognizedLines(
         in image: URL, dark: Bool = false, excludingLeadingFraction: CGFloat = 0,
-        naturalLanguage: Bool = false
+        keepingBottomFraction: CGFloat = 1, naturalLanguage: Bool = false
     ) throws -> [String] {
         guard let raw = NSBitmapImageRep(data: try Data(contentsOf: image))?.cgImage else {
             throw ImageInspectionError.decodeFailed
         }
         let inset = floor(CGFloat(raw.width) * excludingLeadingFraction)
-        guard inset >= 0, inset < CGFloat(raw.width),
+        let kept = ceil(CGFloat(raw.height) * keepingBottomFraction)
+        guard inset >= 0, inset < CGFloat(raw.width), kept > 0, kept <= CGFloat(raw.height),
               let source = raw.cropping(to: CGRect(
-                x: inset, y: 0, width: CGFloat(raw.width) - inset, height: CGFloat(raw.height)
+                x: inset, y: CGFloat(raw.height) - kept, width: CGFloat(raw.width) - inset, height: kept
               )) else { throw ImageInspectionError.decodeFailed }
         // Hosted Macs capture at 1x. Give OCR the same legible input scale without changing the render.
         let scale = max(1, (1_020 + source.width - 1) / source.width)

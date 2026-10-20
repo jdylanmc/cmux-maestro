@@ -178,6 +178,30 @@ struct SidebarReorderTests {
         for item in try menu(handleWithoutWindow).items { #expect(!item.isEnabled) }
     }
 
+    /// Worktrees groups rows: moves and drops stay among the rows shown together, and saving
+    /// still writes the whole surface list.
+    @Test func restrictedContextMovesOnlyAmongItsRows() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let backend = SidebarScopedReorderBackend.localOnly(store: preferences)
+        let session = SidebarReorderDragSession()
+        let full = SidebarReorderContext(compose(.surfaces, [a, b, c], backend: backend), backend: backend, session: session)
+        // a and c share a group; b is in another group, between them in the saved order.
+        let group = full.restricted(to: [a, c])
+        let handleA = group.handle(for: a, noun: "surface"), handleC = group.handle(for: c, noun: "surface")
+        #expect(handleA.step(.up) == nil && handleA.step(.down) == .after(c))
+        #expect(handleC.step(.up) == .before(a) && handleC.step(.down) == nil)
+        #expect(full.restricted(to: [b]).handle(for: b, noun: "surface").step(.up) == nil)
+        session.begin(.surfaces(workspace: workspace), b)
+        #expect(!handleA.accepts(dragging: session.dragging), "No drop from another group")
+        session.begin(.surfaces(workspace: workspace), c)
+        #expect(handleA.accepts(dragging: session.dragging))
+        session.end()
+        handleC.move(.before(a))
+        #expect(preferences.order.ids(for: .surfaces(workspace: workspace)) == [c, a, b])
+    }
+
     @Test func dragAcceptsOnlySameScopeSiblingsInTheSamePinGroup() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

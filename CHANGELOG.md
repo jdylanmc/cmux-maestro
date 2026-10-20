@@ -6,6 +6,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- The Hierarchy has a **Worktrees | Sub-agents** control (#58, ADR 0028). Workspaces stay on top.
+  Worktrees groups each workspace's agents by their exact session's current worktree: a header
+  with the repository, `branch · tree` or `Detached HEAD · commit · tree`, and the agent count,
+  then `No repository` and `Unknown` groups. Sub-agents is the spawning tree. The choice is
+  global and saved. A collapsed group or parent shows an icon card: every agent's icon and
+  state in one row that scrolls inside the card; each icon focuses its agent.
 - The observer hook records each session's current worktree from its own selected directory,
   `workspace.yaml` `cwd:`, which follows Copilot's `/cwd` (#59, ADR 0027). It reads Git's plain
   files there: an opaque key that tells worktrees of one repository apart, the repository name,
@@ -93,6 +99,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Interactive agent rows are one line: icon, name, tag chips, state (#58, ADR 0028). The
+  subtitle with the assigned directory or activity caption is gone from those rows; both stay
+  in the row's help, and the assigned directory stays in hover and details. A collapsed parent shows its spawned agents as an icon card
+  instead of an active-descendant count.
 - CI cancels superseded pull request runs so obsolete work no longer competes
   for macOS runners. Other PRs and in-progress `main` runs are unaffected;
   the current candidate still needs its own successful `ci-gate`.

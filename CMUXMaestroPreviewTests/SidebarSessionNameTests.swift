@@ -272,7 +272,9 @@ struct SidebarSessionNameTests {
         let plain = try #require(r.title("Focus Terminal \(Self.plainTitle)"))
         let namedFrame = r.frame(named), plainFrame = r.frame(plain)
         #expect(namedFrame.maxX <= r.hosting.bounds.width, "Title never widens the sidebar: \(namedFrame)")
-        #expect(namedFrame.height == plainFrame.height, "Title stays on one line: \(namedFrame) vs \(plainFrame)")
+        // The plain terminal row has a title and a metadata line; the named agent row has one line.
+        #expect(namedFrame.height < plainFrame.height, "Title stays on one line: \(namedFrame) vs \(plainFrame)")
+        #expect(namedFrame.height <= 24, "Title stays on one line: \(namedFrame)")
     }
 
     @Test func footerStripsCopilotSuffixOnlyFromTerminalTitles() {
