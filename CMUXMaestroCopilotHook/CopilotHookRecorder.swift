@@ -685,11 +685,11 @@ nonisolated enum CopilotWorktreeResolver {
             && lstat(join(path, "refs"), &refs) == 0 && refs.st_mode & S_IFMT == S_IFDIR
     }
 
+    /// Stops the walk: `HEAD`, `objects` and `refs` all present, of any type, never followed. Git
+    /// would accept symlinked ones, so this fails closed where `hasRepositoryLayout` is strict.
     private static func looksLikeGitDirectory(_ path: String) -> Bool {
-        var head = stat(), objects = stat(), refs = stat()
-        return lstat(join(path, "HEAD"), &head) == 0 && head.st_mode & S_IFMT == S_IFREG
-            && lstat(join(path, "objects"), &objects) == 0 && objects.st_mode & S_IFMT == S_IFDIR
-            && lstat(join(path, "refs"), &refs) == 0 && refs.st_mode & S_IFMT == S_IFDIR
+        var entry = stat()
+        return ["HEAD", "objects", "refs"].allSatisfy { lstat(join(path, $0), &entry) == 0 }
     }
 
     private static func canonical(_ path: String) -> String? {

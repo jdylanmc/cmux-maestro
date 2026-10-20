@@ -486,6 +486,25 @@ struct CopilotWorktreeResolverTests: Sendable {
         }
     }
 
+    /// A bare repository stops the walk even when its layout uses symlinks Git would follow.
+    @Test func symlinkedBareRepositoryIsUnknownAloneOrNested() throws {
+        let scratch = try LocationScratch()
+        defer { scratch.remove() }
+        func bare(_ path: String) throws -> URL {
+            try scratch.write("ref: refs/heads/main\n", "\(path)/HEAD")
+            _ = try scratch.directory("\(path)/refs")
+            let store = try scratch.directory("\(path)-objects")
+            try FileManager.default.createSymbolicLink(
+                at: scratch.root.appendingPathComponent("\(path)/objects"), withDestinationURL: store)
+            return scratch.root.appendingPathComponent(path)
+        }
+        #expect(resolve(try bare("alone.git")) == .unknown)
+        let outer = try scratch.repo("outer")
+        guard case .verified = resolve(outer) else { Issue.record("outer worktree must verify"); return }
+        #expect(resolve(try bare("outer/inner.git")) == .unknown)
+        #expect(resolve(scratch.root.appendingPathComponent("outer/inner.git/refs")) == .unknown)
+    }
+
     @Test func headIsReadAsGitReadsIt() {
         let parse = CMUXMaestroPreview.CopilotWorktreeResolver.parseHead
         #expect(parse("ref: refs/heads/topic \n") == .branch("topic"))
