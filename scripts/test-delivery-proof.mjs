@@ -1966,6 +1966,49 @@ test("native spawn carries optional caller launch preferences without changing o
   assert.equal(requests.length, 2);
 });
 
+test("native spawn projects Copilot 1.0.100 session catalog capabilities", async (t) => {
+  // Minimized public session.model.list projection, not models.list's typed Model shape.
+  const catalog = JSON.parse(await fs.readFile(new URL("./fixtures/model-list-1.0.100.json", import.meta.url)));
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  const requests = [];
+  let tools;
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: own,
+    joinSession: async options => {
+      tools = options.tools;
+      return { sessionId: own.sessionId, rpc: {
+        gitHubAuth: { getStatus: async () => ({
+          isAuthenticated: true, host: "https://github.com", login: "verified-parent",
+        }) },
+        model: { list: async () => catalog },
+      } };
+    },
+    launch: async request => { requests.push(request); return { ok: true, launchAccepted: true }; },
+  });
+  t.after(() => adapter.close());
+  const spawn = tools.find(tool => tool.name === "maestro_spawn").handler;
+  for (const preferences of [
+    { model: "claude-sonnet-5" },
+    { model: "gpt-6.1-sol", contextTier: "long_context", reasoningEffort: "low" },
+    { model: "gpt-5.4-mini", contextTier: "default", reasoningEffort: "low" },
+  ]) {
+    const result = await spawn({ name: "Child", cwd: "/synthetic", task: "Bounded", ...preferences },
+      { sessionId: own.sessionId });
+    assert.equal(typeof result, "string");
+    const request = requests.at(-1);
+    assert.deepEqual(request.launchCapabilities.models, [
+      { id: "claude-sonnet-5", contextTiers: ["default", "long_context"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "gpt-6.1-sol", contextTiers: ["default", "long_context"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      { id: "claude-haiku-4.5", contextTiers: ["default"], reasoningEfforts: [] },
+    ]);
+    assert.equal(request.assignment.model, preferences.model);
+    assert.equal(JSON.stringify(request).includes("billing"), false);
+  }
+});
+
 test("native preference API absence forwards unavailable evidence and preserves visible fallback warning", async (t) => {
   const f = await managedFixture(t);
   const own = f.bindings[0];
