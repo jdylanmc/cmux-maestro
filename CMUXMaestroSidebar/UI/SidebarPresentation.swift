@@ -956,7 +956,7 @@ enum SidebarPresentation {
         let orchestrationIncomplete = orchestrationAvailability != .ready
             && (!managed.isEmpty || ![.stale, .waiting].contains(orchestrationAvailability))
         let sourcesIncomplete = scope == .activity
-            ? orchestrationIncomplete || (!sessions.isEmpty && !currentSnapshot)
+            ? orchestrationIncomplete || ((!sessions.isEmpty || !managed.isEmpty) && !currentSnapshot)
             : orchestrationAvailability != .ready || !currentSnapshot
         var incomplete = !countsComplete || sourcesIncomplete
             || sessions.contains {
