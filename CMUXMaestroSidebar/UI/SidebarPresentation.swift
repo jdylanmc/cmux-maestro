@@ -962,7 +962,7 @@ enum SidebarPresentation {
             || sessions.contains {
                 !SidebarCopilotTree.isFresh($0.observedAt, now: now) || identityCounts[$0.id] != 1
                     || !$0.childrenComplete || $0.treeDegraded || $0.internalTaskCountsIncomplete
-                    || $0.attentionDegraded
+                    || (scope == .activity && $0.attentionDegraded)
                     || (scope == .activity && $0.nodes.contains { $0.state == .unknown || $0.attentionDegraded })
             }
             || bySurface.values.contains { $0.filter { $0.liveness != .dead }.count > 1 }
@@ -990,7 +990,7 @@ enum SidebarPresentation {
                 let state = includingInternalTasks && !currentChild && !node.state.isTerminal
                     ? .unknown : observedSummaryState(node.state)
                 counts[state, default: 0] += 1
-                if state == .unknown || node.attentionDegraded { incomplete = true }
+                if state == .unknown || (scope == .activity && node.attentionDegraded) { incomplete = true }
             }
         }
 

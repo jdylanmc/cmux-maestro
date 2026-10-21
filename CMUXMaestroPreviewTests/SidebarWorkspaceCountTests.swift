@@ -38,10 +38,9 @@ struct SidebarWorkspaceCountTests {
         let competing = ["input", "blocked", "failed"].contains(scenario)
             ? [session(fixtures.otherSessionID, surface: fixtures.surfaceB)] : []
         let snapshot = tree([observed] + competing)
-        let attention = SidebarPresentation.workspaceAttention(
-            sessions: snapshot.sessions, managed: [], availability: .ready, now: now, observations: snapshot
+        let activity = SidebarPresentation.collapsedActivity(
+            sessions: snapshot.sessions, managed: [], availability: .ready, observations: snapshot, now: now
         )
-        let activity = summary(snapshot, managed: []).collapsedActivity(attention: attention)
         if scenario == "idle" {
             #expect(activity == nil)
         } else {
@@ -139,6 +138,25 @@ struct SidebarWorkspaceCountTests {
             sessions: [], managed: [owner()], availability: availability, observations: tree([]), now: now
         ))
         #expect(cue.label == "1 unknown, counts incomplete")
+    }
+
+    @Test(arguments: ["session", "child"])
+    func attentionDegradationQualifiesActivityWithoutChangingAgentCounts(_ owner: String) throws {
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
+        observed.nodes = [
+            .init(id: "legacy-child", parentID: nil, depth: 0, kind: .subagent, name: "Legacy child",
+                  state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)
+        ]
+        if owner == "session" { observed.attentionDegraded = true }
+        else { observed.nodes[0].attentionDegraded = true }
+        let snapshot = tree([observed])
+        let agents = summary(snapshot, managed: [])
+        #expect(agents.agentLine == "2 agents · 2 working")
+        #expect(!agents.incomplete)
+        let activity = try #require(SidebarPresentation.collapsedActivity(
+            sessions: snapshot.sessions, managed: [], availability: .ready, observations: snapshot, now: now
+        ))
+        #expect(activity.label == "2 working, counts incomplete")
     }
 
     @Test func legacyCoordinatorCountsOneSurfaceWithoutClaimingSessionContents() throws {
