@@ -831,13 +831,27 @@ struct CopilotSetupTests {
         }
     }
 
+    private func cleanupWatchdog(
+        testIdentity: String, observation: CopilotSetupObservation? = nil
+    ) throws -> MetadataProcessTestWatchdog {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        return try MetadataProcessTestWatchdog(
+            directory: repository.appendingPathComponent(".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
+            testIdentity: testIdentity, observation: observation)
+    }
+
+    @Test func cleanupWatchdogPreservesInnerWaitBudget() throws {
+        let watchdog = try cleanupWatchdog(testIdentity: "cleanup-watchdog-budget")
+        defer { watchdog.finish() }
+        #expect(watchdog.limit > supervisedWaitLimit,
+                "Cleanup's watchdog must leave the bounded wait time to report its own failure")
+    }
+
     private func exerciseCleanup(
         cancel: Bool, delayStartup: Bool = false, launchDelay: Duration = .zero
     ) async throws {
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let observation = CopilotSetupObservation()
-        let watchdog = try MetadataProcessTestWatchdog(
-            directory: repository.appendingPathComponent(".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
+        let watchdog = try cleanupWatchdog(
             testIdentity: "exerciseCleanup(cancel:\(cancel),launchDelay:\(launchDelay))",
             observation: observation)
         defer { watchdog.finish() }
@@ -1072,10 +1086,7 @@ struct CopilotSetupTests {
     }
 
     @Test func mutationGateDetectsLiveWriterWithoutCleanup() async throws {
-        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let watchdog = try MetadataProcessTestWatchdog(
-            directory: repository.appendingPathComponent(".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
-            testIdentity: "mutationGateDetectsLiveWriterWithoutCleanup()")
+        let watchdog = try cleanupWatchdog(testIdentity: "mutationGateDetectsLiveWriterWithoutCleanup()")
         defer { watchdog.finish() }
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
