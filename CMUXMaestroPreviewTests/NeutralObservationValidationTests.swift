@@ -325,6 +325,41 @@ struct NeutralObservationValidationTests {
         #expect(!tree.hasCompleteCounts)
     }
 
+    @Test(arguments: HistoryAction.allCases, [false, true])
+    func malformedParentReferenceProtectsDescendantsBeforeHistory(
+        _ action: HistoryAction, _ twoLevels: Bool
+    ) throws {
+        for invalidParent in ["", " "] {
+            let broken = child("broken", parent: .child(.init(invalidParent)))
+            let bridge = child("bridge", parent: .child(.init("broken")), state: .unknown(), detail: .idle)
+            let terminal = terminalForHistory(action)
+            let leaf = child(
+                "active", parent: .child(.init(twoLevels ? "bridge" : "broken")), state: terminal.state,
+                terminal: true, attention: terminal.attention, kind: .skill
+            )
+            let safe = child("safe", state: .known(.done), terminal: true, kind: .skill)
+            let input = snapshot(legacy: [safe],
+                                 observed: [leaf, broken, safe] + (twoLevels ? [bridge] : []))
+            #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+            let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now, history: historyFor(action))
+            let session = try #require(tree.sessions.first)
+            let row = try #require(session.nodes.first { $0.id == "active" })
+            #expect(row.attentionDegraded && row.ancestryUnresolved)
+            if twoLevels {
+                let intermediate = try #require(session.nodes.first { $0.id == "bridge" })
+                #expect(intermediate.attentionDegraded && intermediate.ancestryUnresolved)
+            }
+            #expect(!tree.dismissibleOutcomes.contains(historyKey) && tree.acknowledgeableOutcomes.isEmpty)
+            #expect(!tree.hasCompleteCounts)
+            if action == .expire {
+                #expect(tree.hiddenHistoryCount == 1)
+                #expect(!session.nodes.contains { $0.id == "safe" })
+            } else {
+                #expect(tree.dismissibleOutcomes.map(\.childID) == ["safe"])
+            }
+        }
+    }
+
     @Test func malformedNestedObservationCannotHideIdleDescendant() throws {
         let idle = child("idle", parent: .child(.init("parent")), state: .unknown(), detail: .idle)
         let nested = child("parent", children: [idle])
