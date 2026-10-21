@@ -63,7 +63,7 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 
 **When it runs (#192):**
 
-- CI runs once for every pull request update (opened, synchronized or reopened), against GitHub's synthetic merge of the candidate with the base as it was at that update. A push run for a different tree never substitutes for it. If `main` moves afterwards, that PR run is stale too; refresh the candidate as item 4 above requires before treating it as merge evidence.
+- CI runs once for every pull request update (opened, synchronized or reopened), against the exact GitHub workflow synthetic merge. Its actual first parent can be newer than the event payload's base SHA, or belong to a retargeted base. Guide acceptance verifies the exact candidate and proves that actual base by event-base ancestry or a bounded current-PR-base lookup; both expected and actual parents are retained. A push run for a different tree never substitutes for it. If `main` moves after the tested merge, that PR run is stale too; refresh the candidate as item 4 above requires before treating it as merge evidence.
 - Fork pull requests run the same suite with GitHub's read-only fork token; no step needs secrets.
 - CI runs the full validation for pushes to `main`.
 - A feature-branch push without a PR runs nothing. To validate one, open a draft pull request.
@@ -111,7 +111,7 @@ Use [Joe pace](../../.agents/skills/joe-mode/DELIVERY-PACE.md) and the canonical
 
 **Suite selection (#194):**
 
-- `ci-classify` (on `ubuntu-latest`, before any validation job) classifies the change set of the exact pull request run and decides, for each required suite, whether it applies. It reads the base and head SHAs from the pull request event through environment variables, verifies that the checkout is GitHub's synthetic merge of exactly that base and head, and classifies every path that differs between the base and that merge, plus every path the head changed since its merge base, so a change `main` already contains still counts. Renames count as a deletion and an addition, so both paths are classified.
+- `ci-classify` (on `ubuntu-latest`, before any validation job) classifies the change set of the exact pull request run and decides, for each required suite, whether it applies. It verifies the exact workflow merge and event candidate, uses the merge's actual first parent as the base, and records the event's advertised base separately. It classifies every path that differs between the actual base and that merge, plus every path the head changed since its merge base, so a change `main` already contains still counts. Renames count as a deletion and an addition, so both paths are classified.
 - `scripts/ci-classify.py` applies the reviewed map `scripts/ci-suite-map.json`: ordered path-glob rules, the first match wins. A file no rule matches is unmapped and selects every suite. Only these rules select fewer than every suite:
   - This policy (`docs/agents/merge-policy.md`) selects `validate-portable` and `validate-contracts`: it is Markdown, and `scripts/test-build-metadata.py` checks the workflow against it.
   - `README.md` and `docs/reference/cli-guide-and-uninstall.md` also select `validate-portable` and `validate-contracts`: `scripts/test-delivery-proof.py` reads their manual global-skill install commands.

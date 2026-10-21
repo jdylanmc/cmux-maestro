@@ -37,11 +37,22 @@ contention. Injected-clock tests cover both slow and fast actor turns.
 - The replay saturation fixture fixes setup event identities before applying
   pressure. A random false positive in its one-word filter is not a product defect.
 - Guide acceptance remains required. The historical missing-evidence failures
-  came from the producer's shallow-checkout parent check, not demonstrated
-  environment-forwarding loss. Current source uses raw `git cat-file commit`
-  parents; `GuideSourceParentTests` verifies real shallow/full repositories and
-  rejects changed base, candidate, order, tree, and workflow SHA. Failed production
-  still fails the integrated invocation, never becomes an accepted skip.
+  came from producer source-attribution rejection, not lost environment
+  forwarding. Raw `git cat-file commit` parents bind the exact workflow commit,
+  tree and candidate. The event's base SHA may precede a merge or retarget:
+  the actual first parent must equal or descend from that event base, or match
+  the current base tip returned by one bounded GitHub lookup for this repository,
+  PR and exact candidate. Native CI fetches complete history for ancestry checks.
+  The lookup's read-only token is excluded from producer build/test environments
+  and consumer forwarding. Expected/actual parents and the selected proof are
+  retained even when attribution fails.
+- Failed guide production stops the dependent native invocation immediately,
+  retains its original diagnostic in `coverage.json`, and fails the job.
+  Consumers never run with knowingly absent evidence; this is a failed
+  prerequisite, not an accepted skip or reduced coverage on a passing run.
+  Real-Git regressions accept an advanced or verified retargeted base and reject
+  a wrong candidate or unrelated first parent. A forwarding regression verifies
+  both original consumer actions receive only fresh successful-producer evidence.
 
 ## Explicit local-only native acceptance
 

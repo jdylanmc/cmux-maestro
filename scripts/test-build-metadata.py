@@ -191,6 +191,14 @@ SEVENTEEN_VALIDATION_COMMANDS = {
 }
 
 
+NATIVE_CHECKOUT = "      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n"
+NATIVE_TEST_STEP = (
+    "      - name: Run integrated Swift tests\n"
+    "        env:\n          CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ github.token }}\n"
+    "        run: ./scripts/test.sh\n"
+)
+
+
 class IntegratedTestScopeTests(unittest.TestCase):
     def setUp(self):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
@@ -1262,15 +1270,18 @@ class BuildMetadataTests(unittest.TestCase):
             run_steps = [step for step in job_steps(jobs[job]) if "\n        run:" in step]
             self.assertEqual(len(run_steps), len(VALIDATION_JOBS[job]))
             for step in run_steps:
-                self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+                if job == "validate-native":
+                    self.assertEqual(step, NATIVE_TEST_STEP, "Only the exact read-token forwarding is allowed.")
+                else:
+                    self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
             # Independent: each needs only the classifier, so a failure in either job never skips the
             # other's suites; its only condition is the sanctioned selection flag (#194).
             self.assertEqual(re.findall(r"^    needs: (.+)$", jobs[job], re.MULTILINE), [f"[{CLASSIFIER_JOB}]"], job)
             self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)], job)
         self.assert_runner_placement(workflow)
         steps = job_steps(jobs["validate-native"])
-        self.assertEqual(steps[0], "      - uses: actions/checkout@v4\n")
-        self.assertEqual(steps[1], "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n",
+        self.assertEqual(steps[0], NATIVE_CHECKOUT)
+        self.assertEqual(steps[1], NATIVE_TEST_STEP,
                          "Integrated Swift tests start right after checkout (#196).")
         self.assertNotIn("continue-on-error", workflow)
 
@@ -1362,7 +1373,7 @@ class BuildMetadataTests(unittest.TestCase):
         unsigned = (ROOT / "scripts/build-unsigned.sh").read_text()
         self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', test_sh)
         self.assertIn('DERIVED_DATA="$ROOT/.build/unsigned"', unsigned)
-        checkout = "      - uses: actions/checkout@v4\n      - name: Run integrated Swift tests\n"
+        checkout = NATIVE_CHECKOUT + "      - name: Run integrated Swift tests\n"
         self.assertIn(checkout, workflow)
         restore = ("      - uses: actions/checkout@v4\n"
                    "      - uses: actions/cache@v4\n        with:\n          path: .build/tests\n"
@@ -1400,7 +1411,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_split_job_guards_reject_order_coverage_and_dependency_drift(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        test_sh = "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n"
+        test_sh = NATIVE_TEST_STEP
         hook = "      - name: Verify compiled hooks fail open\n        run: ./scripts/test-copilot-hook.sh\n"
         setup = "      - name: Verify Settings guide and setup process isolation\n        run: ./scripts/test-copilot-setup.sh\n"
         beats = "        run: python3 scripts/test-beats.py\n"
@@ -1413,6 +1424,11 @@ class BuildMetadataTests(unittest.TestCase):
         setup_upload = workflow[workflow.index("      - name: Upload setup process isolation evidence\n"):]
         setup_upload = setup_upload[:setup_upload.index("retention-days: 14\n") + len("retention-days: 14\n")]
         validation_mutations = {
+            "shallow native ancestry": workflow.replace(
+                NATIVE_CHECKOUT + test_sh, NATIVE_CHECKOUT.replace("fetch-depth: 0", "fetch-depth: 1") + test_sh),
+            "foreign lookup token": workflow.replace(
+                "CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ github.token }}",
+                "CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ secrets.OTHER_TOKEN }}"),
             "native needs contracts": workflow.replace(
                 "  validate-native:\n", "  validate-native:\n    needs: [validate-contracts]\n"),
             "contracts needs native": workflow.replace(
@@ -1663,7 +1679,8 @@ class BuildMetadataTests(unittest.TestCase):
         contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
         self.assert_suite_selection(workflow, contract)
         mutations = {
-            "shallow classifier checkout": ("          fetch-depth: 0\n", "          fetch-depth: 1\n"),
+            "shallow classifier checkout": ("          fetch-depth: 0\n      - name: Classify changed files\n",
+                                            "          fetch-depth: 1\n      - name: Classify changed files\n"),
             "base inlined into run": ("        run: python3 scripts/ci-classify.py\n",
                                       "        run: python3 scripts/ci-classify.py "
                                       "${{ github.event.pull_request.base.sha }}\n"),

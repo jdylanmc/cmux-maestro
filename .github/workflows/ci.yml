@@ -43,9 +43,16 @@ jobs:
     needs: [ci-classify]
     if: needs.ci-classify.outputs.run_validate_native != 'false'
     runs-on: macos-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Run integrated Swift tests
+        env:
+          CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ github.token }}
         run: ./scripts/test.sh
       - name: Upload synthetic sidebar layout renders
         if: always()

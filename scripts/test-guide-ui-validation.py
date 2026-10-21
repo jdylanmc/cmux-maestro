@@ -3,6 +3,7 @@
 
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -49,6 +50,38 @@ class GuideModuleImportTests(unittest.TestCase):
 
 class GuideSourceParentTests(unittest.TestCase):
     """Actual disposable Git objects and shallow boundary; no native build or execution."""
+
+    def test_current_base_lookup_binds_repository_number_candidate_and_response_bound(self):
+        candidate, base = "a" * 40, "b" * 40
+        environment = {"GITHUB_REPOSITORY": "example/project", "CMUX_GUIDE_ACCEPTANCE_API_TOKEN": "fixture-token"}
+        document = {"number": 7, "head": {"sha": candidate},
+                    "base": {"sha": base, "repo": {"full_name": "example/project"}}}
+        for fault in (None, "number", "candidate", "repository", "base", "oversized"):
+            with self.subTest(fault=fault):
+                value = copy.deepcopy(document)
+                if fault == "number":
+                    value["number"] = 8
+                elif fault == "candidate":
+                    value["head"]["sha"] = "c" * 40
+                elif fault == "repository":
+                    value["base"]["repo"]["full_name"] = "example/other"
+                elif fault == "base":
+                    value["base"]["sha"] = "not-a-commit"
+                data = b" " * 1_048_577 if fault == "oversized" else json.dumps(value).encode()
+
+                def opener(request, *, timeout):
+                    self.assertEqual(request.full_url, "https://api.github.com/repos/example/project/pulls/7")
+                    self.assertEqual(request.get_header("Authorization"), "Bearer " + environment["CMUX_GUIDE_ACCEPTANCE_API_TOKEN"])
+                    self.assertGreater(timeout, 0)
+                    return io.BytesIO(data)
+
+                if fault is None:
+                    self.assertEqual(probe.current_pr_base(environment, 7, candidate, opener=opener), base)
+                else:
+                    with self.assertRaises(ValueError):
+                        probe.current_pr_base(environment, 7, candidate, opener=opener)
+        self.assertNotIn("CMUX_GUIDE_ACCEPTANCE_API_TOKEN", probe.build_environment(environment))
+        self.assertNotIn("CMUX_GUIDE_ACCEPTANCE_API_TOKEN", probe.scopes.hosted_test_environment(environment))
 
     def test_base_movement_and_retarget_accept_only_proven_base_and_exact_candidate(self):
         with tempfile.TemporaryDirectory(prefix="cmux-guide-base-movement-") as directory:
@@ -754,6 +787,8 @@ class GuideUIValidationTests(unittest.TestCase):
 
             def runner(command, **kwargs):
                 nonlocal status_reads, head_reads
+                if command[:4] == ["git", "--no-replace-objects", "merge-base", "--is-ancestor"]:
+                    return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
                 if command[:4] == ["git", "--no-replace-objects", "cat-file", "commit"]:
                     return subprocess.CompletedProcess(command, 0, stdout=(
                         "tree " + "a" * 40 + "\nparent " + ("e" if fault == "PR-wrong-parent" else "d") * 40

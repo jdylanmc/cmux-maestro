@@ -575,6 +575,8 @@ def produce_guide_acceptance(directory, runner):
     context = {"exitCode": code, "output": str(output), "invocation": invocation,
                "head": receipt.get("sourceHead"), "tree": receipt.get("sourceTree"),
                "environment": {}}
+    if code:
+        context["error"] = receipt.get("error") or "Native guide acceptance producer failed without a diagnostic."
     if not code:
         context["environment"] = {
             "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": str(output),
@@ -678,6 +680,15 @@ def run(command, directory, runner=subprocess.run):
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
         guide = {"exitCode": 1, "environment": {}}
         evidence["guideAcceptanceError"] = str(error)
+    if guide["exitCode"]:
+        evidence["guideAcceptanceError"] = evidence.get("guideAcceptanceError") or guide.get("error") or \
+            "Native guide acceptance producer failed without a diagnostic."
+        evidence["blockedStage"] = "guide-acceptance"
+        evidence["passed"] = False
+        save()
+        print("Native guide acceptance producer failed: " + evidence["guideAcceptanceError"], file=sys.stderr)
+        print(f"Integrated test coverage: {evidence_path}", flush=True)
+        return 1
     save()
     isolated_bundle = directory / "isolated.xcresult"
     isolated = runner([*command, "test-without-building", "-only-testing:" + SELECTOR,

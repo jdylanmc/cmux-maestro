@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import urllib.request
 import uuid
 
 sys.dont_write_bytecode = True
@@ -43,6 +44,29 @@ def test_environment(environment, host):
         result["TEST_RUNNER_" + key] = environment[key]
     result["TEST_RUNNER_CMUX_GUIDE_UI_HOST_PATH"] = str(host)
     return result
+
+
+def current_pr_base(environment, number, candidate, opener=urllib.request.urlopen):
+    repository = environment.get("GITHUB_REPOSITORY", "")
+    token = environment.get("CMUX_GUIDE_ACCEPTANCE_API_TOKEN", "")
+    metadata.require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*", repository)
+                     and type(number) is int and number > 0 and token,
+                     "Current PR base lookup requires an exact repository, PR number and read token.")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/pulls/{number}",
+        headers={"Authorization": "Bearer " + token, "Accept": "application/vnd.github+json",
+                 "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "CMUX-Maestro-CI"},
+    )
+    with opener(request, timeout=30) as response:
+        data = response.read(1_048_577)
+    metadata.require(len(data) <= 1_048_576, "Current PR base response exceeded its bound.")
+    document = json.loads(data)
+    base = document["base"]
+    metadata.require(document["number"] == number and document["head"]["sha"] == candidate
+                     and base["repo"]["full_name"] == repository
+                     and re.fullmatch(r"[0-9a-f]{40}", base["sha"]),
+                     "Current PR base response does not bind this repository and exact candidate.")
+    return base["sha"]
 
 
 def run(compile_only, output, *, acceptance=False, invocation=None, runner=subprocess.run, environment=None):
@@ -127,8 +151,28 @@ def run(compile_only, output, *, acceptance=False, invocation=None, runner=subpr
             elif event_name == "pull_request":
                 request = event["pull_request"]
                 candidate = request["head"]["sha"]
-                metadata.require(parents == [request["base"]["sha"], candidate],
-                                 "PR checkout is not the exact current base/candidate synthetic merge.")
+                event_base = request["base"]["sha"]
+                attempt = {"expectedParents": [event_base, candidate], "actualParents": parents}
+                evidence["sourceAttributionAttempt"] = attempt
+                metadata.require(re.fullmatch(r"[0-9a-f]{40}", candidate)
+                                 and re.fullmatch(r"[0-9a-f]{40}", event_base)
+                                 and len(parents) == 2 and parents[1] == candidate,
+                                 "PR checkout is not a two-parent synthetic merge of the exact event candidate.")
+                if parents[0] == event_base:
+                    attempt["baseProof"] = "event-base"
+                else:
+                    ancestry = command("event-base-ancestry", [
+                        "git", "--no-replace-objects", "merge-base", "--is-ancestor", event_base, parents[0],
+                    ], allow_failure=True)
+                    attempt["eventBaseAncestryExitCode"] = ancestry.returncode
+                    if ancestry.returncode == 0:
+                        attempt["baseProof"] = "event-base-descendant"
+                    else:
+                        current_base = current_pr_base(environment, event.get("number"), candidate)
+                        attempt["currentBase"] = current_base
+                        metadata.require(parents[0] == current_base,
+                                         "PR checkout base is neither an event-base descendant nor the current PR base tip.")
+                        attempt["baseProof"] = "current-base-tip"
             else:
                 raise ValueError("Acceptance requires attributable push or pull_request source.")
             evidence["sourceAttribution"] = {"event": event_name, "workflowHead": environment["GITHUB_SHA"],
