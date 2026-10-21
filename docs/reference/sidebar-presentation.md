@@ -115,8 +115,11 @@ or ambiguous evidence unavailable. **Ports (CMUX, workspace-wide)** lists the po
 CMUX's `networkPorts` scope reports for the whole workspace, sorted and copyable, or
 `None reported` (not proof that nothing listens) or `Not granted`. CMUX gives no owner,
 address, protocol or completeness, so agent previews never show it.
-Managed agent previews add background processes and
-listeners ([background processes and ports](processes-and-ports.md)).
+Managed agent previews add one wrapping **Processes** field:
+`PID 4242 (python3.12); PID 4243 (node)`, capped at 8 entries with trailing `+N`
+overflow. Copy gives visible current PIDs, one per line, only for a complete,
+current observation. Helpers stay counted separately; listeners keep their
+endpoint rows ([background processes and ports](processes-and-ports.md)).
 
 `SidebarHoverRegion` and `SidebarHoverCard` accept presentation data, independent
 of sessions, navigation, preferences, and the bottom details. Passive panels

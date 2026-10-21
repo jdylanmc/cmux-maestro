@@ -125,7 +125,7 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
 
 /// Agent hover lines for one node's background processes and listeners: labels and values only.
 enum SidebarProcessPresentation {
-    static let title = "Background processes"
+    static let title = "Processes"
     static let helpersTitle = "Copilot helpers"
     static let listenersTitle = "Listening"
     static let staleInterval: TimeInterval = 60
@@ -152,20 +152,24 @@ enum SidebarProcessPresentation {
             : total > 0 ? ["\(total)"] : incomplete ? [] : ["None"]
         if incomplete { summary.append("Scan incomplete") }
         if stale { summary.append("Stale") }
-        var lines = [SidebarDetailLine(title: title, value: summary.joined(separator: " · "))]
         // Helpers are counted, never listed, whether current or retained.
         let listed = separate + entry.processes.filter { $0.state != "owned-current" && $0.group == "separate" }
         // Only a complete, current list was re-verified; a kept or partial list is not.
         let canCopy = entry.state == "owned-current" && !stale
-        for process in listed.prefix(maximumLines) {
+        let visible = listed.prefix(maximumLines)
+        var values = stale || incomplete || entry.state == "exited" || listed.isEmpty && total == 0
+            ? [summary.joined(separator: " · ")] : []
+        for process in visible {
             let state = ["escaped": " · Detached", "exited": " · Exited"][process.state] ?? ""
-            let copy = process.state == "owned-current" && canCopy
-            lines.append(.init(title: process.name, value: "PID \(process.pid)\(state)",
-                               copyableValue: copy ? String(process.pid) : nil,
-                               lineID: "process-\(process.pid)-\(process.startMicros)"))
+            values.append("PID \(process.pid) (\(process.name))\(state)")
         }
         let hidden = max(0, listed.count - maximumLines) + entry.omittedCount
-        if hidden > 0 { lines.append(.init(title: "More background processes", value: "\(hidden)")) }
+        if hidden > 0 { values.append("+\(hidden)") }
+        let pids = visible.filter { $0.state == "owned-current" }.map { String($0.pid) }
+        var lines = [SidebarDetailLine(
+            title: title, value: values.joined(separator: "; "),
+            copyableValue: canCopy && !pids.isEmpty ? pids.joined(separator: "\n") : nil
+        )]
         if helpers > 0 { lines.append(.init(title: helpersTitle, value: "\(helpers)")) }
         let listeners = owned.flatMap { process in process.listeners.map { (process, $0) } }
         // Unprobed processes, helpers included, may listen: unknown is never shown as none.

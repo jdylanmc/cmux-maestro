@@ -61,10 +61,14 @@ struct SidebarProcessObservationTests {
 
     @Test func ownedProcessesListenersAndHelpersAreLabelledWithCopyablePIDsAndEndpoints() throws {
         let result = lines(file())
-        #expect(result.first == .init(title: "Background processes", value: "2"))
-        let python = try #require(result.first { $0.id == "process-4242-1799999990000007" })
-        #expect((python.title, python.value, python.copyableValue) == ("python3.12", "PID 4242", "4242"))
-        #expect(result.contains { $0.title == "zsh" && $0.copyableValue == "4243" })
+        let processes = try #require(result.first)
+        #expect(processes == .init(
+            title: "Processes",
+            value: "PID 4242 (python3.12); PID 4243 (zsh); PID 4300 (server) · Detached; PID 4301 (build) · Exited",
+            copyableValue: "4242\n4243"
+        ))
+        #expect(result.filter { $0.title == "Processes" }.count == 1)
+        #expect(!result.contains { ["python3.12", "zsh", "server", "build", "More background processes"].contains($0.title) })
         // Helpers are counted, never listed; their listeners still show.
         #expect(result.contains(.init(title: "Copilot helpers", value: "2")))
         #expect(!result.contains { $0.title == "node" })
@@ -76,32 +80,40 @@ struct SidebarProcessObservationTests {
         #expect(listeners[0].value == "127.0.0.1:5173 · TCP · python3.12 4242")
         #expect(!result.contains { $0.value.contains("http") })
         #expect(Set(result.map(\.id)).count == result.count)
-        let detached = try #require(result.first { $0.title == "server" })
-        #expect((detached.value, detached.copyableValue) == ("PID 4300 · Detached", nil))
-        #expect(result.contains { $0.title == "build" && $0.value == "PID 4301 · Exited" && $0.copyableValue == nil })
+    }
+
+    @Test func processFieldPreservesOrderAndFoldsDisplayAndProbeOverflow() throws {
+        let processes = (1...10).map {
+            #"{"pid":\#($0),"startMicros":\#($0),"name":"node","group":"separate","state":"owned-current","listeners":[]}"#
+        }.joined(separator: ",")
+        let result = lines(file(processes: processes, omitted: 3))
+        #expect(result == [.init(
+            title: "Processes",
+            value: "PID 1 (node); PID 2 (node); PID 3 (node); PID 4 (node); PID 5 (node); PID 6 (node); PID 7 (node); PID 8 (node); +5",
+            copyableValue: "1\n2\n3\n4\n5\n6\n7\n8"
+        )])
     }
 
     @Test func staleIncompleteDeniedAndUnprovenStatesNeverClaimACurrentList() {
         let stale = lines(file(), at: now.addingTimeInterval(61))
-        #expect(stale.first?.value == "2 · Stale")
+        #expect(stale.first?.value == "2 · Stale; PID 4242 (python3.12); PID 4243 (zsh); PID 4300 (server) · Detached; PID 4301 (build) · Exited")
         #expect(stale.allSatisfy { $0.copyableValue == nil })
-        #expect(lines(file(), at: now.addingTimeInterval(301)) == [.init(title: "Background processes", value: "Unavailable")])
+        #expect(lines(file(), at: now.addingTimeInterval(301)) == [.init(title: "Processes", value: "Unavailable")])
         let incomplete = lines(file(state: "scan-incomplete", processes: ""))
-        #expect(incomplete == [.init(title: "Background processes", value: "Scan incomplete")])
+        #expect(incomplete == [.init(title: "Processes", value: "Scan incomplete")])
         #expect(lines(file(processes: "")) == [
-            .init(title: "Background processes", value: "None"), .init(title: "Listening", value: "None"),
+            .init(title: "Processes", value: "None"), .init(title: "Listening", value: "None"),
         ])
-        #expect(lines(file(state: "denied", processes: "")) == [.init(title: "Background processes", value: "Denied")])
+        #expect(lines(file(state: "denied", processes: "")) == [.init(title: "Processes", value: "Denied")])
         for state in ["no-custody", "ambiguous"] {
-            #expect(lines(file(state: state, processes: "")) == [.init(title: "Background processes", value: "Unavailable")])
+            #expect(lines(file(state: state, processes: "")) == [.init(title: "Processes", value: "Unavailable")])
         }
-        #expect(SidebarProcessPresentation.lines(nil, now: now) == [.init(title: "Background processes", value: "Not observed")])
+        #expect(SidebarProcessPresentation.lines(nil, now: now) == [.init(title: "Processes", value: "Not observed")])
     }
 
     @Test func anIncompleteScanWithOnlyOmittedWorkNeverClaimsZero() {
         let result = lines(file(state: "scan-incomplete", processes: "", omitted: 4))
-        #expect(result.first == .init(title: "Background processes", value: "4 · Scan incomplete"))
-        #expect(result.contains(.init(title: "More background processes", value: "4")))
+        #expect(result == [.init(title: "Processes", value: "4 · Scan incomplete; +4")])
     }
 
     @Test func retainedHelpersAreNeverListed() {
@@ -113,7 +125,7 @@ struct SidebarProcessObservationTests {
 
     @Test func anIncompleteScanNeverOffersCopies() {
         let result = lines(file(state: "scan-incomplete"))
-        #expect(result.contains { $0.title == "python3.12" && $0.value == "PID 4242" })
+        #expect(result.first?.value == "2 · Scan incomplete; PID 4242 (python3.12); PID 4243 (zsh); PID 4300 (server) · Detached; PID 4301 (build) · Exited")
         #expect(result.contains { $0.value.hasPrefix("127.0.0.1:5173") })
         #expect(result.allSatisfy { $0.copyableValue == nil })
     }
@@ -140,8 +152,7 @@ struct SidebarProcessObservationTests {
         let data = Data(String(decoding: file(omitted: 3), as: UTF8.self)
             .replacingOccurrences(of: #""omittedCount":3"#, with: #""omittedCount":3,"omittedHelperCount":5"#).utf8)
         let result = lines(data)
-        #expect(result.first == .init(title: "Background processes", value: "5"))
-        #expect(result.contains(.init(title: "More background processes", value: "3")))
+        #expect(result.first?.value == "PID 4242 (python3.12); PID 4243 (zsh); PID 4300 (server) · Detached; PID 4301 (build) · Exited; +3")
         #expect(result.contains(.init(title: "Copilot helpers", value: "7")))
     }
 
@@ -177,7 +188,7 @@ struct SidebarProcessObservationTests {
             tree: .init(availability: .ready, sessions: [], issues: [], generatedAt: now),
             managed: snapshot(file()), availability: .ready, now: now
         ))
-        #expect(card.lines.contains(.init(title: "Background processes", value: "2")))
+        #expect(card.lines.filter { $0.title == "Processes" }.map(\.copyableValue) == ["4242\n4243"])
         #expect(card.lines.contains { $0.copyableValue == "127.0.0.1:5173" })
         let unavailable = try #require(SidebarAgentHoverContent.card(
             for: .managed(nodeID, generation: 2), hierarchy: fixtures.hierarchy(), connected: true,
