@@ -70,6 +70,7 @@ struct SidebarAgentIconCardItem: Identifiable {
 /// and a separate control that expands the group. Each icon focuses its agent's surface.
 struct SidebarAgentIconCard: View {
     let items: [SidebarAgentIconCardItem]
+    var summary: SidebarBranchSummary? = nil
     let navigation: SidebarNavigation
     let expandLabel: String
     let expand: () -> Void
@@ -78,9 +79,9 @@ struct SidebarAgentIconCard: View {
     @Environment(\.sidebarTerminalIconStyle) private var terminalStyle
 
     var body: some View {
-        HStack(spacing: 2) {
+        HStack(spacing: 4) {
             ScrollView(.horizontal) {
-                HStack(spacing: 2) {
+                HStack(spacing: 4) {
                     ForEach(items) { item in
                         FocusButton(
                             target: .surface(workspaceID: item.workspaceID, surfaceID: item.surfaceID),
@@ -89,26 +90,29 @@ struct SidebarAgentIconCard: View {
                         ) {
                             icon(item)
                         }
-                        .frame(width: 34, height: 30)
+                        .frame(width: 28, height: 28)
                         .agentHoverPreview(item.hover)
                         .accessibilityIdentifier("agent-icon-\(item.id)")
                     }
                 }
-                .padding(.horizontal, 3)
+                .padding(.horizontal, 4)
             }
             .scrollIndicators(.automatic, axes: .horizontal)
-            .frame(height: 36)
+            .frame(height: 32)
+            if let summary {
+                CollapsedBranchSummary(summary: summary, compact: true)
+            }
             Button(action: expand) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 20, height: 30)
+                    .frame(width: 20, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(expandLabel)
             .accessibilityLabel(expandLabel)
         }
-        .padding(.trailing, 2)
+        .padding(.trailing, 4)
         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(items.count) agent\(items.count == 1 ? "" : "s")")
@@ -125,7 +129,7 @@ struct SidebarAgentIconCard: View {
             SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor))
                 .frame(width: 20, height: 20)
         }
-        .frame(width: 34, height: 30)
+        .frame(width: 28, height: 28)
     }
 }
 

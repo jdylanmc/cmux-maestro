@@ -349,19 +349,33 @@ private struct SidebarActionLayout<Content: View>: View {
     }
 }
 
-private struct CollapsedBranchSummary: View {
+struct CollapsedBranchSummary: View {
     let summary: SidebarBranchSummary
+    var compact = false
 
     var body: some View {
         let lines = SidebarPresentation.collapsed(summary)
         if !lines.isEmpty {
             HStack(spacing: 4) {
+                if compact {
+                    if summary.blocked > 0 {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.blocked))
+                    } else if summary.attention > 0 || summary.omittedActive > 0 {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.failed))
+                    } else if summary.running > 0 {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.working))
+                    }
+                    if summary.incomplete {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.unknown))
+                    }
+                } else {
                 if summary.running > 0 { Image(systemName: SidebarPresentation.state(.working).symbol) }
                 if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
                 if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
                 if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
                 if summary.incomplete {
                     Image(systemName: "info.circle")
+                }
                 }
             }
             .sidebarFont(.caption2)
@@ -1392,14 +1406,15 @@ struct ManagedHierarchyContent: View {
                                 items: descendants(of: row.node.id).map {
                                     .managed($0, availability: polling.availability, tree: copilotTree, now: evidenceDate)
                                 },
+                                summary: SidebarBranchSummary(sessions: retained),
                                 navigation: navigation, expandLabel: "Expand \(row.node.title)"
                             ) { setExpanded(.managed(row.node.id), true) }
-                            .padding(.leading, 22 + density.indentation(
+                            .padding(.leading, 50 + density.indentation(
                                 depth: row.depth, unresolved: false, width: contentWidth
                             ))
                             .padding(.vertical, 2)
                         }
-                        if !expanded && showsRetainedWork(retained) {
+                        if !expanded && !row.hasChildren && showsRetainedWork(retained) {
                             CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
                                 .padding(.leading, 22 + density.indentation(
                                     depth: row.depth, unresolved: false, width: contentWidth
