@@ -477,6 +477,42 @@ struct SidebarOrchestrationTests {
         }
     }
 
+    @Test func humanHexColorsAreRejectedInAgentSnapshotsAndIconOverlays() throws {
+        let current = node(run: UUID(), role: "coordinator", parent: nil, workspace: UUID())
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: current.updatedAt, complete: true, omittedCount: 0, nodes: [current]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        var object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var nodes = try #require(object["nodes"] as? [[String: Any]])
+        for color in ["theme", "teal", "#123456", "#aBcDeF"] {
+            nodes[0]["iconColor"] = color
+            object["nodes"] = nodes
+            let projected = try JSONSerialization.data(withJSONObject: object)
+            let overlay = try JSONSerialization.data(withJSONObject: [
+                "version": 1, "icons": [[
+                    "nodeId": current.id.uuidString, "runId": current.runId.uuidString,
+                    "workspaceId": current.workspaceId.uuidString, "surfaceId": current.surfaceId.uuidString,
+                    "iconColor": color
+                ]]
+            ])
+            if color.hasPrefix("#") {
+                #expect(throws: DecodingError.self) {
+                    try SidebarOrchestrationReader.decoder().decode(SidebarOrchestrationSnapshot.self, from: projected)
+                }
+                #expect(throws: DecodingError.self) { try JSONDecoder().decode(SidebarIconOverrides.self, from: overlay) }
+                #expect(SidebarIconOverrides.overlaid(overlay, onto: snapshot) == snapshot)
+            } else {
+                let decoded = try SidebarOrchestrationReader.decoder().decode(SidebarOrchestrationSnapshot.self, from: projected)
+                #expect(decoded.nodes[0].iconColor?.rawValue == color)
+                #expect(try JSONDecoder().decode(SidebarIconOverrides.self, from: overlay).icons[0].iconColor?.rawValue == color)
+            }
+        }
+        #expect(try SidebarOrchestrationReader.decoder().decode(SidebarOrchestrationSnapshot.self, from: data).nodes[0].iconColor == nil)
+    }
+
     @Test func corruptIconOverlayLeavesManagedHierarchyIntact() {
         let current = node(run: UUID(), role: "coordinator", parent: nil, workspace: UUID())
         let snapshot = SidebarOrchestrationSnapshot(

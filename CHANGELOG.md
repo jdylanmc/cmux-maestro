@@ -23,6 +23,12 @@ Notable changes are recorded using Keep a Changelog categories.
   count. Input and blockers take priority over failures and working agents;
   incomplete evidence stays visible. Activate the cue to expand, without
   focusing or acknowledging a session (#290).
+- Icon and tag editors keep their swatches and add **Custom…**, the macOS system
+  color picker, for any opaque sRGB hex (#294). Custom tags retain readable
+  black/white text; custom icons retain a contrasting outline. Dragging previews
+  locally and commits once on panel close or Save/Done; the editor stays open. Named-only
+  preferences remain format 1; custom choices use format 2, which older builds
+  preserve but cannot display. Agent color APIs remain named-only.
 - `/maestro-demo` runs a human-requested live demo with two visible workers (three
   on request), distinct icons, self-assigned tags, original self-drawn pets, and
   one native-message follow-up each. Closing stays optional and human-approved.
@@ -60,7 +66,7 @@ Notable changes are recorded using Keep a Changelog categories.
   `cmux-maestro-orchestrator tags add|remove|list|clear --self`. Tags show as compact chips inline
   with expanded agent titles, and with their owners in details, hover cards and the Beats panel.
   The same tag from you and the agent is one chip; removing it from one side keeps the other.
-  Colors are automatic per tag, or one of 14 swatches you choose for that tag everywhere; agents
+  Colors are automatic per tag, or a human-chosen swatch or custom color for that tag everywhere; agents
   cannot set colors. Text contrast is at least 4.5:1. See
   [agent tags](docs/reference/agent-tags.md).
 - A new controller command, `process-observe`, publishes each managed agent's owned background

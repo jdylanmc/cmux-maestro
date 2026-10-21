@@ -78,7 +78,22 @@ nonisolated enum SidebarTagError: Error, Equatable {
 nonisolated struct SidebarTagColor: Hashable, Sendable {
     let red: UInt8, green: UInt8, blue: UInt8
 
-    var hex: String { String(format: "#%02x%02x%02x", red, green, blue) }
+    init(red: UInt8, green: UInt8, blue: UInt8) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+    }
+
+    /// Opaque sRGB only; no shorthand, whitespace, alpha, or non-ASCII digits.
+    init?(hex: String) {
+        let bytes = Array(hex.utf8)
+        guard bytes.count == 7, bytes[0] == 35,
+              bytes.dropFirst().allSatisfy({ (48...57).contains($0) || (65...70).contains($0) || (97...102).contains($0) }),
+              let rgb = UInt32(hex.dropFirst(), radix: 16) else { return nil }
+        self.init(red: UInt8((rgb >> 16) & 255), green: UInt8((rgb >> 8) & 255), blue: UInt8(rgb & 255))
+    }
+
+    var hex: String { String(format: "#%02X%02X%02X", red, green, blue) }
 
     /// WCAG 2 relative luminance.
     var luminance: Double {
@@ -103,11 +118,59 @@ nonisolated struct SidebarTagColor: Hashable, Sendable {
     }
 }
 
-/// Human-chosen colors. A fixed set, so every override keeps at least 4.5:1 text contrast.
-nonisolated enum SidebarTagSwatch: String, CaseIterable, Codable, Sendable {
+/// Human-chosen opaque colors. Foregrounds are selected by actual contrast, including custom colors.
+nonisolated enum SidebarTagSwatch: RawRepresentable, CaseIterable, Codable, Hashable, Sendable {
     case rose, peach, gold, lime, mint, teal, sky, periwinkle, lavender, orchid, slate, forest, ocean, plum
+    case custom(SidebarTagColor)
 
-    var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    static let allCases: [Self] = [
+        .rose, .peach, .gold, .lime, .mint, .teal, .sky, .periwinkle, .lavender, .orchid, .slate, .forest, .ocean, .plum
+    ]
+
+    init?(rawValue: String) {
+        if let named = Self.allCases.first(where: { $0.rawValue == rawValue }) { self = named }
+        else if let color = SidebarTagColor(hex: rawValue) { self = .custom(color) }
+        else { return nil }
+    }
+
+    var rawValue: String {
+        switch self {
+        case .rose: "rose"
+        case .peach: "peach"
+        case .gold: "gold"
+        case .lime: "lime"
+        case .mint: "mint"
+        case .teal: "teal"
+        case .sky: "sky"
+        case .periwinkle: "periwinkle"
+        case .lavender: "lavender"
+        case .orchid: "orchid"
+        case .slate: "slate"
+        case .forest: "forest"
+        case .ocean: "ocean"
+        case .plum: "plum"
+        case .custom(let color): color.hex
+        }
+    }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let raw = try container.decode(String.self)
+        guard let color = Self(rawValue: raw) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid tag color.")
+        }
+        self = color
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+
+    var title: String {
+        if case .custom(let color) = self { return color.hex }
+        return rawValue.prefix(1).uppercased() + rawValue.dropFirst()
+    }
 
     var color: SidebarTagColor {
         switch self {
@@ -125,6 +188,7 @@ nonisolated enum SidebarTagSwatch: String, CaseIterable, Codable, Sendable {
         case .forest: .init(red: 0x27, green: 0x56, blue: 0x41)
         case .ocean: .init(red: 0x29, green: 0x4f, blue: 0x75)
         case .plum: .init(red: 0x64, green: 0x42, blue: 0x70)
+        case .custom(let color): color
         }
     }
 }
@@ -190,12 +254,41 @@ nonisolated struct SidebarResolvedTag: Equatable, Identifiable, Sendable {
 
 /// The human's tags and the shared color overrides, in the sidebar's own container.
 nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
-    /// The canonicalization and color-registry version (`SidebarTagSlug.version`).
-    var version = SidebarTagSlug.version
+    /// Named-only choices stay compatible with old builds; custom hex requires format 2.
+    var version: Int {
+        colors.values.contains { if case .custom = $0 { return true }; return false } ? 2 : 1
+    }
     /// Exact session UUID (uppercase) to the human's slugs, in order.
     var assignments: [String: [String]] = [:]
     /// Slug to its human color; absent means the automatic color.
     var colors: [String: SidebarTagSwatch] = [:]
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey { case version, assignments, colors }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let storedVersion = try container.decode(Int.self, forKey: .version)
+        guard [1, 2].contains(storedVersion) else {
+            throw DecodingError.dataCorruptedError(forKey: .version, in: container, debugDescription: "Unsupported tag preferences.")
+        }
+        assignments = try container.decode([String: [String]].self, forKey: .assignments)
+        colors = try container.decode([String: SidebarTagSwatch].self, forKey: .colors)
+        if storedVersion == 1, colors.values.contains(where: {
+            if case .custom = $0 { return true }
+            return false
+        }) {
+            throw DecodingError.dataCorruptedError(forKey: .colors, in: container, debugDescription: "Custom colors require version 2.")
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(assignments, forKey: .assignments)
+        try container.encode(colors, forKey: .colors)
+    }
 
     /// Above the largest valid store (about 1.6 MB), so the entry caps, which pruning handles, always bind first.
     static let maximumStoredBytes = 4_194_304
@@ -207,8 +300,7 @@ nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
     static func key(_ session: UUID) -> String { session.uuidString }
 
     var isValid: Bool {
-        version == SidebarTagSlug.version
-            && assignments.count <= Self.maximumEntries && colors.count <= Self.maximumEntries
+        assignments.count <= Self.maximumEntries && colors.count <= Self.maximumEntries
             && assignments.allSatisfy { key, slugs in
                 UUID(uuidString: key)?.uuidString == key && !slugs.isEmpty
                     && slugs.count <= SidebarTagSlug.maximumPerSource && Set(slugs).count == slugs.count

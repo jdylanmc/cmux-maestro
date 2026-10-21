@@ -13,7 +13,7 @@ nonisolated struct SidebarIconOverrides: Codable, Equatable, Sendable {
         let workspaceId: UUID
         let surfaceId: UUID
         let iconId: String?
-        let iconColor: SidebarAvatarColor?
+        @SidebarAgentIconColor var iconColor: SidebarAvatarColor? = nil
     }
     let version: Int
     let icons: [Entry]
@@ -86,7 +86,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     /// `born` for a session that enrolled itself at start (ADR 0025); nil for launches.
     var enrollment: String? = nil
     var iconId: String?
-    var iconColor: SidebarAvatarColor?
+    @SidebarAgentIconColor var iconColor: SidebarAvatarColor? = nil
     let worktreeLabel: String?
     let branchLabel: String?
     let gitEvidenceStatus: String?

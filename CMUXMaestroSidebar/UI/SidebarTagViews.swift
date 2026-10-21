@@ -162,6 +162,7 @@ struct SidebarTagEditor: View {
     @State private var draft = SidebarTagDraft()
     @State private var error: String?
     @State private var coloring: String?
+    @State private var colorEdit = SidebarColorEdit()
 
     private var tags: [SidebarResolvedTag] { draft.preview(preferences.tags(for: session)) }
 
@@ -184,7 +185,10 @@ struct SidebarTagEditor: View {
             if !tags.isEmpty {
                 SidebarTagFlow {
                     ForEach(tags) { tag in
-                        Button { coloring = coloring == tag.slug ? nil : tag.slug } label: {
+                        Button {
+                            colorEdit.finish()
+                            coloring = coloring == tag.slug ? nil : tag.slug
+                        } label: {
                             SidebarTagChip(tag: tag, compact: false)
                         }
                         .buttonStyle(.plain)
@@ -212,11 +216,11 @@ struct SidebarTagEditor: View {
         }
     }
 
-    private func swatches(for tag: SidebarResolvedTag) -> some View {
+    func swatches(for tag: SidebarResolvedTag) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(22), spacing: 6), count: 7), spacing: 6) {
                 ForEach(SidebarTagSwatch.allCases, id: \.self) { swatch in
-                    Button { draft.colors[tag.slug] = .some(swatch) } label: {
+                    Button { colorEdit.reset { draft.colors[tag.slug] = .some(swatch) } } label: {
                         Circle().fill(swatch.color.swiftUI).frame(width: 18, height: 18)
                             .overlay { if tag.swatch == swatch { Circle().strokeBorder(Color.primary, lineWidth: 2) } }
                             .frame(width: 22, height: 22).contentShape(Rectangle())
@@ -227,7 +231,14 @@ struct SidebarTagEditor: View {
                     .accessibilityAddTraits(tag.swatch == swatch ? .isSelected : [])
                 }
             }
-            Button("Use automatic color") { draft.colors[tag.slug] = .some(nil) }
+            SidebarCustomColorPicker(
+                color: tag.background.nativeColor,
+                selected: tag.swatch.flatMap { if case .custom(let color) = $0 { return color }; return nil },
+                edit: colorEdit,
+                choose: { draft.colors[tag.slug] = .some(.custom($0)) }
+            )
+            .id(tag.slug)
+            Button("Use automatic color") { colorEdit.reset { draft.colors[tag.slug] = .some(nil) } }
                 .disabled(tag.swatch == nil)
                 .font(.caption)
                 .accessibilityIdentifier("sidebar-tag-automatic-color")
@@ -242,6 +253,7 @@ struct SidebarTagEditor: View {
     }
 
     private func save() {
+        colorEdit.finish()
         if let message = draft.commit(to: preferences, session: session) {
             error = message
         } else {

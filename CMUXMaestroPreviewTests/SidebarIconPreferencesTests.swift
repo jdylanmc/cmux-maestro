@@ -8,6 +8,48 @@ struct SidebarIconPreferencesTests {
     private let agent = SidebarIconChoice(glyph: "md-duck", color: .teal)
     private let human = SidebarIconChoice(glyph: "md-bird", color: .purple)
 
+    @Test func humanHexColorDecodesAndWritesCanonicalOpaqueSRGB() throws {
+        let color = try JSONDecoder().decode(SidebarAvatarColor.self, from: Data("\"#a1b2c3\"".utf8))
+        #expect(color.rawValue == "#A1B2C3")
+        #expect(String(data: try JSONEncoder().encode(color), encoding: .utf8) == "\"#A1B2C3\"")
+        for value in ["#ABC", "#11223344", "112233", "#GG0000", " #112233", "#１２３４５６"] {
+            let data = try JSONEncoder().encode(value)
+            #expect(throws: (any Error).self) { try JSONDecoder().decode(SidebarAvatarColor.self, from: data) }
+        }
+        #expect(try JSONDecoder().decode(SidebarAvatarColor.self, from: Data(#""teal""#.utf8)) == .teal)
+    }
+
+    @Test func legacyIconsUpgradeOnlyOnWriteAndCustomColorsSurviveBothResets() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let target = SidebarIconTarget.session(UUID())
+        let file = fixture.root.appendingPathComponent("sidebar-icons.json")
+        let legacy = Data("""
+        {"version":1,"overrides":{"\(target.key)":{"custom":{"_0":{"glyph":"md-duck","color":"teal"}}}}}
+        """.utf8)
+        try legacy.write(to: file)
+        let preferences = fixture.preferences()
+        #expect(preferences.iconNotice == nil)
+        #expect(preferences.icons.resolve(target: target, standard: standard, agent: nil).choice == agent)
+        #expect(try Data(contentsOf: file) == legacy)
+        preferences.setIcon(human, for: target)
+        let named = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(named["version"] as? Int == 1)
+        let color = try #require(SidebarAvatarColor(rawValue: "#fedcba"))
+        let custom = SidebarIconChoice(glyph: "md-bird", color: color)
+        preferences.setIcon(custom, for: target)
+        let stored = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(stored["version"] as? Int == 2)
+        #expect(fixture.preferences().icons.resolve(target: target, standard: standard, agent: agent).choice == custom)
+        preferences.resetIconToDefault(for: target)
+        #expect(fixture.preferences().icons.resolve(target: target, standard: standard, agent: agent).choice == standard)
+        let reset = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(reset["version"] as? Int == 1)
+        preferences.setIcon(custom, for: target)
+        preferences.resetIconToAgentSelection(for: target)
+        #expect(fixture.preferences().icons.resolve(target: target, standard: standard, agent: agent).choice == agent)
+    }
+
     @Test func humanOverrideAndBothResetsHaveDistinctPrecedence() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -80,7 +122,14 @@ struct SidebarIconPreferencesTests {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let file = fixture.root.appendingPathComponent("sidebar-icons.json")
-        for data in [Data("broken".utf8), Data(#"{"version":999,"overrides":{}}"#.utf8)] {
+        let key = SidebarIconTarget.session(UUID()).key
+        let invalidColor = Data("""
+        {"version":2,"overrides":{"\(key)":{"custom":{"_0":{"glyph":"md-duck","color":"#ABC"}}}}}
+        """.utf8)
+        let unversionedCustom = Data("""
+        {"version":1,"overrides":{"\(key)":{"custom":{"_0":{"glyph":"md-duck","color":"#112233"}}}}}
+        """.utf8)
+        for data in [Data("broken".utf8), Data(#"{"version":999,"overrides":{}}"#.utf8), invalidColor, unversionedCustom] {
             try data.write(to: file)
             let preferences = fixture.preferences()
             #expect(preferences.iconNotice != nil)

@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C29400000000000000000006 /* SidebarColorEdit.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C29400000000000000000016; };
+		C29400000000000000000005 /* SidebarAgentIconColor.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C29400000000000000000015; };
+		C29400000000000000000003 /* SidebarColorWell.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C29400000000000000000013; };
+		C29400000000000000000004 /* SidebarNativeColorWell.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C29400000000000000000014; };
+		C29400000000000000000001 /* SidebarCustomColorPicker.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C29400000000000000000011; };
+		C29400000000000000000002 /* SidebarTagColor+AppKit.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C29400000000000000000012; };
 		D14400000000000000000101 = {isa = PBXBuildFile; fileRef = D14400000000000000000201; };
 		D14400000000000000000102 = {isa = PBXBuildFile; fileRef = D14400000000000000000202; };
 		D14400000000000000000103 = {isa = PBXBuildFile; fileRef = D14400000000000000000203; };
@@ -169,6 +175,12 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C29400000000000000000016 /* SidebarColorEdit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarColorEdit.swift; sourceTree = SOURCE_ROOT; };
+		C29400000000000000000015 /* SidebarAgentIconColor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Orchestration/SidebarAgentIconColor.swift; sourceTree = SOURCE_ROOT; };
+		C29400000000000000000013 /* SidebarColorWell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarColorWell.swift; sourceTree = SOURCE_ROOT; };
+		C29400000000000000000014 /* SidebarNativeColorWell.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarNativeColorWell.swift; sourceTree = SOURCE_ROOT; };
+		C29400000000000000000011 /* SidebarCustomColorPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarCustomColorPicker.swift; sourceTree = SOURCE_ROOT; };
+		C29400000000000000000012 /* SidebarTagColor+AppKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CMUXMaestroSidebar/UI/SidebarTagColor+AppKit.swift"; sourceTree = SOURCE_ROOT; };
 		D14400000000000000000201 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUIHost/GuideAcceptanceFixture.swift; sourceTree = SOURCE_ROOT; };
 		D14400000000000000000202 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroGuideUITests/GuideAcceptanceTests.swift; sourceTree = SOURCE_ROOT; };
 		D14400000000000000000203 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift; sourceTree = SOURCE_ROOT; };
@@ -375,6 +387,12 @@
 				C04900000000000000000012 /* SidebarIconPicker.swift */,
 				C04900000000000000000013 /* SidebarItemIcon.swift */,
 				C04900000000000000000014 /* SidebarIconModels.swift */,
+				C29400000000000000000011 /* SidebarCustomColorPicker.swift */,
+				C29400000000000000000012 /* SidebarTagColor+AppKit.swift */,
+				C29400000000000000000013 /* SidebarColorWell.swift */,
+				C29400000000000000000014 /* SidebarNativeColorWell.swift */,
+				C29400000000000000000015 /* SidebarAgentIconColor.swift */,
+				C29400000000000000000016 /* SidebarColorEdit.swift */,
 				C05200000000000000000011 /* SidebarHoverCard.swift */,
 				C05700000000000000000011 /* SidebarRowActions.swift */,
 				C07600000000000000000011 /* SidebarCopyableValue.swift */,
@@ -718,6 +736,12 @@
 				C04900000000000000000002 /* SidebarIconPicker.swift in Test Sources */,
 				C04900000000000000000003 /* SidebarItemIcon.swift in Test Sources */,
 				C04900000000000000000004 /* SidebarIconModels.swift in Test Sources */,
+				C29400000000000000000001 /* SidebarCustomColorPicker.swift in Test Sources */,
+				C29400000000000000000002 /* SidebarTagColor+AppKit.swift in Test Sources */,
+				C29400000000000000000003 /* SidebarColorWell.swift in Test Sources */,
+				C29400000000000000000004 /* SidebarNativeColorWell.swift in Test Sources */,
+				C29400000000000000000005 /* SidebarAgentIconColor.swift in Test Sources */,
+				C29400000000000000000006 /* SidebarColorEdit.swift in Test Sources */,
 				C05200000000000000000001 /* SidebarHoverCard.swift in Test Sources */,
 				C05700000000000000000001 /* SidebarRowActions.swift in Test Sources */,
 				C07600000000000000000001 /* SidebarCopyableValue.swift in Test Sources */,

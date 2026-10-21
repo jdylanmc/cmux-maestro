@@ -24,8 +24,38 @@ nonisolated enum SidebarIconOverride: Codable, Equatable, Sendable {
 }
 
 nonisolated struct SidebarIconSettings: SidebarPreferenceValue {
-    var version = 1
+    var version: Int {
+        overrides.values.contains {
+            if case .custom(let choice) = $0 { return choice.color.customColor != nil }
+            return false
+        } ? 2 : 1
+    }
     var overrides: [String: SidebarIconOverride] = [:]
+
+    init() {}
+
+    private enum CodingKeys: String, CodingKey { case version, overrides }
+
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let storedVersion = try container.decode(Int.self, forKey: .version)
+        guard [1, 2].contains(storedVersion) else {
+            throw DecodingError.dataCorruptedError(forKey: .version, in: container, debugDescription: "Unsupported icon preferences.")
+        }
+        overrides = try container.decode([String: SidebarIconOverride].self, forKey: .overrides)
+        if storedVersion == 1, overrides.values.contains(where: {
+            if case .custom(let choice) = $0, case .custom = choice.color { return true }
+            return false
+        }) {
+            throw DecodingError.dataCorruptedError(forKey: .overrides, in: container, debugDescription: "Custom colors require version 2.")
+        }
+    }
+
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(overrides, forKey: .overrides)
+    }
 
     static let maximumStoredBytes = 1_048_576
     static let maximumEntries = 2_048
@@ -34,7 +64,7 @@ nonisolated struct SidebarIconSettings: SidebarPreferenceValue {
     static let saveNotice = "Icon preferences could not be saved. Check available storage and retry."
 
     var isValid: Bool {
-        version == 1 && overrides.count <= Self.maximumEntries && overrides.allSatisfy { key, value in
+        overrides.count <= Self.maximumEntries && overrides.allSatisfy { key, value in
             guard SidebarIconTarget.isValidKey(key) else { return false }
             if case .custom(let choice) = value { return SidebarGlyphName.isValid(choice.glyph) }
             return true
