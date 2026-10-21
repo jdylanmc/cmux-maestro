@@ -6,6 +6,56 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test func iconCardBadgesOnlyChangeTheIconCorner() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let navigation = SidebarNavigation()
+        let workspace = UUID(), surface = UUID()
+        func pixels(_ state: AgentWorkState, needsInput: Bool = false) throws -> [UInt8] {
+            let item = SidebarAgentIconCardItem(
+                id: "synthetic", title: "Helper", workspaceID: workspace, surfaceID: surface,
+                iconTarget: nil, glyph: nil, color: nil, visual: SidebarPresentation.state(state),
+                needsInput: needsInput, hover: nil
+            )
+            let host = NSHostingView(rootView: SidebarAgentIconCard(
+                items: [item], navigation: navigation, expandLabel: "Expand helpers", expand: {}
+            ).environment(preferences).environment(\._accessibilityReduceMotion, true))
+            let frame = NSRect(x: 0, y: 0, width: 200, height: 32)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.frame = frame
+            host.layoutSubtreeIfNeeded()
+            let button = try #require(nativeTitles(in: host).first)
+            #expect(button.accessibilityLabel() == "Helper, \(needsInput ? "Needs input. " : "")\(state == .completed ? "Finished" : state.rawValue.capitalized)")
+            let bitmap = try #require(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 56, pixelsHigh: 56,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 224, bitsPerPixel: 32
+            ))
+            bitmap.size = NSSize(width: 28, height: 28)
+            button.cacheDisplay(in: button.bounds, to: bitmap)
+            let data = try #require(bitmap.bitmapData)
+            return Array(UnsafeBufferPointer(start: data, count: 56 * 224))
+        }
+        let idle = try pixels(.idle)
+        #expect(try pixels(.completed) == idle, "Idle and finished draw only the identity icon")
+        for (state, input) in [(AgentWorkState.working, false), (.blocked, false), (.failed, false),
+                               (.unknown, false), (.idle, true)] {
+            let badged = try pixels(state, needsInput: input)
+            #expect(badged != idle, "\(state), input=\(input) keeps a meaningful state badge")
+            // The left half remains exactly the identity icon, not a separate leading status lane.
+            #expect((0..<56).allSatisfy { y in
+                let start = y * 224
+                return badged[start..<(start + 112)] == idle[start..<(start + 112)]
+            }, "State must overlay the right corner, not move or precede the icon")
+        }
+        #expect(try pixels(.working) == pixels(.working), "Reduce Motion renders a stable working badge")
+    }
+
     @Test func targetLedNativeComposition() async throws {
         let model = await makeVisualTargetModel()
         let fixture = try SidebarPreferenceFixture()
