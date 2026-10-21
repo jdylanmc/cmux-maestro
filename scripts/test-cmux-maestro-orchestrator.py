@@ -1759,15 +1759,24 @@ class RetiredCapacityStatusTests(unittest.TestCase):
         worker = self.worker()
         worker.update(executionMode="interactive", launchMethod="direct", runtimeProtocolVersion=2,
                       providerProcess=worker["supervisor"], supervisor=None,
-                      phase="process-disappeared", availability="unavailable")
-        self.retire()
-        with patch.object(self.cmux, "surface_exists", return_value=True):
-            result = self.status()
-        observed = next(node for node in result["workers"] if node["workerId"] == worker["id"])
-        self.assertEqual(result["capacity"]["used"], 1)
-        self.assertTrue(observed["surfacePresent"])
-        self.assertFalse(observed["providerRunning"])
-        self.assertEqual(observed["result"], "Synthetic verified outcome")
+                      phase="process-disappeared", availability="unavailable",
+                      verifiedBoundaryGeneration=None, result="Synthetic launch failure")
+        for reconcile_first in (False, True):
+            with self.subTest(reconcile_first=reconcile_first):
+                self.retire()
+                if reconcile_first:
+                    snapshot = CONTROLLER_API["read_state"](self.root)
+                    observations = {worker["id"]: {"surface": True, "process": False, "exited": True}}
+                    CONTROLLER_API["mutate"](self.root, lambda state:
+                        CONTROLLER_API["reconcile_resources"](state, snapshot, observations, set()))
+                with patch.object(self.cmux, "surface_exists", return_value=True):
+                    for _ in range(3):
+                        result = self.status()
+                        observed = next(node for node in result["workers"] if node["workerId"] == worker["id"])
+                        self.assertEqual(result["capacity"]["used"], 1)
+                        self.assertTrue(observed["surfacePresent"])
+                        self.assertFalse(observed["providerRunning"])
+                        self.assertEqual(observed["result"], "Synthetic launch failure")
 
     def test_retired_reappearance_or_uncertainty_is_charged_without_adoption(self):
         worker = self.worker()

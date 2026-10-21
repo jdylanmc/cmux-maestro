@@ -7102,8 +7102,7 @@ def command_status(args, root, cmux):
                     record_launch_failure(state, node["id"], node["surfaceId"], phase="terminal-disappeared")
                     cancelled.append(node["id"])
                 continue
-            was_retired = node["phase"] == "resource-retired"
-            if was_retired:
+            if node["phase"] == "resource-retired":
                 if resources_observed_gone(node, observed):
                     retiring.append(node)
                     continue
@@ -7120,7 +7119,7 @@ def command_status(args, root, cmux):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
-                if is_direct_launch(node) and not was_retired:
+                if is_direct_launch(node) and node["result"] is None:
                     node["result"] = "Exact Copilot process exited; no task outcome is inferred."
             if exited:
                 retiring.append(node)
