@@ -210,6 +210,10 @@ struct WorktreeProjectionContent: View {
         let sessions = members.flatMap { member -> [SidebarCopilotSession] in
             switch member {
             case .managed(let node):
+                if node.copilotSessionId == nil {
+                    return SidebarPresentation.managedSession(for: node, in: tree, now: now()).map { [$0] } ?? []
+                }
+                // Bound sessions also retain task outcomes after their owner exits.
                 return tree.sessions.filter {
                     $0.id == node.copilotSessionId && $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
                 }

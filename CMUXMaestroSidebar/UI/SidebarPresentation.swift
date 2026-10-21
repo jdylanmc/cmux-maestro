@@ -1267,7 +1267,7 @@ enum SidebarPresentation {
         return (id, details.petId)
     }
 
-    private static func managedSession(
+    static func managedSession(
         for node: SidebarOrchestrationNode, in tree: SidebarCopilotTree, now: Date
     ) -> SidebarCopilotSession? {
         guard tree.availability == .ready || tree.availability == .partial,
