@@ -270,6 +270,16 @@ only: nothing is focused, moved, acknowledged or adopted.
   one row that scrolls inside the card, plus a separate expand control. Each icon
   focuses its agent's surface and previews like its row. Group disclosure is saved
   per workspace and group (`worktreeGroup` in the layout record), expanded by default.
+  Meaningful state overlays the icon's corner; idle and finished icons have no badge.
+  Outstanding attention and incomplete child evidence stay visible, including together
+  with activity. Working badges honor Reduce Motion. Icons use equal 28-point targets
+  with 4-point gaps, centered with the chevron. A collapsed parent's card starts at
+  its title edge. Retained task activity and uncertainty stay inside the card, never
+  in a separate summary row beneath it; counts remain in help and accessibility.
+  Card attention follows expanded rows: turn-finished notices and recovered errors
+  while working add no badge; permission and answer requests use the needs-input
+  question glyph. The parent row already shows its own working state, so only
+  hidden work contributes to the card's working count.
 - Internal tasks stay subordinate text rows under their exact owner in both views.
 
 Pinned details show labels and values only, not identity/binding explanation paragraphs.

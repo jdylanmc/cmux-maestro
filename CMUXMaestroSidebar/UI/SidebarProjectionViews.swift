@@ -41,28 +41,64 @@ struct SidebarAgentIconCardItem: Identifiable {
     let needsInput: Bool
     let hover: SidebarAgentHoverTarget?
     var inspection: SidebarInspection.Target? = nil
+    var evidence: SidebarBranchSummary? = nil
 
-    var status: String { SidebarPresentation.statusDescription(visual, needsInput: needsInput) }
+    var status: String {
+        ([SidebarPresentation.statusDescription(visual, needsInput: needsInput)]
+            + (evidence.map(SidebarPresentation.collapsed) ?? [])).joined(separator: ". ")
+    }
+
+    var badge: SidebarVisual? {
+        if needsInput || visual.tone == .red { return visual }
+        if let evidence, evidence.attention > 0 {
+            return .init(title: status, symbol: "exclamationmark.circle", tone: .attention)
+        }
+        if visual.tone != .neutral || !["circle", "checkmark.circle"].contains(visual.symbol) { return visual }
+        return evidence?.incomplete == true ? SidebarPresentation.state(.unknown) : nil
+    }
 
     @MainActor
     static func managed(
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         tree: SidebarCopilotTree, now: Date
     ) -> Self {
-        .init(id: "managed-\(node.id)", title: node.title, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
+        var item = Self(id: "managed-\(node.id)", title: node.title, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
               iconTarget: SidebarPresentation.managedIconTarget(node, tree: tree, now: now),
               glyph: node.iconId, color: node.iconColor,
               visual: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree),
               needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now),
               hover: .managed(node.id, generation: node.generation), inspection: .managed(node))
+        if case .session(let id) = item.iconTarget,
+           let session = tree.exactLiveSession(id: id, workspaceID: node.workspaceId, surfaceID: node.surfaceId, now: now) {
+            item.includeEvidence(session)
+        }
+        return item
     }
 
     static func session(_ session: SidebarCopilotSession, title: String) -> Self {
-        .init(id: "session-\(session.id)", title: title, workspaceID: session.workspaceID, surfaceID: session.surfaceID,
+        var item = Self(id: "session-\(session.id)", title: title, workspaceID: session.workspaceID, surfaceID: session.surfaceID,
               iconTarget: session.statusOnly ? nil : .session(session.id),
               glyph: session.iconId, color: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
               visual: SidebarPresentation.sessionState(session),
               needsInput: SidebarPresentation.needsInput(session.attention), hover: .session(session.id))
+        item.includeEvidence(session)
+        return item
+    }
+
+    private mutating func includeEvidence(_ session: SidebarCopilotSession) {
+        var session = session
+        session.attention = Self.visibleAttention(session.attention, state: session.state)
+        // An icon's state belongs to its session, never to its descendants.
+        session.nodes = []
+        var summary = SidebarBranchSummary(sessions: [session])
+        summary.running = 0
+        summary.blocked = 0
+        summary.incomplete = summary.incomplete || session.treeDegraded || summary.omittedActive > 0
+        evidence = summary
+    }
+
+    static func visibleAttention(_ attention: [AgentAttention], state: AgentWorkState) -> [AgentAttention] {
+        attention.filter { $0.kind != .turnFinished && !($0.kind == .error && state == .working) }
     }
 }
 
@@ -70,6 +106,7 @@ struct SidebarAgentIconCardItem: Identifiable {
 /// and a separate control that expands the group. Each icon focuses its agent's surface.
 struct SidebarAgentIconCard: View {
     let items: [SidebarAgentIconCardItem]
+    var retained: [SidebarCopilotSession] = []
     let navigation: SidebarNavigation
     let expandLabel: String
     let expand: () -> Void
@@ -78,9 +115,10 @@ struct SidebarAgentIconCard: View {
     @Environment(\.sidebarTerminalIconStyle) private var terminalStyle
 
     var body: some View {
-        HStack(spacing: 2) {
+        let retainedState = Self.retainedState(retained)
+        HStack(spacing: 4) {
             ScrollView(.horizontal) {
-                HStack(spacing: 2) {
+                HStack(spacing: 4) {
                     ForEach(items) { item in
                         FocusButton(
                             target: .surface(workspaceID: item.workspaceID, surfaceID: item.surfaceID),
@@ -89,30 +127,52 @@ struct SidebarAgentIconCard: View {
                         ) {
                             icon(item)
                         }
-                        .frame(width: 34, height: 30)
+                        .frame(width: 28, height: 28)
                         .agentHoverPreview(item.hover)
                         .accessibilityIdentifier("agent-icon-\(item.id)")
                     }
                 }
-                .padding(.horizontal, 3)
+                .padding(.horizontal, 4)
             }
             .scrollIndicators(.automatic, axes: .horizontal)
-            .frame(height: 36)
+            .frame(height: 32)
+            CollapsedBranchSummary(summary: retainedState.summary, compact: true, needsInput: retainedState.needsInput)
             Button(action: expand) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 20, height: 30)
+                    .frame(width: 20, height: 28)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .help(expandLabel)
             .accessibilityLabel(expandLabel)
         }
-        .padding(.trailing, 2)
+        .padding(.trailing, 4)
         .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(0.05)))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(items.count) agent\(items.count == 1 ? "" : "s")")
         .accessibilityIdentifier("agent-icon-card")
+    }
+
+    static func retainedState(_ sessions: [SidebarCopilotSession]) -> (summary: SidebarBranchSummary, needsInput: Bool) {
+        let filtered = sessions.map { session in
+            var session = session
+            session.attention = SidebarAgentIconCardItem.visibleAttention(session.attention, state: session.state)
+            for index in session.nodes.indices {
+                session.nodes[index].attention = SidebarAgentIconCardItem.visibleAttention(
+                    session.nodes[index].attention, state: session.nodes[index].state
+                )
+            }
+            return session
+        }
+        let inputOwners = filtered.filter { SidebarPresentation.needsInput($0.attention) }.count
+            + filtered.flatMap(\.nodes).filter { SidebarPresentation.needsInput($0.attention) }.count
+        var summary = SidebarBranchSummary(sessions: filtered)
+        // The parent row already shows its own activity; the card summarizes hidden work.
+        summary.running -= filtered.filter { $0.state == .working }.count
+        summary.blocked -= inputOwners
+        summary.incomplete = summary.incomplete || filtered.contains { $0.treeDegraded || $0.hasUncountedChildren }
+        return (summary, inputOwners > 0)
     }
 
     private func icon(_ item: SidebarAgentIconCardItem) -> some View {
@@ -120,12 +180,20 @@ struct SidebarAgentIconCard: View {
             kind: .agent, target: item.iconTarget, agentGlyph: item.glyph, agentColor: item.color,
             icons: preferences.icons, agentStyle: agentStyle, terminalStyle: terminalStyle
         ).choice
-        return HStack(spacing: 1) {
-            SidebarStateBadge(visual: item.visual, needsInput: item.needsInput, detail: item.status)
-            SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor))
-                .frame(width: 20, height: 20)
-        }
-        .frame(width: 34, height: 30)
+        return SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor))
+            .frame(width: 28, height: 28)
+            .overlay(alignment: .topTrailing) {
+                if let badge = item.badge {
+                    SidebarStateBadge(visual: badge, needsInput: item.needsInput, detail: item.status)
+                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if item.evidence?.incomplete == true, item.badge?.symbol != "circle.dashed" {
+                    SidebarStateBadge(visual: SidebarPresentation.state(.unknown), detail: item.status)
+                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                }
+            }
     }
 }
 

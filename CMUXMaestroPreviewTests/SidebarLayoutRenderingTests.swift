@@ -6,6 +6,78 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test func iconCardBadgesOnlyChangeTheIconCorner() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let navigation = SidebarNavigation()
+        let workspace = UUID(), surface = UUID()
+        func pixels(_ state: AgentWorkState, needsInput: Bool = false,
+                    session: SidebarCopilotSession? = nil) throws -> [UInt8] {
+            let item = session.map { SidebarAgentIconCardItem.session($0, title: "Helper") } ?? SidebarAgentIconCardItem(
+                id: "synthetic", title: "Helper", workspaceID: workspace, surfaceID: surface,
+                iconTarget: nil, glyph: nil, color: nil, visual: SidebarPresentation.state(state),
+                needsInput: needsInput, hover: nil
+            )
+            let host = NSHostingView(rootView: SidebarAgentIconCard(
+                items: [item], navigation: navigation, expandLabel: "Expand helpers", expand: {}
+            ).environment(preferences).environment(\._accessibilityReduceMotion, true))
+            let frame = NSRect(x: 0, y: 0, width: 200, height: 32)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.frame = frame
+            host.layoutSubtreeIfNeeded()
+            let button = try #require(nativeTitles(in: host).first)
+            let expected = "Helper, \(needsInput ? "Needs input. " : "")\(state == .completed ? "Finished" : state.rawValue.capitalized)"
+            #expect(button.accessibilityLabel()?.hasPrefix(expected) == true)
+            let bitmap = try #require(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: 56, pixelsHigh: 56,
+                bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                colorSpaceName: .deviceRGB, bytesPerRow: 224, bitsPerPixel: 32
+            ))
+            bitmap.size = NSSize(width: 28, height: 28)
+            button.cacheDisplay(in: button.bounds, to: bitmap)
+            let data = try #require(bitmap.bitmapData)
+            return Array(UnsafeBufferPointer(start: data, count: 56 * 224))
+        }
+        let idle = try pixels(.idle)
+        #expect(try pixels(.completed) == idle, "Idle and finished draw only the identity icon")
+        for (state, input) in [(AgentWorkState.working, false), (.blocked, false), (.failed, false),
+                               (.unknown, false), (.idle, true)] {
+            let badged = try pixels(state, needsInput: input)
+            #expect(badged != idle, "\(state), input=\(input) keeps a meaningful state badge")
+            // The left half remains exactly the identity icon, not a separate leading status lane.
+            #expect((0..<56).allSatisfy { y in
+                let start = y * 224
+                return badged[start..<(start + 112)] == idle[start..<(start + 112)]
+            }, "State must overlay the right corner, not move or precede the icon")
+        }
+        #expect(try pixels(.working) == pixels(.working), "Reduce Motion renders a stable working badge")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = SidebarCopilotSession(
+            id: UUID(), workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .idle,
+            model: nil, observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        session.attention = [.init(kind: .error, evidence: .init(source: "synthetic", eventID: UUID()), occurredAt: now)]
+        #expect(try pixels(.idle, session: session) != idle, "An idle session's outstanding error remains visible")
+        var working = SidebarCopilotSession(
+            id: session.id, workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .working,
+            model: nil, observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        working.attention = session.attention
+        #expect(try pixels(.working, session: working) == pixels(.working),
+                "Recovered errors do not replace a working icon's spinner")
+        session.attention = []
+        session.internalTaskCountsIncomplete = true
+        #expect(try pixels(.idle, session: session) != idle, "Incomplete child evidence never looks like quiet idle")
+        #expect(SidebarAgentIconCardItem.session(session, title: "Helper").status.contains("incomplete"))
+    }
+
     @Test func targetLedNativeComposition() async throws {
         let model = await makeVisualTargetModel()
         let fixture = try SidebarPreferenceFixture()
@@ -162,13 +234,97 @@ struct SidebarLayoutRenderingTests {
                 #expect(rows["Focus Left helper"] == nil)
                 #expect(rows.keys.contains { $0.hasPrefix("Left helper, ") })
                 #expect(rows.keys.contains { $0.hasPrefix("Right helper, ") })
+                let parent = try #require(rows["Focus Coordinator"])
+                let left = try #require(rows.first { $0.key.hasPrefix("Left helper, ") }?.value)
+                let right = try #require(rows.first { $0.key.hasPrefix("Right helper, ") }?.value)
+                let following = try #require(rows["Focus Unrelated"])
+                #expect(left.width == 28 && right.width == 28, "Compact, equal icon targets")
+                #expect(right.minX - left.minX == 32, "Even four-point gaps, no leading state lane")
+                #expect(left.minY == right.minY)
+                #expect(left.minX == parent.minX + 4, "Card starts at the parent title edge, with four-point inset")
+                #expect(following.minY - parent.minY <= preferences.layout.density.agentRowHeight + 36,
+                        "Retained task state belongs inside the card, not in a second summary row")
             }
             preferences.setExpanded(true, for: .managed(projection.root))
         }
     }
 
+    @Test(arguments: [AgentAttentionKind.permission, .error])
+    func collapsedParentKeepsAttentionAndOmittedTasksInsideCard(_ attention: AgentAttentionKind) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        let projection = await makeProjectionModel(parentAttention: attention, crowdedChildren: true)
+        defer { projection.model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.projection = .subAgents
+        preferences.setExpanded(false, for: .managed(projection.root))
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/visual-target/projections")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try await render(model: projection.model, preferences: preferences, width: 280, height: 640,
+                         appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
+                         destination: folder.appendingPathComponent("collapsed-\(attention.rawValue)-omitted.png")) { host in
+            let rows = Dictionary(nativeTitles(in: host).map {
+                ($0.accessibilityLabel() ?? "", host.convert($0.bounds, from: $0))
+            }, uniquingKeysWith: { first, _ in first })
+            let parent = try #require(rows["Focus Coordinator"])
+            let following = try #require(rows["Focus Unrelated"])
+            #expect(following.minY - parent.minY <= preferences.layout.density.agentRowHeight + 36,
+                    "Attention and omitted-task warnings cannot create prose rows outside the collapsed card")
+            let session = try #require(projection.model.copilot.tree.sessions.first { !$0.attention.isEmpty })
+            #expect(session.omittedActiveChildrenCount > 0, "Exercise real bounded child projection")
+            let summary = SidebarBranchSummary(sessions: [session])
+            #expect(summary.attention > 0 && summary.omittedActive > 0 && summary.incomplete)
+        }
+    }
+
+    @Test(arguments: [AgentAttentionKind.turnFinished, .error, .permission, .answer])
+    func collapsedParentSummaryUsesVisibleAttention(_ attention: AgentAttentionKind) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        let projection = await makeProjectionModel(
+            parentAttention: attention, parentState: attention == .error ? .working : .idle,
+            parentTaskState: .completed
+        )
+        defer { projection.model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.projection = .subAgents
+        preferences.setExpanded(false, for: .managed(projection.root))
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/visual-target/projections")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try await render(model: projection.model, preferences: preferences, width: 280, height: 640,
+                         appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
+                         destination: folder.appendingPathComponent("collapsed-summary-\(attention.rawValue).png")) { host in
+            let icon = try #require(nativeTitles(in: host).first { $0.accessibilityLabel()?.hasPrefix("Right helper, ") == true })
+            let frame = host.convert(icon.bounds, from: icon)
+            // The trailing card lane excludes agent icons and the parent's own state cue.
+            let lane = NSRect(x: frame.maxX + 4, y: frame.minY, width: host.bounds.width - frame.maxX - 12,
+                              height: frame.height)
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: lane))
+            host.cacheDisplay(in: lane, to: bitmap)
+            var colored = 0
+            var questions = 0
+            for y in 0..<bitmap.pixelsHigh { for x in 0..<bitmap.pixelsWide {
+                let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                let r = color.redComponent, g = color.greenComponent, b = color.blueComponent
+                if max(r, g, b) - min(r, g, b) > 0.15 { colored += 1 }
+                if b > 0.7 && g > r + 0.1 && b > g + 0.1 { questions += 1 }
+            } }
+            let parent = try #require(projection.model.copilot.tree.sessions.first { !$0.attention.isEmpty })
+            let retained = SidebarAgentIconCard.retainedState([parent])
+            if attention == .permission || attention == .answer {
+                #expect(questions > 0, "Input requests use the existing light-blue question glyph, not a blocked pause")
+                #expect(retained.needsInput && retained.summary.blocked == 0)
+            } else {
+                #expect(colored == 0, "Turn completion and a recovered working error create no summary badge")
+                #expect(SidebarPresentation.collapsed(retained.summary).isEmpty)
+            }
+        }
+    }
+
     /// `failures` adds a failed worker with a spawned child and a failed leaf worker, all Unknown.
-    private func makeProjectionModel(failures: [String] = []) async -> (
+    private func makeProjectionModel(failures: [String] = [], parentAttention: AgentAttentionKind? = nil,
+                                     crowdedChildren: Bool = false, parentState: CopilotWorkState = .working,
+                                     parentTaskState: CopilotWorkState = .working) async -> (
         model: SidebarConnectionModel, workspace: UUID, root: UUID, keys: [SidebarWorktreeGroupKey], extra: [UUID]
     ) {
         let now = Date()
@@ -221,10 +377,15 @@ struct SidebarLayoutRenderingTests {
         let observations: [CopilotSessionObservation] = (0..<5).map { index in
             var observation = CopilotSessionObservation(
                 sessionID: sessions[index], surfaceID: surfaces[index], launchWorkspaceID: workspace,
-                liveness: .alive, state: index == 3 ? .idle : .working, model: "synthetic-model",
-                children: index == 0 ? [.init(id: "scan", parentID: nil, kind: .subagent, name: "Scan sources",
-                                              state: .working, model: nil)] : [],
-                observedAt: now
+                liveness: .alive, state: index == 0 ? parentState : index == 3 ? .idle : .working, model: "synthetic-model",
+                children: index == 0 ? (0..<(crowdedChildren ? 300 : 1)).map {
+                    .init(id: "scan-\($0)", parentID: nil, kind: .subagent, name: "Scan sources",
+                          state: parentTaskState, model: nil)
+                } : [],
+                observedAt: now,
+                attention: index == 0 ? parentAttention.map {
+                    [.init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)]
+                } : nil
             )
             observation.currentWorktree = worktrees[index]
             return observation

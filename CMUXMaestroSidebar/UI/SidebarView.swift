@@ -349,27 +349,49 @@ private struct SidebarActionLayout<Content: View>: View {
     }
 }
 
-private struct CollapsedBranchSummary: View {
+struct CollapsedBranchSummary: View {
     let summary: SidebarBranchSummary
+    var compact = false
+    var needsInput = false
 
     var body: some View {
         let lines = SidebarPresentation.collapsed(summary)
+        let detail = SidebarPresentation.statusDescription(
+            .init(title: lines.joined(separator: ". "), symbol: "questionmark", tone: .teal), needsInput: needsInput
+        )
         if !lines.isEmpty {
             HStack(spacing: 4) {
-                if summary.running > 0 { Image(systemName: SidebarPresentation.state(.working).symbol) }
-                if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
-                if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
-                if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
-                if summary.incomplete {
-                    Image(systemName: "info.circle")
+                if compact {
+                    if needsInput {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.blocked), needsInput: true, detail: detail)
+                    } else if summary.blocked > 0 {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.blocked))
+                    } else if summary.attention > 0 || summary.omittedActive > 0 {
+                        SidebarStateBadge(visual: .init(
+                            title: lines.joined(separator: ". "), symbol: "exclamationmark.circle", tone: .attention
+                        ))
+                    } else if summary.running > 0 {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.working))
+                    }
+                    if summary.incomplete {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.unknown))
+                    }
+                } else {
+                    if summary.running > 0 { Image(systemName: SidebarPresentation.state(.working).symbol) }
+                    if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
+                    if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
+                    if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
+                    if summary.incomplete {
+                        Image(systemName: "info.circle")
+                    }
                 }
             }
             .sidebarFont(.caption2)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Collapsed branch. \(lines.joined(separator: ". "))")
-            .help(lines.joined(separator: ". "))
+            .accessibilityLabel("Collapsed branch. \(detail)")
+            .help(detail)
         }
     }
 }
@@ -1392,20 +1414,21 @@ struct ManagedHierarchyContent: View {
                                 items: descendants(of: row.node.id).map {
                                     .managed($0, availability: polling.availability, tree: copilotTree, now: evidenceDate)
                                 },
+                                retained: retained,
                                 navigation: navigation, expandLabel: "Expand \(row.node.title)"
                             ) { setExpanded(.managed(row.node.id), true) }
-                            .padding(.leading, 22 + density.indentation(
+                            .padding(.leading, 50 + density.indentation(
                                 depth: row.depth, unresolved: false, width: contentWidth
                             ))
                             .padding(.vertical, 2)
                         }
-                        if !expanded && showsRetainedWork(retained) {
+                        if !expanded && !row.hasChildren && showsRetainedWork(retained) {
                             CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
                                 .padding(.leading, 22 + density.indentation(
                                     depth: row.depth, unresolved: false, width: contentWidth
                                 ))
                         }
-                        ForEach(retained) { session in
+                        ForEach(expanded || !row.hasChildren ? retained : []) { session in
                             CopilotSessionContents(
                                 session: session, expanded: expanded,
                                 navigation: navigation, layout: layout, setExpanded: setExpanded,
