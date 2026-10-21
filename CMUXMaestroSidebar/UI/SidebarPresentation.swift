@@ -176,11 +176,11 @@ struct SidebarWorkspaceAttention: Equatable {
 
     var detail: String {
         var parts: [String] = []
-        if questions > 0 { parts.append("\(questions) asking a question") }
-        if approvals > 0 { parts.append("\(approvals) awaiting approval") }
-        if blocked > 0 { parts.append("\(blocked) blocked; input reason not reported") }
-        if lastReportedBlocked > 0 { parts.append("\(lastReportedBlocked) last-reported blockers; live state unverified") }
-        return parts.joined(separator: ". ")
+        if questions > 0 { parts.append("Questions: \(questions)") }
+        if approvals > 0 { parts.append("Approvals: \(approvals)") }
+        if blocked > 0 { parts.append("Blocked: \(blocked) · Input reason: Unreported") }
+        if lastReportedBlocked > 0 { parts.append("Last-reported blockers: \(lastReportedBlocked) · Live state: Unverified") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -1081,7 +1081,9 @@ enum SidebarPresentation {
         let age = now.timeIntervalSince(node.updatedAt)
         guard (availability == .ready || availability == .partial),
               age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
-            return .init(title: "State unverified",
+            let observation = age > SidebarOrchestrationReader.staleInterval || availability == .stale
+                ? "Stale" : "Unavailable"
+            return .init(title: "State unverified · Observation: \(observation)",
                          symbol: "circle.dashed", tone: .neutral)
         }
         let phase = SidebarOrchestrationPhase(rawValue: node.phase)

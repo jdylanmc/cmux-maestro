@@ -194,7 +194,7 @@ struct SidebarCopilotTree: Equatable {
     var omittedActiveChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedActiveChildrenCount } }
     var hasUncountedChildren: Bool { sessions.contains(where: \.hasUncountedChildren) }
     var omittedChildrenDescription: String {
-        hasUncountedChildren ? "At least \(omittedChildrenCount); total unknown" : "\(omittedChildrenCount)"
+        hasUncountedChildren ? "\(omittedChildrenCount)+ · Total: Unknown" : "\(omittedChildrenCount)"
     }
     var retainedHistoryCount: Int { sessions.reduce(0) { $0 + $1.retainedHistoryCount } }
     var hiddenHistoryCount: Int { sessions.reduce(0) { $0 + $1.hiddenHistoryCount } }
