@@ -266,7 +266,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         }]}
 
     def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0,
-                inventory=None, enumeration_exit=0):
+                inventory=None, enumeration_exit=0, guide_environment=None, guide_exception=None):
         # The default built inventory mirrors the fixture; inventory tests pass an explicit enumeration.
         inventory = (self.enumeration(self.reported_identities(isolated, remaining))
                      if inventory is None else inventory)
@@ -289,8 +289,11 @@ class IntegratedTestScopeTests(unittest.TestCase):
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
         # These fixtures isolate the existing partition/count policy, not native guide execution.
-        with patch("builtins.print"), patch.dict(os.environ), \
-                patch.object(scopes, "produce_guide_acceptance", return_value={"exitCode": guide_exit, "environment": {}}), \
+        with patch("builtins.print") as printed, patch.dict(os.environ), \
+                patch.object(scopes, "produce_guide_acceptance", side_effect=guide_exception, return_value={
+                    "exitCode": guide_exit, "environment": guide_environment or {},
+                    "error": "Synthetic PR source-parent mismatch" if guide_exit else None,
+                }), \
                 patch.object(scopes, "revalidate_guide_acceptance",
                              side_effect=ValueError("Synthetic native producer failed") if guide_exit else None), \
                 patch.object(scopes, "validate_original_guide_cases"):
@@ -299,18 +302,52 @@ class IntegratedTestScopeTests(unittest.TestCase):
             else:
                 os.environ[BENCHMARK_FLAG] = benchmark_flag
             result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
+        self.output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
         return result, json.loads((self.directory / "results/coverage.json").read_text())
 
-    def test_native_producer_failure_preserves_both_original_integrated_actions(self):
+    def test_native_producer_failure_reports_its_cause_without_running_dependent_consumers(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
                                         self.report([("OtherSuite/test()", "Passed")]), guide_exit=65)
         self.assertEqual(result, 1)
         self.assertEqual(evidence["guideAcceptance"]["exitCode"], 65)
-        self.assertIn("guideAcceptanceError", evidence)
+        self.assertEqual(evidence["guideAcceptanceError"], "Synthetic PR source-parent mismatch")
+        self.assertIn("Synthetic PR source-parent mismatch", self.output)
+        self.assertEqual(evidence["blockedStage"], "guide-acceptance")
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 0)
+        self.assertNotIn("remainingCounts", evidence)
+
+    def test_native_producer_exception_keeps_the_original_error(self):
+        result, evidence = self.execute(
+            self.report([(scopes.TEST, "Passed")]), self.report([("OtherSuite/test()", "Passed")]),
+            guide_exception=ValueError("Synthetic evidence document refused"))
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["guideAcceptanceError"], "Synthetic evidence document refused")
+        self.assertIn("Synthetic evidence document refused", self.output)
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 0)
+
+    def test_successful_producer_forwards_fresh_evidence_to_both_original_actions(self):
+        expected = {
+            "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": "/synthetic/guide-acceptance",
+            "CMUX_GUIDE_ACCEPTANCE_INVOCATION": str(uuid.uuid4()),
+            "CMUX_GUIDE_ACCEPTANCE_HEAD": "a" * 40,
+            "CMUX_GUIDE_ACCEPTANCE_TREE": "b" * 40,
+            "CMUX_GUIDE_ACCEPTANCE_STATUSES_SHA256": "c" * 64,
+            "CMUX_GUIDE_ACCEPTANCE_RECHECK_SHA256": "d" * 64,
+        }
+        with patch.dict(os.environ, {"TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_DIRECTORY": "stale",
+                                     "CMUX_GUIDE_ACCEPTANCE_UNRELATED": "stale"}):
+            result, evidence = self.execute(
+                self.report([(scopes.TEST, "Passed")]), self.report([("OtherSuite/test()", "Passed")]),
+                guide_environment=expected)
+        self.assertEqual(result, 0)
+        self.assertTrue(evidence["passed"])
         self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
-        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
         for environment in self.build_environments[1:]:
-            self.assertFalse(any(key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_") for key in environment))
+            self.assertEqual({key: value for key, value in environment.items()
+                              if key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_")},
+                             {"TEST_RUNNER_" + key: value for key, value in expected.items()})
+            self.assertFalse(any(key.startswith("CMUX_GUIDE_ACCEPTANCE_") for key in environment))
 
     def test_stale_acceptance_aliases_never_reach_original_validators(self):
         original = {

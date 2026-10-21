@@ -50,6 +50,68 @@ class GuideModuleImportTests(unittest.TestCase):
 class GuideSourceParentTests(unittest.TestCase):
     """Actual disposable Git objects and shallow boundary; no native build or execution."""
 
+    def test_base_movement_and_retarget_accept_only_proven_base_and_exact_candidate(self):
+        with tempfile.TemporaryDirectory(prefix="cmux-guide-base-movement-") as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+            environment = {**os.environ, "GIT_AUTHOR_NAME": "Fixture", "GIT_COMMITTER_NAME": "Fixture",
+                           "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                           "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+
+            def git(*args, input=None):
+                return subprocess.check_output(["git", "-C", str(repository), *args], input=input,
+                                               text=True, stderr=subprocess.PIPE, env=environment).strip()
+
+            git("init", "--quiet")
+            tree = git("mktree", input="")
+            base = git("commit-tree", tree, input="event base\n")
+            advanced = git("commit-tree", tree, "-p", base, input="advanced base\n")
+            former_target = git("commit-tree", tree, "-p", base, input="former target\n")
+            unrelated = git("commit-tree", tree, input="unrelated root\n")
+            candidate = git("commit-tree", tree, "-p", base, input="candidate\n")
+            for name, actual_base, event_base, event_head, current_base, accepted in (
+                ("advanced", advanced, base, candidate, unrelated, True),
+                ("retargeted", advanced, former_target, candidate, advanced, True),
+                ("wrong-candidate", advanced, base, "f" * 40, advanced, False),
+                ("unrelated-parent", unrelated, base, candidate, advanced, False),
+            ):
+                with self.subTest(name=name):
+                    merge = git("commit-tree", tree, "-p", actual_base, "-p", candidate, input=name + "\n")
+                    git("update-ref", "HEAD", merge)
+                    invocation = str(uuid.uuid4())
+                    output = root / ("scopes-" + invocation) / "guide-acceptance"
+                    event = root / "event.json"
+                    event.write_text(json.dumps({"number": 7, "pull_request": {
+                        "base": {"sha": event_base}, "head": {"sha": event_head}}}))
+                    commands = []
+
+                    def runner(command, **kwargs):
+                        commands.append(command)
+                        if command[0] != "git":
+                            raise subprocess.CalledProcessError(91, command)
+                        return subprocess.run(command, cwd=repository, env=kwargs["env"],
+                                              text=True, capture_output=True)
+
+                    with patch("builtins.print"), patch.object(
+                        probe, "current_pr_base", return_value=current_base, create=True
+                    ) as lookup:
+                        result = probe.run(False, output, acceptance=True, invocation=invocation, runner=runner,
+                                           environment={"DEVELOPER_DIR": probe.DEVELOPER, "GITHUB_ACTIONS": "true",
+                                                        "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_SHA": merge,
+                                                        "GITHUB_EVENT_NAME": "pull_request",
+                                                        "GITHUB_EVENT_PATH": str(event)})
+                    receipt = json.loads((output / "evidence.json").read_text())
+                    self.assertEqual(result, 1, "Only source preflight executes, never a native producer.")
+                    self.assertEqual("sourceAttribution" in receipt, accepted)
+                    self.assertEqual(any(command[0] == "/usr/bin/plutil" for command in commands), accepted)
+                    self.assertEqual(receipt["sourceAttributionAttempt"]["expectedParents"], [event_base, event_head])
+                    self.assertEqual(receipt["sourceAttributionAttempt"]["actualParents"], [actual_base, candidate])
+                    if name in {"advanced", "wrong-candidate"}:
+                        lookup.assert_not_called()
+                    if name == "retargeted":
+                        lookup.assert_called_once()
+
     def test_shallow_and_full_real_parents_bind_exact_order_tree_and_workflow(self):
         with tempfile.TemporaryDirectory(prefix="cmux-guide-parents-") as directory:
             root = Path(directory)
