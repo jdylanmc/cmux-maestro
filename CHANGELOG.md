@@ -252,6 +252,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Status reads preserve proven resource retirement instead of charging ended
+  workers against workspace capacity again (#182). Restored or uncertain
+  resources remain charged; stored history and its independent limits stay intact.
 - Installer recovery keeps its guard when a process-group existence probe is
   permission-denied, and releases it only after absence is proven (#276).
 

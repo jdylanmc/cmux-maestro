@@ -205,6 +205,19 @@ slots, configured limit, and workspace stored-node slots. Pending leases are
 already counted through their managed nodes, not added twice. Unknown or stale
 process/terminal ownership is not free capacity.
 
+Repeated status reads preserve `resource-retired` while the exact surface is
+absent and the recorded processes are proven ended. A launch proven never to have
+created a surface remains retired too. Current absence and process observations
+still appear in status; retirement does not erase the outcome, identity or
+generation. A restored surface, live process or uncertain observation removes the
+retirement exemption without adopting a session or inferring work state. Status
+and admission use the same absence test and reject observations from a changed
+session, generation, ownership or launch lease. Only normal guarded admission
+reconciliation establishes new resource retirement; status does not retire other
+ended nodes just because their phase says `terminal-disappeared` or
+`process-disappeared`. Those nodes may still own a surface or process, so they
+remain charged. An accepted close alone never releases capacity.
+
 To persist a limit, a human-directed workspace coordinator uses:
 
 ```sh

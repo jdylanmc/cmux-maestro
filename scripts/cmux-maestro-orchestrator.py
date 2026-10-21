@@ -2629,6 +2629,13 @@ def resource_observations(state, cmux, workspace):
     return active, retained_gone
 
 
+def resources_observed_gone(node, observed):
+    surface_absent = observed["surface"] is False or (
+        observed["surface"] is None and node.get("surfaceId") is None)
+    return (surface_absent and not observed["process"]
+            and observed["exited"] and not node.get("surfaceUnknown"))
+
+
 def reconcile_resources(state, snapshot, observations, retained_gone):
     for identifier, observed in observations.items():
         node = state["nodes"].get(identifier)
@@ -2637,14 +2644,17 @@ def reconcile_resources(state, snapshot, observations, retained_gone):
             node is None or previous is None
             or identifier in state["launches"] or identifier in snapshot["launches"]
             or node["phase"] == "launching"
-            or any(node.get(key) != previous.get(key) for key in (
-                "runId", "workspaceId", "surfaceId", "supervisor", "providerProcess", "phase",
-            ))
+            or not observation_matches(snapshot, state, identifier)
         ):
             continue
-        if not observed["surface"] and observed["exited"] and not node.get("surfaceUnknown"):
+        if resources_observed_gone(node, observed):
             node["phase"], node["availability"], node["updatedAt"] = (
                 "resource-retired", "unavailable", now()
+            )
+        elif node["phase"] == "resource-retired":
+            # Keep the prior terminal loss, but charge a restored or uncertain resource.
+            node["phase"], node["availability"], node["updatedAt"] = (
+                "terminal-disappeared", "unavailable", now()
             )
     state["retainedResources"] = [
         resource for resource in state["retainedResources"]
@@ -7092,6 +7102,13 @@ def command_status(args, root, cmux):
                     record_launch_failure(state, node["id"], node["surfaceId"], phase="terminal-disappeared")
                     cancelled.append(node["id"])
                 continue
+            if node["phase"] == "resource-retired":
+                if resources_observed_gone(node, observed):
+                    retiring.append(node)
+                    continue
+                node["phase"], node["availability"], node["updatedAt"] = (
+                    "terminal-disappeared", "unavailable", now()
+                )
             if has_managed_runtime(node) and not process and not exited:
                 continue
             if node.get("surfaceId") and surface is False:
@@ -7102,7 +7119,7 @@ def command_status(args, root, cmux):
                 node["phase"], node["availability"], node["updatedAt"] = (
                     "process-disappeared", "unavailable", now()
                 )
-                if is_direct_launch(node):
+                if is_direct_launch(node) and node["result"] is None:
                     node["result"] = "Exact Copilot process exited; no task outcome is inferred."
             if exited:
                 retiring.append(node)
