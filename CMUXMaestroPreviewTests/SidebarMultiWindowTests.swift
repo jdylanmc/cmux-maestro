@@ -80,11 +80,22 @@ struct SidebarMultiWindowTests {
         #expect(bindingA.model.state == .unpaired && bindingB.model.state == .unpaired)
         #expect(bindingA.model.hierarchy.workspaces.isEmpty && bindingB.model.hierarchy.workspaces.isEmpty)
 
+        // Each snapshot publishes context and status in one MainActor turn.
+        // Connection acceptance alone does not prove either snapshot arrived.
+        var publications = -1
+        var disclosedWhileUnpaired = false
+        let observation = scene.observe { state in
+            publications += 1
+            if case .unpaired = state {} else { disclosedWhileUnpaired = true }
+        }
+        defer { observation.cancel() }
         let windowB = try SyntheticCmuxWindow(scene: scene, title: "Beta")
+        defer { windowB.close() }
         windowB.send(sequence: 5)
         windowA.send(sequence: 6)
-        await sidebarEventually { windowB.isAccepted }
-        try await Task.sleep(for: .milliseconds(50))
+        await sidebarEventually { publications >= 4 }
+        #expect(!disclosedWhileUnpaired, "Delivered snapshots must not disclose either window")
+        observation.cancel()
         for binding in [bindingA, bindingB] {
             #expect(binding.model.state == .unpaired)
             #expect(binding.model.hierarchy.workspaces.isEmpty, "Unpaired views show no window's data")
@@ -94,6 +105,13 @@ struct SidebarMultiWindowTests {
 
         windowB.close()
         scene.viewDidDisappear(viewB)
+        await sidebarEventually {
+            if case .bound(_, _, let context) = scene.state {
+                return context?.snapshot.windowID == windowA.windowID
+            }
+            return false
+        }
+        #expect(!windowA.wasInvalidated)
         windowA.send(sequence: 7)
         await sidebarEventually { bindingA.model.hierarchy.sequence == 7 }
         #expect(bindingA.model.hierarchy.workspaces.map(\.id) == [windowA.workspaceID])
