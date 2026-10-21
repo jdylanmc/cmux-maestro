@@ -72,6 +72,32 @@ struct SidebarAgentHoverTests {
         )
     }
 
+    @Test func hoverEvidenceUsesTerseStatesWithoutHidingUncertainty() throws {
+        var session = session(childrenComplete: false)
+        session.nodes = [.init(id: "child", parentID: nil, depth: 0, kind: .subagent, name: "Child",
+                               state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)]
+        let node = directoryNode(session)
+        let child = try #require(card(.child(sessionID: session.id, childID: "child"), sessions: [session]))
+        #expect(child.notice == nil)
+        #expect(child.lines.contains(.init(title: "Child history", value: "Incomplete")))
+        #expect(child.lines.contains(.init(title: "Placement", value: "Parent session")))
+        let current = try #require(card(.managed(node.id, generation: 2), sessions: [session], nodes: [node]))
+        #expect(current.lines.first { $0.title == "Child history" }?.value == "Incomplete")
+        #expect(current.lines.first { $0.title == "Git changes" }?.value == "Unavailable")
+        let stale = try #require(card(.managed(node.id, generation: 2), sessions: [session],
+                                     nodes: [node], availability: .stale))
+        #expect(stale.notice == "Observation: Stale")
+        let unavailable = try #require(card(.managed(node.id, generation: 2), sessions: [session],
+                                           nodes: [node], availability: .unavailable))
+        #expect(unavailable.notice == "Observation: Unavailable")
+        #expect(unavailable.lines.allSatisfy { $0.copyableValue == nil && $0.copyableSessionID == nil })
+        let tooltip = SidebarPresentation.managedGitMetadataHelp(node, now: now)
+        #expect(tooltip.contains("Git changes: Unavailable"))
+        #expect(tooltip.contains("Git source: Assigned directory"))
+        #expect(!tooltip.contains("not Copilot") && !tooltip.contains("Current counts unavailable"))
+        #expect(SidebarPresentation.sessionStatus(session) == "Working · Child history: Incomplete")
+    }
+
     @Test(arguments: [true, false], [nil, "", "relative/../reported", "/synthetic/reported"] as [String?])
     func directoryConsumersKeepHostSourceAndPermissionDistinct(granted: Bool, directory: String?) throws {
         let hierarchy = directoryHierarchy(directory, granted: granted)
