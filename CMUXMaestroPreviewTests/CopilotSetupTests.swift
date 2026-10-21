@@ -831,9 +831,32 @@ struct CopilotSetupTests {
         }
     }
 
+    private func cleanupWatchdog(
+        testIdentity: String, observation: CopilotSetupObservation? = nil
+    ) throws -> MetadataProcessTestWatchdog {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        return try MetadataProcessTestWatchdog(
+            directory: repository.appendingPathComponent(".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
+            testIdentity: testIdentity,
+            limit: supervisedWaitLimit + .seconds(10),
+            observation: observation)
+    }
+
+    @Test func cleanupWatchdogPreservesInnerWaitBudget() throws {
+        let watchdog = try cleanupWatchdog(testIdentity: "cleanup-watchdog-budget")
+        defer { watchdog.finish() }
+        #expect(watchdog.limit > supervisedWaitLimit,
+                "Cleanup's watchdog must leave the bounded wait time to report its own failure")
+    }
+
     private func exerciseCleanup(
         cancel: Bool, delayStartup: Bool = false, launchDelay: Duration = .zero
     ) async throws {
+        let observation = CopilotSetupObservation()
+        let watchdog = try cleanupWatchdog(
+            testIdentity: "exerciseCleanup(cancel:\(cancel),launchDelay:\(launchDelay))",
+            observation: observation)
+        defer { watchdog.finish() }
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
         defer {
@@ -843,21 +866,22 @@ struct CopilotSetupTests {
             try? FileManager.default.removeItem(at: directory)
         }
 
-        let unrelated = Process()
-        let unrelatedInput = Pipe()
-        unrelated.executableURL = URL(fileURLWithPath: "/bin/cat")
-        unrelated.standardInput = unrelatedInput
-        unrelated.standardOutput = FileHandle.nullDevice
-        unrelated.standardError = FileHandle.nullDevice
-        try unrelated.run()
-        defer {
-            try? unrelatedInput.fileHandleForWriting.close()
-            if unrelated.isRunning { unrelated.terminate() }
-            unrelated.waitUntilExit()
+        let exited = try await withUnrelatedProcess(watchdog: watchdog) { unrelated in
+            try await verifyCleanup(cancel: cancel, delayStartup: delayStartup, launchDelay: launchDelay,
+                                    fixture: fixture, unrelated: unrelated, watchdog: watchdog, observation: observation)
         }
+        #expect(exited, "Unrelated process exit observation exceeded its bound")
+    }
+
+    private func verifyCleanup(
+        cancel: Bool, delayStartup: Bool, launchDelay: Duration,
+        fixture: (directory: URL, reader: FileHandle, writer: FileHandle, completion: FileHandle),
+        unrelated: Process, watchdog: MetadataProcessTestWatchdog, observation: CopilotSetupObservation
+    ) async throws {
+        let directory = fixture.directory
         let clock = SetupDeadlineClock()
         let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05,
-                                             deadlineNow: { clock.now() })
+                                             deadlineNow: { clock.now() }, observation: observation)
         let arguments = gatedInstallerArguments(in: directory) + (delayStartup ? ["--delay-startup"] : [])
         let task = Task {
             defer { clock.finishStartup() }
@@ -881,13 +905,16 @@ struct CopilotSetupTests {
         // The runner first samples after posix_spawn. Scheduling its driver is
         // not part of the child's readiness hang guard.
         var ready = false
+        watchdog.begin("startup")
         let started = await bounded { await clock.waitForStartup() }
         if started == true {
+            watchdog.begin("writer-readiness")
             ready = try await waitForGatedWriter(in: directory, deadlineClock: clock)
         }
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
             let detail = supervisionDiagnostics(directory, clock: clock)
+            watchdog.begin("readiness-failure-cleanup")
             task.cancel()
             let stopped = await bounded { await task.value }
             readinessFailure += "; startup=\(started.map { "\($0)" } ?? "unreturned")"
@@ -907,6 +934,7 @@ struct CopilotSetupTests {
             #expect(try String(contentsOf: directory.appendingPathComponent("delay-completed"), encoding: .utf8) == "0.6")
         }
         try fixture.reader.close()
+        watchdog.begin("runner-result")
         if cancel {
             task.cancel()
         } else {
@@ -929,13 +957,139 @@ struct CopilotSetupTests {
         // the child cannot perform another write after that channel closes.
         let release = releaseMutationGate(fixture.writer)
         try #require(release.bytes == 8 || (release.bytes == -1 && release.error == EPIPE))
+        watchdog.begin("completion-eof")
         #expect(try mutationCompletion(fixture.completion, in: directory, clock: clock).isEmpty,
                 "A writer survived returned cleanup")
         #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
         #expect(unrelated.isRunning)
     }
 
+    private func withUnrelatedProcess(
+        watchdog: MetadataProcessTestWatchdog? = nil,
+        waitForExit: (@Sendable (AsyncStream<Void>) async -> Bool)? = nil,
+        waitForTimeout: (@Sendable (Duration) async throws -> Void)? = nil,
+        body: (Process) async throws -> Void
+    ) async throws -> Bool {
+        let process = Process()
+        let input = Pipe()
+        defer { try? input.fileHandleForWriting.close() }
+        process.executableURL = URL(fileURLWithPath: "/bin/cat")
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        return try await withTestProcess(
+            process, watchdog: watchdog,
+            waitForExit: waitForExit ?? { exited in
+                for await _ in exited { return true }
+                return false
+            },
+            waitForTimeout: waitForTimeout,
+            stop: { _ in try input.fileHandleForWriting.close() },
+            body: body)
+    }
+
+    private func withTestProcess(
+        _ process: Process, watchdog: MetadataProcessTestWatchdog? = nil,
+        waitForExit: @escaping @Sendable (AsyncStream<Void>) async -> Bool = { exited in
+            for await _ in exited { return true }
+            return false
+        },
+        waitForTimeout: (@Sendable (Duration) async throws -> Void)? = nil,
+        stop: (Bool) throws -> Void,
+        body: (Process) async throws -> Void
+    ) async throws -> Bool {
+        let exited = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        defer { exited.continuation.finish() }
+        process.terminationHandler = { _ in
+            exited.continuation.yield(())
+            exited.continuation.finish()
+        }
+        try process.run()
+        let result: Result<Void, any Error>
+        do {
+            try await body(process)
+            result = .success(())
+        } catch {
+            result = .failure(error)
+        }
+        watchdog?.begin("fixture-process-cleanup")
+        if case .success = result { try stop(true) } else { try stop(false) }
+        let stopped: Bool?
+        if let waitForTimeout {
+            stopped = await bounded(waitForTimeout: waitForTimeout) { await waitForExit(exited.stream) }
+        } else {
+            stopped = await bounded { await waitForExit(exited.stream) }
+        }
+        try result.get()
+        return stopped == true
+    }
+
+    @Test func unrelatedCleanupBoundsMissingExitObservation() async throws {
+        let never = AsyncStream<Void>.makeStream()
+        defer { never.continuation.finish() }
+        let entered = AsyncStream<Void>.makeStream()
+        let deadline = AsyncStream<Void>.makeStream()
+        defer {
+            entered.continuation.finish()
+            deadline.continuation.finish()
+        }
+        let task = Task {
+            try await withUnrelatedProcess(waitForExit: { _ in
+                entered.continuation.yield(())
+                for await _ in never.stream {}
+                return true
+            }, waitForTimeout: { _ in
+                for await _ in deadline.stream { break }
+            }) { process in
+                #expect(process.isRunning)
+            }
+        }
+        try #require(await bounded {
+            for await _ in entered.stream { return true }
+            return false
+        } == true)
+        deadline.continuation.yield(())
+        deadline.continuation.finish()
+        // An injected deadline, not elapsed time, orders the cleanup failure.
+        let returned = await bounded { await task.result }
+        never.continuation.finish()
+        let drained = try #require(await bounded { await task.result })
+        #expect(try drained.get() == false)
+        #expect(returned != nil)
+    }
+
+    @Test(arguments: [false, true])
+    func unrelatedCleanupPreservesBodyFailureAndEarlyExit(exitBeforeCleanup: Bool) async throws {
+        enum BodyFailure: Error { case expected }
+        var observed: Process?
+        do {
+            _ = try await withUnrelatedProcess { process in
+                observed = process
+                if exitBeforeCleanup {
+                    let delivered = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+                    defer { delivered.continuation.finish() }
+                    let handler = process.terminationHandler
+                    process.terminationHandler = { process in
+                        handler?(process)
+                        delivered.continuation.yield(())
+                        delivered.continuation.finish()
+                    }
+                    process.terminate()
+                    try #require(await bounded {
+                        for await _ in delivered.stream { return true }
+                        return false
+                    } == true)
+                }
+                throw BodyFailure.expected
+            }
+            Issue.record("Cleanup must preserve the original assertion failure")
+        } catch BodyFailure.expected {}
+        #expect(try #require(observed).isRunning == false)
+    }
+
     @Test func mutationGateDetectsLiveWriterWithoutCleanup() async throws {
+        let watchdog = try cleanupWatchdog(testIdentity: "mutationGateDetectsLiveWriterWithoutCleanup()")
+        defer { watchdog.finish() }
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
         defer {
@@ -953,20 +1107,21 @@ struct CopilotSetupTests {
         writer.standardInput = FileHandle.nullDevice
         writer.standardOutput = FileHandle.nullDevice
         writer.standardError = FileHandle.nullDevice
-        try writer.run()
-        defer {
-            if writer.isRunning { kill(writer.processIdentifier, SIGKILL) }
-            writer.waitUntilExit()
+        let exited = try await withTestProcess(writer, watchdog: watchdog, stop: { succeeded in
+            if !succeeded, writer.isRunning { kill(writer.processIdentifier, SIGKILL) }
+        }) { writer in
+            watchdog.begin("negative-control-readiness")
+            try #require(await waitForGatedWriter(in: directory))
+            #expect(try recordedProcessValue("child.pid", in: directory) == writer.processIdentifier)
+            try #require(HookProcess.current(writer.processIdentifier) != nil)
+            try fixture.reader.close()
+            #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
+            let release = releaseMutationGate(fixture.writer)
+            #expect(release.bytes == 8 && release.error == 0, "The negative-control writer must receive the gate")
+            watchdog.begin("negative-control-completion")
+            #expect(try String(decoding: mutationCompletion(fixture.completion, in: directory), as: UTF8.self) == "mutated")
         }
-        try #require(await waitForGatedWriter(in: directory))
-        #expect(try recordedProcessValue("child.pid", in: directory) == writer.processIdentifier)
-        try #require(HookProcess.current(writer.processIdentifier) != nil)
-        try fixture.reader.close()
-        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
-        let release = releaseMutationGate(fixture.writer)
-        #expect(release.bytes == 8 && release.error == 0, "The negative-control writer must receive the gate")
-        #expect(try String(decoding: mutationCompletion(fixture.completion, in: directory), as: UTF8.self) == "mutated")
-        writer.waitUntilExit()
+        try #require(exited, "Negative-control process exit observation exceeded its bound")
         #expect(writer.terminationStatus == 0)
         #expect(try String(contentsOf: directory.appendingPathComponent("late-mutation"), encoding: .utf8) == "forbidden")
     }

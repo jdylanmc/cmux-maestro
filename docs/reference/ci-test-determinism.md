@@ -16,6 +16,26 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   deadlines; neither can finish early. The observer retains the MainActor versus
   detached-driver distinction. Deadline-helper tests release an explicit timeout
   signal instead of measuring elapsed wall time.
+  Cleanup fixtures subscribe to unrelated-process termination before launch and
+  await the buffered event after closing stdin, including when an assertion throws.
+  They never call Foundation's synchronous `Process.waitUntilExit()`: a local
+  reproduction of #302 sampled that call stuck in its run loop after the setup
+  supervisor had already completed. The mutation-gate negative control uses the
+  same bounded exit helper: repeated-suite sampling also caught its old synchronous
+  wait stalled. A controlled missing-notification regression
+  advances an injected deadline; a second regression delivers termination before
+  cleanup starts. No cleanup coverage was removed.
+  Each cleanup phase also has an executor-independent watchdog at
+  `supervisedWaitLimit + 10 seconds` (currently 70 seconds), with at most five
+  additional seconds for stack capture. The inner 60-second bounds retain their
+  full budget and report their own diagnostics first; the watchdog is a backstop
+  for non-cooperative stalls, not a shorter replacement timeout. A mutation guard
+  checks the configured watchdog from the shared cleanup factory against the
+  inner limit, so falling back to the metadata watchdog's 30-second default fails.
+  Its phase and supervisor
+  boundary records use the existing `metadata-diagnostics` artifact path. This
+  backstop covers synchronous fixture work and teardown as well as async waits;
+  it exits with failure, never retries or converts a stalled assertion into a pass.
 - Orchestration snapshots and naming use an injected clock. Polling tests await
   publication at the existing pause boundary rather than counting scheduler yields.
   Cadence fixtures suspend until cancellation, never a 60-second accidental tick.

@@ -98,7 +98,7 @@
     }
   },
   "CMUXMaestroPreviewTests/CopilotSetupTests.swift": {
-    "reason": "Injected-clock observations, deadline helper and 60-second process readiness/EOF hang guards. Deliberately delayed synthetic launcher tests retain their startup precondition; no upper wall-time performance assertion.",
+    "reason": "Injected-clock observations, deadline helper and 60-second process readiness/EOF hang guards. Cleanup's shared watchdog is strictly outside these bounds (supervisedWaitLimit + 10 seconds), preserving in-test diagnostics before its non-cooperative-stall backstop. Deliberately delayed synthetic launcher tests retain their startup precondition; no upper wall-time performance assertion.",
     "statements": {
       "let initial = ContinuousClock.now": 1,
       "return origin.duration(to: instant)": 1,
@@ -127,7 +127,7 @@
     }
   },
   "CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift": {
-    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "reason": "Executor-independent diagnostic deadline and bounded sampler. Metadata probes retain their 30-second default; setup cleanup explicitly supplies supervisedWaitLimit + 10 seconds (currently 70), outside every inner 60-second hang guard. No new timing statements or counts; see docs/reference/ci-test-determinism.md.",
     "statements": {
       "deadline = ContinuousClock.now.advanced(by: limit)": 2,
       "let instant = ContinuousClock.now": 1,

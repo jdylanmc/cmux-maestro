@@ -9,7 +9,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     private let condition = NSCondition()
     private let directory: URL
     private let testIdentity: String
-    private let limit: Duration
+    let limit: Duration
     private let samplerExecutable: URL
     private let observation: CopilotSetupObservation?
     private var phase = "fixture"
