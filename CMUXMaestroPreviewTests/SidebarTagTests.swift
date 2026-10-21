@@ -9,6 +9,100 @@ struct SidebarTagTests {
     private static let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
         .deletingLastPathComponent().appendingPathComponent("scripts/test-fixtures")
 
+    @Test func customTagColorsRoundTripAsVersionTwoAndAutomaticResetClearsThem() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let session = UUID()
+        let file = fixture.root.appendingPathComponent("sidebar-tags.json")
+        let legacy = Data("""
+        {"version":1,"assignments":{"\(session.uuidString)":["release"]},"colors":{"release":"ocean"}}
+        """.utf8)
+        try legacy.write(to: file)
+        let preferences = preferences(fixture)
+        #expect(preferences.tags(for: session).first?.swatch == .ocean)
+        #expect(try Data(contentsOf: file) == legacy)
+        let color = try JSONDecoder().decode(SidebarTagSwatch.self, from: Data("\"#fedcba\"".utf8))
+        var draft = SidebarTagDraft(text: "release", colors: ["release": color])
+        #expect(draft.preview(preferences.tags(for: session)).first?.background.hex == "#FEDCBA")
+        #expect(preferences.tags(for: session).first?.swatch == .ocean, "Draft color must not persist before Save")
+        #expect(draft.commit(to: preferences, session: session) == nil)
+        let stored = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(stored["version"] as? Int == 2)
+        #expect((stored["colors"] as? [String: String])?["release"] == "#FEDCBA")
+        #expect(self.preferences(fixture).tags(for: session).first?.background.hex == "#FEDCBA")
+        draft.colors["release"] = .some(nil)
+        #expect(draft.commit(to: preferences, session: session) == nil)
+        #expect(self.preferences(fixture).tagSettings.colors.isEmpty)
+        #expect(preferences.tags(for: session).first?.background == SidebarTagPalette.automatic("release"))
+    }
+
+    @Test func tagEditorShowsTheCurrentCustomColorInANativeWell() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = preferences(fixture)
+        let session = UUID()
+        let color = try #require(SidebarTagSwatch(rawValue: "#bada55"))
+        #expect(preferences.saveTags("release", colors: ["release": color], for: session) == nil)
+        let editor = SidebarTagEditor(session: session, preferences: preferences, close: {})
+        let host = NSHostingView(rootView: editor.swatches(for: try #require(preferences.tags(for: session).first)))
+        host.frame = NSRect(x: 0, y: 0, width: 280, height: 140)
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let wells = descendants(host).compactMap { $0 as? NSColorWell }
+        #expect(wells.count == 1)
+        #expect(SidebarTagColor(nativeColor: try #require(wells.first).color)?.hex == "#BADA55")
+        #expect(preferences.tags(for: session).first?.swatch == color)
+    }
+
+    @Test func everyCustomSRGBGridColorHasReadableTextAndCanonicalStorage() throws {
+        // WCAG ratios against black and white multiply to 21, so their maximum is >= sqrt(21).
+        for red in stride(from: 0, through: 255, by: 17) {
+            for green in stride(from: 0, through: 255, by: 17) {
+                for blue in stride(from: 0, through: 255, by: 17) {
+                    let hex = String(format: "#%02x%02x%02x", red, green, blue)
+                    let swatch = try #require(SidebarTagSwatch(rawValue: hex))
+                    #expect(swatch.rawValue == hex.uppercased())
+                    #expect(SidebarTagColor.contrast(swatch.color, swatch.color.foreground) >= sqrt(21))
+                }
+            }
+        }
+        for invalid in ["", "#fff", "#000000ff", "#00gg00", "123456", "#123456\n"] {
+            #expect(SidebarTagSwatch(rawValue: invalid) == nil)
+        }
+        #expect(SidebarTagSwatch(rawValue: "#000000")?.color.foreground == .white)
+        #expect(SidebarTagSwatch(rawValue: "#FFFFFF")?.color.foreground == .black)
+    }
+
+    @Test func panelColorsConvertToOpaqueSRGBAndClampOutOfGamutChannels() throws {
+        #expect(SidebarTagColor(nativeColor: NSColor(white: 0.5, alpha: 0.2))?.hex == "#808080")
+        let extended = NSColor(colorSpace: .extendedSRGB, components: [1.2, -0.1, 0.5, 0.3], count: 4)
+        let converted = try #require(SidebarTagColor(nativeColor: extended))
+        #expect(converted.hex == "#FF0080")
+        #expect(converted.nativeColor.alphaComponent == 1)
+        let p3 = NSColor(displayP3Red: 1, green: 0, blue: 0, alpha: 1)
+        #expect(SidebarTagColor(nativeColor: p3)?.hex == "#FF0000")
+    }
+
+    @Test func unsupportedHumanTagColorsAndVersionsPreserveTheStoreUntilExplicitReset() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let file = fixture.root.appendingPathComponent("sidebar-tags.json")
+        let session = UUID()
+        for (version, color) in [(3, "rose"), (2, "#ABC"), (1, "#112233")] {
+            let data = Data("""
+            {"version":\(version),"assignments":{"\(session.uuidString)":["release"]},"colors":{"release":"\(color)"}}
+            """.utf8)
+            try data.write(to: file)
+            let preferences = preferences(fixture)
+            #expect(preferences.tagNotice != nil)
+            #expect(preferences.setTagColor(.rose, for: "release") != nil)
+            #expect(try Data(contentsOf: file) == data)
+            preferences.resetTags()
+            #expect(preferences.tagNotice == nil)
+            #expect(preferences.tagSettings.colors.isEmpty)
+        }
+    }
+
     /// An agent store written the way the controller writes it: private folder, private file.
     private struct AgentStore {
         let file: SidebarAgentTagsFile
@@ -230,8 +324,8 @@ struct SidebarTagTests {
 
     @Test func automaticColorsMatchTheApprovedReference() {
         // Computed with the frozen prototype's defaultTagColor.
-        let reference = ["front-end": "#dc7489", "accessibility": "#86dad3", "content": "#df9d81",
-                         "数据-pipeline": "#dad195", "café": "#ddb28d", "😀": "#8a8ce0"]
+        let reference = ["front-end": "#DC7489", "accessibility": "#86DAD3", "content": "#DF9D81",
+                         "数据-pipeline": "#DAD195", "café": "#DDB28D", "😀": "#8A8CE0"]
         for (slug, hex) in reference { #expect(SidebarTagPalette.automatic(slug).hex == hex, "\(slug)") }
     }
 
@@ -256,6 +350,9 @@ struct SidebarTagTests {
     @Test func renderedChipsMeetContrastOnTheirActualBackground() throws {
         let tags = [SidebarResolvedTag(slug: "release", human: true, agent: false, swatch: nil)]
             + SidebarTagSwatch.allCases.map { SidebarResolvedTag(slug: "release", human: false, agent: true, swatch: $0) }
+            + ["#000000", "#FFFFFF", "#757575", "#767676", "#00FF00"].map {
+                SidebarResolvedTag(slug: "release", human: true, agent: false, swatch: SidebarTagSwatch(rawValue: $0))
+            }
         for tag in tags {
             let renderer = ImageRenderer(content: SidebarTagChip(tag: tag, compact: false).environment(\.colorScheme, .dark))
             renderer.scale = 4

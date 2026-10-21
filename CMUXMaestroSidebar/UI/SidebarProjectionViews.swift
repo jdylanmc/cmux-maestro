@@ -181,7 +181,9 @@ struct SidebarAgentIconCard: View {
             kind: .agent, target: item.iconTarget, agentGlyph: item.glyph, agentColor: item.color,
             icons: preferences.icons, agentStyle: agentStyle, terminalStyle: terminalStyle
         ).choice
-        return SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor))
+        return SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor),
+                                outline: choice.color.customColor?.foreground.swiftUI)
+            .accessibilityLabel("\(choice.glyph), \(choice.color.title)")
             .frame(width: 28, height: 28)
             .overlay(alignment: .topTrailing) {
                 if let badge = item.badge {

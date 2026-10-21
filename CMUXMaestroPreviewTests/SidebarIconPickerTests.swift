@@ -6,6 +6,53 @@ import Carbon.HIToolbox
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarIconPickerTests {
+    @Test func iconPickerIncludesANativeColorWellWithoutOpeningThePanel() throws {
+        var changes: [SidebarIconChoice] = []
+        let picker = SidebarIconPicker(
+            catalog: try SidebarGlyphCatalog.shared.get(),
+            selection: .init(glyph: "md-duck", color: .teal), source: "Your choice",
+            choose: { changes.append($0) },
+            resetDefault: {}, close: {}
+        )
+        let host = NSHostingView(rootView: picker)
+        host.frame = NSRect(x: 0, y: 0, width: 280, height: 520)
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let wells = descendants(host).compactMap { $0 as? NSColorWell }
+        let well = try #require(wells.first)
+        #expect(wells.count == 1)
+        #expect(changes.isEmpty, "Rendering must not change the color")
+        #expect(!NSColorPanel.sharedColorPanelExists)
+        well.color = NSColor(srgbRed: 0x12 / 255.0, green: 0xab / 255.0, blue: 0xef / 255.0, alpha: 1)
+        #expect(well.sendAction(well.action, to: well.target))
+        #expect(changes == [.init(glyph: "md-duck", color: try #require(SidebarAvatarColor(rawValue: "#12ABEF")))])
+    }
+
+    @Test func customIconUsesAnOpaqueNonTemplateImageWithAContrastingOutline() throws {
+        let custom = try #require(SidebarAvatarColor(rawValue: "#FFFFFF"))
+        let host = NSHostingView(rootView: SidebarIconPickerButton(
+            catalog: try SidebarGlyphCatalog.shared.get(), selection: .init(glyph: "md-robot", color: custom),
+            label: "Example", enabled: true, action: {}
+        ))
+        host.frame = NSRect(x: 0, y: 0, width: 24, height: 24)
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let button = try #require(descendants(host).compactMap { $0 as? SidebarIconNativeButton }.first)
+        let image = try #require(button.image)
+        #expect(!image.isTemplate)
+        let data = try #require(image.tiffRepresentation)
+        let bitmap = try #require(NSBitmapImageRep(data: data))
+        var white = 0, black = 0
+        for y in 0..<bitmap.pixelsHigh { for x in 0..<bitmap.pixelsWide {
+            let pixel = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB))
+            if pixel.alphaComponent > 0.9 {
+                if pixel.redComponent > 0.9 { white += 1 }
+                if pixel.redComponent < 0.1 { black += 1 }
+            }
+        } }
+        #expect(white > 0 && black > 0, "White glyph must retain a black outline on a white row")
+    }
+
     @Test func staleMenuIconRequestCannotRetargetAReplacementSession() {
         let original = SidebarIconTarget.session(UUID())
         let replacement = SidebarIconTarget.session(UUID())
@@ -99,13 +146,14 @@ struct SidebarIconPickerTests {
     func pickerRendersWithoutAnySidebarEnvironment(dark: Bool) async throws {
         let catalog = try SidebarGlyphCatalog.shared.get()
         let picker = SidebarIconPicker(
-            catalog: catalog, selection: .init(glyph: "md-duck", color: .teal), source: "Your choice",
+            catalog: catalog, selection: .init(glyph: "md-duck", color: try #require(SidebarAvatarColor(rawValue: "#12ABEF"))),
+            source: "Your choice",
             choose: { _ in Issue.record("Rendering must not select an icon") },
             resetDefault: { Issue.record("Rendering must not reset preferences") },
             resetAgentSelection: { Issue.record("Rendering must not follow an agent") },
             close: { Issue.record("Rendering must not dismiss") }
         )
-        let frame = NSRect(x: 0, y: 0, width: 280, height: 470)
+        let frame = NSRect(x: 0, y: 0, width: 280, height: 510)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)

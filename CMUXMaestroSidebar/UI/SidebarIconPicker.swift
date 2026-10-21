@@ -12,6 +12,7 @@ extension SidebarAvatarColor {
         case .pink: .systemPink
         case .red: .systemRed
         case .gray: .systemGray
+        case .custom(let color): color.nativeColor
         }
     }
 }
@@ -36,7 +37,10 @@ struct SidebarIconPicker: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
-                glyph(selection.glyph, tint: Color(nsColor: selection.color.nativeColor))
+                SidebarGlyphIcon(
+                    name: selection.glyph, tint: Color(nsColor: selection.color.nativeColor),
+                    outline: selection.color.customColor?.foreground.swiftUI, catalog: .success(catalog)
+                )
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Choose icon").font(.headline)
                     Text(source).font(.caption).foregroundStyle(.secondary)
@@ -121,6 +125,10 @@ struct SidebarIconPicker: View {
                     .help(color.title)
                 }
             }
+            SidebarCustomColorPicker(
+                color: selection.color.nativeColor, selected: selection.color.customColor,
+                choose: { selectColor(.custom($0)) }
+            )
             Divider()
             Button("Reset to default", action: resetDefault)
                 .accessibilityIdentifier("icon-picker-reset-default")
@@ -224,9 +232,10 @@ struct SidebarIconPickerButton: NSViewRepresentable {
         button.activate = action
         button.isEnabled = enabled
         button.toolTip = label
-        button.setAccessibilityLabel(label)
+        button.setAccessibilityLabel(selection.color.customColor.map { "\(label), \($0.hex)" } ?? label)
         button.setAccessibilityIdentifier("icon-picker-button")
-        button.contentTintColor = selection.color.nativeColor
+        let custom = selection.color.customColor
+        button.contentTintColor = custom == nil ? selection.color.nativeColor : nil
         if let outline = catalog.path(for: selection.glyph) {
             let bounds = outline.boundingBoxOfPath
             let scale = min(20 / bounds.width, 20 / bounds.height)
@@ -235,11 +244,18 @@ struct SidebarIconPickerButton: NSViewRepresentable {
                 context.translateBy(x: 10 - bounds.midX * scale, y: 10 - bounds.midY * scale)
                 context.scaleBy(x: scale, y: scale)
                 context.addPath(outline)
-                context.setFillColor(NSColor.black.cgColor)
-                context.fillPath()
+                context.setFillColor(custom?.nativeColor.cgColor ?? NSColor.black.cgColor)
+                if let custom {
+                    context.setStrokeColor(custom.foreground.nativeColor.cgColor)
+                    context.setLineWidth(1 / scale)
+                    context.setLineJoin(.round)
+                    context.drawPath(using: .fillStroke)
+                } else {
+                    context.fillPath()
+                }
                 return true
             }
-            button.image?.isTemplate = true
+            button.image?.isTemplate = custom == nil
         } else {
             button.image = NSImage(systemSymbolName: "questionmark.square", accessibilityDescription: "Icon unavailable")
         }

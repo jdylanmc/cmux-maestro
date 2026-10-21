@@ -9,3 +9,19 @@ Rejected: one shared store under a new writable grant (widens the sandbox, ADR 0
 Retention: entries stay until removed, but a full store never blocks forever. When the agent store (2,048 sessions) or the human store (2,048 sessions, 2,048 colors) is full, a new entry first drops sessions whose Copilot state folder (`~/.copilot/session-state/<id>`) is gone, since those sessions can never resume or tag again, and colors for slugs no session carries. A missing state root proves nothing and drops nothing. Which slugs agents carry comes from a fresh read of the agent store at write time; if that read fails, no color is dropped. If still full, the write is refused. Byte caps (agent 2 MiB, human 4 MiB) sit above the largest valid store, so the entry caps always bind first. **Reset all tags** in Settings clears the human store; agents' own entries are unchanged.
 
 Consequence: any same-user process can edit either file; readers check shape, owner and privacy only, with the same strict JSON rules on both sides (`scripts/test-fixtures/tag-store-cases.json`). Limits (6 per source, 24 characters) refuse rather than truncate. A changed canonical rule needs a new version and a migration of both stores.
+
+## Human custom colors (2026-10-21, #294)
+
+The human preference format is now version 2, independent of the unchanged
+version-1 slug rules, automatic palette and agent store. A color is either an
+existing named swatch or a validated opaque sRGB `#RRGGBB`, canonicalized uppercase.
+The editor's **Custom…** system color well writes only through the existing draft
+and Save path. Black or white text is chosen from actual contrast; arbitrary
+opaque sRGB still guarantees at least `sqrt(21):1`.
+
+Version-1 human preferences decode without a disk write; the next explicit edit
+writes version 2. Older builds fail open for presentation, show their existing
+notice and refuse ordinary writes to the unsupported file; only an explicit
+global reset discards it. The same versioning rule applies to human icon
+preferences (`sidebar-icons.json`). No new grant, agent color API, controller
+store or automatic migration of external files is introduced.

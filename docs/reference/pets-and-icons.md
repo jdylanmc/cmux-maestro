@@ -64,6 +64,35 @@ Searches are paged, capped at 100 results. Palette
 is `theme`, `green`, `teal`, `blue`, `purple`, `pink`, `red`, and `gray`; no orange.
 Omit glyph or color to preserve that part of selection.
 
+### Human color picker
+
+Every **Choose icon** popover (sessions, terminals and browsers, including row
+**Appearance** actions) keeps the named swatches and adds **Custom…**, a native
+macOS color well that opens the system color panel. Choose or enter any opaque
+sRGB hex. The well displays the current color; a checkmark marks a custom
+selection and its accessibility label includes the hex. Icon changes save
+immediately, as named swatches do. Both reset actions keep their existing
+precedence.
+
+Human choices stay in the sidebar container's `sidebar-icons.json`, never in
+agent appearance records. Version 2 stores color as a named string or uppercase
+`#RRGGBB`. Version-1 named choices still read; the next explicit save writes
+version 2. Older builds reject version 2, show their existing preference notice
+and preserve the file until an explicit global reset. Downgrading therefore
+hides these preferences; upgrading restores them. Unknown versions and malformed
+colors are never overwritten by ordinary edits.
+
+The panel has no opacity control. Wide-gamut and grayscale choices convert to
+sRGB, clamp to its gamut and round to eight bits per channel; alpha is discarded.
+Custom glyphs have a one-point black or white outline, whichever contrasts more
+with their fill, so even white on a light row or black on a dark row retains an
+edge. Named colors and theme inheritance are unchanged. This is human-only:
+`maestro_spawn`, `register`, `spawn` and `icon` still accept only the named
+palette. The Python controller reads agent records, not either human color store;
+its stored agent-color validation intentionally remains named-only.
+
+### Agent appearance records
+
 All new registrations and workers default to `md-robot`.
 `register`/`spawn` accept optional `--icon` and `--color` startup choices.
 Saved choices survive follow-ups. They are cosmetic: never refresh execution

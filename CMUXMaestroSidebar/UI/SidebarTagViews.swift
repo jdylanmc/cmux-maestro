@@ -212,7 +212,7 @@ struct SidebarTagEditor: View {
         }
     }
 
-    private func swatches(for tag: SidebarResolvedTag) -> some View {
+    func swatches(for tag: SidebarResolvedTag) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(22), spacing: 6), count: 7), spacing: 6) {
                 ForEach(SidebarTagSwatch.allCases, id: \.self) { swatch in
@@ -227,6 +227,11 @@ struct SidebarTagEditor: View {
                     .accessibilityAddTraits(tag.swatch == swatch ? .isSelected : [])
                 }
             }
+            SidebarCustomColorPicker(
+                color: tag.background.nativeColor,
+                selected: tag.swatch.flatMap { if case .custom(let color) = $0 { return color }; return nil },
+                choose: { draft.colors[tag.slug] = .some(.custom($0)) }
+            )
             Button("Use automatic color") { draft.colors[tag.slug] = .some(nil) }
                 .disabled(tag.swatch == nil)
                 .font(.caption)

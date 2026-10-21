@@ -151,6 +151,7 @@ private struct SidebarFontGlyphShape: Shape {
 struct SidebarGlyphIcon: View {
     let name: String
     var tint: Color = .primary
+    var outline: Color? = nil
     var catalog: Result<SidebarGlyphCatalog, Error> = SidebarGlyphCatalog.shared
 
     var body: some View {
@@ -158,6 +159,11 @@ struct SidebarGlyphIcon: View {
             if case .success(let catalog) = catalog,
                let path = catalog.path(for: name) {
                 SidebarFontGlyphShape(outline: path).fill(tint)
+                    .overlay {
+                        if let outline {
+                            SidebarFontGlyphShape(outline: path).stroke(outline, lineWidth: 1)
+                        }
+                    }
                     .accessibilityLabel(name)
             } else {
                 Image(systemName: "questionmark.square")

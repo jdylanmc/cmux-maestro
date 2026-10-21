@@ -1,0 +1,34 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "color.custom" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "مخصص…" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Eigene Farbe…" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Custom…" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Personalizado…" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Personnalisé…" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "カスタム…" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용자 지정…" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "自定义…" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "自訂…" } }
+      }
+    },
+    "color.unavailable" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "اللون غير متاح" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Farbe nicht verfügbar" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Color unavailable" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Color no disponible" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Couleur indisponible" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "色を使用できません" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "색상을 사용할 수 없음" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "颜色不可用" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "顏色無法使用" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}

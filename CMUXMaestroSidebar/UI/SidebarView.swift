@@ -152,6 +152,7 @@ private extension SidebarAvatarColor {
         case .pink: .pink
         case .red: .red
         case .gray: .gray
+        case .custom(let color): color.swiftUI
         }
     }
 }
@@ -168,7 +169,8 @@ struct SidebarAgentIcon: View {
     }
 
     var body: some View {
-        SidebarGlyphIcon(name: selectedGlyph, tint: color?.tint ?? .primary)
+        SidebarGlyphIcon(name: selectedGlyph, tint: color?.tint ?? .primary,
+                         outline: color?.customColor?.foreground.swiftUI)
         .frame(width: 24, height: 24)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Agent · \(visual.title) · \(selectedGlyph)")
