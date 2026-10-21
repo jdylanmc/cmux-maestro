@@ -220,7 +220,7 @@ struct SidebarPreferenceCoordinationTests {
     // Cross-process file presentation can lag on a loaded CI runner (run 38761640483 missed a 10 s bound).
     // Still bounded; the label names the step that failed to converge.
     private func eventually(_ step: String, _ condition: () -> Bool) async throws {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(30))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while !condition() && ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -308,7 +308,7 @@ final class PreferenceTestChild {
                 throw CocoaError(.fileReadUnknown)
             }
             group.addTask {
-                try await Task.sleep(for: .seconds(15))
+                try await Task.sleep(for: .seconds(60))
                 throw CocoaError(.coderValueNotFound)
             }
             defer { group.cancelAll() }

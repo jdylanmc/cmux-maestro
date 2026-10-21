@@ -599,17 +599,20 @@ struct SidebarCopilotTreeTests {
     func tornEOFAndReadLimitsWithoutUnreadHistoryUseNormalDelay() async {
         let harness = SidebarReadHarness()
         let cadence = SidebarCadenceHarness()
+        let now = Date(timeIntervalSince1970: 2_000)
         let poller = SidebarCopilotPolling(
             read: neutralRead { try await harness.read($0) },
             hasPendingHistory: { await harness.hasPendingHistory },
             pause: { try await cadence.idle() },
-            catchUpPause: { try await cadence.catchUp() }
+            catchUpPause: { try await cadence.catchUp() },
+            expiryPause: sidebarFrozenExpiry,
+            now: { now }
         )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
         await sidebarEventually { await harness.callCount == 1 }
         await harness.succeed(0, with: fixtures.snapshot(
-            sessions: [], issues: [.loadingHistory, .readLimitReached], complete: false
+            sessions: [], issues: [.loadingHistory, .readLimitReached], complete: false, now: now
         ))
         await sidebarEventually { await cadence.idleCalls == 1 }
         #expect(await cadence.catchUpCalls == 0)
@@ -621,7 +624,7 @@ struct SidebarCopilotTreeTests {
     @Test
     func staleHistoryCannotTriggerCatchUpAndHideCancelsCatchUpPause() async {
         let harness = SidebarReadHarness()
-        let cadence = SidebarCadenceHarness()
+        let cadence = SidebarCadenceHarness(holdCatchUp: true)
         let now = Date()
         let poller = SidebarCopilotPolling(
             read: neutralRead { try await harness.read($0) },
@@ -649,7 +652,7 @@ struct SidebarCopilotTreeTests {
         poller.setVisible(false)
         await harness.finishPending()
         let readsWhenHidden = await harness.callCount
-        try? await Task.sleep(for: .milliseconds(10))
+        await sidebarEventually { await cadence.finishedCatchUps == 1 }
         #expect(await harness.callCount == readsWhenHidden)
         #expect(poller.tree.availability == .hidden)
     }
@@ -821,11 +824,13 @@ func sidebarEventually(
     _ condition: @MainActor () async -> Bool,
     sourceLocation: SourceLocation = #_sourceLocation
 ) async {
-    for _ in 0..<300 {
+    // A hang guard only: callers assert state/ordering, never elapsed time.
+    let deadline = ContinuousClock.now.advanced(by: .seconds(60))
+    while ContinuousClock.now < deadline {
         if await condition() { return }
         try? await Task.sleep(for: .milliseconds(5))
     }
-    Issue.record("Condition did not settle", sourceLocation: sourceLocation)
+    Issue.record("Condition did not settle within the 60-second hang guard", sourceLocation: sourceLocation)
 }
 
 // Fixtures with fixed `now` must not expire on unrelated wall-clock scheduling.
@@ -839,12 +844,17 @@ nonisolated func sidebarFrozenExpiry(_: TimeInterval) async throws {
 private actor SidebarCadenceHarness {
     private(set) var idleCalls = 0
     private(set) var catchUpCalls = 0
+    private(set) var finishedCatchUps = 0
+    let holdCatchUp: Bool
+    init(holdCatchUp: Bool = false) { self.holdCatchUp = holdCatchUp }
     func idle() async throws {
         idleCalls += 1
-        try await Task.sleep(for: .seconds(60))
+        try await sidebarFrozenExpiry(0)
     }
     func catchUp() async throws {
         catchUpCalls += 1
-        try await Task.sleep(for: .milliseconds(1))
+        defer { finishedCatchUps += 1 }
+        if holdCatchUp { try await sidebarFrozenExpiry(0) }
+        else { await Task.yield() }
     }
 }

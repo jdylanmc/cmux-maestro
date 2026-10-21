@@ -133,7 +133,7 @@ final class SetupDeadlineClock: @unchecked Sendable {
 
 /// Upper bound for a test's wait on supervised real-process work. It is a hang
 /// ceiling, not a speed oracle: passing runs finish in a few seconds.
-let supervisedWaitLimit: Duration = .seconds(30)
+let supervisedWaitLimit: Duration = .seconds(60)
 
 private final class FirstResume<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
@@ -154,12 +154,13 @@ private final class FirstResume<Value: Sendable>: @unchecked Sendable {
 /// never completes is abandoned rather than awaited, so the caller cannot hang.
 func bounded<Value: Sendable>(
     within limit: Duration = supervisedWaitLimit,
+    waitForTimeout: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },
     _ operation: @escaping @Sendable () async -> Value
 ) async -> Value? {
     await withCheckedContinuation { continuation in
         let first = FirstResume(continuation)
         let timer = Task.detached {
-            guard (try? await Task.sleep(for: limit)) != nil else { return }
+            guard (try? await waitForTimeout(limit)) != nil else { return }
             first.resume(nil)
         }
         Task.detached {
@@ -671,9 +672,8 @@ struct CopilotSetupTests {
         let started = await bounded { await clock.waitForStartup() }
         #expect(started == true, Comment(rawValue: "startup=\(started.map { "\($0)" } ?? "unreturned"); "
             + supervisionDiagnostics(fixture.directory, clock: clock)))
-        let waiting = ContinuousClock.now
-        #expect(try await waitForGatedWriter(in: fixture.directory, deadlineClock: clock) == false)
-        #expect(waiting.duration(to: .now) >= .seconds(3))
+        #expect(try await waitForGatedWriter(in: fixture.directory, deadlineClock: clock,
+                                            until: .now) == false)
         let exited = await bounded { await task.value }
         #expect(exited == .exited(7), Comment(rawValue: "result=\(exited.map { "\($0)" } ?? "unreturned"); "
             + supervisionDiagnostics(fixture.directory, clock: clock)))
@@ -683,23 +683,45 @@ struct CopilotSetupTests {
     @Test func supervisedWaitHelpersReturnAtTheirBoundInsteadOfHanging() async throws {
         let never = AsyncStream<Void>.makeStream()
         defer { never.continuation.finish() }
-        let started = ContinuousClock.now
-        let abandoned = await bounded(within: .milliseconds(200)) {
-            for await _ in never.stream {}
-            return true
+        let timeout = AsyncStream<Void>.makeStream()
+        let entered = AsyncStream<Void>.makeStream()
+        defer {
+            timeout.continuation.finish()
+            entered.continuation.finish()
         }
+        let task = Task {
+            await bounded(waitForTimeout: { _ in
+                for await _ in timeout.stream { break }
+            }) {
+                entered.continuation.yield(())
+                entered.continuation.finish()
+                for await _ in never.stream {}
+                return true
+            }
+        }
+        defer { task.cancel() }
+        try #require(await bounded {
+            for await _ in entered.stream { return true }
+            return false
+        } == true)
+        timeout.continuation.yield(())
+        timeout.continuation.finish()
+        let abandoned = try #require(await bounded { await task.value })
         #expect(abandoned == nil)
-        #expect(started.duration(to: .now) < .seconds(10))
-        #expect(await bounded(within: .seconds(10)) { 7 } == 7)
+        #expect(await bounded { 7 } == 7)
+        #expect(await bounded(waitForTimeout: { _ in
+            for await _ in never.stream {}
+        }) { 7 } == 7)
 
         var channel: [Int32] = [-1, -1]
         try #require(pipe(&channel) == 0)
         defer { for fd in channel where fd >= 0 { close(fd) } }
-        #expect(boundedReadToEnd(channel[0], until: .now.advanced(by: .milliseconds(200))) == nil,
+        for fd in channel { try #require(fcntl(fd, F_SETFD, FD_CLOEXEC) == 0) }
+        #expect(boundedReadToEnd(channel[0], until: .now) == nil,
                 "An open writer must fail at the bound rather than block")
         try #require(Darwin.write(channel[1], "partial", 7) == 7)
         close(channel[1]); channel[1] = -1
-        #expect(boundedReadToEnd(channel[0], until: .now.advanced(by: .seconds(10))) == Data("partial".utf8))
+        #expect(boundedReadToEnd(channel[0], until: .now.advanced(by: supervisedWaitLimit)) == Data("partial".utf8))
     }
 
     @Test func supervisionDefaultsKeepTheRealMonotonicClock() {
@@ -771,7 +793,9 @@ struct CopilotSetupTests {
             }
         }
         func observeReadiness() -> Bool {
-            let readiness = ContinuousClock.now.advanced(by: .seconds(3))
+            // Both children remain blocked on their mutation gates. Readiness is
+            // causal overlap, not a scheduler-speed assertion.
+            let readiness = ContinuousClock.now.advanced(by: supervisedWaitLimit)
             while !allReady(), ContinuousClock.now < readiness {
                 Thread.sleep(forTimeInterval: 0.01)
             }
@@ -835,7 +859,6 @@ struct CopilotSetupTests {
         let runner = LocalCopilotSetupRunner(timeout: 0.4, terminationGrace: 0.05,
                                              deadlineNow: { clock.now() })
         let arguments = gatedInstallerArguments(in: directory) + (delayStartup ? ["--delay-startup"] : [])
-        let startupStarted = ContinuousClock.now
         let task = Task {
             defer { clock.finishStartup() }
             let actor: (any Actor)? = #isolation
@@ -856,7 +879,7 @@ struct CopilotSetupTests {
         }
         defer { task.cancel() }
         // The runner first samples after posix_spawn. Scheduling its driver is
-        // not part of the child's three-second readiness budget.
+        // not part of the child's readiness hang guard.
         var ready = false
         let started = await bounded { await clock.waitForStartup() }
         if started == true {
@@ -882,7 +905,6 @@ struct CopilotSetupTests {
         if delayStartup {
             #expect(try String(contentsOf: directory.appendingPathComponent("delay-started"), encoding: .utf8) == "0.6")
             #expect(try String(contentsOf: directory.appendingPathComponent("delay-completed"), encoding: .utf8) == "0.6")
-            #expect(startupStarted.duration(to: ContinuousClock.now) > .seconds(runner.timeout))
         }
         try fixture.reader.close()
         if cancel {
@@ -1016,7 +1038,8 @@ struct CopilotSetupTests {
     }
 
     private func waitForGatedWriter(
-        in directory: URL, deadlineClock: SetupDeadlineClock? = nil
+        in directory: URL, deadlineClock: SetupDeadlineClock? = nil,
+        until readiness: ContinuousClock.Instant = .now.advanced(by: supervisedWaitLimit)
     ) async throws -> Bool {
         // Observe the runner's baseline sample before advancing test time, even
         // if the child happens to become ready before the spawning thread resumes.
@@ -1024,7 +1047,6 @@ struct CopilotSetupTests {
             FileManager.default.fileExists(atPath: directory.appendingPathComponent("ready").path)
                 && (deadlineClock?.wasSampled ?? true)
         }
-        let readiness = ContinuousClock.now.advanced(by: .seconds(3))
         while !ready(), ContinuousClock.now < readiness {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -1073,7 +1095,7 @@ struct CopilotSetupTests {
     }
 
     @Test func isolatedRunnerPreservesExitStatusAndSpawnFailure() async {
-        let runner = LocalCopilotSetupRunner(timeout: 2)
+        let runner = LocalCopilotSetupRunner(timeout: 60)
         #expect(await runner.run(executable: URL(fileURLWithPath: "/bin/sh"),
                                  arguments: ["-c", "exit 7"], path: "/usr/bin:/bin") == .exited(7))
         #expect(await runner.run(executable: URL(fileURLWithPath: "/nonexistent/maestro-test-executable"),
@@ -1749,10 +1771,10 @@ struct CopilotProcessQuiescenceTests {
     @Test func unkillableGroupStopsWaitingAtItsDeadline() {
         var polls = 0
         let stopped = LocalCopilotSetupRunner.waitForQuiescence(
-            until: .now.advanced(by: .milliseconds(50)), pollInterval: 0.001
+            until: .now, pollInterval: 0.001
         ) { polls += 1; return false }
         #expect(!stopped)
-        #expect(polls > 1)
+        #expect(polls == 1)
     }
 
     private func seam(quiescent: @escaping (Int) -> Bool, signals: Box<[Int32]>, reaps: Box<Int>,
@@ -1801,7 +1823,7 @@ struct CopilotProcessQuiescenceTests {
     @Test func quiescenceObservedBeforeTheDeadlineSucceeds() {
         var polls = 0
         let stopped = LocalCopilotSetupRunner.waitForQuiescence(
-            until: .now.advanced(by: .seconds(5)), pollInterval: 0.001
+            until: .now.advanced(by: supervisedWaitLimit), pollInterval: 0.001
         ) { polls += 1; return polls == 3 }
         #expect(stopped)
         #expect(polls == 3)

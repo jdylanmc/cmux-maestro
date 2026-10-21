@@ -4,6 +4,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Changed
+
+- Setup and polling tests use causal barriers and controlled clocks; replay
+  saturation starts from fixed identities. Process/event waits use hang guards
+  rather than short scheduler-speed assertions (#276).
+
 ### Added
 
 - `/maestro-demo` runs a human-requested live demo with two visible workers (three

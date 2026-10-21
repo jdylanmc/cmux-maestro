@@ -2,6 +2,13 @@ import Foundation
 import Testing
 @testable import CMUXMaestroPreview
 
+private func publicationArrived(_ stream: AsyncStream<Void>) async -> Bool {
+    await bounded {
+        for await _ in stream { return true }
+        return false
+    } == true
+}
+
 @MainActor
 struct SidebarOrchestrationTests {
     /// The controller's projected phases, read by executing it, must each decode into the typed sidebar vocabulary.
@@ -53,9 +60,14 @@ struct SidebarOrchestrationTests {
             version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
             nodes: [root, child, omitted]
         )
+        let published = AsyncStream<Void>.makeStream()
         let poll = SidebarOrchestrationPolling(
             read: { snapshot },
-            pause: { try await Task.sleep(for: .seconds(60)) }
+            pause: {
+                published.continuation.yield(())
+                try await sidebarFrozenExpiry(0)
+            },
+            now: { snapshot.generatedAt }
         )
         poll.update(
             topology: topology(
@@ -64,14 +76,17 @@ struct SidebarOrchestrationTests {
             connected: true
         )
         poll.setVisible(true)
-        for _ in 0..<100 where poll.snapshot.nodes.isEmpty { await Task.yield() }
+        defer {
+            poll.setVisible(false)
+            published.continuation.finish()
+        }
+        try #require(await publicationArrived(published.stream))
 
         #expect(poll.availability == .ready)
         #expect(poll.snapshot.nodes.map(\.id) == [root.id, child.id])
         #expect(poll.snapshot.omittedCount == 0)
         #expect(poll.roots.map(\.id) == [root.id])
         #expect(poll.children(of: root.id).map(\.id) == [child.id])
-        poll.setVisible(false)
     }
 
     @Test func resumedInteractiveCoordinatorKeepsTheSnapshotReadable() throws {
@@ -87,7 +102,7 @@ struct SidebarOrchestrationTests {
         }
     }
 
-    @Test func filteredCoordinatorDoesNotPromoteChildToProvenRoot() async {
+    @Test func filteredCoordinatorDoesNotPromoteChildToProvenRoot() async throws {
         let workspace = UUID()
         let run = UUID()
         let root = node(run: run, role: "coordinator", parent: nil, workspace: workspace)
@@ -96,42 +111,58 @@ struct SidebarOrchestrationTests {
             version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
             nodes: [root, child]
         )
+        let published = AsyncStream<Void>.makeStream()
         let poll = SidebarOrchestrationPolling(
             read: { snapshot },
-            pause: { try await Task.sleep(for: .seconds(60)) }
+            pause: {
+                published.continuation.yield(())
+                try await sidebarFrozenExpiry(0)
+            },
+            now: { snapshot.generatedAt }
         )
         poll.update(
             topology: topology(workspace: workspace, surfaces: [child.surfaceId]),
             connected: true
         )
         poll.setVisible(true)
-        for _ in 0..<100 where poll.availability == .loading { await Task.yield() }
+        defer {
+            poll.setVisible(false)
+            published.continuation.finish()
+        }
+        try #require(await publicationArrived(published.stream))
         #expect(poll.availability == .ready)
         #expect(poll.snapshot.nodes.isEmpty)
         #expect(poll.snapshot.omittedCount == 0)
-        poll.setVisible(false)
     }
 
-    @Test func staleSnapshotIsQualifiedWithoutDiscardingValidatedNodes() async {
+    @Test func staleSnapshotIsQualifiedWithoutDiscardingValidatedNodes() async throws {
         let workspace = UUID()
         let root = node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
         let snapshot = SidebarOrchestrationSnapshot(
             version: 1, generatedAt: Date().addingTimeInterval(-120),
             complete: true, omittedCount: 0, nodes: [root]
         )
+        let published = AsyncStream<Void>.makeStream()
         let poll = SidebarOrchestrationPolling(
             read: { snapshot },
-            pause: { try await Task.sleep(for: .seconds(60)) }
+            pause: {
+                published.continuation.yield(())
+                try await sidebarFrozenExpiry(0)
+            },
+            now: { snapshot.generatedAt.addingTimeInterval(120) }
         )
         poll.update(
             topology: topology(workspace: workspace, surfaces: [root.surfaceId]),
             connected: true
         )
         poll.setVisible(true)
-        for _ in 0..<100 where poll.availability == .loading { await Task.yield() }
+        defer {
+            poll.setVisible(false)
+            published.continuation.finish()
+        }
+        try #require(await publicationArrived(published.stream))
         #expect(poll.availability == .stale)
         #expect(poll.snapshot.nodes == [root])
-        poll.setVisible(false)
     }
 
     @Test(arguments: ["success", "missing", "unsafe"])
@@ -149,6 +180,7 @@ struct SidebarOrchestrationTests {
         let poll = SidebarOrchestrationPolling(
             read: { try await gate.read() },
             pause: { try await gate.pause() },
+            now: { currentSnapshot.generatedAt },
             taskFinished: { gate.finished.append($0) }
         )
         defer {
@@ -630,7 +662,7 @@ struct SidebarOrchestrationTests {
                 await requested.append(ids)
                 return [session: CopilotManagedSessionDetails(sessionName: "Synthetic refactor", readAt: Date())]
             },
-            pause: { try await Task.sleep(for: .milliseconds(20)) }
+            pause: { try await sidebarFrozenExpiry(0) }
         )
         polling.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
         polling.updateManagedSubjects(SidebarOrchestrationSnapshot(
@@ -639,6 +671,7 @@ struct SidebarOrchestrationTests {
         polling.setVisible(true)
         await sidebarEventually { polling.tree.managedDetails[session]?.sessionName == "Synthetic refactor" }
         #expect(await requested.values.first == [session])
+        polling.setVisible(false)
     }
 
     @Test func bornRootKeepsItsNameDuringObservationLossOnlyWithinTheGrace() {
@@ -683,22 +716,37 @@ struct SidebarOrchestrationTests {
         #expect(titles(snapshot, evidence) == ["Root name", "Implementation"])
     }
 
-    @Test func pollingRetitlesBornRootsAsObservationsChange() async {
+    @Test func pollingRetitlesBornRootsAsObservationsChange() async throws {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let born = bornRoot(workspace: workspace, surface: surface, session: session)
         let snapshot = SidebarOrchestrationSnapshot(
             version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born])
-        let poll = SidebarOrchestrationPolling(read: { snapshot }, pause: { try await Task.sleep(for: .seconds(60)) })
+        let published = AsyncStream<Void>.makeStream()
+        let poll = SidebarOrchestrationPolling(read: { snapshot }, pause: {
+            published.continuation.yield(())
+            try await sidebarFrozenExpiry(0)
+        }, now: { snapshot.generatedAt })
+        func evidence(_ name: String?) -> SidebarCopilotTree {
+            var value = tree(name.map {
+                [observed(session, workspace: workspace, surface: surface, name: $0,
+                          observedAt: snapshot.generatedAt)]
+            } ?? [])
+            value.generatedAt = snapshot.generatedAt
+            return value
+        }
         poll.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
-        poll.updateObservedSessions(tree([observed(session, workspace: workspace, surface: surface, name: "Before poll")]))
+        poll.updateObservedSessions(evidence("Before poll"))
         poll.setVisible(true)
-        for _ in 0..<100 where poll.snapshot.nodes.isEmpty { await Task.yield() }
+        defer {
+            poll.setVisible(false)
+            published.continuation.finish()
+        }
+        try #require(await publicationArrived(published.stream))
         #expect(poll.snapshot.nodes.map(\.title) == ["Before poll"])
-        poll.updateObservedSessions(tree([observed(session, workspace: workspace, surface: surface, name: "Renamed")]))
+        poll.updateObservedSessions(evidence("Renamed"))
         #expect(poll.snapshot.nodes.map(\.title) == ["Renamed"])
-        poll.updateObservedSessions(tree([]))
+        poll.updateObservedSessions(evidence(nil))
         #expect(poll.snapshot.nodes.map(\.title) == ["Copilot session"])
-        poll.setVisible(false)
     }
 
     @Test func enrollmentDecodesAndOnlyBornRootsMayCarryIt() throws {
@@ -833,7 +881,7 @@ private final class OrchestrationReadGate {
         pauseCount += 1
         let index = pauseCount
         defer { finishedPauses.insert(index) }
-        try await Task.sleep(for: .seconds(60))
+        try await sidebarFrozenExpiry(0)
     }
 
     func cancelPending() {

@@ -46,7 +46,7 @@ struct PreferenceCoordinationTestClient {
                 }
                 guard result.notice == nil else { throw CocoaError(.fileWriteUnknown) }
             case "expect-layout":
-                let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+                let deadline = ContinuousClock.now.advanced(by: .seconds(60))
                 while preferences.layout.collapsed.count != Int(args[1])!
                     || preferences.layout.density.rawValue != args[2] || preferences.layoutNotice != nil {
                     guard ContinuousClock.now < deadline else { throw CocoaError(.coderValueNotFound) }
@@ -68,7 +68,7 @@ struct PreferenceCoordinationTestClient {
                 }
                 guard result.notice == nil else { throw CocoaError(.fileWriteUnknown) }
             case "expect-ack":
-                let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+                let deadline = ContinuousClock.now.advanced(by: .seconds(60))
                 while preferences.attention.acknowledged.count != Int(args[1])! || preferences.attentionNotice != nil {
                     guard ContinuousClock.now < deadline else { throw CocoaError(.coderValueNotFound) }
                     try await Task.sleep(for: .milliseconds(10))
@@ -82,7 +82,7 @@ struct PreferenceCoordinationTestClient {
                 }
                 guard result.notice == nil else { throw CocoaError(.fileWriteUnknown) }
             case "expect":
-                let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+                let deadline = ContinuousClock.now.advanced(by: .seconds(60))
                 while preferences.history.dismissed.count != Int(args[1])!
                     || preferences.history.retention.rawValue != args[2] {
                     guard ContinuousClock.now < deadline else { throw CocoaError(.coderValueNotFound) }
