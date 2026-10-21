@@ -265,6 +265,17 @@ struct NeutralObservationValidationTests {
         }
     }
 
+    @Test func malformedNestedObservationCannotHideIdleDescendant() throws {
+        let idle = child("idle", parent: .child(.init("parent")), state: .unknown(), detail: .idle)
+        let nested = child("parent", children: [idle])
+        let unrelated = child("unrelated", state: .unknown(), detail: .idle)
+        let input = snapshot(legacy: [nested, unrelated], observed: [nested, unrelated], lossless: true)
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now)
+        #expect(tree.sessions.first?.nodes.map(\.id) == ["parent", "idle"])
+        #expect(tree.sessions.first?.nodes.last?.attentionDegraded == true)
+        #expect(tree.sessions.first?.nodes.last?.ancestryUnresolved == true)
+    }
+
     @Test(arguments: InvalidCanonicalPeer.allCases, [false, true])
     func canonicalErrorsCannotWeakenConsistencyHistorySafety(
         _ invalidPeer: InvalidCanonicalPeer, _ falselyLossless: Bool

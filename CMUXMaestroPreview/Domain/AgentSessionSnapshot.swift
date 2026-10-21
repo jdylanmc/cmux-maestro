@@ -797,10 +797,12 @@ extension AgentSessionSnapshot {
         result.unresolvedParents = evidence.unresolvedParents
         result.omittedChildren = evidence.omittedChildren
         result.hasUncountedChildren = evidence.hasUncountedChildren
+        result.invalidChildren.formUnion(evidence.unresolvedParents)
+        let groups = Dictionary(grouping: evidence.children, by: \.id)
         if let observation = session.childWorkObservation {
             result.invalidChildren.formUnion(legacy.invalidChildren)
+            result.invalidChildren.formUnion(legacy.unresolvedParents)
             let legacyGroups = Dictionary(grouping: legacy.children, by: \.id)
-            let groups = Dictionary(grouping: evidence.children, by: \.id)
             var inconsistentIDs = Set<ChildWorkID>()
             for (id, matches) in legacyGroups {
                 guard matches.count == 1, let child = matches.first,
@@ -825,6 +827,35 @@ extension AgentSessionSnapshot {
                 result.invalidChildren.formUnion(evidence.children.map(\.id))
             }
         }
+        // Rejected identities cannot survive the consumer's ancestor walk.
+        // Protect their exact ancestry here, before those observations disappear.
+        var protectedAncestors = Set<ChildWorkID>()
+        var unattributedDoubt = false
+        let rejected = evidence.children.filter { child in
+            if child.id.rawValue.isEmpty || groups[child.id]?.count != 1 { return true }
+            if case .session(let owner) = child.parent { return owner != session.identity }
+            return false
+        }
+        for child in rejected {
+            var parent = child.parent
+            if case .session = parent {
+                unattributedDoubt = true
+            }
+            while case .child(let id) = parent {
+                guard protectedAncestors.insert(id).inserted else { break }
+                guard !id.rawValue.isEmpty, let matches = groups[id],
+                      matches.count == 1, let ancestor = matches.first else {
+                    unattributedDoubt = true
+                    break
+                }
+                result.invalidChildren.insert(id)
+                parent = ancestor.parent
+                if case .session(let owner) = parent, owner != session.identity {
+                    unattributedDoubt = true
+                }
+            }
+        }
+        if unattributedDoubt { result.invalidChildren.formUnion(groups.keys) }
         return result
     }
 }

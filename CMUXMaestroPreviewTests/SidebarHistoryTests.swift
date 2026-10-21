@@ -81,6 +81,18 @@ struct SidebarHistoryTests {
         #expect(projected.observedAt == now.addingTimeInterval(-2))
     }
 
+    @Test(arguments: [false, true])
+    func terminalTimingCannotExceedSnapshotOrDisplayClock(_ afterSnapshot: Bool) {
+        let observation = fixtures.session(children: [child("future", age: -0.5)], now: now.addingTimeInterval(-1))
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [observation], now: now.addingTimeInterval(afterSnapshot ? 0 : 1)),
+            onto: fixtures.topology(), now: now.addingTimeInterval(afterSnapshot ? 1 : 0)
+        )
+        #expect(tree.sessions.first?.nodes.count == 1)
+        #expect(tree.sessions.first?.nodes.first?.terminalTimestamp == nil)
+        #expect(tree.nextHistoryExpiry == nil && tree.hiddenHistoryCount == 0)
+    }
+
     @Test func ancientEvidenceExpiresOnReconstructionNotFirstPoll() {
         let tree = project([child("old", age: 86_400)])
         #expect(tree.hiddenHistoryCount == 1)

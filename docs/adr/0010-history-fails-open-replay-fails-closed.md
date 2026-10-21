@@ -13,12 +13,16 @@ Consequence: users may see more history until reset. A false positive in the 128
 An invalid child field or disagreement between its legacy and observed
 projections disables hiding for that child, not every child in the session.
 Suspect evidence still cannot hide its owner or required ancestry; unrelated
-valid children retain their history controls. Consistency checks cannot be
+valid children retain their history controls. Malformed inherited ancestry
+protects the affected descendants. Rejected duplicate or empty child identities
+protect their identifiable ancestor chains before the rows are filtered out.
+Consistency checks cannot be
 waived by an invalid peer in either projection. Strict validation still rejects
 the snapshot, and the session's counts remain partial.
 
 Unattributable doubt stays session-wide: a legacy child absent from observed
-evidence or a truncated legacy traversal disables child hiding for the session.
+evidence, a truncated legacy traversal, or a rejected identity without an
+identifiable child ancestor chain disables child hiding for the session.
 Malformed stored settings, schema mismatch, replay and capacity policy do not
 change.
 
