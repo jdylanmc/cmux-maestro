@@ -217,6 +217,54 @@ struct NeutralObservationValidationTests {
         #expect(tree.hiddenHistoryCount == 0 && tree.dismissibleOutcomes.isEmpty)
     }
 
+    @Test(arguments: HistoryAction.allCases, [false, true])
+    func rejectedChildIdentityProtectsItsAncestorNotUnrelatedHistory(
+        _ action: HistoryAction, _ duplicate: Bool
+    ) throws {
+        let rejected = child(duplicate ? "duplicate" : "", parent: .child(.init("active")))
+        let descendants = duplicate ? [rejected, rejected] : [rejected]
+        let parent = terminalForHistory(action)
+        let safe = child("safe", state: .known(.done), terminal: true, kind: .skill)
+        let input = snapshot(legacy: [parent.containing(descendants), safe],
+                             observed: [parent, safe] + descendants, lossless: true)
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now, history: historyFor(action))
+        #expect(tree.sessions.first?.nodes.first { $0.id == "active" }?.attentionDegraded == true)
+        #expect(!tree.dismissibleOutcomes.contains(historyKey))
+        #expect(tree.acknowledgeableOutcomes.isEmpty)
+        #expect(!tree.hasCompleteCounts)
+        if action == .expire {
+            #expect(tree.sessions.first?.nodes.map(\.id) == ["active"])
+            #expect(tree.hiddenHistoryCount == 1)
+        } else {
+            #expect(tree.dismissibleOutcomes.map(\.childID) == ["safe"])
+        }
+    }
+
+    @Test(arguments: HistoryAction.allCases)
+    func malformedNestedObservationProtectsDescendantHistory(_ action: HistoryAction) throws {
+        let terminal = terminalForHistory(action)
+        let descendant = AgentChildWork(
+            id: terminal.id, parent: .child(.init("parent")), title: terminal.title, state: terminal.state,
+            activity: terminal.activity, kind: terminal.kind, terminalEvent: terminal.terminalEvent,
+            attention: terminal.attention
+        )
+        let nested = child("parent", children: [descendant])
+        let safe = child("safe", state: .known(.done), terminal: true, kind: .skill)
+        let input = snapshot(legacy: [nested, safe], observed: [nested, safe], lossless: true)
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now, history: historyFor(action))
+        let row = try #require(tree.sessions.first?.nodes.first { $0.id == "active" })
+        #expect(row.ancestryUnresolved && row.attentionDegraded)
+        #expect(!tree.dismissibleOutcomes.contains(historyKey))
+        #expect(tree.acknowledgeableOutcomes.isEmpty)
+        if action == .expire {
+            #expect(tree.hiddenHistoryCount == 1)
+        } else {
+            #expect(tree.dismissibleOutcomes.map(\.childID) == ["safe"])
+        }
+    }
+
     @Test(arguments: InvalidCanonicalPeer.allCases, [false, true])
     func canonicalErrorsCannotWeakenConsistencyHistorySafety(
         _ invalidPeer: InvalidCanonicalPeer, _ falselyLossless: Bool
