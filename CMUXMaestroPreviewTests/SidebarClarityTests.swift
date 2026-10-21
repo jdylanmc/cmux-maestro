@@ -270,6 +270,17 @@ struct SidebarClarityTests {
         ).label == nil)
     }
 
+    @Test(arguments: [false, true])
+    func inlineSessionOmissionsUseSharedCompactCount(unknown: Bool) {
+        var tree = makeTree(nodes: [], complete: false, omittedActive: 3)
+        tree.sessions[0].hasUncountedChildren = unknown
+        let session = tree.sessions[0]
+        let expected = unknown ? "3+ · Total: Unknown" : "3"
+        #expect(session.omittedChildrenDescription == expected)
+        #expect(tree.omittedChildrenDescription == expected)
+        #expect(SidebarPresentation.sessionDetails(session).first { $0.title == "Omitted children" }?.value == expected)
+    }
+
     @Test func workspaceAttentionCountsQuestionsAndApprovalsWithoutManagedDuplicates() {
         var tree = makeTree(nodes: [node(state: .blocked, attention: [signal(.permission)])])
         tree.sessions[0].attention = [signal(.answer)]

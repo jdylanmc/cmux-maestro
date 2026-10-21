@@ -2465,7 +2465,7 @@ private struct CopilotSessionContents: View {
         }
         if session.hasUncountedChildren || session.omittedActiveChildrenCount > 0 {
             Text(session.hasUncountedChildren
-                 ? "At least \(session.omittedChildrenCount) tasks omitted; total and active counts unknown."
+                 ? session.omittedChildrenDescription
                  : "\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))

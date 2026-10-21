@@ -111,6 +111,11 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var knownRunningChildren: Int { nodes.filter { $0.state == .working }.count }
     var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
     var shortID: String { String(id.uuidString.prefix(8)).lowercased() }
+    var omittedChildrenDescription: String {
+        hasUncountedChildren
+            ? "At least \(omittedChildrenCount) tasks omitted; total and active counts unknown."
+            : "\(omittedChildrenCount)"
+    }
     var attentionOwnerCount: Int {
         (attention.isEmpty && !attentionDegraded ? 0 : 1)
             + nodes.filter { !$0.attention.isEmpty || $0.attentionDegraded }.count
