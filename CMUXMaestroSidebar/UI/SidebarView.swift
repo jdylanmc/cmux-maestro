@@ -361,7 +361,9 @@ struct CollapsedBranchSummary: View {
                     if summary.blocked > 0 {
                         SidebarStateBadge(visual: SidebarPresentation.state(.blocked))
                     } else if summary.attention > 0 || summary.omittedActive > 0 {
-                        SidebarStateBadge(visual: SidebarPresentation.state(.failed))
+                        SidebarStateBadge(visual: .init(
+                            title: lines.joined(separator: ". "), symbol: "exclamationmark.circle", tone: .attention
+                        ))
                     } else if summary.running > 0 {
                         SidebarStateBadge(visual: SidebarPresentation.state(.working))
                     }
@@ -369,13 +371,13 @@ struct CollapsedBranchSummary: View {
                         SidebarStateBadge(visual: SidebarPresentation.state(.unknown))
                     }
                 } else {
-                if summary.running > 0 { Image(systemName: SidebarPresentation.state(.working).symbol) }
-                if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
-                if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
-                if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
-                if summary.incomplete {
-                    Image(systemName: "info.circle")
-                }
+                    if summary.running > 0 { Image(systemName: SidebarPresentation.state(.working).symbol) }
+                    if summary.blocked > 0 { Label("\(summary.blocked)", systemImage: SidebarPresentation.state(.blocked).symbol) }
+                    if summary.attention > 0 { Label("\(summary.attention)", systemImage: "exclamationmark.circle") }
+                    if summary.omittedActive > 0 { Label("+\(summary.omittedActive)", systemImage: "exclamationmark.triangle") }
+                    if summary.incomplete {
+                        Image(systemName: "info.circle")
+                    }
                 }
             }
             .sidebarFont(.caption2)

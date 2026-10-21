@@ -41,28 +41,60 @@ struct SidebarAgentIconCardItem: Identifiable {
     let needsInput: Bool
     let hover: SidebarAgentHoverTarget?
     var inspection: SidebarInspection.Target? = nil
+    var evidence: SidebarBranchSummary? = nil
 
-    var status: String { SidebarPresentation.statusDescription(visual, needsInput: needsInput) }
+    var status: String {
+        ([SidebarPresentation.statusDescription(visual, needsInput: needsInput)]
+            + (evidence.map(SidebarPresentation.collapsed) ?? [])).joined(separator: ". ")
+    }
+
+    var badge: SidebarVisual? {
+        if needsInput || visual.tone == .red { return visual }
+        if let evidence, evidence.attention > 0 {
+            return .init(title: status, symbol: "exclamationmark.circle", tone: .attention)
+        }
+        if visual.tone != .neutral || !["circle", "checkmark.circle"].contains(visual.symbol) { return visual }
+        return evidence?.incomplete == true ? SidebarPresentation.state(.unknown) : nil
+    }
 
     @MainActor
     static func managed(
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         tree: SidebarCopilotTree, now: Date
     ) -> Self {
-        .init(id: "managed-\(node.id)", title: node.title, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
+        var item = Self(id: "managed-\(node.id)", title: node.title, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
               iconTarget: SidebarPresentation.managedIconTarget(node, tree: tree, now: now),
               glyph: node.iconId, color: node.iconColor,
               visual: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree),
               needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now),
               hover: .managed(node.id, generation: node.generation), inspection: .managed(node))
+        if case .session(let id) = item.iconTarget,
+           let session = tree.exactLiveSession(id: id, workspaceID: node.workspaceId, surfaceID: node.surfaceId, now: now) {
+            item.includeEvidence(session)
+        }
+        return item
     }
 
     static func session(_ session: SidebarCopilotSession, title: String) -> Self {
-        .init(id: "session-\(session.id)", title: title, workspaceID: session.workspaceID, surfaceID: session.surfaceID,
+        var item = Self(id: "session-\(session.id)", title: title, workspaceID: session.workspaceID, surfaceID: session.surfaceID,
               iconTarget: session.statusOnly ? nil : .session(session.id),
               glyph: session.iconId, color: session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
               visual: SidebarPresentation.sessionState(session),
               needsInput: SidebarPresentation.needsInput(session.attention), hover: .session(session.id))
+        item.includeEvidence(session)
+        return item
+    }
+
+    private mutating func includeEvidence(_ session: SidebarCopilotSession) {
+        var session = session
+        session.attention.removeAll { $0.kind == .turnFinished }
+        // An icon's state belongs to its session, never to its descendants.
+        session.nodes = []
+        var summary = SidebarBranchSummary(sessions: [session])
+        summary.running = 0
+        summary.blocked = 0
+        summary.incomplete = summary.incomplete || session.treeDegraded || summary.omittedActive > 0
+        evidence = summary
     }
 }
 
@@ -124,12 +156,20 @@ struct SidebarAgentIconCard: View {
             kind: .agent, target: item.iconTarget, agentGlyph: item.glyph, agentColor: item.color,
             icons: preferences.icons, agentStyle: agentStyle, terminalStyle: terminalStyle
         ).choice
-        return HStack(spacing: 1) {
-            SidebarStateBadge(visual: item.visual, needsInput: item.needsInput, detail: item.status)
-            SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor))
-                .frame(width: 20, height: 20)
-        }
-        .frame(width: 28, height: 28)
+        return SidebarGlyphIcon(name: choice.glyph, tint: Color(nsColor: choice.color.nativeColor))
+            .frame(width: 28, height: 28)
+            .overlay(alignment: .topTrailing) {
+                if let badge = item.badge {
+                    SidebarStateBadge(visual: badge, needsInput: item.needsInput, detail: item.status)
+                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                }
+            }
+            .overlay(alignment: .bottomTrailing) {
+                if item.evidence?.incomplete == true, item.badge?.symbol != "circle.dashed" {
+                    SidebarStateBadge(visual: SidebarPresentation.state(.unknown), detail: item.status)
+                        .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
+                }
+            }
     }
 }
 

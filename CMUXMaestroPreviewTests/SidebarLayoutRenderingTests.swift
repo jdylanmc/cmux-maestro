@@ -12,8 +12,9 @@ struct SidebarLayoutRenderingTests {
         let preferences = fixture.preferences()
         let navigation = SidebarNavigation()
         let workspace = UUID(), surface = UUID()
-        func pixels(_ state: AgentWorkState, needsInput: Bool = false) throws -> [UInt8] {
-            let item = SidebarAgentIconCardItem(
+        func pixels(_ state: AgentWorkState, needsInput: Bool = false,
+                    session: SidebarCopilotSession? = nil) throws -> [UInt8] {
+            let item = session.map { SidebarAgentIconCardItem.session($0, title: "Helper") } ?? SidebarAgentIconCardItem(
                 id: "synthetic", title: "Helper", workspaceID: workspace, surfaceID: surface,
                 iconTarget: nil, glyph: nil, color: nil, visual: SidebarPresentation.state(state),
                 needsInput: needsInput, hover: nil
@@ -30,7 +31,8 @@ struct SidebarLayoutRenderingTests {
             host.frame = frame
             host.layoutSubtreeIfNeeded()
             let button = try #require(nativeTitles(in: host).first)
-            #expect(button.accessibilityLabel() == "Helper, \(needsInput ? "Needs input. " : "")\(state == .completed ? "Finished" : state.rawValue.capitalized)")
+            let expected = "Helper, \(needsInput ? "Needs input. " : "")\(state == .completed ? "Finished" : state.rawValue.capitalized)"
+            #expect(button.accessibilityLabel()?.hasPrefix(expected) == true)
             let bitmap = try #require(NSBitmapImageRep(
                 bitmapDataPlanes: nil, pixelsWide: 56, pixelsHigh: 56,
                 bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
@@ -54,6 +56,18 @@ struct SidebarLayoutRenderingTests {
             }, "State must overlay the right corner, not move or precede the icon")
         }
         #expect(try pixels(.working) == pixels(.working), "Reduce Motion renders a stable working badge")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = SidebarCopilotSession(
+            id: UUID(), workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .idle,
+            model: nil, observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        session.attention = [.init(kind: .error, evidence: .init(source: "synthetic", eventID: UUID()), occurredAt: now)]
+        #expect(try pixels(.idle, session: session) != idle, "An idle session's outstanding error remains visible")
+        session.attention = []
+        session.internalTaskCountsIncomplete = true
+        #expect(try pixels(.idle, session: session) != idle, "Incomplete child evidence never looks like quiet idle")
+        #expect(SidebarAgentIconCardItem.session(session, title: "Helper").status.contains("incomplete"))
     }
 
     @Test func targetLedNativeComposition() async throws {
