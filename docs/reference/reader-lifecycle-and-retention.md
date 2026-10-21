@@ -205,6 +205,8 @@ Malformed inherited ancestry protects its descendants; duplicate or empty
 identities protect their identifiable ancestor chains before row filtering.
 Rejected duplicate, empty or foreign-owner identities also invalidate their
 dependent descendants transitively, even when each descendant's own ID is unique.
+Malformed parent references seed the same downward protection, even when the
+child's own identity remains valid and unique.
 A falsely lossless projection degrades unmatched observed children. A legacy
 child absent from the observed projection, or a truncated legacy traversal,
 cannot be attributed to a displayed row and keeps session-wide history fail-open.

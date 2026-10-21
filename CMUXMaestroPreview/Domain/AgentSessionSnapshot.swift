@@ -842,7 +842,7 @@ extension AgentSessionSnapshot {
                 childrenByParent[parent, default: []].append(child.id)
             }
         }
-        var unresolved = Set(rejected.map(\.id))
+        var unresolved = Set(rejected.map(\.id)).union(evidence.unresolvedParents)
         var pending = Array(unresolved)
         while let parent = pending.popLast() {
             for descendant in childrenByParent[parent] ?? [] {
