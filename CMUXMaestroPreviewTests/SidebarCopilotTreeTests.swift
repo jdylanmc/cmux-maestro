@@ -824,13 +824,57 @@ func sidebarEventually(
     _ condition: @MainActor () async -> Bool,
     sourceLocation: SourceLocation = #_sourceLocation
 ) async {
-    // A hang guard only: callers assert state/ordering, never elapsed time.
-    let deadline = ContinuousClock.now.advanced(by: .seconds(60))
-    while ContinuousClock.now < deadline {
-        if await condition() { return }
-        try? await Task.sleep(for: .milliseconds(5))
+    if (try? await SidebarTestWait().until(condition)) != true {
+        Issue.record("Condition exhausted the 60-second and 300-turn hang guards", sourceLocation: sourceLocation)
     }
-    Issue.record("Condition did not settle within the 60-second hang guard", sourceLocation: sourceLocation)
+}
+
+@MainActor
+struct SidebarTestWait {
+    var now: () -> ContinuousClock.Instant = { ContinuousClock.now }
+    var pause: () async throws -> Void = { try await Task.sleep(for: .milliseconds(5)) }
+
+    func until(_ condition: @MainActor () async -> Bool) async throws -> Bool {
+        let deadline = now().advanced(by: .seconds(60))
+        var checks = 0
+        // The original helper allowed 300 actor turns, which can take over 60s
+        // in the full suite. Neither elapsed time nor scheduler turns alone expire this guard.
+        while checks < 300 || now() < deadline {
+            try Task.checkCancellation()
+            if await condition() { return true }
+            checks += 1
+            try await pause()
+        }
+        return false
+    }
+}
+
+@MainActor
+struct SidebarTestWaitTests {
+    @Test func actorContentionCannotShortenTheOriginalObservationBudget() async throws {
+        var instant = ContinuousClock.now
+        var pauses = 0
+        let wait = SidebarTestWait(now: { instant }, pause: {
+            pauses += 1
+            instant = instant.advanced(by: .seconds(61))
+        })
+        #expect(try await wait.until { pauses == 299 })
+        #expect(pauses == 299)
+        pauses = 0
+        #expect(try await !wait.until { false })
+        #expect(pauses == 300, "Even an expired clock retains exactly the original 300 opportunities")
+    }
+
+    @Test func fastActorTurnsCannotShortenTheElapsedHangGuard() async throws {
+        var instant = ContinuousClock.now
+        var pauses = 0
+        let wait = SidebarTestWait(now: { instant }, pause: {
+            pauses += 1
+            if pauses == 301 { instant = instant.advanced(by: .seconds(60)) }
+        })
+        #expect(try await !wait.until { false })
+        #expect(pauses == 301)
+    }
 }
 
 // Fixtures with fixed `now` must not expire on unrelated wall-clock scheduling.

@@ -47,8 +47,21 @@ struct SidebarMultiWindowTests {
         #expect(windowA.selectedWorkspaces == [windowA.workspaceID])
         #expect(windowB.selectedWorkspaces.isEmpty, "Window A's actions target only window A's connection")
 
+        let closed = AsyncStream<Void>.makeStream()
+        let closeObservation = sceneB.observe { state in
+            if case .waitingForHost = state {
+                windowB.recordClosePublication()
+                closed.continuation.yield()
+            }
+        }
+        defer {
+            closeObservation.cancel()
+            closed.continuation.finish()
+            windowB.reportClose()
+            windowB.close()
+        }
         windowB.close()
-        await sidebarEventually { if case .waitingForHost = sceneB.state { true } else { false } }
+        try await Self.requirePublication(closed.stream)
         windowA.send(sequence: 3)
         await sidebarEventually { bindingA.model.hierarchy.sequence == 3 }
         #expect(bindingA.model.hierarchy.workspaces.map(\.id) == [windowA.workspaceID],
@@ -103,18 +116,27 @@ struct SidebarMultiWindowTests {
         }
         #expect(!windowA.wasInvalidated, "A second connection must not invalidate the first")
 
+        let recovered = AsyncStream<Void>.makeStream()
+        let recoveryObservation = scene.observe { state in
+            if case .bound(_, _, let context) = state,
+               context?.snapshot.windowID == windowA.windowID,
+               context?.snapshot.sequence == 7 {
+                windowB.recordClosePublication()
+                recovered.continuation.yield()
+            }
+        }
+        defer {
+            recoveryObservation.cancel()
+            recovered.continuation.finish()
+            windowB.reportClose()
+        }
         windowB.close()
         scene.viewDidDisappear(viewB)
         // Preserve the regression's update-during-teardown interleaving.
         windowA.send(sequence: 7)
-        await sidebarEventually {
-            if case .bound(_, _, let context) = scene.state {
-                return context?.snapshot.windowID == windowA.windowID
-            }
-            return false
-        }
+        try await Self.requirePublication(recovered.stream)
         #expect(!windowA.wasInvalidated)
-        await sidebarEventually { bindingA.model.hierarchy.sequence == 7 }
+        #expect(bindingA.model.hierarchy.sequence == 7)
         #expect(bindingA.model.hierarchy.workspaces.map(\.id) == [windowA.workspaceID])
         #expect(bindingA.model.hierarchy.windowID == windowA.windowID)
     }
@@ -207,6 +229,18 @@ struct SidebarMultiWindowTests {
         ))
     }
 
+    private static func requirePublication(
+        _ stream: AsyncStream<Void>, sourceLocation: SourceLocation = #_sourceLocation
+    ) async throws {
+        let arrived = await bounded(waitForTimeout: { _ in
+            _ = try await SidebarTestWait().until { false }
+        }) {
+            for await _ in stream { return true }
+            return false
+        }
+        try #require(arrived == true, "Scene teardown publication did not arrive", sourceLocation: sourceLocation)
+    }
+
     private static func context(sequence: UInt64, workspace: UUID) -> CmuxSidebarContext {
         CmuxSidebarContext(
             snapshot: CmuxSidebarSnapshot(
@@ -235,8 +269,10 @@ private final class SyntheticCmuxWindow {
 
     init(scene: CmuxSidebarScene, title: String) throws {
         self.title = title
-        extensionSide = ExtensionSideListener(scene: scene)
         host = SyntheticHostObject()
+        extensionSide = ExtensionSideListener(scene: scene, onInvalidation: { [host] in
+            host.recordCloseEvent("extension-invalidation")
+        })
         connection = NSXPCConnection(listenerEndpoint: extensionSide.listener.endpoint)
         connection.exportedInterface = NSXPCInterface(with: CMUXSidebarHostXPC.self)
         connection.exportedObject = host
@@ -261,9 +297,13 @@ private final class SyntheticCmuxWindow {
     }
 
     func close() {
+        host.beginClose()
         connection.invalidate()
         extensionSide.listener.invalidate()
     }
+
+    func recordClosePublication() { host.recordCloseEvent("scene-publication") }
+    func reportClose() { host.reportClose() }
 }
 
 private final class ExtensionSideListener: NSObject, NSXPCListenerDelegate, @unchecked Sendable {
@@ -271,10 +311,12 @@ private final class ExtensionSideListener: NSObject, NSXPCListenerDelegate, @unc
     private let scene: CmuxSidebarScene
     private let lock = NSLock()
     private var didAccept = false
+    private let onInvalidation: @Sendable () -> Void
     var accepted: Bool { lock.withLock { didAccept } }
 
-    init(scene: CmuxSidebarScene) {
+    init(scene: CmuxSidebarScene, onInvalidation: @escaping @Sendable () -> Void) {
         self.scene = scene
+        self.onInvalidation = onInvalidation
         super.init()
         listener.delegate = self
         listener.resume()
@@ -282,6 +324,11 @@ private final class ExtensionSideListener: NSObject, NSXPCListenerDelegate, @unc
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
         let accepted = scene.accept(connection)
+        let invalidate = connection.invalidationHandler
+        connection.invalidationHandler = { [onInvalidation] in
+            onInvalidation()
+            invalidate?()
+        }
         lock.withLock { didAccept = accepted }
         return accepted
     }
@@ -291,11 +338,38 @@ private final class SyntheticHostObject: NSObject, CMUXSidebarHostXPC, @unchecke
     private let lock = NSLock()
     private var selected: [UUID] = []
     private var isInvalidated = false
+    private var closeStarted: ContinuousClock.Instant?
+    private var closeEvents: [String: Duration] = [:]
 
     var selectedWorkspaces: [UUID] { lock.withLock { selected } }
     var invalidated: Bool { lock.withLock { isInvalidated } }
 
-    func markInvalidated() { lock.withLock { isInvalidated = true } }
+    func markInvalidated() {
+        lock.withLock { isInvalidated = true }
+        recordCloseEvent("host-invalidation")
+    }
+
+    func beginClose() {
+        lock.withLock {
+            if closeStarted == nil { closeStarted = ContinuousClock.now }
+        }
+    }
+
+    func recordCloseEvent(_ phase: String) {
+        let instant = ContinuousClock.now
+        lock.withLock {
+            guard let closeStarted, closeEvents[phase] == nil else { return }
+            closeEvents[phase] = closeStarted.duration(to: instant)
+        }
+    }
+
+    func reportClose() {
+        let events = lock.withLock { closeEvents }
+        let detail = ["host-invalidation", "extension-invalidation", "scene-publication"].map {
+            "\($0)=\(events[$0].map(String.init(describing:)) ?? "missing")"
+        }.joined(separator: " ")
+        print("Synthetic XPC teardown: \(detail)")
+    }
 
     func requestSidebarSnapshot(reply: @escaping (NSData?, NSString?) -> Void) {
         reply(nil, "unsupported" as NSString)

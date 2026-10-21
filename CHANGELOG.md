@@ -248,6 +248,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Installer recovery keeps its guard when a process-group existence probe is
+  permission-denied, and releases it only after absence is proven (#276).
+
 - Native spawn recognizes Copilot 1.0.100's session-catalog context and reasoning
   capabilities instead of silently discarding them (#152). Launch refusals name
   the failed admission check; unsupported optional choices still warn and use
