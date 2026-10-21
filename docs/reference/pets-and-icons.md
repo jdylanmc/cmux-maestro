@@ -72,6 +72,13 @@ node/run/workspace/surface identity. It survives older supervisors republishing
 `current.json` without cosmetic fields. Sidebar stays read-only over its
 existing observer-directory grant.
 
+Managed rows, collapsed icon cards and session-icon details prefer the exact
+session's `--self` appearance over the controller's startup choice, per glyph
+and color. Before observation binds a running managed session, its freshly read
+session appearance supplies the same choice. Human overrides still win;
+**Reset to agent selection** removes only the human override. Names and renamed
+surfaces never select an appearance record.
+
 Glyph font and catalog are pinned to upstream commit
 `b894ea7803af6aade63d60a4381e006098ec9c4d`. Hashes, upstream license and
 glyph-source notices live under `Resources/NerdFonts/`. Tests check whole

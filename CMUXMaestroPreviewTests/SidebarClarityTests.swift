@@ -1410,7 +1410,6 @@ struct SidebarClarityTests {
         let source = try String(contentsOf: root.appendingPathComponent("CMUXMaestroSidebar/UI/SidebarView.swift"), encoding: .utf8)
         #expect(!source.contains(".orange"))
         #expect(!source.contains("Text(\"Copilot agent\")"))
-        #expect(source.contains("agentGlyph: node.iconId, agentColor: node.iconColor"))
         #expect(!source.contains("isOrchestrating:"))
         #expect(source.contains("dismiss-managed-"))
         #expect(source.contains("Image(systemName: surface.kind.symbolName)"))

@@ -1137,10 +1137,11 @@ enum SidebarPresentation {
         }
         result += Self.paths(pathContext, copyable: true)
         result += managedGitDetails(node, now: now)
+        let icon = managedIcon(node, tree: tree, now: now)
         result += [
             .init(title: "Copilot observation", value: tree.summary),
-            .init(title: "Session glyph", value: node.iconId ?? "Sidebar default"),
-            .init(title: "Icon color", value: node.iconColor?.title ?? "Theme default"),
+            .init(title: "Session glyph", value: icon.glyph ?? "Sidebar default"),
+            .init(title: "Icon color", value: icon.color?.title ?? "Theme default"),
             .init(title: "Role", value: node.role.capitalized)
         ]
         if node.role == "worker" {
@@ -1177,6 +1178,23 @@ enum SidebarPresentation {
     ) -> SidebarIconTarget? {
         if let id = node.copilotSessionId { return .session(id) }
         return managedSession(for: node, in: tree, now: now).map { .session($0.id) }
+    }
+
+    /// Session self-selection overrides controller choices per component; human overrides are
+    /// applied by SidebarItemIcon. Reuse the pet's exact-session and pre-observation boundaries.
+    static func managedIcon(
+        _ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date
+    ) -> (glyph: String?, color: SidebarAvatarColor?) {
+        if let session = managedSession(for: node, in: tree, now: now) {
+            return (session.iconId ?? node.iconId,
+                    session.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)) ?? node.iconColor)
+        }
+        if isInteractiveSessionPhase(node), let id = node.copilotSessionId,
+           let details = tree.managedDetails(id: id, now: now) {
+            return (details.iconId ?? node.iconId,
+                    details.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)) ?? node.iconColor)
+        }
+        return (node.iconId, node.iconColor)
     }
 
     private static func isInteractiveSessionPhase(_ node: SidebarOrchestrationNode) -> Bool {
