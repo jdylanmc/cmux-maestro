@@ -1348,8 +1348,7 @@ enum SidebarPresentation {
             .init(title: "Known working children", value: "\(session.knownRunningChildren)"),
             .init(title: "Retained outcomes", value: "\(session.retainedHistoryCount)"),
             .init(title: "Hidden history", value: "\(session.hiddenHistoryCount)"),
-            .init(title: "Omitted children", value: session.hasUncountedChildren
-                  ? "\(session.omittedChildrenCount)+ · Total: Unknown" : "\(session.omittedChildrenCount)"),
+            .init(title: "Omitted children", value: session.omittedChildrenDescription),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
                 ? "Complete" : "Incomplete",
                   copyableValue: session.childrenComplete && !session.treeDegraded ? "complete" : "incomplete")

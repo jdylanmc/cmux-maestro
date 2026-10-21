@@ -112,9 +112,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
     var shortID: String { String(id.uuidString.prefix(8)).lowercased() }
     var omittedChildrenDescription: String {
-        hasUncountedChildren
-            ? "At least \(omittedChildrenCount) tasks omitted; total and active counts unknown."
-            : "\(omittedChildrenCount)"
+        SidebarCopilotTree.omittedChildrenDescription(count: omittedChildrenCount, uncounted: hasUncountedChildren)
     }
     var attentionOwnerCount: Int {
         (attention.isEmpty && !attentionDegraded ? 0 : 1)
@@ -199,7 +197,10 @@ struct SidebarCopilotTree: Equatable {
     var omittedActiveChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedActiveChildrenCount } }
     var hasUncountedChildren: Bool { sessions.contains(where: \.hasUncountedChildren) }
     var omittedChildrenDescription: String {
-        hasUncountedChildren ? "\(omittedChildrenCount)+ · Total: Unknown" : "\(omittedChildrenCount)"
+        Self.omittedChildrenDescription(count: omittedChildrenCount, uncounted: hasUncountedChildren)
+    }
+    static func omittedChildrenDescription(count: Int, uncounted: Bool) -> String {
+        uncounted ? "\(count)+ · Total: Unknown" : "\(count)"
     }
     var retainedHistoryCount: Int { sessions.reduce(0) { $0 + $1.retainedHistoryCount } }
     var hiddenHistoryCount: Int { sessions.reduce(0) { $0 + $1.hiddenHistoryCount } }
