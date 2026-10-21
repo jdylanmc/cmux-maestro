@@ -254,8 +254,10 @@ nonisolated struct SidebarResolvedTag: Equatable, Identifiable, Sendable {
 
 /// The human's tags and the shared color overrides, in the sidebar's own container.
 nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
-    /// Human preference format, independent of the unchanged version-1 slug and automatic palette.
-    var version = 2
+    /// Named-only choices stay compatible with old builds; custom hex requires format 2.
+    var version: Int {
+        colors.values.contains { if case .custom = $0 { return true }; return false } ? 2 : 1
+    }
     /// Exact session UUID (uppercase) to the human's slugs, in order.
     var assignments: [String: [String]] = [:]
     /// Slug to its human color; absent means the automatic color.
@@ -281,6 +283,13 @@ nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
         }
     }
 
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(assignments, forKey: .assignments)
+        try container.encode(colors, forKey: .colors)
+    }
+
     /// Above the largest valid store (about 1.6 MB), so the entry caps, which pruning handles, always bind first.
     static let maximumStoredBytes = 4_194_304
     static let maximumEntries = 2_048
@@ -291,8 +300,7 @@ nonisolated struct SidebarTagSettings: SidebarPreferenceValue {
     static func key(_ session: UUID) -> String { session.uuidString }
 
     var isValid: Bool {
-        version == 2
-            && assignments.count <= Self.maximumEntries && colors.count <= Self.maximumEntries
+        assignments.count <= Self.maximumEntries && colors.count <= Self.maximumEntries
             && assignments.allSatisfy { key, slugs in
                 UUID(uuidString: key)?.uuidString == key && !slugs.isEmpty
                     && slugs.count <= SidebarTagSlug.maximumPerSource && Set(slugs).count == slugs.count

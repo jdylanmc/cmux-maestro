@@ -56,9 +56,14 @@ to the same output.
 - **Custom…** opens the macOS system color panel, with opacity disabled. Any chosen or entered
   color converts to opaque, eight-bit sRGB (wide-gamut channels clamp), stored as uppercase
   `#RRGGBB`. The native well shows the current color; a checkmark marks a custom choice and its
-  accessibility label includes the hex. Save and Cancel apply to custom colors too.
+  accessibility label includes the hex. The panel previews without writing; closing it updates
+  the draft once, and only if its canonical color changed. Save and Cancel apply to custom colors
+  too. While active, the system panel is a child window of the editor's popover, preventing
+  outside-click dismissal from losing the draft.
 - Human preference **format version 2** accepts named strings or `#RRGGBB`; version-1 named files
-  read without writing until an explicit edit saves version 2. Older builds reject version 2,
+  read without writing. Named-only edits continue writing version 1; version 2 is written only
+  while the file contains a custom hex. Removing the last custom color restores version 1.
+  Older builds reject version 2,
   show the existing unavailable notice and preserve the file until an explicit global reset.
   Unknown versions or invalid colors also preserve the file. Slug rules, automatic palette,
   and the separate agent store remain version 1.

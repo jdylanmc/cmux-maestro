@@ -24,7 +24,12 @@ nonisolated enum SidebarIconOverride: Codable, Equatable, Sendable {
 }
 
 nonisolated struct SidebarIconSettings: SidebarPreferenceValue {
-    var version = 2
+    var version: Int {
+        overrides.values.contains {
+            if case .custom(let choice) = $0 { return choice.color.customColor != nil }
+            return false
+        } ? 2 : 1
+    }
     var overrides: [String: SidebarIconOverride] = [:]
 
     init() {}
@@ -46,6 +51,12 @@ nonisolated struct SidebarIconSettings: SidebarPreferenceValue {
         }
     }
 
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(overrides, forKey: .overrides)
+    }
+
     static let maximumStoredBytes = 1_048_576
     static let maximumEntries = 2_048
     static let failOpen = Self()
@@ -53,7 +64,7 @@ nonisolated struct SidebarIconSettings: SidebarPreferenceValue {
     static let saveNotice = "Icon preferences could not be saved. Check available storage and retry."
 
     var isValid: Bool {
-        version == 2 && overrides.count <= Self.maximumEntries && overrides.allSatisfy { key, value in
+        overrides.count <= Self.maximumEntries && overrides.allSatisfy { key, value in
             guard SidebarIconTarget.isValidKey(key) else { return false }
             if case .custom(let choice) = value { return SidebarGlyphName.isValid(choice.glyph) }
             return true

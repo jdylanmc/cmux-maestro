@@ -12,16 +12,24 @@ Consequence: any same-user process can edit either file; readers check shape, ow
 
 ## Human custom colors (2026-10-21, #294)
 
-The human preference format is now version 2, independent of the unchanged
+The human preference format supports version 2, independent of the unchanged
 version-1 slug rules, automatic palette and agent store. A color is either an
 existing named swatch or a validated opaque sRGB `#RRGGBB`, canonicalized uppercase.
 The editor's **Custom…** system color well writes only through the existing draft
 and Save path. Black or white text is chosen from actual contrast; arbitrary
 opaque sRGB still guarantees at least `sqrt(21):1`.
 
-Version-1 human preferences decode without a disk write; the next explicit edit
-writes version 2. Older builds fail open for presentation, show their existing
+Version-1 human preferences decode without a disk write. Named-only edits stay
+version 1; version 2 is written only while a custom color remains in the file.
+Removing the last custom color restores version 1. Older builds fail open for presentation, show their existing
 notice and refuse ordinary writes to the unsupported file; only an explicit
 global reset discards it. The same versioning rule applies to human icon
 preferences (`sidebar-icons.json`). No new grant, agent color API, controller
 store or automatic migration of external files is introduced.
+
+The AppKit color well previews locally and commits only on deactivation/panel
+close, deduplicating unchanged canonical values. Its panel is temporarily a
+child of the presenting popover's window, so interacting with the panel cannot
+trigger the popover's outside-click dismissal. Releasing the panel restores
+normal dismissal. Tag choices still require Save; a reset or editor teardown
+cancels an unfinished native edit.

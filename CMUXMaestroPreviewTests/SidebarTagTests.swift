@@ -21,10 +21,13 @@ struct SidebarTagTests {
         let preferences = preferences(fixture)
         #expect(preferences.tags(for: session).first?.swatch == .ocean)
         #expect(try Data(contentsOf: file) == legacy)
+        #expect(preferences.setTagColor(.rose, for: "release") == nil)
+        let named = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(named["version"] as? Int == 1)
         let color = try JSONDecoder().decode(SidebarTagSwatch.self, from: Data("\"#fedcba\"".utf8))
         var draft = SidebarTagDraft(text: "release", colors: ["release": color])
         #expect(draft.preview(preferences.tags(for: session)).first?.background.hex == "#FEDCBA")
-        #expect(preferences.tags(for: session).first?.swatch == .ocean, "Draft color must not persist before Save")
+        #expect(preferences.tags(for: session).first?.swatch == .rose, "Draft color must not persist before Save")
         #expect(draft.commit(to: preferences, session: session) == nil)
         let stored = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
         #expect(stored["version"] as? Int == 2)
@@ -33,6 +36,8 @@ struct SidebarTagTests {
         draft.colors["release"] = .some(nil)
         #expect(draft.commit(to: preferences, session: session) == nil)
         #expect(self.preferences(fixture).tagSettings.colors.isEmpty)
+        let reset = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(reset["version"] as? Int == 1)
         #expect(preferences.tags(for: session).first?.background == SidebarTagPalette.automatic("release"))
     }
 

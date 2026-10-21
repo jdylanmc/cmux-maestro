@@ -70,17 +70,21 @@ Every **Choose icon** popover (sessions, terminals and browsers, including row
 **Appearance** actions) keeps the named swatches and adds **Custom…**, a native
 macOS color well that opens the system color panel. Choose or enter any opaque
 sRGB hex. The well displays the current color; a checkmark marks a custom
-selection and its accessibility label includes the hex. Icon changes save
-immediately, as named swatches do. Both reset actions keep their existing
-precedence.
+selection and its accessibility label includes the hex. Custom changes preview
+in the native well and panel, then save once when the panel closes or the well
+deactivates, only if the canonical color changed. Named swatches still save
+immediately. Both reset actions keep their existing precedence; a reset cancels
+an open custom edit.
 
 Human choices stay in the sidebar container's `sidebar-icons.json`, never in
 agent appearance records. Version 2 stores color as a named string or uppercase
-`#RRGGBB`. Version-1 named choices still read; the next explicit save writes
-version 2. Older builds reject version 2, show their existing preference notice
-and preserve the file until an explicit global reset. Downgrading therefore
-hides these preferences; upgrading restores them. Unknown versions and malformed
-colors are never overwritten by ordinary edits.
+`#RRGGBB`. Named-only choices continue writing version 1. Version 2 is written
+only while a custom hex remains in that file; removing the last custom color
+returns to version 1. Older builds reject version 2, show their existing
+preference notice and preserve the file until an explicit global reset.
+Downgrading therefore hides preferences only in files containing custom colors;
+upgrading restores them. Unknown versions and malformed colors are never
+overwritten by ordinary edits.
 
 The panel has no opacity control. Wide-gamut and grayscale choices convert to
 sRGB, clamp to its gamut and round to eight bits per channel; alpha is discarded.

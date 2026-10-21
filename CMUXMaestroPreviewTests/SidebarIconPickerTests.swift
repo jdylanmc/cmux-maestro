@@ -22,10 +22,111 @@ struct SidebarIconPickerTests {
         let well = try #require(wells.first)
         #expect(wells.count == 1)
         #expect(changes.isEmpty, "Rendering must not change the color")
-        #expect(!NSColorPanel.sharedColorPanelExists)
+        #expect(!NSColorPanel.sharedColorPanelExists || !NSColorPanel.shared.isVisible)
         well.color = NSColor(srgbRed: 0x12 / 255.0, green: 0xab / 255.0, blue: 0xef / 255.0, alpha: 1)
         #expect(well.sendAction(well.action, to: well.target))
         #expect(changes == [.init(glyph: "md-duck", color: try #require(SidebarAvatarColor(rawValue: "#12ABEF")))])
+    }
+
+    @Test func customColorDragCommitsOnlyOnceWhenPanelCloses() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let target = SidebarIconTarget.session(UUID())
+        let initial = SidebarIconChoice(glyph: "md-duck", color: .teal)
+        preferences.setIcon(initial, for: target)
+        let file = fixture.root.appendingPathComponent("sidebar-icons.json")
+        let before = try Data(contentsOf: file)
+        var writes = 0
+        let host = NSHostingView(rootView: SidebarIconPicker(
+            catalog: try SidebarGlyphCatalog.shared.get(), selection: initial, source: "Your choice",
+            choose: { writes += 1; preferences.setIcon($0, for: target) }, resetDefault: {}, close: {}
+        ))
+        host.frame = NSRect(x: 0, y: 0, width: 280, height: 520)
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let well = try #require(descendants(host).compactMap { $0 as? NSColorWell }.first)
+        well.activate(true)
+        let panel = NSColorPanel.shared
+        defer { panel.close() }
+        #expect(panel.isVisible)
+        for hex in ["#123456", "#ABCDEF", "#FEDCBA"] {
+            well.color = try #require(SidebarTagColor(hex: hex)).nativeColor
+            #expect(well.sendAction(well.action, to: well.target))
+        }
+        #expect(writes == 0)
+        #expect(try Data(contentsOf: file) == before)
+        panel.close()
+        #expect(writes == 1)
+        #expect(preferences.icons.resolve(target: target, standard: initial, agent: nil).choice.color.rawValue == "#FEDCBA")
+        well.activate(true)
+        #expect(well.sendAction(well.action, to: well.target))
+        panel.close()
+        #expect(writes == 1, "Opening and closing an unchanged canonical color must not write")
+    }
+
+    @Test func nativePanelKeepsTransientTagPopoverAndDraftUntilSave() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let session = UUID()
+        #expect(preferences.setHumanTags("release", for: session) == nil)
+        var draft = SidebarTagDraft(text: "release, review")
+        let original = preferences.tagSettings
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: window.frame)
+        window.contentView = anchor
+        window.orderFront(nil)
+        let popover = NSPopover()
+        popover.animates = false
+        popover.behavior = .transient
+        let content = NSHostingController(rootView: SidebarCustomColorPicker(
+            color: NSColor.systemTeal, choose: { draft.colors["release"] = .some(.custom($0)) }
+        ).padding(12).frame(width: 220, height: 80))
+        popover.contentViewController = content
+        defer { NSColorPanel.shared.close(); popover.close(); window.close() }
+        popover.show(relativeTo: anchor.bounds, of: anchor, preferredEdge: .maxX)
+        content.view.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        let well = try #require(descendants(content.view).compactMap { $0 as? SidebarNativeColorWell }.first)
+        #expect(popover.isShown)
+        well.activate(true)
+        let panel = NSColorPanel.shared
+        #expect(panel.isVisible)
+        #expect(!well.supportsAlpha)
+        #expect(panel.parent === content.view.window)
+        panel.makeKeyAndOrderFront(nil)
+        well.color = try #require(SidebarTagColor(hex: "#123456")).nativeColor
+        #expect(well.sendAction(well.action, to: well.target))
+        popover.performClose(nil)
+        #expect(popover.isShown, "The open native panel must prevent outside-click dismissal")
+        #expect(draft.text == "release, review" && draft.colors.isEmpty)
+        panel.close()
+        #expect(popover.isShown)
+        #expect(draft.colors["release"] == .some(.custom(try #require(SidebarTagColor(hex: "#123456")))))
+        #expect(preferences.tagSettings == original, "Panel close edits only the draft")
+        #expect(draft.commit(to: preferences, session: session) == nil)
+        #expect(preferences.humanTags(for: session) == ["release", "review"])
+        #expect(preferences.tags(for: session).first?.background.hex == "#123456")
+        popover.performClose(nil)
+        #expect(!popover.isShown, "Closing the panel must restore normal popover dismissal")
+    }
+
+    @Test func externalResetCancelsAnOpenColorEditWithoutOverwritingIt() throws {
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        var changes: [SidebarTagColor] = []
+        well.configure(color: .systemTeal, label: "Custom", choose: { changes.append($0) }, unavailable: { _ in })
+        well.activate(true)
+        defer { NSColorPanel.shared.close() }
+        well.color = .red
+        #expect(well.sendAction(well.action, to: well.target))
+        well.configure(color: .black, label: "Custom", choose: { changes.append($0) }, unavailable: { _ in })
+        #expect(!well.isActive && changes.isEmpty)
+        #expect(SidebarTagColor(nativeColor: well.color) == .black)
+        NSColorPanel.shared.close()
+        #expect(changes.isEmpty)
     }
 
     @Test func customIconUsesAnOpaqueNonTemplateImageWithAContrastingOutline() throws {

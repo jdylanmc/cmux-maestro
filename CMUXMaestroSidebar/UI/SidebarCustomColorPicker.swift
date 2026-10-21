@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The system color well is controlled by its owner, just like the named swatches.
+/// The native well previews continuously and commits once when the system panel closes.
 struct SidebarCustomColorPicker: View {
     let color: NSColor
     var selected: SidebarTagColor?
@@ -10,21 +10,12 @@ struct SidebarCustomColorPicker: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ColorPicker(selection: Binding(
-                get: { Color(nsColor: color) },
-                set: { value in
-                    guard let rgb = SidebarTagColor(nativeColor: NSColor(value)) else {
-                        unavailable = true
-                        return
-                    }
-                    unavailable = false
-                    choose(rgb)
-                }
-            ), supportsOpacity: false) {
-                Text(title)
-            }
-            .accessibilityLabel(selected.map { "\(title) \($0.hex)" } ?? title)
-            .accessibilityValue(selected?.hex ?? "")
+            Text(title)
+            SidebarColorWell(
+                color: color, label: selected.map { "\(title) \($0.hex)" } ?? title,
+                choose: choose, unavailable: { unavailable = $0 }
+            )
+            .frame(width: 44, height: 24)
             .accessibilityAddTraits(selected == nil ? [] : .isSelected)
             if selected != nil {
                 Image(systemName: "checkmark").font(.caption).accessibilityHidden(true)

@@ -232,6 +232,7 @@ struct SidebarTagEditor: View {
                 selected: tag.swatch.flatMap { if case .custom(let color) = $0 { return color }; return nil },
                 choose: { draft.colors[tag.slug] = .some(.custom($0)) }
             )
+            .id(tag.slug)
             Button("Use automatic color") { draft.colors[tag.slug] = .some(nil) }
                 .disabled(tag.swatch == nil)
                 .font(.caption)
