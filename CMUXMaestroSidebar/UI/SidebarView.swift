@@ -1422,7 +1422,7 @@ struct ManagedHierarchyContent: View {
                                     depth: row.depth, unresolved: false, width: contentWidth
                                 ))
                         }
-                        ForEach(retained) { session in
+                        ForEach(expanded || !row.hasChildren ? retained : []) { session in
                             CopilotSessionContents(
                                 session: session, expanded: expanded,
                                 navigation: navigation, layout: layout, setExpanded: setExpanded,
