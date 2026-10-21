@@ -309,7 +309,7 @@
   "CMUXMaestroPreviewTests/SidebarOrchestrationTests.swift": {
     "reason": "Existing synthetic timestamps, fixture clocks and timer bounds newly covered by the expanded #276 review guard. Exact legacy occurrences only; not a claim all old timing dependencies are deterministic. New or changed occurrences require review.",
     "statements": {
-      "version: 1, generatedAt: Date(), complete: true, omittedCount: 0,": 7,
+      "version: 1, generatedAt: Date(), complete: true, omittedCount: 0,": 6,
       "createdAt: Date(), updatedAt: Date())": 2,
       ".init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [root]))": 1,
       "version: 1, generatedAt: Date().addingTimeInterval(-120),": 1,
@@ -333,8 +333,6 @@
       "sessionName: \"Stale\", readAt: Date().addingTimeInterval(-60))]": 1,
       "version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [ended])": 1,
       "#expect(SidebarPresentation.managedPet(ended, tree: unbound, now: Date()) == nil)": 1,
-      "read: neutralRead { _ in CopilotSnapshot(generatedAt: Date(), sessions: [], issues: [], isComplete: true) },": 1,
-      "return [session: CopilotManagedSessionDetails(sessionName: \"Synthetic refactor\", readAt: Date())]": 1,
       "version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [born, child])": 1,
       ".init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: nodes)": 1,
       ".init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: nodes))": 1
