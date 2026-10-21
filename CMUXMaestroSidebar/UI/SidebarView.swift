@@ -352,13 +352,19 @@ private struct SidebarActionLayout<Content: View>: View {
 struct CollapsedBranchSummary: View {
     let summary: SidebarBranchSummary
     var compact = false
+    var needsInput = false
 
     var body: some View {
         let lines = SidebarPresentation.collapsed(summary)
+        let detail = SidebarPresentation.statusDescription(
+            .init(title: lines.joined(separator: ". "), symbol: "questionmark", tone: .teal), needsInput: needsInput
+        )
         if !lines.isEmpty {
             HStack(spacing: 4) {
                 if compact {
-                    if summary.blocked > 0 {
+                    if needsInput {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.blocked), needsInput: true, detail: detail)
+                    } else if summary.blocked > 0 {
                         SidebarStateBadge(visual: SidebarPresentation.state(.blocked))
                     } else if summary.attention > 0 || summary.omittedActive > 0 {
                         SidebarStateBadge(visual: .init(
@@ -384,8 +390,8 @@ struct CollapsedBranchSummary: View {
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Collapsed branch. \(lines.joined(separator: ". "))")
-            .help(lines.joined(separator: ". "))
+            .accessibilityLabel("Collapsed branch. \(detail)")
+            .help(detail)
         }
     }
 }
@@ -1408,7 +1414,7 @@ struct ManagedHierarchyContent: View {
                                 items: descendants(of: row.node.id).map {
                                     .managed($0, availability: polling.availability, tree: copilotTree, now: evidenceDate)
                                 },
-                                summary: SidebarBranchSummary(sessions: retained),
+                                retained: retained,
                                 navigation: navigation, expandLabel: "Expand \(row.node.title)"
                             ) { setExpanded(.managed(row.node.id), true) }
                             .padding(.leading, 50 + density.indentation(

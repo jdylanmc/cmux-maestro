@@ -309,10 +309,14 @@ struct SidebarLayoutRenderingTests {
                 if max(r, g, b) - min(r, g, b) > 0.15 { colored += 1 }
                 if b > 0.7 && g > r + 0.1 && b > g + 0.1 { questions += 1 }
             } }
+            let parent = try #require(projection.model.copilot.tree.sessions.first { !$0.attention.isEmpty })
+            let retained = SidebarAgentIconCard.retainedState([parent])
             if attention == .permission || attention == .answer {
                 #expect(questions > 0, "Input requests use the existing light-blue question glyph, not a blocked pause")
+                #expect(retained.needsInput && retained.summary.blocked == 0)
             } else {
                 #expect(colored == 0, "Turn completion and a recovered working error create no summary badge")
+                #expect(SidebarPresentation.collapsed(retained.summary).isEmpty)
             }
         }
     }

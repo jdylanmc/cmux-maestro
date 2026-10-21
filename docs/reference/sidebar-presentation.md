@@ -276,6 +276,10 @@ only: nothing is focused, moved, acknowledged or adopted.
   with 4-point gaps, centered with the chevron. A collapsed parent's card starts at
   its title edge. Retained task activity and uncertainty stay inside the card, never
   in a separate summary row beneath it; counts remain in help and accessibility.
+  Card attention follows expanded rows: turn-finished notices and recovered errors
+  while working add no badge; permission and answer requests use the needs-input
+  question glyph. The parent row already shows its own working state, so only
+  hidden work contributes to the card's working count.
 - Internal tasks stay subordinate text rows under their exact owner in both views.
 
 Pinned details show labels and values only, not identity/binding explanation paragraphs.

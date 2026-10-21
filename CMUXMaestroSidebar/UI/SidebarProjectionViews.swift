@@ -87,7 +87,7 @@ struct SidebarAgentIconCardItem: Identifiable {
 
     private mutating func includeEvidence(_ session: SidebarCopilotSession) {
         var session = session
-        session.attention.removeAll { $0.kind == .turnFinished }
+        session.attention = Self.visibleAttention(session.attention, state: session.state)
         // An icon's state belongs to its session, never to its descendants.
         session.nodes = []
         var summary = SidebarBranchSummary(sessions: [session])
@@ -96,13 +96,17 @@ struct SidebarAgentIconCardItem: Identifiable {
         summary.incomplete = summary.incomplete || session.treeDegraded || summary.omittedActive > 0
         evidence = summary
     }
+
+    static func visibleAttention(_ attention: [AgentAttention], state: AgentWorkState) -> [AgentAttention] {
+        attention.filter { $0.kind != .turnFinished && !($0.kind == .error && state == .working) }
+    }
 }
 
 /// A collapsed group: every agent's icon and state in one row that scrolls inside the card,
 /// and a separate control that expands the group. Each icon focuses its agent's surface.
 struct SidebarAgentIconCard: View {
     let items: [SidebarAgentIconCardItem]
-    var summary: SidebarBranchSummary? = nil
+    var retained: [SidebarCopilotSession] = []
     let navigation: SidebarNavigation
     let expandLabel: String
     let expand: () -> Void
@@ -111,6 +115,7 @@ struct SidebarAgentIconCard: View {
     @Environment(\.sidebarTerminalIconStyle) private var terminalStyle
 
     var body: some View {
+        let retainedState = Self.retainedState(retained)
         HStack(spacing: 4) {
             ScrollView(.horizontal) {
                 HStack(spacing: 4) {
@@ -131,9 +136,7 @@ struct SidebarAgentIconCard: View {
             }
             .scrollIndicators(.automatic, axes: .horizontal)
             .frame(height: 32)
-            if let summary {
-                CollapsedBranchSummary(summary: summary, compact: true)
-            }
+            CollapsedBranchSummary(summary: retainedState.summary, compact: true, needsInput: retainedState.needsInput)
             Button(action: expand) {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 11, weight: .semibold))
@@ -149,6 +152,27 @@ struct SidebarAgentIconCard: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(items.count) agent\(items.count == 1 ? "" : "s")")
         .accessibilityIdentifier("agent-icon-card")
+    }
+
+    static func retainedState(_ sessions: [SidebarCopilotSession]) -> (summary: SidebarBranchSummary, needsInput: Bool) {
+        let filtered = sessions.map { session in
+            var session = session
+            session.attention = SidebarAgentIconCardItem.visibleAttention(session.attention, state: session.state)
+            for index in session.nodes.indices {
+                session.nodes[index].attention = SidebarAgentIconCardItem.visibleAttention(
+                    session.nodes[index].attention, state: session.nodes[index].state
+                )
+            }
+            return session
+        }
+        let inputOwners = filtered.filter { SidebarPresentation.needsInput($0.attention) }.count
+            + filtered.flatMap(\.nodes).filter { SidebarPresentation.needsInput($0.attention) }.count
+        var summary = SidebarBranchSummary(sessions: filtered)
+        // The parent row already shows its own activity; the card summarizes hidden work.
+        summary.running -= filtered.filter { $0.state == .working }.count
+        summary.blocked -= inputOwners
+        summary.incomplete = summary.incomplete || filtered.contains { $0.treeDegraded || $0.hasUncountedChildren }
+        return (summary, inputOwners > 0)
     }
 
     private func icon(_ item: SidebarAgentIconCardItem) -> some View {
