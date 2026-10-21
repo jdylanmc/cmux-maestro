@@ -201,6 +201,40 @@ class IntegratedTestScopeTests(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.directory)
 
+    def test_test_sh_default_and_focused_dispatch_under_system_bash(self):
+        scripts = self.directory / "scripts"
+        scripts.mkdir()
+        (scripts / "test.sh").write_bytes((ROOT / "scripts/test.sh").read_bytes())
+        for name in ("fetch-sdk.sh", "build-preference-test-client.sh"):
+            file = scripts / name
+            file.write_text("#!/bin/bash\nexit 0\n")
+            file.chmod(0o755)
+        binary = self.directory / "bin"
+        binary.mkdir()
+        records = self.directory / "commands.jsonl"
+        for name in ("python3", "xcodebuild"):
+            file = binary / name
+            file.write_text(f"#!{sys.executable}\nimport json,os,sys\n"
+                            "with open(os.environ['DISPATCH_RECORD'], 'a') as f:\n"
+                            "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                            "print('{}')\n")
+            file.chmod(0o755)
+        for options in ([], ["--focused", "ExampleTests", "--repeat", "2"]):
+            with self.subTest(options=options):
+                records.write_text("")
+                result = subprocess.run(
+                    ["/bin/bash", str(scripts / "test.sh"), *options], capture_output=True, text=True,
+                    env={**os.environ, "PATH": str(binary) + ":" + os.environ["PATH"],
+                         "DISPATCH_RECORD": str(records)},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                commands = [json.loads(line) for line in records.read_text().splitlines()]
+                dispatch = next(command for command in commands
+                                if command and command[0].endswith("run-integrated-test-scopes.py"))
+                separator = dispatch.index("--")
+                self.assertEqual(dispatch[3:separator], options)
+                self.assertEqual(dispatch[separator + 1], "xcodebuild")
+
     @staticmethod
     def report(entries):
         statuses = [status for _, status in entries]

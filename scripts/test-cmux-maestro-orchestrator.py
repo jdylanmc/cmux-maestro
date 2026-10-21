@@ -4361,6 +4361,36 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(renamed["gitChanges"]["insertions"], 0)
         self.assertEqual(renamed["gitChanges"]["deletions"], 0)
 
+    def test_git_counts_construct_net_head_queries_and_parse_renames_without_process_timing(self):
+        counts = CONTROLLER_API["git_change_counts"]
+        expected_queries = [
+            ("rev-parse", "--verify", "HEAD"),
+            ("ls-files", "--unmerged", "-z"),
+            ("diff", "--no-ext-diff", "--no-textconv", "--ignore-submodules=all",
+             "--find-renames", "--numstat", "-z", "HEAD", "--"),
+            ("ls-files", "--others", "--exclude-standard", "-z"),
+            ("rev-parse", "--verify", "HEAD"),
+        ]
+        for numstat, untracked, expected in [
+            (b"3\t1\ttext\0-\t-\tbinary\0", b"untracked\0",
+             {"files": 3, "insertions": 3, "deletions": 1, "untrackedFiles": 1, "binaryFiles": 1}),
+            (b"0\t0\t\0old-name\0new-name\0", b"",
+             {"files": 1, "insertions": 0, "deletions": 0, "untrackedFiles": 0, "binaryFiles": 0}),
+            (b"", b"", {"files": 0, "insertions": 0, "deletions": 0, "untrackedFiles": 0, "binaryFiles": 0}),
+        ]:
+            with self.subTest(numstat=numstat):
+                calls = []
+                replies = [b"exact-head\n", b"", numstat, untracked, b"exact-head\n"]
+
+                def query(git, cwd, *arguments):
+                    self.assertEqual((git, cwd), ("/synthetic/git", self.h.path))
+                    calls.append(arguments)
+                    return replies[len(calls) - 1]
+
+                with patch.dict(counts.__globals__, {"git_change_query": query}):
+                    self.assertEqual(counts("/synthetic/git", self.h.path), expected)
+                self.assertEqual(calls, expected_queries)
+
     def test_git_count_parser_rejects_partial_invalid_and_excessive_evidence(self):
         parse = CONTROLLER_API["parse_git_change_counts"]
         for numstat, untracked in [

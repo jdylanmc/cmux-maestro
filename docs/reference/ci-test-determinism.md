@@ -34,14 +34,15 @@ The same identities appear as attributed skips in `coverage.json`; an unlisted
 skip, missing inventory entry, or enabled test that skips still fails validation.
 No test body, pixel tolerance, focus oracle, or negative control is weakened.
 
-The local cases depend on native animation sampling, OCR, hosted view discovery,
-key-window ownership, or late AppKit scroller settlement. They are useful manual
+The five local cases have observed failures involving native animation sampling,
+OCR or hosted view discovery. They are useful manual
 acceptance probes but cannot be mandatory evidence from an uncontrolled runner.
 Pure phase/reduced-motion, key-chain, layout-budget, retention/dismissal-identity,
 and form-state tests remain required. This is a deliberate reduction of *native
 venue* guarantees at the merge gate, not a claim the venue tests were repaired.
-The viewport positive/negative controls move together; #127's runtime mechanism
-is not declared solved. #174's cancellation stall was already removed by an
+The key-window test and all six viewport positive/negative controls remain
+required: no failures for them were established in the mined history. #127's
+runtime mechanism is not declared solved. #174's cancellation stall was already removed by an
 earlier owner decision and remains unresolved.
 
 Run specific acceptance methods locally without changing global preferences:
@@ -54,7 +55,9 @@ CMUX_MAESTRO_LOCAL_PROCESS_ACCEPTANCE=1 python3 scripts/test-cmux-maestro-orches
 ```
 
 The Git test requires real commands to finish within the unchanged production
-one-second probe deadline. Parser rejection/count tests stay required; successful
+one-second probe deadline. Required deterministic tests exercise the exact
+net-versus-HEAD query arguments and parse text, binary, untracked, rename and
+clean results without scheduling real Git. Parser rejection tests also stay required; successful
 real Git collection is local acceptance, not a promise about runner speed.
 Native local acceptance can require an interactive graphical session; use a
 disposable validation venue, not a live Maestro installation.
@@ -70,6 +73,9 @@ Every selected suite/method must execute, every run must pass, and any skip or
 failure stops the command. `focused.json` records all runs and explicitly says
 `requiredCoverage: false`. Focused mode refuses GitHub Actions and never replaces
 the full `./scripts/test.sh` CI receipt. No failed iteration is retried.
+The default command works under the system Bash 3.2 with no focused arguments.
+Its full local invocation still cannot produce GitHub-hosted guide acceptance;
+never spoof the venue variables to turn that refusal into passing evidence.
 
 ## Timing policy ratchet
 
@@ -79,6 +85,9 @@ scans tracked Swift, Python, JavaScript and shell test sources for sleeps, wall
 clock reads/comparisons, OCR and key-window dependence. New files, changed
 statements, and additional copies of an existing statement fail. Line numbers
 and indentation do not affect the comparison.
+Removed statements, excess exception counts and missing test files must remove
+their old exceptions too. Test helpers under `scripts/test-fixtures/` and
+installed skill `tests/` directories are included.
 
 `scripts/test-timing-allowlist.json` freezes existing occurrences, including
 real-process hang guards, fake-provider delays, offscreen native settlement,

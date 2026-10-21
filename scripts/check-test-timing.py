@@ -15,14 +15,20 @@ PATTERN = re.compile(
     r"|(?:setTimeout|setInterval|delay|usleep|XCTWaiter)\s*\("
     r"|(?:^|[;&|]\s*)\s*sleep\s+[^\n;&|]+"
     r"|DispatchTime\s*\.\s*now\s*\("
-    r"|(?:ContinuousClock|Date)\s*\.\s*now\b"
+    r"|(?:ContinuousClock|SuspendingClock)(?:\s*\(\s*\))?\s*\.\s*now\b"
+    r"|(?<!\w)\.now\b|Date\s*\(\s*\)"
+    r"|CFAbsoluteTimeGetCurrent\s*\("
+    r"|\b(?:fulfillment|wait)\s*\(\s*(?:of|for)\s*:"
+    r"|\b(?:performance\s*\.\s*now|process\s*\.\s*hrtime(?:\s*\.\s*bigint)?"
+    r"|AbortSignal\s*\.\s*timeout)\s*\("
+    r"|\bdatetime(?:\s*\.\s*datetime)?\s*\.\s*now\s*\("
     r"|\.duration\s*\(\s*to\s*:"
     r"|\.timeIntervalSince\s*\("
     r"|#(?:expect|require)\s*\([^\n]*\b(?:elapsed|duration)\b"
     r"|\bassert(?:Less|Greater)(?:Equal)?\s*\([^\n]*(?:elapsed|duration|time\.)"
     r"|\bisKeyWindow\b"
     r"|\bVNRecognizeTextRequest\b"
-    r"|\b(?:time\.(?:monotonic|time)|Date\.now)\s*\("
+    r"|\b(?:time\s*\.\s*(?:monotonic(?:_ns)?|perf_counter(?:_ns)?|time)|Date\.now)\s*\("
     r"|\b(?:RunLoop\.[\w.]+\.run|Thread\.sleep)\s*\("
     r"|\b(?:asyncAfter|sleep)\s*\(",
     re.MULTILINE,
@@ -31,9 +37,10 @@ PATTERN = re.compile(
 
 def test_path(path):
     value = Path(path)
-    return (value.suffix in {".swift", ".py", ".mjs", ".sh"}
-            and (any(part.endswith("Tests") for part in value.parts[:-1])
-                 or value.name.startswith("test-") or value.name.endswith("Tests.swift")
+    return (value.suffix in {".swift", ".py", ".mjs", ".js", ".cjs", ".ts", ".tsx", ".sh"}
+            and (any(part.lower().endswith("tests") or part == "test-fixtures" for part in value.parts[:-1])
+                 or value.name.startswith(("test-", "test_"))
+                 or value.stem.endswith(("Tests", ".test", ".spec"))
                  or ("scripts" in value.parts and "Test" in value.name)))
 
 
@@ -56,9 +63,10 @@ def statements(text):
 
 def violations(root, paths, policy):
     errors = []
-    for name in paths:
-        if not test_path(name):
-            continue
+    selected = {name for name in paths if test_path(name)}
+    for name in sorted(set(policy) - selected):
+        errors.append(f"{name}: stale exception for an absent or unscanned test source")
+    for name in sorted(selected):
         found = statements((root / name).read_text())
         entry = policy.get(name, {})
         allowed = entry.get("statements", {})
@@ -67,6 +75,12 @@ def violations(root, paths, policy):
         for statement, count in found.items():
             if count > allowed.get(statement, 0):
                 errors.append(f"{name}: unreviewed timing/venue dependency ({count} occurrences): {statement}")
+        for statement, count in allowed.items():
+            if type(count) is not int or count <= 0:
+                errors.append(f"{name}: exception count must be a positive integer: {statement}")
+            elif count > found.get(statement, 0):
+                errors.append(f"{name}: stale/excess exception ({count} allowed, "
+                              f"{found.get(statement, 0)} present): {statement}")
     return errors
 
 

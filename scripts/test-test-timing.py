@@ -22,7 +22,7 @@ class TimingPolicyTests(unittest.TestCase):
             self.assertEqual(timing.violations(root, [name], policy), [])
             for text in (original + "\n" + original, original.replace("60", "2")):
                 file.write_text(text)
-                self.assertEqual(len(timing.violations(root, [name], policy)), 1)
+                self.assertTrue(any("unreviewed" in error for error in timing.violations(root, [name], policy)))
 
     def test_new_files_multiline_spelling_and_other_languages_are_checked(self):
         for name, text in [
@@ -35,6 +35,19 @@ class TimingPolicyTests(unittest.TestCase):
              + "await de" + "lay(100)"),
             ("NewTests/Window.swift", "#expect(window." + "isKeyWindow)"),
             ("NewTests/Render.swift", "let oracle = VNRecognize" + "TextRequest()"),
+            ("NewTests/Clock.swift", "let now = Da" + "te()"),
+            ("NewTests/Clock.swift", "let now = ContinuousClock()." + "now"),
+            ("NewTests/Clock.swift", "let now = SuspendingClock." + "now"),
+            ("NewTests/Clock.swift", "let now = CFAbsoluteTimeGet" + "Current()"),
+            ("NewTests/Clock.swift", "await fulfill" + "ment(of: [done], timeout: 0.1)"),
+            ("NewTests/Clock.swift", "wait(" + "for: [done], timeout: 0.1)"),
+            ("scripts/test-clock.mjs", "performance." + "now()"),
+            ("scripts/test-clock.mjs", "process." + "hrtime.bigint()"),
+            ("scripts/test-clock.mjs", "AbortSignal." + "timeout(2000)"),
+            ("scripts/test-fixtures/clock.py", "time." + "perf_counter()"),
+            ("scripts/test-fixtures/clock.py", "time." + "monotonic_ns()"),
+            ("scripts/test-fixtures/clock.py", "datetime." + "now()"),
+            (".agents/skills/example/tests/clock.test.mjs", "await de" + "lay(100)"),
         ]:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -46,6 +59,18 @@ class TimingPolicyTests(unittest.TestCase):
     def test_barriers_and_virtual_clock_advancement_need_no_exception(self):
         self.assertEqual(timing.statements("await gate.open()\nclock.advance(by: .seconds(60))"), {})
         self.assertFalse(timing.test_path("Production/Clock.swift"))
+
+    def test_removed_occurrences_and_absent_files_must_remove_their_exceptions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            name = "tests/clock.test.mjs"
+            file = root / name
+            file.parent.mkdir()
+            statement = "AbortSignal." + "timeout(60_000)"
+            policy = {name: {"reason": "Hang guard", "statements": {statement: 2}}}
+            file.write_text(statement)
+            self.assertTrue(any("stale/excess" in error for error in timing.violations(root, [name], policy)))
+            self.assertTrue(any("absent" in error for error in timing.violations(root, [], policy)))
 
 
 if __name__ == "__main__":

@@ -30,7 +30,7 @@ python3 "$ROOT/scripts/verify-build-metadata.py" --mode tests \
     --settings "$DERIVED_DATA/namespace-settings.json"
 
 python3 "$ROOT/scripts/run-integrated-test-scopes.py" \
-    --results-root "$DERIVED_DATA/scoped-results" "${SCOPE_ARGS[@]}" -- xcodebuild \
+    --results-root "$DERIVED_DATA/scoped-results" ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} -- xcodebuild \
     -project "$ROOT/CMUXMaestroPreview.xcodeproj" \
     -scheme CMUXMaestroPreview \
     -configuration Debug \

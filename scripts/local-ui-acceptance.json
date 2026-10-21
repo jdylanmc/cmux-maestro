@@ -1,13 +1,6 @@
 {
   "SidebarRowGroupTests/hoveringAnyRowHighlightsTheWholeGroup(_:)": "Native hosted subview discovery and hover pixels; groupHoverActionRules stays required.",
   "SidebarMotionTests/nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane()": "Wall-clock native animation/pixel sampling; deterministic phase and reduced-motion controls stay required.",
-  "SidebarHoverTests/hostedPreviewKeysContinueToFollowingRow(exit:)": "Requires process key-window ownership; exact native key-chain and preview boundary controls stay required.",
-  "SidebarLayoutRenderingTests/nativeEightLevelOutlineRetainsMinimumTitleWidthAt280(style:)": "Native scroller settlement precondition; fixed viewport negative controls remain paired in the local suite.",
-  "SidebarLayoutRenderingTests/productionEightLevelOutlineRetainsNameAndStableActionsAt280(budget:)": "Native scroller settlement and focus interval; deterministic layout budget tests stay required.",
-  "SidebarLayoutRenderingTests/deepOutlineViewportRemainsStableWithoutFocus(budget:)": "Native preference/style settlement is external to the fixture.",
-  "SidebarLayoutRenderingTests/deepOutlineFrameComparisonRejectsRealWidthChange(budget:)": "Paired real-width-change negative control for local viewport acceptance.",
-  "SidebarLayoutRenderingTests/deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline(style:)": "Paired native style-transition negative control for local viewport acceptance.",
-  "SidebarLayoutRenderingTests/deepOutlineFixedViewportSurvivesNativeStyleChanges(budget:initialStyle:)": "Paired native style-transition viewport acceptance; no production preference changes.",
   "SidebarLayoutRenderingTests/activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes()": "Native footer clearance and OCR depend on venue; deterministic layout/state and exact title-oracle controls stay required.",
   "SidebarInternalTaskRenderingTests/review002DisplayedDismissControlHandlesHiddenCompletedChild(_:_:)": "Hosted accessibility press and asynchronous projection; exact dismissal-identity and retention tests stay required.",
   "SidebarBeatIndicatorTests/formDraftSurvivesAScopeChangeAndOffersNoShowAll()": "Hosted text discovery; formHasNoShowAllAndKeepsItsDraftOnScopeChange remains the deterministic behavioral guarantee."
