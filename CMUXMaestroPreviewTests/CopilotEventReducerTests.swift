@@ -685,11 +685,19 @@ nonisolated struct CopilotEventReducerTests {
         var reducer = CopilotEventReducer(
             sessionID: UUID(), maximumLifecycleEvents: 2, maximumReplayFilterWords: 1
         )
-        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "a", "agentDisplayName": "A"])
-        try feed(&reducer, "assistant.turn_start", agent: "worker", ["turnId": "turn-a"])
-        try feed(&reducer, "subagent.completed", ["toolCallId": "a", "agentDisplayName": "A"])
-        try feed(&reducer, "subagent.started", agent: "worker", ["toolCallId": "b", "agentDisplayName": "B"])
-        try feed(&reducer, "permission.requested", agent: "worker", ["requestId": "pending-b"])
+        // Random UUIDs can be false positives in this deliberately one-word
+        // replay filter before pressure is applied. Fix the event identities.
+        let events: [(String, String?, [String: Any])] = [
+            ("subagent.started", "worker", ["toolCallId": "a", "agentDisplayName": "A"]),
+            ("assistant.turn_start", "worker", ["turnId": "turn-a"]),
+            ("subagent.completed", nil, ["toolCallId": "a", "agentDisplayName": "A"]),
+            ("subagent.started", "worker", ["toolCallId": "b", "agentDisplayName": "B"]),
+            ("permission.requested", "worker", ["requestId": "pending-b"]),
+        ]
+        for (index, event) in events.enumerated() {
+            reducer.consume(try copilotTestEvent(event.0, agent: event.1, data: event.2,
+                id: String(format: "A0000000-0000-0000-0000-%012X", index)))
+        }
         #expect(reducer.value().children.first?.state == .blocked)
         for row in try copilotTestReplayPressure() { reducer.consume(row) }
         let limited = reducer.value()
@@ -979,10 +987,10 @@ nonisolated func copilotTestColdStartPressure() throws -> [Data] {
 }
 
 nonisolated func copilotTestEvent(
-    _ type: String, agent: String? = nil, data: [String: Any] = [:]
+    _ type: String, agent: String? = nil, data: [String: Any] = [:], id: String = UUID().uuidString
 ) throws -> Data {
     var event: [String: Any] = [
-        "id": UUID().uuidString, "type": type, "data": data,
+        "id": id, "type": type, "data": data,
         "parentId": UUID().uuidString, "timestamp": "2026-09-12T12:00:00Z"
     ]
     if let agent { event["agentId"] = agent }

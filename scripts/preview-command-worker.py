@@ -118,6 +118,9 @@ def group_alive(group):
         return True
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # EPERM does not prove absence. Retain the guard until ESRCH does.
+        return True
 
 
 def drain_group(group):

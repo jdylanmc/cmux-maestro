@@ -2083,7 +2083,14 @@ struct CopilotObserverRegistrationTests {
             try fixture.write(try CopilotCMUXHooks.manifest(),
                               to: hooks.appendingPathComponent("\(CopilotObserverRegistration.asidePrefix)extra-\(index)"))
         }
-        #expect(throws: CMUXMaestroPreview.CopilotFileError.tooLarge) { try fixture.registration.validateLocal() }
+        #expect {
+            try fixture.registration.validateLocal()
+        } throws: { error in
+            // The integrated target compiles the shared filesystem types too.
+            // Either directory-limit path must report tooLarge, not an arbitrary error.
+            (error as? CMUXMaestroPreview.CopilotFileError) == .tooLarge
+                || (error as? CopilotFileError) == .tooLarge
+        }
         #expect(await perform(setup(fixture, runner: runner), fixture, action: .uninstall) == .uninstalled)
     }
 

@@ -2364,6 +2364,24 @@ except subprocess.TimeoutExpired:
         self.assertEqual(lock.read_bytes(), b"")
         self.assertEqual((self.app / "payload").read_text(), "old")
 
+    def test_permission_denied_group_probe_retains_guard_until_absence_is_proven(self):
+        installer = self.installer()
+        with installer.locked():
+            fd = self.ops.install_lock_fd
+            preview.command_worker.write_marker(fd, {
+                "schema": 1, "state": "running", "token": "a" * 32,
+                "supervisor": 9114, "group": 9115,
+            })
+            before = os.pread(fd, 4096, 0)
+            with patch.object(preview.command_worker.os, "killpg", side_effect=PermissionError(1, "denied")):
+                self.assertTrue(preview.command_worker.group_alive(9115))
+                with self.assertRaisesRegex(ValueError, "without proving completion"):
+                    preview.command_worker.recover_marker(fd)
+            self.assertEqual(os.pread(fd, 4096, 0), before)
+            with patch.object(preview.command_worker.os, "killpg", side_effect=ProcessLookupError):
+                preview.command_worker.recover_marker(fd)
+            self.assertEqual(os.pread(fd, 4096, 0), b"")
+
     def test_running_preview_refuses_before_replacement_without_signals(self):
         self.operation("install", self.old)
         self.ops.busy = True

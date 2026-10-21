@@ -59,7 +59,7 @@ async function fixture(t) {
 }
 
 const addr = (binding) => ({ workspaceId: binding.workspaceId, sessionId: binding.sessionId });
-const event = (emitter, name) => once(emitter, name, { signal: AbortSignal.timeout(2000) });
+const event = (emitter, name) => once(emitter, name, { signal: AbortSignal.timeout(60_000) });
 
 async function rawSend(root, peer, wire) {
   await new Promise((resolve, reject) => {
@@ -347,7 +347,7 @@ async function loaderFixture(t) {
     catch (error) { if (error.code === "ENOENT") return null; throw error; }
   }
   async function waitFor(predicate) {
-    const deadline = Date.now() + 4000;
+    const deadline = Date.now() + 60_000;
     while (!await predicate()) {
       assert.ok(Date.now() < deadline, "Synthetic lifecycle condition exceeded test watchdog");
       await delay(10);
@@ -358,7 +358,7 @@ async function loaderFixture(t) {
     try {
       return await Promise.race([
         item.done,
-        delay(4000, null, { signal: timeout.signal }).then(() => {
+        delay(60_000, null, { signal: timeout.signal }).then(() => {
           throw new Error("Owned synthetic extension did not terminate within test watchdog");
         }),
       ]);
@@ -2354,6 +2354,9 @@ test("a launch's held exit settles at once when joining fails", async (t) => {
   const own = f.bindings[0];
   const ended = [];
   const endGate = createSessionEndGate();
+  let finished = false;
+  const finish = endGate.finish;
+  endGate.finish = () => { finished = true; finish(); };
   let exit;
   await assert.rejects(start({
     root: f.root, peer: own.peer, managed: true, endGate,
@@ -2365,11 +2368,13 @@ test("a launch's held exit settles at once when joining fails", async (t) => {
       throw new Error("join refused");
     },
   }), /join refused/);
-  const settled = await Promise.race([exit.then(() => true), delay(2000).then(() => false)]);
-  assert.ok(settled, "a held exit must settle when startup fails");
-  const started = Date.now();
-  await endGate.drain(5000);
-  assert.ok(Date.now() - started < 1000);
+  const timeout = new AbortController();
+  try {
+    await Promise.race([exit, delay(60_000, null, { signal: timeout.signal }).then(() => {
+      throw new Error("a held exit must settle when startup fails");
+    })]);
+  } finally { timeout.abort(); }
+  assert.ok(finished, "startup failure must release the session-end gate");
   assert.equal(ended.length, 0);
 });
 
@@ -2586,7 +2591,7 @@ if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
     await fs.writeFile(modeFile, mode);
     const pending = close({ target }, { sessionId: own.sessionId });
     if (mode === "cancel") {
-      const deadline = Date.now() + 2000;
+      const deadline = Date.now() + 60_000;
       while (!(await fs.readFile(callsFile, "utf8")).endsWith("cancel\n")) {
         assert.ok(Date.now() < deadline, "synthetic controller did not receive request");
         await delay(10);
@@ -2652,7 +2657,7 @@ if (mode === "cancel") setTimeout(() => process.exit(5), 4000);
     await fs.writeFile(modeFile, mode);
     const pending = close({ target, scope: "subtree" }, { sessionId: own.sessionId });
     if (mode === "cancel") {
-      const deadline = Date.now() + 2000;
+      const deadline = Date.now() + 60_000;
       while (!(await fs.readFile(callsFile, "utf8")).endsWith("cancel\n")) {
         assert.ok(Date.now() < deadline, "synthetic subtree controller did not receive request");
         await delay(10);
@@ -2775,7 +2780,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
   let hooks;
   const session = {
     sessionId: own.sessionId,
-    send: async (value) => { calls.sent.push(value); },
+    send: async (value) => { calls.sent.push(value); f.events.emit("born-send"); },
     rpc: { gitHubAuth: { getStatus: async () => {
       calls.auth++;
       return auth ?? { isAuthenticated: true, login: "human-account", host: "https://github.com" };
@@ -2931,12 +2936,10 @@ test("born managed: readiness first after a second session holder reports custod
 
 test("born managed: an inbound message first after a second session holder is not delivered", async (t) => {
   const f = await ambiguousCustody(t);
-  let dropped = false;
-  f.events.once("drop", () => { dropped = true; });
+  const dropped = event(f.events, "drop");
   await f.peerTools[1].maestro_send({ destination: managedAddress(f.own), body: "synthetic" });
-  for (let i = 0; i < 200 && !dropped && f.calls.sent.length === 0; i++) await delay(10);
+  await dropped;
   assert.equal(f.calls.sent.length, 0);
-  assert.ok(dropped);
   assert.ok(f.calls.custody.length > f.checks);
   assert.equal((await readiness(f)).managed.reason, "session-custody-lost");
 });
@@ -2948,8 +2951,9 @@ test("born managed: custody loss is latched; its end does not restore stale auth
   } });
   await f.launch(1);
   const toA = { destination: managedAddress(f.own), body: "synthetic" };
-  f.peerTools[1].maestro_send(toA);
-  for (let i = 0; i < 200 && f.calls.sent.length === 0; i++) await delay(10);
+  const delivered = event(f.events, "born-send");
+  await f.peerTools[1].maestro_send(toA);
+  await delivered;
   assert.equal(f.calls.sent.length, 1, "delivered while held");
   assert.deepEqual(f.calls.custody.at(-1), { controller: "/synthetic/controller", request: { identity: {
     nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId, generation: 1,

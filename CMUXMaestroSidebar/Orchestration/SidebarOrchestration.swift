@@ -466,18 +466,21 @@ final class SidebarOrchestrationPolling {
     private var worker: Task<Void, Never>?
     private let read: Read
     private let pause: Pause
+    private let now: @Sendable () -> Date
     // Observe quiescence without exposing cancellable task handles.
     private let taskFinished: @MainActor @Sendable (UInt64) -> Void
 
     init(
         read: Read? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
+        now: @escaping @Sendable () -> Date = { Date() },
         taskFinished: @escaping @MainActor @Sendable (UInt64) -> Void = { _ in }
     ) {
         self.read = read ?? {
             try await Task.detached { try SidebarOrchestrationReader.read() }.value
         }
         self.pause = pause
+        self.now = now
         self.taskFinished = taskFinished
     }
 
@@ -490,12 +493,12 @@ final class SidebarOrchestrationPolling {
     }
 
     /// Re-titles born-managed roots from the latest Copilot observations (ADR 0022).
-    func updateObservedSessions(_ tree: SidebarCopilotTree, now: Date = Date()) {
+    func updateObservedSessions(_ tree: SidebarCopilotTree, now: Date? = nil) {
         observedTree = tree
-        retitle(now: now)
+        retitle(now: now ?? self.now())
     }
 
-    private func retitle(now: Date = Date()) {
+    private func retitle(now: Date) {
         let named = observedTree.map { projected.namingBornRoots(from: $0, now: now) }
             ?? projected.namingBornRoots(from: .waiting, now: now)
         if named != snapshot { snapshot = named }
@@ -559,8 +562,8 @@ final class SidebarOrchestrationPolling {
                         nodes: nodes, processes: raw.processes
                     )
                     self.snapshot = self.projected
-                    self.retitle()
-                    self.availability = SidebarOrchestrationReader.isStale(raw)
+                    self.retitle(now: self.now())
+                    self.availability = SidebarOrchestrationReader.isStale(raw, now: self.now())
                         ? .stale : self.snapshot.complete ? .ready : .partial
                 } catch CopilotFileError.missing {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
