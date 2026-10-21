@@ -1527,6 +1527,9 @@ private struct ManagedNodeRow: View {
     private var pet: (session: UUID, choice: String?)? {
         SidebarPresentation.managedPet(node, tree: copilotTree, now: evidenceDate)
     }
+    private var icon: (glyph: String?, color: SidebarAvatarColor?) {
+        SidebarPresentation.managedIcon(node, tree: copilotTree, now: evidenceDate)
+    }
     @State private var editingTags: UUID?
 
     private var actions: [SidebarRowActionGroup] {
@@ -1570,7 +1573,7 @@ private struct ManagedNodeRow: View {
             }
             SidebarItemIcon(
                 kind: .agent, target: SidebarPresentation.managedIconTarget(node, tree: copilotTree, now: evidenceDate),
-                title: node.title, agentGlyph: node.iconId, agentColor: node.iconColor,
+                title: node.title, agentGlyph: icon.glyph, agentColor: icon.color,
                 inspect: select, picker: $showingPicker
             )
             FocusButton(

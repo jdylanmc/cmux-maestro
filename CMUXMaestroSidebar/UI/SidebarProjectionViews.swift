@@ -62,9 +62,10 @@ struct SidebarAgentIconCardItem: Identifiable {
         _ node: SidebarOrchestrationNode, availability: SidebarOrchestrationAvailability,
         tree: SidebarCopilotTree, now: Date
     ) -> Self {
+        let icon = SidebarPresentation.managedIcon(node, tree: tree, now: now)
         var item = Self(id: "managed-\(node.id)", title: node.title, workspaceID: node.workspaceId, surfaceID: node.surfaceId,
               iconTarget: SidebarPresentation.managedIconTarget(node, tree: tree, now: now),
-              glyph: node.iconId, color: node.iconColor,
+              glyph: icon.glyph, color: icon.color,
               visual: SidebarPresentation.managedState(node, availability: availability, now: now, tree: tree),
               needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now),
               hover: .managed(node.id, generation: node.generation), inspection: .managed(node))

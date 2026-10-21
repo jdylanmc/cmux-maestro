@@ -6,6 +6,67 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test func managedRowRendersSelfSelectionAndHumanReset() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fixtures = SidebarTreeFixtures()
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        var node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic database",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.sessionID,
+            executionMode: .interactive, iconId: "md-robot", createdAt: now, updatedAt: now)
+        node.enrollment = "born"
+        let session = SidebarCopilotSession(
+            iconId: "md-database_check_outline", iconColor: "purple",
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .idle, model: nil, observedAt: now, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let polling = SidebarOrchestrationPolling(read: {
+            Issue.record("Rendering injected rows must not read live orchestration")
+            throw CancellationError()
+        })
+        let target = SidebarIconTarget.session(fixtures.sessionID)
+        func render(_ name: String, glyph: String, color: SidebarAvatarColor) throws {
+            let host = NSHostingView(rootView: ManagedHierarchyContent(
+                polling: polling, hierarchy: fixtures.hierarchy(), navigation: SidebarNavigation(),
+                layout: preferences.layout, setExpanded: { _, _ in },
+                selectedNode: .constant(nil), dismiss: { _ in }, acknowledge: { _ in },
+                selection: .constant(nil), showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree
+            ).environment(preferences).environment(\.sidebarPresentationNow, { now })
+                .environment(\._accessibilityReduceMotion, true))
+            let frame = NSRect(x: 0, y: 0, width: 300, height: 70)
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.frame = frame
+            host.layoutSubtreeIfNeeded()
+            func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+            let buttons = descendants(host).compactMap { $0 as? SidebarIconNativeButton }
+            let button = try #require(buttons.first)
+            #expect(buttons.count == 1)
+            #expect(button.accessibilityLabel()?.contains(glyph) == true)
+            #expect(button.contentTintColor == color.nativeColor)
+            #expect(!window.isVisible)
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/layout-validation/offscreen")
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try #require(bitmap.representation(using: .png, properties: [:]))
+                .write(to: folder.appendingPathComponent("agent-self-icon-\(name).png"))
+        }
+        try render("agent", glyph: "md-database_check_outline", color: .purple)
+        preferences.setIcon(.init(glyph: "md-bird", color: .teal), for: target)
+        try render("human", glyph: "md-bird", color: .teal)
+        preferences.resetIconToAgentSelection(for: target)
+        try render("reset", glyph: "md-database_check_outline", color: .purple)
+    }
+
     @Test func iconCardBadgesOnlyChangeTheIconCorner() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

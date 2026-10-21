@@ -581,6 +581,107 @@ struct SidebarOrchestrationTests {
         snapshot.namingBornRoots(from: tree, now: Date()).nodes.map(\.title)
     }
 
+    @Test func renamedBornRootUsesItsSelfSelectedIconAfterHumanReset() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = UUID(), surface = UUID(), sessionID = UUID()
+        var node = bornRoot(workspace: workspace, surface: surface, session: sessionID)
+        node.iconId = "md-robot"
+        var session = observed(sessionID, workspace: workspace, surface: surface, name: "Synthetic database",
+                               observedAt: now)
+        session.iconId = "md-database_check_outline"
+        session.iconColor = "purple"
+        let evidence = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let named = try #require(snapshot.namingBornRoots(from: evidence, now: now).nodes.first)
+        let item = SidebarAgentIconCardItem.managed(named, availability: .ready, tree: evidence, now: now)
+        #expect(item.title == "Synthetic database")
+        #expect(item.iconTarget == .session(sessionID))
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        func appearance() -> SidebarIconChoice {
+            SidebarItemIcon.appearance(
+                kind: .agent, target: item.iconTarget, agentGlyph: item.glyph, agentColor: item.color,
+                icons: preferences.icons, agentStyle: .maestro, terminalStyle: .ghost
+            ).choice
+        }
+        let agent = SidebarIconChoice(glyph: "md-database_check_outline", color: .purple)
+        #expect(appearance() == agent)
+        let human = SidebarIconChoice(glyph: "md-bird", color: .teal)
+        preferences.setIcon(human, for: .session(sessionID))
+        #expect(appearance() == human)
+        preferences.resetIconToAgentSelection(for: .session(sessionID))
+        #expect(appearance() == agent)
+        #expect(fixture.preferences().icons.overrides[SidebarIconTarget.session(sessionID).key] == nil)
+        #expect(node.iconId == "md-robot")
+    }
+
+    @Test(arguments: [true, false])
+    func launchedAndObservedSessionsShareSelfSelection(bothComponents: Bool) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = UUID(), surface = UUID(), sessionID = UUID()
+        let node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: UUID(), role: "worker", label: "Launched helper",
+            workspaceId: workspace, surfaceId: surface, generation: 2, phase: "turn-running",
+            availability: "busy", copilotSessionId: sessionID, executionMode: .interactive,
+            iconId: "md-bird", iconColor: .teal, createdAt: now, updatedAt: now)
+        var session = observed(sessionID, workspace: workspace, surface: surface, name: "Different name",
+                               observedAt: now)
+        session.iconId = bothComponents ? "md-database_check_outline" : nil
+        session.iconColor = "purple"
+        let evidence = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let managed = SidebarAgentIconCardItem.managed(node, availability: .ready, tree: evidence, now: now)
+        #expect(managed.glyph == (bothComponents ? "md-database_check_outline" : "md-bird"))
+        #expect(managed.color == .purple)
+        let plain = SidebarAgentIconCardItem.session(session, title: "Renamed surface")
+        #expect(plain.iconTarget == managed.iconTarget)
+        #expect(plain.glyph == session.iconId)
+        #expect(plain.color == .purple)
+        session.iconId = "md-database_check_outline"
+        session.iconColor = nil
+        let glyphOnly = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let selection = SidebarPresentation.managedIcon(node, tree: glyphOnly, now: now)
+        #expect(selection.glyph == "md-database_check_outline")
+        #expect(selection.color == .teal)
+    }
+
+    @Test(arguments: ["unbound", "stale-details", "denied", "other-session", "other-surface",
+                      "other-workspace", "duplicate", "dead", "stale-observation", "lost", "ended"])
+    func managedIconUsesOnlyEligibleExactSessionAppearance(scenario: String) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = UUID(), surface = UUID(), sessionID = UUID()
+        var node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic database",
+            workspaceId: workspace, surfaceId: surface, generation: 1,
+            phase: scenario == "ended" ? "process-disappeared" : "turn-running",
+            availability: "busy", copilotSessionId: sessionID, executionMode: .interactive,
+            iconId: "md-bird", iconColor: .teal, createdAt: now, updatedAt: now)
+        node.enrollment = "born"
+        var evidence = SidebarCopilotTree(availability: .ready, sessions: [], issues: [], generatedAt: now)
+        evidence.managedDetails[sessionID] = .init(
+            iconId: "md-database_check_outline", iconColor: "purple",
+            readAt: scenario == "stale-details" ? now.addingTimeInterval(-60) : now)
+        if scenario == "denied" { evidence.issues = [.permissionDenied] }
+        if scenario == "other-session" {
+            evidence.managedDetails[UUID()] = evidence.managedDetails.removeValue(forKey: sessionID)
+        }
+        if ["other-surface", "other-workspace", "duplicate", "dead", "stale-observation", "lost"].contains(scenario) {
+            var session = observed(
+                sessionID, workspace: scenario == "other-workspace" ? UUID() : workspace,
+                surface: scenario == "other-surface" ? UUID() : surface, name: node.label,
+                liveness: scenario == "dead" ? .dead : .alive,
+                observedAt: scenario == "stale-observation" ? now.addingTimeInterval(-60) : now)
+            session.iconId = "md-database_check_outline"
+            session.iconColor = "purple"
+            if scenario == "lost" { evidence.statusSessions = [session] }
+            else { evidence.sessions = scenario == "duplicate" ? [session, session] : [session] }
+        }
+        let item = SidebarAgentIconCardItem.managed(node, availability: .ready, tree: evidence, now: now)
+        #expect(item.glyph == (scenario == "unbound" ? "md-database_check_outline" : "md-bird"))
+        #expect(item.color == (scenario == "unbound" ? .purple : .teal))
+    }
+
     @Test func bornRootTakesItsExactSessionNameUnderADR0022Rules() throws {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let born = bornRoot(workspace: workspace, surface: surface, session: session)
