@@ -296,8 +296,8 @@
     "statements": {
       "observedAt: Date(), nodes: [], childrenComplete: true, treeDegraded: false,": 1,
       "return SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: Date())": 1,
-      "closeEvents[phase] = closeStarted.duration(to: instant)": 1,
-      "if closeStarted == nil { closeStarted = ContinuousClock.now }": 1,
+      "let elapsed = closeStarted.duration(to: instant)": 1,
+      "closeStarted = ContinuousClock.now": 1,
       "let instant = ContinuousClock.now": 1
     }
   },

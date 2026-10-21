@@ -23,7 +23,10 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   connection invalidation. The shared-scene test still sends its final snapshot
   during teardown. Synthetic endpoint and publication durations distinguish XPC
   propagation from actor scheduling; these measurements are diagnostics, not
-  speed assertions. The earlier hosted failure's exported diagnostics exceeded
+  speed assertions. Each of the two teardown tests writes five small immutable
+  phase JSON files as events occur. CI always uploads them separately as
+  `multiwindow-teardown-phases`, independent of xcresult export and its size cap.
+  The earlier hosted failure's exported diagnostics exceeded
   the artifact cap, so they do not establish which stage stalled.
 - A denied installer process-group probe is conservatively treated as present.
   Only proven absence permits recovery; a transient permission refusal cannot
