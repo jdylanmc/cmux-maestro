@@ -20,7 +20,9 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   await the buffered event after closing stdin, including when an assertion throws.
   They never call Foundation's synchronous `Process.waitUntilExit()`: a local
   reproduction of #302 sampled that call stuck in its run loop after the setup
-  supervisor had already completed. A controlled missing-notification regression
+  supervisor had already completed. The mutation-gate negative control uses the
+  same bounded exit helper: repeated-suite sampling also caught its old synchronous
+  wait stalled. A controlled missing-notification regression
   advances an injected deadline; a second regression delivers termination before
   cleanup starts. No cleanup coverage was removed.
   Each cleanup phase also has an executor-independent 30-second watchdog, with

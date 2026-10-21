@@ -850,10 +850,11 @@ struct CopilotSetupTests {
             try? FileManager.default.removeItem(at: directory)
         }
 
-        try await withUnrelatedProcess(watchdog: watchdog) { unrelated in
+        let exited = try await withUnrelatedProcess(watchdog: watchdog) { unrelated in
             try await verifyCleanup(cancel: cancel, delayStartup: delayStartup, launchDelay: launchDelay,
                                     fixture: fixture, unrelated: unrelated, watchdog: watchdog, observation: observation)
         }
+        #expect(exited, "Unrelated process exit observation exceeded its bound")
     }
 
     private func verifyCleanup(
@@ -949,24 +950,40 @@ struct CopilotSetupTests {
 
     private func withUnrelatedProcess(
         watchdog: MetadataProcessTestWatchdog? = nil,
+        waitForExit: (@Sendable (AsyncStream<Void>) async -> Bool)? = nil,
+        waitForTimeout: (@Sendable (Duration) async throws -> Void)? = nil,
+        body: (Process) async throws -> Void
+    ) async throws -> Bool {
+        let process = Process()
+        let input = Pipe()
+        defer { try? input.fileHandleForWriting.close() }
+        process.executableURL = URL(fileURLWithPath: "/bin/cat")
+        process.standardInput = input
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        return try await withTestProcess(
+            process, watchdog: watchdog,
+            waitForExit: waitForExit ?? { exited in
+                for await _ in exited { return true }
+                return false
+            },
+            waitForTimeout: waitForTimeout,
+            stop: { _ in try input.fileHandleForWriting.close() },
+            body: body)
+    }
+
+    private func withTestProcess(
+        _ process: Process, watchdog: MetadataProcessTestWatchdog? = nil,
         waitForExit: @escaping @Sendable (AsyncStream<Void>) async -> Bool = { exited in
             for await _ in exited { return true }
             return false
         },
         waitForTimeout: (@Sendable (Duration) async throws -> Void)? = nil,
+        stop: (Bool) throws -> Void,
         body: (Process) async throws -> Void
-    ) async throws {
-        let process = Process()
-        let input = Pipe()
+    ) async throws -> Bool {
         let exited = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        defer {
-            try? input.fileHandleForWriting.close()
-            exited.continuation.finish()
-        }
-        process.executableURL = URL(fileURLWithPath: "/bin/cat")
-        process.standardInput = input
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        defer { exited.continuation.finish() }
         process.terminationHandler = { _ in
             exited.continuation.yield(())
             exited.continuation.finish()
@@ -979,16 +996,16 @@ struct CopilotSetupTests {
         } catch {
             result = .failure(error)
         }
-        watchdog?.begin("unrelated-cleanup")
-        try input.fileHandleForWriting.close()
+        watchdog?.begin("fixture-process-cleanup")
+        if case .success = result { try stop(true) } else { try stop(false) }
         let stopped: Bool?
         if let waitForTimeout {
             stopped = await bounded(waitForTimeout: waitForTimeout) { await waitForExit(exited.stream) }
         } else {
             stopped = await bounded { await waitForExit(exited.stream) }
         }
-        #expect(stopped == true, "Unrelated process exit observation exceeded its bound")
         try result.get()
+        return stopped == true
     }
 
     @Test func unrelatedCleanupBoundsMissingExitObservation() async throws {
@@ -1001,18 +1018,14 @@ struct CopilotSetupTests {
             deadline.continuation.finish()
         }
         let task = Task {
-            try await withKnownIssue("A missing termination notification must fail at the cleanup bound") {
-                try await withUnrelatedProcess(waitForExit: { _ in
-                    entered.continuation.yield(())
-                    for await _ in never.stream {}
-                    return true
-                }, waitForTimeout: { _ in
-                    for await _ in deadline.stream { break }
-                }) { process in
-                    #expect(process.isRunning)
-                }
-            } matching: { issue in
-                issue.comments.contains { $0.rawValue == "Unrelated process exit observation exceeded its bound" }
+            try await withUnrelatedProcess(waitForExit: { _ in
+                entered.continuation.yield(())
+                for await _ in never.stream {}
+                return true
+            }, waitForTimeout: { _ in
+                for await _ in deadline.stream { break }
+            }) { process in
+                #expect(process.isRunning)
             }
         }
         try #require(await bounded {
@@ -1025,7 +1038,7 @@ struct CopilotSetupTests {
         let returned = await bounded { await task.result }
         never.continuation.finish()
         let drained = try #require(await bounded { await task.result })
-        try drained.get()
+        #expect(try drained.get() == false)
         #expect(returned != nil)
     }
 
@@ -1034,7 +1047,7 @@ struct CopilotSetupTests {
         enum BodyFailure: Error { case expected }
         var observed: Process?
         do {
-            try await withUnrelatedProcess { process in
+            _ = try await withUnrelatedProcess { process in
                 observed = process
                 if exitBeforeCleanup {
                     let delivered = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
@@ -1059,6 +1072,11 @@ struct CopilotSetupTests {
     }
 
     @Test func mutationGateDetectsLiveWriterWithoutCleanup() async throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let watchdog = try MetadataProcessTestWatchdog(
+            directory: repository.appendingPathComponent(".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
+            testIdentity: "mutationGateDetectsLiveWriterWithoutCleanup()")
+        defer { watchdog.finish() }
         let fixture = try gatedInstallerFixture()
         let directory = fixture.directory
         defer {
@@ -1076,20 +1094,21 @@ struct CopilotSetupTests {
         writer.standardInput = FileHandle.nullDevice
         writer.standardOutput = FileHandle.nullDevice
         writer.standardError = FileHandle.nullDevice
-        try writer.run()
-        defer {
-            if writer.isRunning { kill(writer.processIdentifier, SIGKILL) }
-            writer.waitUntilExit()
+        let exited = try await withTestProcess(writer, watchdog: watchdog, stop: { succeeded in
+            if !succeeded, writer.isRunning { kill(writer.processIdentifier, SIGKILL) }
+        }) { writer in
+            watchdog.begin("negative-control-readiness")
+            try #require(await waitForGatedWriter(in: directory))
+            #expect(try recordedProcessValue("child.pid", in: directory) == writer.processIdentifier)
+            try #require(HookProcess.current(writer.processIdentifier) != nil)
+            try fixture.reader.close()
+            #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
+            let release = releaseMutationGate(fixture.writer)
+            #expect(release.bytes == 8 && release.error == 0, "The negative-control writer must receive the gate")
+            watchdog.begin("negative-control-completion")
+            #expect(try String(decoding: mutationCompletion(fixture.completion, in: directory), as: UTF8.self) == "mutated")
         }
-        try #require(await waitForGatedWriter(in: directory))
-        #expect(try recordedProcessValue("child.pid", in: directory) == writer.processIdentifier)
-        try #require(HookProcess.current(writer.processIdentifier) != nil)
-        try fixture.reader.close()
-        #expect(!FileManager.default.fileExists(atPath: directory.appendingPathComponent("late-mutation").path))
-        let release = releaseMutationGate(fixture.writer)
-        #expect(release.bytes == 8 && release.error == 0, "The negative-control writer must receive the gate")
-        #expect(try String(decoding: mutationCompletion(fixture.completion, in: directory), as: UTF8.self) == "mutated")
-        writer.waitUntilExit()
+        try #require(exited, "Negative-control process exit observation exceeded its bound")
         #expect(writer.terminationStatus == 0)
         #expect(try String(contentsOf: directory.appendingPathComponent("late-mutation"), encoding: .utf8) == "forbidden")
     }
