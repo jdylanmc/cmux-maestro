@@ -191,6 +191,14 @@ SEVENTEEN_VALIDATION_COMMANDS = {
 }
 
 
+NATIVE_CHECKOUT = "      - uses: actions/checkout@v4\n        with:\n          fetch-depth: 0\n"
+NATIVE_TEST_STEP = (
+    "      - name: Run integrated Swift tests\n"
+    "        env:\n          CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ github.token }}\n"
+    "        run: ./scripts/test.sh\n"
+)
+
+
 class IntegratedTestScopeTests(unittest.TestCase):
     def setUp(self):
         self.directory = ROOT / ".build/metadata-tests" / str(uuid.uuid4())
@@ -200,6 +208,40 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.directory)
+
+    def test_test_sh_default_and_focused_dispatch_under_system_bash(self):
+        scripts = self.directory / "scripts"
+        scripts.mkdir()
+        (scripts / "test.sh").write_bytes((ROOT / "scripts/test.sh").read_bytes())
+        for name in ("fetch-sdk.sh", "build-preference-test-client.sh"):
+            file = scripts / name
+            file.write_text("#!/bin/bash\nexit 0\n")
+            file.chmod(0o755)
+        binary = self.directory / "bin"
+        binary.mkdir()
+        records = self.directory / "commands.jsonl"
+        for name in ("python3", "xcodebuild"):
+            file = binary / name
+            file.write_text(f"#!{sys.executable}\nimport json,os,sys\n"
+                            "with open(os.environ['DISPATCH_RECORD'], 'a') as f:\n"
+                            "    f.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+                            "print('{}')\n")
+            file.chmod(0o755)
+        for options in ([], ["--focused", "ExampleTests", "--repeat", "2"]):
+            with self.subTest(options=options):
+                records.write_text("")
+                result = subprocess.run(
+                    ["/bin/bash", str(scripts / "test.sh"), *options], capture_output=True, text=True,
+                    env={**os.environ, "PATH": str(binary) + ":" + os.environ["PATH"],
+                         "DISPATCH_RECORD": str(records)},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                commands = [json.loads(line) for line in records.read_text().splitlines()]
+                dispatch = next(command for command in commands
+                                if command and command[0].endswith("run-integrated-test-scopes.py"))
+                separator = dispatch.index("--")
+                self.assertEqual(dispatch[3:separator], options)
+                self.assertEqual(dispatch[separator + 1], "xcodebuild")
 
     @staticmethod
     def report(entries):
@@ -232,7 +274,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         }]}
 
     def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0,
-                inventory=None, enumeration_exit=0):
+                inventory=None, enumeration_exit=0, guide_environment=None, guide_exception=None):
         # The default built inventory mirrors the fixture; inventory tests pass an explicit enumeration.
         inventory = (self.enumeration(self.reported_identities(isolated, remaining))
                      if inventory is None else inventory)
@@ -255,8 +297,11 @@ class IntegratedTestScopeTests(unittest.TestCase):
             values = isolated if scope == "isolated" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
         # These fixtures isolate the existing partition/count policy, not native guide execution.
-        with patch("builtins.print"), patch.dict(os.environ), \
-                patch.object(scopes, "produce_guide_acceptance", return_value={"exitCode": guide_exit, "environment": {}}), \
+        with patch("builtins.print") as printed, patch.dict(os.environ), \
+                patch.object(scopes, "produce_guide_acceptance", side_effect=guide_exception, return_value={
+                    "exitCode": guide_exit, "environment": guide_environment or {},
+                    "error": "Synthetic PR source-parent mismatch" if guide_exit else None,
+                }), \
                 patch.object(scopes, "revalidate_guide_acceptance",
                              side_effect=ValueError("Synthetic native producer failed") if guide_exit else None), \
                 patch.object(scopes, "validate_original_guide_cases"):
@@ -265,18 +310,52 @@ class IntegratedTestScopeTests(unittest.TestCase):
             else:
                 os.environ[BENCHMARK_FLAG] = benchmark_flag
             result = scopes.run(["xcodebuild", "-scheme", "CMUXMaestroPreview"], self.directory / "results", runner)
+        self.output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
         return result, json.loads((self.directory / "results/coverage.json").read_text())
 
-    def test_native_producer_failure_preserves_both_original_integrated_actions(self):
+    def test_native_producer_failure_reports_its_cause_without_running_dependent_consumers(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
                                         self.report([("OtherSuite/test()", "Passed")]), guide_exit=65)
         self.assertEqual(result, 1)
         self.assertEqual(evidence["guideAcceptance"]["exitCode"], 65)
-        self.assertIn("guideAcceptanceError", evidence)
+        self.assertEqual(evidence["guideAcceptanceError"], "Synthetic PR source-parent mismatch")
+        self.assertIn("Synthetic PR source-parent mismatch", self.output)
+        self.assertEqual(evidence["blockedStage"], "guide-acceptance")
+        self.assertFalse(evidence["passed"])
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 0)
+        self.assertNotIn("remainingCounts", evidence)
+
+    def test_native_producer_exception_keeps_the_original_error(self):
+        result, evidence = self.execute(
+            self.report([(scopes.TEST, "Passed")]), self.report([("OtherSuite/test()", "Passed")]),
+            guide_exception=ValueError("Synthetic evidence document refused"))
+        self.assertEqual(result, 1)
+        self.assertEqual(evidence["guideAcceptanceError"], "Synthetic evidence document refused")
+        self.assertIn("Synthetic evidence document refused", self.output)
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 0)
+
+    def test_successful_producer_forwards_fresh_evidence_to_both_original_actions(self):
+        expected = {
+            "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": "/synthetic/guide-acceptance",
+            "CMUX_GUIDE_ACCEPTANCE_INVOCATION": str(uuid.uuid4()),
+            "CMUX_GUIDE_ACCEPTANCE_HEAD": "a" * 40,
+            "CMUX_GUIDE_ACCEPTANCE_TREE": "b" * 40,
+            "CMUX_GUIDE_ACCEPTANCE_STATUSES_SHA256": "c" * 64,
+            "CMUX_GUIDE_ACCEPTANCE_RECHECK_SHA256": "d" * 64,
+        }
+        with patch.dict(os.environ, {"TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_DIRECTORY": "stale",
+                                     "CMUX_GUIDE_ACCEPTANCE_UNRELATED": "stale"}):
+            result, evidence = self.execute(
+                self.report([(scopes.TEST, "Passed")]), self.report([("OtherSuite/test()", "Passed")]),
+                guide_environment=expected)
+        self.assertEqual(result, 0)
+        self.assertTrue(evidence["passed"])
         self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
-        self.assertEqual(evidence["remainingCounts"]["passedTests"], 1)
         for environment in self.build_environments[1:]:
-            self.assertFalse(any(key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_") for key in environment))
+            self.assertEqual({key: value for key, value in environment.items()
+                              if key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_")},
+                             {"TEST_RUNNER_" + key: value for key, value in expected.items()})
+            self.assertFalse(any(key.startswith("CMUX_GUIDE_ACCEPTANCE_") for key in environment))
 
     def test_stale_acceptance_aliases_never_reach_original_validators(self):
         original = {
@@ -413,7 +492,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertIsNotNone(environment)
 
     def test_allowlisted_disabled_tests_and_skips_have_reasons(self):
-        self.assertEqual(set(scopes.INTENTIONAL_SKIPS), {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST})
+        self.assertEqual(set(scopes.INTENTIONAL_SKIPS),
+                         {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST} | set(scopes.LOCAL_UI_TESTS))
         self.assertTrue(all(reason.strip() for reason in scopes.INTENTIONAL_SKIPS.values()))
         first = scopes.TARGET + "/OtherSuite/first()"
         benchmark = scopes.TARGET + "/" + BENCHMARK_TEST
@@ -424,6 +504,18 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(result, 0)
         [skip] = evidence["remainingCounts"]["skippedTestsByIdentity"]
         self.assertEqual(skip["allowlistReason"], scopes.INTENTIONAL_SKIPS[benchmark])
+
+    def test_local_acceptance_skips_are_exact_and_cannot_hide_enabled_failures(self):
+        identity = next(iter(scopes.LOCAL_UI_TESTS))
+        report = self.report([(identity, "Skipped"), ("Other/test()", "Passed")])
+        counts = scopes.validate_remaining(*report, benchmark_enabled=False)
+        self.assertEqual(counts["skippedTestsByIdentity"][0]["policyReason"], "opt-in-local-ui-acceptance")
+        with self.assertRaisesRegex(ValueError, "Unattributed or enabled"):
+            scopes.validate_remaining(*report, benchmark_enabled=False, local_ui_enabled=True)
+        with self.assertRaisesRegex(ValueError, "Local UI acceptance"):
+            scopes.hosted_test_environment({"GITHUB_ACTIONS": "true", scopes.LOCAL_UI_FLAG: "1"})
+        environment = scopes.hosted_test_environment({scopes.LOCAL_UI_FLAG: "1"})
+        self.assertEqual(environment["TEST_RUNNER_" + scopes.LOCAL_UI_FLAG], "1")
 
     def test_failed_isolated_regression_still_runs_complement_and_remains_red(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Failed")]),
@@ -650,6 +742,47 @@ class IntegratedTestScopeTests(unittest.TestCase):
                        "-test-iterations", "-only-test-configuration", "-resultBundlePath", "-xctestrun"):
             with self.subTest(option=option), self.assertRaises(ValueError):
                 scopes.validate_arguments(["xcodebuild", option])
+
+    def test_focused_diagnostics_bound_runs_and_reject_nonpassing_parameter_executions(self):
+        for status in ("Passed", "Skipped", "Expected Failure"):
+            with self.subTest(status=status):
+                summary, tree = self.report([("OtherSuite/parameterized(value:)", "Passed")])
+                summary["devicesAndConfigurations"] = [{
+                    "passedTests": 1 + int(status == "Passed"), "failedTests": 0,
+                    "skippedTests": int(status == "Skipped"),
+                    "expectedFailures": int(status == "Expected Failure")}]
+                tree["testNodes"][0]["children"][0]["children"] = [
+                    {"nodeType": "Arguments", "name": name, "result": result, "children": [
+                        {"nodeType": "Test Case Run", "name": "Run", "result": result}]}
+                    for name, result in (("one", "Passed"), ("two", status))]
+                directory = self.directory / status
+                with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}), \
+                        patch.object(scopes, "read_result", return_value=(summary, tree)), \
+                        patch("builtins.print"):
+                    runner = lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0)
+                    if status == "Passed":
+                        self.assertEqual(scopes.run_focused(["xcodebuild"], directory, ["OtherSuite"], 2, runner), 0)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "failed or skipped"):
+                            scopes.run_focused(["xcodebuild"], directory, ["OtherSuite"], 2, runner)
+                evidence = json.loads((directory / "focused.json").read_text())
+                self.assertFalse(evidence["requiredCoverage"])
+                self.assertEqual(len(evidence["runs"]), 2 if status == "Passed" else 1)
+
+    def test_focused_diagnostics_refuse_ci_missing_selectors_and_invalid_run_counts(self):
+        for environment, selectors, repeats, error in (
+            ("true", ["OtherSuite"], 1, "required CI"),
+            ("false", ["OtherSuite"], 0, "repeat count"),
+            ("false", ["OtherSuite"], 101, "repeat count"),
+            ("false", ["MissingSuite"], 1, "did not execute"),
+        ):
+            with self.subTest(environment=environment, repeats=repeats), \
+                    patch.dict(os.environ, {"GITHUB_ACTIONS": environment}), \
+                    patch.object(scopes, "read_result",
+                                 return_value=self.report([("OtherSuite/test()", "Passed")])):
+                with self.assertRaisesRegex(ValueError, error):
+                    scopes.run_focused(["xcodebuild"], self.directory / str(uuid.uuid4()), selectors, repeats,
+                                      lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0))
 
     def test_actual_xcresult_identifier_url_is_bound_to_expected_method(self):
         summary, tree = self.report([(scopes.TEST, "Passed")])
@@ -1137,15 +1270,18 @@ class BuildMetadataTests(unittest.TestCase):
             run_steps = [step for step in job_steps(jobs[job]) if "\n        run:" in step]
             self.assertEqual(len(run_steps), len(VALIDATION_JOBS[job]))
             for step in run_steps:
-                self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
+                if job == "validate-native":
+                    self.assertEqual(step, NATIVE_TEST_STEP, "Only the exact read-token forwarding is allowed.")
+                else:
+                    self.assertEqual(len(step.splitlines()), 2, "Validation steps must not gain skip/failure overrides.")
             # Independent: each needs only the classifier, so a failure in either job never skips the
             # other's suites; its only condition is the sanctioned selection flag (#194).
             self.assertEqual(re.findall(r"^    needs: (.+)$", jobs[job], re.MULTILINE), [f"[{CLASSIFIER_JOB}]"], job)
             self.assertEqual(re.findall(r"^    if: (.+)$", jobs[job], re.MULTILINE), [selection_condition(job)], job)
         self.assert_runner_placement(workflow)
         steps = job_steps(jobs["validate-native"])
-        self.assertEqual(steps[0], "      - uses: actions/checkout@v4\n")
-        self.assertEqual(steps[1], "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n",
+        self.assertEqual(steps[0], NATIVE_CHECKOUT)
+        self.assertEqual(steps[1], NATIVE_TEST_STEP,
                          "Integrated Swift tests start right after checkout (#196).")
         self.assertNotIn("continue-on-error", workflow)
 
@@ -1237,7 +1373,7 @@ class BuildMetadataTests(unittest.TestCase):
         unsigned = (ROOT / "scripts/build-unsigned.sh").read_text()
         self.assertIn('DERIVED_DATA="$ROOT/.build/tests"', test_sh)
         self.assertIn('DERIVED_DATA="$ROOT/.build/unsigned"', unsigned)
-        checkout = "      - uses: actions/checkout@v4\n      - name: Run integrated Swift tests\n"
+        checkout = NATIVE_CHECKOUT + "      - name: Run integrated Swift tests\n"
         self.assertIn(checkout, workflow)
         restore = ("      - uses: actions/checkout@v4\n"
                    "      - uses: actions/cache@v4\n        with:\n          path: .build/tests\n"
@@ -1275,7 +1411,7 @@ class BuildMetadataTests(unittest.TestCase):
 
     def test_ci_split_job_guards_reject_order_coverage_and_dependency_drift(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-        test_sh = "      - name: Run integrated Swift tests\n        run: ./scripts/test.sh\n"
+        test_sh = NATIVE_TEST_STEP
         hook = "      - name: Verify compiled hooks fail open\n        run: ./scripts/test-copilot-hook.sh\n"
         setup = "      - name: Verify Settings guide and setup process isolation\n        run: ./scripts/test-copilot-setup.sh\n"
         beats = "        run: python3 scripts/test-beats.py\n"
@@ -1288,6 +1424,11 @@ class BuildMetadataTests(unittest.TestCase):
         setup_upload = workflow[workflow.index("      - name: Upload setup process isolation evidence\n"):]
         setup_upload = setup_upload[:setup_upload.index("retention-days: 14\n") + len("retention-days: 14\n")]
         validation_mutations = {
+            "shallow native ancestry": workflow.replace(
+                NATIVE_CHECKOUT + test_sh, NATIVE_CHECKOUT.replace("fetch-depth: 0", "fetch-depth: 1") + test_sh),
+            "foreign lookup token": workflow.replace(
+                "CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ github.token }}",
+                "CMUX_GUIDE_ACCEPTANCE_API_TOKEN: ${{ secrets.OTHER_TOKEN }}"),
             "native needs contracts": workflow.replace(
                 "  validate-native:\n", "  validate-native:\n    needs: [validate-contracts]\n"),
             "contracts needs native": workflow.replace(
@@ -1402,6 +1543,9 @@ class BuildMetadataTests(unittest.TestCase):
         "      - name: Verify suite classifier\n"
         "        if: always()\n"
         "        run: python3 scripts/test-ci-classify.py\n"
+        "      - name: Reject new timing-sensitive tests\n"
+        "        if: always()\n"
+        "        run: python3 scripts/test-test-timing.py && python3 scripts/check-test-timing.py\n"
         "      - name: Evaluate required suites\n"
         "        if: always()\n"
         "        env:\n"
@@ -1535,7 +1679,8 @@ class BuildMetadataTests(unittest.TestCase):
         contract = json.loads((ROOT / "scripts/ci-required-suites.json").read_text())
         self.assert_suite_selection(workflow, contract)
         mutations = {
-            "shallow classifier checkout": ("          fetch-depth: 0\n", "          fetch-depth: 1\n"),
+            "shallow classifier checkout": ("          fetch-depth: 0\n      - name: Classify changed files\n",
+                                            "          fetch-depth: 1\n      - name: Classify changed files\n"),
             "base inlined into run": ("        run: python3 scripts/ci-classify.py\n",
                                       "        run: python3 scripts/ci-classify.py "
                                       "${{ github.event.pull_request.base.sha }}\n"),

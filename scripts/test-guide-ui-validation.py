@@ -3,6 +3,7 @@
 
 import copy
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -35,7 +36,7 @@ class GuideModuleImportTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             for name in ("run-integrated-test-scopes.py", "run-guide-ui-validation.py",
-                         "verify-build-metadata.py", "guide-acceptance-evidence.py"):
+                         "verify-build-metadata.py", "guide-acceptance-evidence.py", "local-ui-acceptance.json"):
                 shutil.copyfile(ROOT / "scripts" / name, scripts / name)
             result = subprocess.run([
                 sys.executable, "-I", "-c",
@@ -49,6 +50,100 @@ class GuideModuleImportTests(unittest.TestCase):
 
 class GuideSourceParentTests(unittest.TestCase):
     """Actual disposable Git objects and shallow boundary; no native build or execution."""
+
+    def test_current_base_lookup_binds_repository_number_candidate_and_response_bound(self):
+        candidate, base = "a" * 40, "b" * 40
+        environment = {"GITHUB_REPOSITORY": "example/project", "CMUX_GUIDE_ACCEPTANCE_API_TOKEN": "fixture-token"}
+        document = {"number": 7, "head": {"sha": candidate},
+                    "base": {"sha": base, "repo": {"full_name": "example/project"}}}
+        for fault in (None, "number", "candidate", "repository", "base", "oversized"):
+            with self.subTest(fault=fault):
+                value = copy.deepcopy(document)
+                if fault == "number":
+                    value["number"] = 8
+                elif fault == "candidate":
+                    value["head"]["sha"] = "c" * 40
+                elif fault == "repository":
+                    value["base"]["repo"]["full_name"] = "example/other"
+                elif fault == "base":
+                    value["base"]["sha"] = "not-a-commit"
+                data = b" " * 1_048_577 if fault == "oversized" else json.dumps(value).encode()
+
+                def opener(request, *, timeout):
+                    self.assertEqual(request.full_url, "https://api.github.com/repos/example/project/pulls/7")
+                    self.assertEqual(request.get_header("Authorization"), "Bearer " + environment["CMUX_GUIDE_ACCEPTANCE_API_TOKEN"])
+                    self.assertGreater(timeout, 0)
+                    return io.BytesIO(data)
+
+                if fault is None:
+                    self.assertEqual(probe.current_pr_base(environment, 7, candidate, opener=opener), base)
+                else:
+                    with self.assertRaises(ValueError):
+                        probe.current_pr_base(environment, 7, candidate, opener=opener)
+        self.assertNotIn("CMUX_GUIDE_ACCEPTANCE_API_TOKEN", probe.build_environment(environment))
+        self.assertNotIn("CMUX_GUIDE_ACCEPTANCE_API_TOKEN", probe.scopes.hosted_test_environment(environment))
+
+    def test_base_movement_and_retarget_accept_only_proven_base_and_exact_candidate(self):
+        with tempfile.TemporaryDirectory(prefix="cmux-guide-base-movement-") as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+            environment = {**os.environ, "GIT_AUTHOR_NAME": "Fixture", "GIT_COMMITTER_NAME": "Fixture",
+                           "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+                           "GIT_COMMITTER_EMAIL": "fixture@example.invalid"}
+
+            def git(*args, input=None):
+                return subprocess.check_output(["git", "-C", str(repository), *args], input=input,
+                                               text=True, stderr=subprocess.PIPE, env=environment).strip()
+
+            git("init", "--quiet")
+            tree = git("mktree", input="")
+            base = git("commit-tree", tree, input="event base\n")
+            advanced = git("commit-tree", tree, "-p", base, input="advanced base\n")
+            former_target = git("commit-tree", tree, "-p", base, input="former target\n")
+            unrelated = git("commit-tree", tree, input="unrelated root\n")
+            candidate = git("commit-tree", tree, "-p", base, input="candidate\n")
+            for name, actual_base, event_base, event_head, current_base, accepted in (
+                ("advanced", advanced, base, candidate, unrelated, True),
+                ("retargeted", advanced, former_target, candidate, advanced, True),
+                ("wrong-candidate", advanced, base, "f" * 40, advanced, False),
+                ("unrelated-parent", unrelated, base, candidate, advanced, False),
+            ):
+                with self.subTest(name=name):
+                    merge = git("commit-tree", tree, "-p", actual_base, "-p", candidate, input=name + "\n")
+                    git("update-ref", "HEAD", merge)
+                    invocation = str(uuid.uuid4())
+                    output = root / ("scopes-" + invocation) / "guide-acceptance"
+                    event = root / "event.json"
+                    event.write_text(json.dumps({"number": 7, "pull_request": {
+                        "base": {"sha": event_base}, "head": {"sha": event_head}}}))
+                    commands = []
+
+                    def runner(command, **kwargs):
+                        commands.append(command)
+                        if command[0] != "git":
+                            raise subprocess.CalledProcessError(91, command)
+                        return subprocess.run(command, cwd=repository, env=kwargs["env"],
+                                              text=True, capture_output=True)
+
+                    with patch("builtins.print"), patch.object(
+                        probe, "current_pr_base", return_value=current_base, create=True
+                    ) as lookup:
+                        result = probe.run(False, output, acceptance=True, invocation=invocation, runner=runner,
+                                           environment={"DEVELOPER_DIR": probe.DEVELOPER, "GITHUB_ACTIONS": "true",
+                                                        "RUNNER_ENVIRONMENT": "github-hosted", "GITHUB_SHA": merge,
+                                                        "GITHUB_EVENT_NAME": "pull_request",
+                                                        "GITHUB_EVENT_PATH": str(event)})
+                    receipt = json.loads((output / "evidence.json").read_text())
+                    self.assertEqual(result, 1, "Only source preflight executes, never a native producer.")
+                    self.assertEqual("sourceAttribution" in receipt, accepted)
+                    self.assertEqual(any(command[0] == "/usr/bin/plutil" for command in commands), accepted)
+                    self.assertEqual(receipt["sourceAttributionAttempt"]["expectedParents"], [event_base, event_head])
+                    self.assertEqual(receipt["sourceAttributionAttempt"]["actualParents"], [actual_base, candidate])
+                    if name in {"advanced", "wrong-candidate"}:
+                        lookup.assert_not_called()
+                    if name == "retargeted":
+                        lookup.assert_called_once()
 
     def test_shallow_and_full_real_parents_bind_exact_order_tree_and_workflow(self):
         with tempfile.TemporaryDirectory(prefix="cmux-guide-parents-") as directory:
@@ -692,6 +787,8 @@ class GuideUIValidationTests(unittest.TestCase):
 
             def runner(command, **kwargs):
                 nonlocal status_reads, head_reads
+                if command[:4] == ["git", "--no-replace-objects", "merge-base", "--is-ancestor"]:
+                    return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
                 if command[:4] == ["git", "--no-replace-objects", "cat-file", "commit"]:
                     return subprocess.CompletedProcess(command, 0, stdout=(
                         "tree " + "a" * 40 + "\nparent " + ("e" if fault == "PR-wrong-parent" else "d") * 40

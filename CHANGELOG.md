@@ -6,9 +6,13 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
-- Setup and polling tests use causal barriers and controlled clocks; replay
-  saturation starts from fixed identities. Process/event waits use hang guards
-  rather than short scheduler-speed assertions (#276).
+- Required CI uses causal setup/polling checks and fixed replay identities, with
+  a guard against new timing-sensitive tests. Venue-dependent native acceptance
+  is explicitly opt-in; its exact exclusions and remaining behavioral coverage
+  are documented in the CI test policy (#276).
+- Native guide acceptance tolerates a proven base advance or retarget while
+  retaining the exact candidate. Producer failures report their original cause
+  instead of launching dependent validators without evidence (#276).
 
 ### Added
 

@@ -26,6 +26,11 @@ TEST = "CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor(
 SELECTOR = TARGET + "/" + TEST
 BENCHMARK_SELECTOR = TARGET + "/CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
+LOCAL_UI_FLAG = "CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE"
+LOCAL_UI_TESTS = {
+    TARGET + "/" + identity: reason
+    for identity, reason in json.loads(Path(__file__).with_name("local-ui-acceptance.json").read_text()).items()
+}
 SCHEMA = "0.1.0"
 STATUSES = ("Passed", "Failed", "Skipped", "Expected Failure")
 STRUCTURE = ("Device", "Test Plan Configuration")
@@ -270,7 +275,7 @@ def validate_isolated(summary, tests):
     return measured
 
 
-def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=True):
+def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=True, local_ui_enabled=False):
     selected = cases(tests)
     measured = reconcile(summary, selected)
     if benchmark_enabled:
@@ -292,6 +297,8 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
             reason = "verified-isolated-selector-exclusion"
         elif case.identity == BENCHMARK_SELECTOR and not benchmark_enabled:
             reason = "existing-opt-in-benchmark-disabled"
+        elif case.identity in LOCAL_UI_TESTS and not local_ui_enabled:
+            reason = "opt-in-local-ui-acceptance"
         else:
             raise ValueError(f"Unattributed or enabled skipped integrated test: {case.identity}")
         attributed.append({"identity": case.identity, "policyReason": reason,
@@ -308,6 +315,7 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
 INTENTIONAL_SKIPS = {
     SELECTOR: "Runs alone in the isolated scope; skipped from the remaining scope.",
     BENCHMARK_SELECTOR: f"Opt-in reader benchmark; runs only when {BENCHMARK_FLAG}=1.",
+    **LOCAL_UI_TESTS,
 }
 
 
@@ -538,6 +546,10 @@ def hosted_test_environment(inherited):
             environment.pop(name)
     for name in ("GITHUB_ACTIONS", "RUNNER_ENVIRONMENT"):
         environment.pop("TEST_RUNNER_" + name, None)
+    environment.pop("TEST_RUNNER_" + LOCAL_UI_FLAG, None)
+    if environment.get(LOCAL_UI_FLAG) == "1":
+        require(environment.get("GITHUB_ACTIONS") != "true", "Local UI acceptance cannot run in required CI.")
+        environment["TEST_RUNNER_" + LOCAL_UI_FLAG] = "1"
     if (environment.get("GITHUB_ACTIONS") == "true"
             and environment.get("RUNNER_ENVIRONMENT") == "github-hosted"):
         # xcodebuild(1) forwards these to test runners with TEST_RUNNER_ stripped.
@@ -563,6 +575,8 @@ def produce_guide_acceptance(directory, runner):
     context = {"exitCode": code, "output": str(output), "invocation": invocation,
                "head": receipt.get("sourceHead"), "tree": receipt.get("sourceTree"),
                "environment": {}}
+    if code:
+        context["error"] = receipt.get("error") or "Native guide acceptance producer failed without a diagnostic."
     if not code:
         context["environment"] = {
             "CMUX_GUIDE_ACCEPTANCE_DIRECTORY": str(output),
@@ -625,8 +639,10 @@ def run(command, directory, runner=subprocess.run):
     directory.mkdir(parents=True, exist_ok=False)
     benchmark_flag = os.environ.get(BENCHMARK_FLAG)
     benchmark_enabled = benchmark_flag == "1"
+    local_ui_enabled = test_environment.get(LOCAL_UI_FLAG) == "1"
     evidence = {"candidateSelector": SELECTOR, "selectorVerifiedByHostedResult": False,
-                "testBodyOrDeadlineChanged": False, "wholeSuiteSerialized": False,
+                "testBodyOrDeadlineChanged": True, "wholeSuiteSerialized": False,
+                "localUIAcceptance": {"enabled": local_ui_enabled, "tests": LOCAL_UI_TESTS},
                 "guideCalibrationVenue": {
                     "GITHUB_ACTIONS": test_environment.get("GITHUB_ACTIONS"),
                     "RUNNER_ENVIRONMENT": test_environment.get("RUNNER_ENVIRONMENT"),
@@ -664,6 +680,15 @@ def run(command, directory, runner=subprocess.run):
     except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as error:
         guide = {"exitCode": 1, "environment": {}}
         evidence["guideAcceptanceError"] = str(error)
+    if guide["exitCode"]:
+        evidence["guideAcceptanceError"] = evidence.get("guideAcceptanceError") or guide.get("error") or \
+            "Native guide acceptance producer failed without a diagnostic."
+        evidence["blockedStage"] = "guide-acceptance"
+        evidence["passed"] = False
+        save()
+        print("Native guide acceptance producer failed: " + evidence["guideAcceptanceError"], file=sys.stderr)
+        print(f"Integrated test coverage: {evidence_path}", flush=True)
+        return 1
     save()
     isolated_bundle = directory / "isolated.xcresult"
     isolated = runner([*command, "test-without-building", "-only-testing:" + SELECTOR,
@@ -695,7 +720,8 @@ def run(command, directory, runner=subprocess.run):
         print("Remaining hosted summary: " + json.dumps(remaining_summary), flush=True)
         print("Remaining hosted test tree: " + json.dumps(tests), flush=True)
         evidence["remainingCounts"] = validate_remaining(
-            remaining_summary, tests, benchmark_enabled=benchmark_enabled, isolated_excluded=bool(selection))
+            remaining_summary, tests, benchmark_enabled=benchmark_enabled, isolated_excluded=bool(selection),
+            local_ui_enabled=local_ui_enabled)
         validate_original_guide_cases(tests)
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
@@ -750,9 +776,49 @@ def run(command, directory, runner=subprocess.run):
     return 0 if success else 1
 
 
+def run_focused(command, directory, selectors, repeats, runner=subprocess.run):
+    """Local diagnostic evidence, never the required full-suite coverage receipt."""
+    require(os.environ.get("GITHUB_ACTIONS") != "true", "Focused diagnostics cannot replace required CI.")
+    require(1 <= repeats <= 100, "Focused repeat count must be between 1 and 100.")
+    require(selectors and all(re.fullmatch(r"[A-Za-z0-9_]+(?:/[A-Za-z0-9_():]+)?", item)
+                              for item in selectors), "Expected suite or suite/test selectors.")
+    directory.mkdir(parents=True, exist_ok=False)
+    environment = hosted_test_environment(os.environ)
+    source = diagnostic_source()
+    build = runner([*command, "build-for-testing"], check=False)
+    if build.returncode:
+        return build.returncode
+    receipts = []
+    for index in range(repeats):
+        scope = f"focused-{index + 1}"
+        bundle = directory / (scope + ".xcresult")
+        result = runner([*command, "test-without-building",
+                         *["-only-testing:" + TARGET + "/" + item for item in selectors],
+                         "-resultBundlePath", str(bundle)], check=False, env=environment)
+        summary, tree = read_result(bundle, directory, scope, runner)
+        selected = cases(tree)
+        measured = reconcile(summary, selected)
+        require(all(any(case.identity == TARGET + "/" + item
+                        or case.identity.startswith(TARGET + "/" + item + "/") for case in selected)
+                    for item in selectors), "Focused selector did not execute.")
+        receipts.append({"scope": scope, "exitCode": result.returncode, "counts": measured})
+        (directory / "focused.json").write_text(json.dumps({
+            "requiredCoverage": False, "source": source, "selectors": selectors,
+            "requestedRuns": repeats, "runs": receipts
+        }, indent=2) + "\n")
+        require(not result.returncode and measured["failedTests"] == 0
+                and all(measured["executionCounts"][key] == 0
+                        for key in ("failedTests", "skippedTests", "expectedFailures")),
+                "Focused diagnostics failed or skipped a test; no retries.")
+    print(f"Focused stability evidence: {directory}/focused.json", flush=True)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--results-root", required=True, type=Path)
+    parser.add_argument("--focused", help="Comma-separated suite/test selectors; local diagnostics only.")
+    parser.add_argument("--repeat", type=int, default=1, help="Independent focused executions; stop on any failure.")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
@@ -760,6 +826,9 @@ def main():
     args.results_root.mkdir(parents=True, exist_ok=True)
     # The runner owns only this new evidence directory; no stale xcresult can pass.
     directory = args.results_root.resolve() / ("scopes-" + str(uuid.uuid4()))
+    if args.focused:
+        return run_focused(command, directory, args.focused.split(","), args.repeat)
+    require(args.repeat == 1, "--repeat requires --focused.")
     return run(command, directory)
 
 

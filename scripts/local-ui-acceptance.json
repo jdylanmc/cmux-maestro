@@ -1,0 +1,7 @@
+{
+  "SidebarRowGroupTests/hoveringAnyRowHighlightsTheWholeGroup(_:)": "Native hosted subview discovery and hover pixels; groupHoverActionRules stays required.",
+  "SidebarMotionTests/nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane()": "Wall-clock native animation/pixel sampling; deterministic phase and reduced-motion controls stay required.",
+  "SidebarLayoutRenderingTests/activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes()": "Native footer clearance and OCR depend on venue; deterministic layout/state and exact title-oracle controls stay required.",
+  "SidebarInternalTaskRenderingTests/review002DisplayedDismissControlHandlesHiddenCompletedChild(_:_:)": "Hosted accessibility press and asynchronous projection; exact dismissal-identity and retention tests stay required.",
+  "SidebarBeatIndicatorTests/formDraftSurvivesAScopeChangeAndOffersNoShowAll()": "Hosted text discovery; formHasNoShowAllAndKeepsItsDraftOnScopeChange remains the deterministic behavioral guarantee."
+}

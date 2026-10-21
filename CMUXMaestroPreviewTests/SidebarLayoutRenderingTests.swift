@@ -1035,7 +1035,8 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.agentRowHeight)
     }
 
-    @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

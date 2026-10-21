@@ -538,7 +538,8 @@ struct SidebarBeatIndicatorTests {
         #expect(r.navigations.count == 0)
     }
 
-    @Test func formDraftSurvivesAScopeChangeAndOffersNoShowAll() async throws {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func formDraftSurvivesAScopeChangeAndOffersNoShowAll() async throws {
         let stores = SidebarStoreFixture()
         defer { stores.cleanup() }
         let a = UUID(), b = UUID()

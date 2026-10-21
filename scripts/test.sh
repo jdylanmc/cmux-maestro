@@ -4,6 +4,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DERIVED_DATA="$ROOT/.build/tests"
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+SCOPE_ARGS=()
+while [[ "${1:-}" == "--focused" || "${1:-}" == "--repeat" ]]; do
+    if [[ $# -lt 2 ]]; then echo "$1 requires a value" >&2; exit 2; fi
+    SCOPE_ARGS+=("$1" "$2")
+    shift 2
+done
 
 "$ROOT/scripts/fetch-sdk.sh"
 bash "$ROOT/scripts/build-preference-test-client.sh"
@@ -24,7 +30,7 @@ python3 "$ROOT/scripts/verify-build-metadata.py" --mode tests \
     --settings "$DERIVED_DATA/namespace-settings.json"
 
 python3 "$ROOT/scripts/run-integrated-test-scopes.py" \
-    --results-root "$DERIVED_DATA/scoped-results" -- xcodebuild \
+    --results-root "$DERIVED_DATA/scoped-results" ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"} -- xcodebuild \
     -project "$ROOT/CMUXMaestroPreview.xcodeproj" \
     -scheme CMUXMaestroPreview \
     -configuration Debug \

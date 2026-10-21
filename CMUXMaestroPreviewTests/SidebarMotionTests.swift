@@ -514,7 +514,8 @@ struct SidebarMotionTests {
         }
     }
 
-    @Test func nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane() async throws {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane() async throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
