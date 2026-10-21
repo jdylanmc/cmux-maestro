@@ -256,8 +256,9 @@ Notable changes are recorded using Keep a Changelog categories.
 ### Fixed
 
 - Setup process-isolation tests no longer hang in unrelated fixture teardown.
-  Exit observation is asynchronous and bounded; an independent phase watchdog
-  preserves diagnostics rather than consuming the CI job timeout (#302).
+  Exit observation is asynchronous with the full 60-second wait budget; an
+  independent 70-second phase watchdog preserves diagnostics for non-cooperative
+  stalls rather than consuming the CI job timeout (#302).
 - Status reads preserve proven resource retirement instead of charging ended
   workers against workspace capacity again (#182). Restored or uncertain
   resources remain charged; stored history and its independent limits stay intact.

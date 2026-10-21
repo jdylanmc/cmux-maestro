@@ -837,7 +837,9 @@ struct CopilotSetupTests {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         return try MetadataProcessTestWatchdog(
             directory: repository.appendingPathComponent(".build/tests/scoped-results/metadata-diagnostics/\(UUID().uuidString)"),
-            testIdentity: testIdentity, observation: observation)
+            testIdentity: testIdentity,
+            limit: supervisedWaitLimit + .seconds(10),
+            observation: observation)
     }
 
     @Test func cleanupWatchdogPreservesInnerWaitBudget() throws {
