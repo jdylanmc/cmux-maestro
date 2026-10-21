@@ -897,6 +897,7 @@ struct CopilotSetupTests {
         var readinessFailure = "Synthetic child must execute before the timeout/cancellation assertion"
         if !ready {
             let detail = supervisionDiagnostics(directory, clock: clock)
+            watchdog.begin("readiness-failure-cleanup")
             task.cancel()
             let stopped = await bounded { await task.value }
             readinessFailure += "; startup=\(started.map { "\($0)" } ?? "unreturned")"
@@ -948,9 +949,9 @@ struct CopilotSetupTests {
 
     private func withUnrelatedProcess(
         watchdog: MetadataProcessTestWatchdog? = nil,
-        waitForExit: @escaping @Sendable (Process, AsyncStream<Void>) async -> Bool = { process, _ in
-            process.waitUntilExit()
-            return true
+        waitForExit: @escaping @Sendable (AsyncStream<Void>) async -> Bool = { exited in
+            for await _ in exited { return true }
+            return false
         },
         waitForTimeout: (@Sendable (Duration) async throws -> Void)? = nil,
         body: (Process) async throws -> Void
@@ -980,9 +981,13 @@ struct CopilotSetupTests {
         }
         watchdog?.begin("unrelated-cleanup")
         try input.fileHandleForWriting.close()
-        // Baseline regression: the teardown wait has no deadline.
-        let stopped = await waitForExit(process, exited.stream)
-        #expect(stopped, "Unrelated process exit observation exceeded its bound")
+        let stopped: Bool?
+        if let waitForTimeout {
+            stopped = await bounded(waitForTimeout: waitForTimeout) { await waitForExit(exited.stream) }
+        } else {
+            stopped = await bounded { await waitForExit(exited.stream) }
+        }
+        #expect(stopped == true, "Unrelated process exit observation exceeded its bound")
         try result.get()
     }
 
@@ -996,8 +1001,8 @@ struct CopilotSetupTests {
             deadline.continuation.finish()
         }
         let task = Task {
-            await withKnownIssue("A missing termination notification must fail at the cleanup bound") {
-                try await withUnrelatedProcess(waitForExit: { _, _ in
+            try await withKnownIssue("A missing termination notification must fail at the cleanup bound") {
+                try await withUnrelatedProcess(waitForExit: { _ in
                     entered.continuation.yield(())
                     for await _ in never.stream {}
                     return true
@@ -1006,6 +1011,8 @@ struct CopilotSetupTests {
                 }) { process in
                     #expect(process.isRunning)
                 }
+            } matching: { issue in
+                issue.comments.contains { $0.rawValue == "Unrelated process exit observation exceeded its bound" }
             }
         }
         try #require(await bounded {
@@ -1015,10 +1022,40 @@ struct CopilotSetupTests {
         deadline.continuation.yield(())
         deadline.continuation.finish()
         // An injected deadline, not elapsed time, orders the cleanup failure.
-        let returned = await bounded { await task.value; return true }
+        let returned = await bounded { await task.result }
         never.continuation.finish()
-        _ = await bounded { await task.value; return true }
-        #expect(returned == true)
+        let drained = try #require(await bounded { await task.result })
+        try drained.get()
+        #expect(returned != nil)
+    }
+
+    @Test(arguments: [false, true])
+    func unrelatedCleanupPreservesBodyFailureAndEarlyExit(exitBeforeCleanup: Bool) async throws {
+        enum BodyFailure: Error { case expected }
+        var observed: Process?
+        do {
+            try await withUnrelatedProcess { process in
+                observed = process
+                if exitBeforeCleanup {
+                    let delivered = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+                    defer { delivered.continuation.finish() }
+                    let handler = process.terminationHandler
+                    process.terminationHandler = { process in
+                        handler?(process)
+                        delivered.continuation.yield(())
+                        delivered.continuation.finish()
+                    }
+                    process.terminate()
+                    try #require(await bounded {
+                        for await _ in delivered.stream { return true }
+                        return false
+                    } == true)
+                }
+                throw BodyFailure.expected
+            }
+            Issue.record("Cleanup must preserve the original assertion failure")
+        } catch BodyFailure.expected {}
+        #expect(try #require(observed).isRunning == false)
     }
 
     @Test func mutationGateDetectsLiveWriterWithoutCleanup() async throws {

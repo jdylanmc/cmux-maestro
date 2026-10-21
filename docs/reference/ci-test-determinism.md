@@ -16,6 +16,18 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   deadlines; neither can finish early. The observer retains the MainActor versus
   detached-driver distinction. Deadline-helper tests release an explicit timeout
   signal instead of measuring elapsed wall time.
+  Cleanup fixtures subscribe to unrelated-process termination before launch and
+  await the buffered event after closing stdin, including when an assertion throws.
+  They never call Foundation's synchronous `Process.waitUntilExit()`: a local
+  reproduction of #302 sampled that call stuck in its run loop after the setup
+  supervisor had already completed. A controlled missing-notification regression
+  advances an injected deadline; a second regression delivers termination before
+  cleanup starts. No cleanup coverage was removed.
+  Each cleanup phase also has an executor-independent 30-second watchdog, with
+  at most five additional seconds for stack capture. Its phase and supervisor
+  boundary records use the existing `metadata-diagnostics` artifact path. This
+  backstop covers synchronous fixture work and teardown as well as async waits;
+  it exits with failure, never retries or converts a stalled assertion into a pass.
 - Orchestration snapshots and naming use an injected clock. Polling tests await
   publication at the existing pause boundary rather than counting scheduler yields.
   Cadence fixtures suspend until cancellation, never a 60-second accidental tick.
