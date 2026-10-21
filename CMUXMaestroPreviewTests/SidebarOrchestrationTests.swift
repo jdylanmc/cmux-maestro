@@ -581,6 +581,42 @@ struct SidebarOrchestrationTests {
         snapshot.namingBornRoots(from: tree, now: Date()).nodes.map(\.title)
     }
 
+    @Test func renamedBornRootUsesItsSelfSelectedIconAfterHumanReset() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = UUID(), surface = UUID(), sessionID = UUID()
+        var node = bornRoot(workspace: workspace, surface: surface, session: sessionID)
+        node.iconId = "md-robot"
+        var session = observed(sessionID, workspace: workspace, surface: surface, name: "Synthetic database",
+                               observedAt: now)
+        session.iconId = "md-database_check_outline"
+        session.iconColor = "purple"
+        let evidence = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let named = try #require(snapshot.namingBornRoots(from: evidence, now: now).nodes.first)
+        let item = SidebarAgentIconCardItem.managed(named, availability: .ready, tree: evidence, now: now)
+        #expect(item.title == "Synthetic database")
+        #expect(item.iconTarget == .session(sessionID))
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        func appearance() -> SidebarIconChoice {
+            SidebarItemIcon.appearance(
+                kind: .agent, target: item.iconTarget, agentGlyph: item.glyph, agentColor: item.color,
+                icons: preferences.icons, agentStyle: .maestro, terminalStyle: .ghost
+            ).choice
+        }
+        let agent = SidebarIconChoice(glyph: "md-database_check_outline", color: .purple)
+        #expect(appearance() == agent)
+        let human = SidebarIconChoice(glyph: "md-bird", color: .teal)
+        preferences.setIcon(human, for: .session(sessionID))
+        #expect(appearance() == human)
+        preferences.resetIconToAgentSelection(for: .session(sessionID))
+        #expect(appearance() == agent)
+        #expect(fixture.preferences().icons.overrides[SidebarIconTarget.session(sessionID).key] == nil)
+        #expect(node.iconId == "md-robot")
+    }
+
     @Test func bornRootTakesItsExactSessionNameUnderADR0022Rules() throws {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let born = bornRoot(workspace: workspace, surface: surface, session: session)
