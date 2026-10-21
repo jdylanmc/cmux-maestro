@@ -1746,6 +1746,117 @@ class RetiredCapacityStatusTests(unittest.TestCase):
             self.assertEqual(CONTROLLER_API["read_state"](self.root)["nodes"][worker["id"]],
                              before["nodes"][worker["id"]])
 
+    def test_retired_launch_that_never_created_a_surface_stays_uncharged(self):
+        worker = self.worker()
+        worker.update(surfaceId=None, supervisor=None, runtimeNotStarted=True,
+                      phase="launch-failed", availability="unavailable", verifiedBoundaryGeneration=None)
+        self.retire()
+        self.assertEqual(self.status()["capacity"]["used"], 0)
+        self.assertEqual(CONTROLLER_API["read_state"](self.root)["nodes"][worker["id"]]["phase"],
+                         "resource-retired")
+
+    def test_restored_surface_preserves_retired_direct_launch_history(self):
+        worker = self.worker()
+        worker.update(executionMode="interactive", launchMethod="direct", runtimeProtocolVersion=2,
+                      providerProcess=worker["supervisor"], supervisor=None,
+                      phase="process-disappeared", availability="unavailable")
+        self.retire()
+        with patch.object(self.cmux, "surface_exists", return_value=True):
+            result = self.status()
+        observed = next(node for node in result["workers"] if node["workerId"] == worker["id"])
+        self.assertEqual(result["capacity"]["used"], 1)
+        self.assertTrue(observed["surfacePresent"])
+        self.assertFalse(observed["providerRunning"])
+        self.assertEqual(observed["result"], "Synthetic verified outcome")
+
+    def test_retired_reappearance_or_uncertainty_is_charged_without_adoption(self):
+        worker = self.worker()
+        for operation in ("status", "admission"):
+            for surface, process in ((True, False), (False, True), (True, True),
+                                     (None, False), (False, None), (None, None)):
+                with self.subTest(operation=operation, surface=surface, process=process):
+                    self.retire()
+                    before = CONTROLLER_API["read_state"](self.root)["nodes"][worker["id"]]
+                    with patch.object(self.cmux, "surface_exists", side_effect=lambda workspace, identifier:
+                                      True if identifier == self.actor["surfaceId"] else surface), patch.dict(
+                            CONTROLLER_API["command_status"].__globals__, {
+                                "process_start": lambda pid: worker["supervisor"]["start"] if process else None,
+                                "process_observation": lambda identity: process if identity else None,
+                            }):
+                        if operation == "status":
+                            self.status()
+                        else:
+                            snapshot = CONTROLLER_API["read_state"](self.root)
+                            observations = {worker["id"]: {
+                                "surface": surface, "process": process is True, "exited": process is False}}
+                            CONTROLLER_API["mutate"](self.root, lambda state:
+                                CONTROLLER_API["reconcile_resources"](state, snapshot, observations, set()))
+                    saved = CONTROLLER_API["read_state"](self.root)
+                    self.assertEqual(CONTROLLER_API["workspace_capacity"](saved, self.workspace)["used"], 1)
+                    saved["workspaceCapacity"] = {self.workspace: 1}
+                    with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "resource limit"):
+                        CONTROLLER_API["require_workspace_capacity"](saved, self.workspace)
+                    after = saved["nodes"][worker["id"]]
+                    for key in ("id", "runId", "parentId", "workspaceId", "surfaceId", "copilotSessionId",
+                                "generation", "supervisor", "result", "verifiedBoundaryGeneration"):
+                        self.assertEqual(after[key], before[key], key)
+
+    def test_admission_does_not_retire_a_generation_changed_after_observation(self):
+        worker = self.worker()
+        self.save()
+        snapshot = CONTROLLER_API["read_state"](self.root)
+        observations, retained_gone = CONTROLLER_API["resource_observations"](
+            snapshot, self.cmux, self.workspace)
+        replacement_session = str(uuid.uuid4())
+
+        def replace(state):
+            state["nodes"][worker["id"]].update(generation=2, copilotSessionId=replacement_session)
+        CONTROLLER_API["mutate"](self.root, replace)
+        before = CONTROLLER_API["read_state"](self.root)["nodes"][worker["id"]]
+        CONTROLLER_API["mutate"](self.root, lambda state: CONTROLLER_API["reconcile_resources"](
+            state, snapshot, observations, retained_gone))
+        saved = CONTROLLER_API["read_state"](self.root)
+        self.assertEqual(saved["nodes"][worker["id"]], before)
+        self.assertEqual(CONTROLLER_API["workspace_capacity"](saved, self.workspace)["used"], 1)
+
+    def test_large_history_reports_live_and_stored_counts_separately(self):
+        other, _ = CONTROLLER_API["new_root"](
+            str(uuid.uuid4()), str(uuid.uuid4()), self.pane, "Other coordinator")
+        self.state["nodes"][other["id"]] = other
+        for _ in range(108):
+            self.worker().update(phase="resource-retired", availability="unavailable")
+        live = [self.actor, other]
+        live.extend(self.worker() for _ in range(18))
+        live.extend(self.worker(other) for _ in range(55))
+        for node in live:
+            node.update(phase="turn-running", availability="busy",
+                        supervisor={"pid": 999998, "start": "synthetic-live-process"})
+            if node["role"] == "coordinator":
+                node.update(executionMode="interactive", generation=1, copilotSessionId=str(uuid.uuid4()),
+                            runtimeProtocolVersion=2,
+                            launchSettings={"version": 1, "copilotAccount": "synthetic", "model": "test-model"})
+        live_surfaces = {node["surfaceId"] for node in live}
+        self.save()
+        with patch.object(self.cmux, "surface_exists",
+                          side_effect=lambda workspace, surface: surface in live_surfaces), patch.dict(
+                CONTROLLER_API["command_status"].__globals__, {
+                    "process_start": lambda pid: "synthetic-live-process" if pid == 999998 else None,
+                    "process_observation": lambda identity: identity["pid"] == 999998 if identity else None,
+                }):
+            for _ in range(3):
+                summary = self.status()["capacity"]
+                self.assertEqual((summary["used"], summary["managedRoots"], summary["workers"]), (19, 1, 18))
+                self.assertEqual((summary["storedNodes"], summary["nodeSlotsRemaining"]), (127, 1))
+                self.assertEqual((summary["hostStoredNodes"], summary["hostNodeSlotsRemaining"]), (183, 841))
+                self.assertEqual(summary["remaining"], 13)
+                self.assertTrue(summary["admissionAvailable"])
+        capacity_args = CONTROLLER_API["parser"]().parse_args(["capacity", "--workspace", other["workspaceId"]])
+        other_summary = CONTROLLER_API["command_capacity"](capacity_args, self.root)["capacity"]
+        self.assertEqual((other_summary["used"], other_summary["storedNodes"]), (56, 56))
+        saved = CONTROLLER_API["read_state"](self.root)
+        self.assertEqual(sum(node["phase"] == "resource-retired" for node in saved["nodes"].values()), 108)
+        self.assertEqual(len(json.loads((self.root / "observer/current.json").read_text())["nodes"]), 183)
+
 
 class LaunchPayloadCompactionTests(unittest.TestCase):
     """Ended nodes' launch payload leaves control state for a private per-node archive (#280)."""
