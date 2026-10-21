@@ -974,7 +974,8 @@ enum SidebarPresentation {
             for node in session.nodes where node.kind == .subagent && (includingInternalTasks || !node.isInternalTask) {
                 let currentChild = currentSnapshot && SidebarCopilotTree.isFresh(session.observedAt, now: now)
                     && session.liveness == .alive && !session.statusOnly
-                let state = includingInternalTasks && !currentChild ? .unknown : observedSummaryState(node.state)
+                let state = includingInternalTasks && !currentChild && !node.state.isTerminal
+                    ? .unknown : observedSummaryState(node.state)
                 counts[state, default: 0] += 1
                 if state == .unknown || node.attentionDegraded { incomplete = true }
             }

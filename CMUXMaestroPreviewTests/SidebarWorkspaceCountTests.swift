@@ -82,6 +82,24 @@ struct SidebarWorkspaceCountTests {
                 == (stale ? .none : .steadyWorking))
     }
 
+    @Test(arguments: [AgentProcessLiveness.dead, .ambiguous, .unknown])
+    func collapsedActivityKeepsRetainedTaskFailureAheadOfOtherWorkingSessions(_ liveness: AgentProcessLiveness) throws {
+        var ended = session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle, liveness: liveness)
+        ended.nodes = [
+            .init(id: "failed", parentID: nil, depth: 0, kind: .subagent, name: "Failed task",
+                  state: .failed, model: nil, ancestryUnresolved: false, hasChildren: false,
+                  terminalEvent: .init(id: UUID(), timestamp: now),
+                  observedParent: .session(.init(providerID: "copilot", sessionID: ended.id.uuidString)))
+        ]
+        let observed = tree([ended, session(fixtures.otherSessionID, surface: fixtures.surfaceB)])
+        let cue = try #require(SidebarPresentation.collapsedActivity(
+            sessions: observed.sessions, managed: [], availability: .ready, countsComplete: true,
+            observations: observed, now: now
+        ))
+        #expect(cue.visual == SidebarPresentation.state(.failed))
+        #expect(cue.count == 1)
+    }
+
     @Test func legacyCoordinatorCountsOneSurfaceWithoutClaimingSessionContents() throws {
         let root = owner()
         let observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
