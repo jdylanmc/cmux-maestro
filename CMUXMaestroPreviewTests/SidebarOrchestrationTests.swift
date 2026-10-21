@@ -653,25 +653,36 @@ struct SidebarOrchestrationTests {
 
     /// #261 wiring: copilot polling reads details for the managed subjects' exact sessions and
     /// carries them on the tree it publishes.
-    @Test func pollingCarriesManagedDetailsForManagedSessions() async {
+    @Test func pollingCarriesManagedDetailsForManagedSessions() async throws {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let requested = ManagedRequests()
+        let timestamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let published = AsyncStream<Void>.makeStream()
         let polling = SidebarCopilotPolling(
-            read: neutralRead { _ in CopilotSnapshot(generatedAt: Date(), sessions: [], issues: [], isComplete: true) },
+            read: neutralRead { _ in CopilotSnapshot(generatedAt: timestamp, sessions: [], issues: [], isComplete: true) },
             readManaged: { ids in
                 await requested.append(ids)
-                return [session: CopilotManagedSessionDetails(sessionName: "Synthetic refactor", readAt: Date())]
+                return [session: CopilotManagedSessionDetails(sessionName: "Synthetic refactor", readAt: timestamp)]
             },
-            pause: { try await sidebarFrozenExpiry(0) }
+            pause: {
+                published.continuation.yield(())
+                try await sidebarFrozenExpiry(0)
+            },
+            expiryPause: sidebarFrozenExpiry,
+            now: { timestamp }
         )
+        defer {
+            polling.setVisible(false)
+            published.continuation.finish()
+        }
         polling.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
         polling.updateManagedSubjects(SidebarOrchestrationSnapshot(
-            version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
+            version: 1, generatedAt: timestamp, complete: true, omittedCount: 0,
             nodes: [bornRoot(workspace: workspace, surface: surface, session: session)]))
         polling.setVisible(true)
-        await sidebarEventually { polling.tree.managedDetails[session]?.sessionName == "Synthetic refactor" }
+        try #require(await publicationArrived(published.stream))
+        #expect(polling.tree.managedDetails[session]?.sessionName == "Synthetic refactor")
         #expect(await requested.values.first == [session])
-        polling.setVisible(false)
     }
 
     @Test func bornRootKeepsItsNameDuringObservationLossOnlyWithinTheGrace() {
