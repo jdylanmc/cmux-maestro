@@ -90,6 +90,41 @@ struct SidebarInternalTaskRenderingTests {
         #expect(model.navigation.status == .idle)
     }
 
+    @Test(arguments: [CopilotWorkState.idle, .working])
+    func collapsedWorktreeLegacyCoordinatorRetainsNeedsInput(_ state: CopilotWorkState) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let owner = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Managed owner",
+            workspaceId: data.workspaceA, surfaceId: data.surfaceA, generation: 1, phase: "registered",
+            availability: "active", createdAt: now, updatedAt: now
+        )
+        let session = CopilotSessionObservation(
+            sessionID: data.sessionID, surfaceID: data.surfaceA, launchWorkspaceID: data.workspaceA,
+            liveness: .alive, state: state, model: nil, children: [], observedAt: now,
+            attention: [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()),
+                              occurredAt: now)]
+        )
+        let model = await makeModel(data, children: [], now: now, managedNodes: [owner], sessionOverride: session)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        #expect(owner.copilotSessionId == nil)
+        #expect(SidebarPresentation.managedNeedsInput(owner, tree: model.copilot.tree, now: now))
+        preferences.projection = .worktrees
+        let group = SidebarExpansionID.worktreeGroup(.unknown, workspaceID: data.workspaceA)
+        preferences.setExpanded(false, for: group)
+        let mounted = mount(model, preferences, width: 280, reduceMotion: true, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        mounted.host.layoutSubtreeIfNeeded()
+        let activity = try #require(buttons(mounted.host).first { $0.accessibilityLabel() == "1 needs input" })
+        activity.performClick(nil)
+        #expect(preferences.layout.isExpanded(group))
+        #expect(model.navigation.status == .idle)
+    }
+
     @Test(arguments: [false, true])
     func hiddenUnknownTaskDoesNotMakeManagedLeafExpandable(_ expanded: Bool) async throws {
         let fixture = try SidebarPreferenceFixture()
@@ -692,9 +727,12 @@ struct SidebarInternalTaskRenderingTests {
         _ data: SidebarTreeFixtures, children: [CopilotChildWork], now: Date,
         liveness: CopilotLiveness = .alive, managed: Bool = false,
         additional: [CopilotSessionObservation] = [], managedNodes: [SidebarOrchestrationNode]? = nil,
-        hierarchyOverride: HierarchySnapshot? = nil
+        hierarchyOverride: HierarchySnapshot? = nil, sessionOverride: CopilotSessionObservation? = nil
     ) async -> SidebarConnectionModel {
-        let snapshot = data.snapshot(sessions: [data.session(liveness: liveness, children: children, now: now)] + additional, now: now)
+        let snapshot = data.snapshot(
+            sessions: [sessionOverride ?? data.session(liveness: liveness, children: children, now: now)] + additional,
+            now: now
+        )
         let polling = SidebarCopilotPolling(
             read: neutralRead { _ in snapshot }, pause: { try await sidebarFrozenExpiry(0) },
             expiryPause: sidebarFrozenExpiry, now: { now }
