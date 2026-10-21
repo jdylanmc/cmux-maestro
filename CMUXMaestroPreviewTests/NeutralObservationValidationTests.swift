@@ -148,6 +148,28 @@ struct NeutralObservationValidationTests {
         #expect(tree.availability == .partial && !tree.hasCompleteCounts)
     }
 
+    @Test(arguments: [false, true])
+    func oneFutureDatedChildDoesNotRevealUnrelatedHistory(_ observed: Bool) throws {
+        let skewed = child("skewed", activity: .known(.init(
+            kind: .executing, summary: "Executing tool: view", lastEventAt: now.addingTimeInterval(60)
+        )))
+        let children = [
+            skewed, child("live"),
+            child("skill", state: .known(.done), terminal: true, kind: .skill),
+            child("shell", state: .known(.done), terminal: true, kind: .shell),
+            child("cancelled", state: .unknown(), detail: .cancelled, terminal: true)
+        ]
+        let input = snapshot(legacy: children, observed: observed ? children : nil, lossless: observed)
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now)
+        let session = try #require(tree.sessions.first)
+        #expect(session.nodes.map(\.id) == ["skewed", "live"])
+        #expect(session.nodes.filter(\.attentionDegraded).map(\.id) == ["skewed"])
+        #expect(session.hiddenHistoryCount == 3)
+        #expect(session.childrenComplete == false && tree.availability == .partial)
+        #expect(session.nodes.first?.activity?.lastEventAt == nil)
+    }
+
     @Test(arguments: InvalidCanonicalPeer.allCases, [false, true])
     func canonicalErrorsCannotWeakenConsistencyHistorySafety(
         _ invalidPeer: InvalidCanonicalPeer, _ falselyLossless: Bool
