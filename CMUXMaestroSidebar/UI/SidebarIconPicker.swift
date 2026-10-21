@@ -132,10 +132,10 @@ struct SidebarIconPicker: View {
                 choose: { selectColor(.custom($0)) }
             )
             Divider()
-            Button("Reset to default", action: resetDefault)
+            Button("Reset to default") { colorEdit.cancel(); resetDefault() }
                 .accessibilityIdentifier("icon-picker-reset-default")
             if let resetAgentSelection {
-                Button("Reset to agent selection", action: resetAgentSelection)
+                Button("Reset to agent selection") { colorEdit.cancel(); resetAgentSelection() }
                     .accessibilityIdentifier("icon-picker-reset-agent")
             }
             if let notice {

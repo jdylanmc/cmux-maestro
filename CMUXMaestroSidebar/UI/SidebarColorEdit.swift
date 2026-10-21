@@ -8,4 +8,5 @@ final class SidebarColorEdit {
 
     func attach(_ well: SidebarNativeColorWell) { self.well = well }
     func finish() { well?.finish() }
+    func cancel() { well?.cancel() }
 }

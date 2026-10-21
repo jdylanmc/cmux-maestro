@@ -61,7 +61,8 @@ to the same output.
   finishes the pending color first; **Cancel** discards it. While active, the system panel is a
   child window of the editor's popover, preventing outside-click dismissal from losing the draft.
   If another window already owns the system panel, the well reports **Color unavailable**
-  without detaching or closing that panel.
+  without detaching or closing that panel. After that window releases the panel, a successful
+  retry clears the warning immediately.
 - Human preference **format version 2** accepts named strings or `#RRGGBB`; version-1 named files
   read without writing. Named-only edits continue writing version 1; version 2 is written only
   while the file contains a custom hex. Removing the last custom color restores version 1.

@@ -74,7 +74,8 @@ selection and its accessibility label includes the hex. Custom changes preview
 in the native well and panel, then save once when the panel closes or the well
 deactivates, only if the canonical color changed. **Done** finishes the pending
 color before closing. Named swatches still save immediately. Both reset actions
-keep their existing precedence; a reset cancels an open custom edit.
+keep their existing precedence; either reset explicitly cancels an open custom edit,
+even when the resulting color is unchanged.
 
 Human choices stay in the sidebar container's `sidebar-icons.json`, never in
 agent appearance records. Version 2 stores color as a named string or uppercase

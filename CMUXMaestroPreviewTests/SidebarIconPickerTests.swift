@@ -154,6 +154,58 @@ struct SidebarIconPickerTests {
         #expect(changes.isEmpty)
     }
 
+    @Test func successfulActivationClearsAnEarlierForeignPanelWarning() {
+        let foreignWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                                     styleMask: .borderless, backing: .buffered, defer: false)
+        foreignWindow.isReleasedWhenClosed = false
+        let panel = NSColorPanel.shared
+        foreignWindow.addChildWindow(panel, ordered: .above)
+        defer { panel.close(); foreignWindow.close() }
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        var unavailable = false
+        well.configure(color: .systemTeal, label: "Custom", choose: { _ in }, unavailable: { unavailable = $0 })
+        #expect(!well.accessibilityPerformPress())
+        #expect(unavailable)
+        foreignWindow.removeChildWindow(panel)
+        #expect(well.accessibilityPerformPress())
+        #expect(panel.isVisible && !unavailable, "Successful retry must clear the warning before any color change")
+        well.cancel()
+    }
+
+    @Test(arguments: [false, true])
+    func sameColorResetDiscardsPendingCustomColor(resetToAgent: Bool) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let target = SidebarIconTarget.session(UUID())
+        let standard = SidebarIconChoice(glyph: "md-robot", color: .theme)
+        let agent = SidebarIconChoice(glyph: "md-cat", color: .theme)
+        preferences.setIcon(.init(glyph: "md-duck", color: .theme), for: target)
+        let edit = SidebarColorEdit()
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        edit.attach(well)
+        var changes = 0
+        let choose: (SidebarTagColor) -> Void = { color in
+            changes += 1
+            preferences.setIcon(.init(glyph: "md-duck", color: .custom(color)), for: target)
+        }
+        well.configure(color: .labelColor, label: "Custom", choose: choose, unavailable: { _ in })
+        #expect(well.accessibilityPerformPress())
+        defer { NSColorPanel.shared.close() }
+        well.color = .red
+        #expect(well.sendAction(well.action, to: well.target))
+        edit.cancel()
+        if resetToAgent { preferences.resetIconToAgentSelection(for: target) }
+        else { preferences.resetIconToDefault(for: target) }
+        let resolved = preferences.icons.resolve(target: target, standard: standard, agent: agent)
+        #expect(resolved.choice == (resetToAgent ? agent : standard))
+        well.configure(color: resolved.choice.color.nativeColor, label: "Custom", choose: choose, unavailable: { _ in })
+        NSColorPanel.shared.close()
+        edit.finish()
+        #expect(changes == 0 && !well.isActive)
+        #expect(preferences.icons.resolve(target: target, standard: standard, agent: agent).choice == resolved.choice)
+    }
+
     @Test func externalResetCancelsAnOpenColorEditWithoutOverwritingIt() throws {
         let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
         var changes: [SidebarTagColor] = []

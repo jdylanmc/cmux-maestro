@@ -55,6 +55,7 @@ final class SidebarNativeColorWell: NSColorWell {
             unavailable(true)
             return
         }
+        unavailable(false)
         editing = true
         super.activate(true)
         ownedPanel = panel
