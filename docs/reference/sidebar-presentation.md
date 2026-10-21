@@ -133,6 +133,8 @@ the same compact statuses wherever shared. Omitted lower bounds remain `N+` with
 unknown totals; **Turn scope: Main turn only** never claims background completion.
 The inline session row, session details and aggregate omission count reuse one
 formatter for `N+ · Total: Unknown`; exact counts remain `N`.
+The inline caption adds **Omitted tasks:** and **Active: Unknown** for uncounted
+work, or **Omitted working/blocked: N** for a known active count.
 An old managed node retains **Observation: Stale** in its state cue, hover and row
 tooltip even inside a fresh snapshot. Workspace attention tooltips use counted
 labels, keeping **Input reason: Unreported** and **Live state: Unverified** explicit.

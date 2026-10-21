@@ -1340,7 +1340,7 @@ enum SidebarPresentation {
 
     static func omittedTaskCaption(_ session: SidebarCopilotSession) -> String {
         session.hasUncountedChildren
-            ? session.omittedChildrenDescription
+            ? "Omitted tasks: \(session.omittedChildrenDescription) · Active: Unknown"
             : "Omitted working/blocked: \(session.omittedActiveChildrenCount)"
     }
 
