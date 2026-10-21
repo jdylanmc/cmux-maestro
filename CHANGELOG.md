@@ -19,6 +19,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Collapsed workspace and worktree headers keep an aggregate activity glyph and
+  count. Input and blockers take priority over failures and working agents;
+  incomplete evidence stays visible. Activate the cue to expand, without
+  focusing or acknowledging a session (#290).
 - `/maestro-demo` runs a human-requested live demo with two visible workers (three
   on request), distinct icons, self-assigned tags, original self-drawn pets, and
   one native-message follow-up each. Closing stays optional and human-approved.

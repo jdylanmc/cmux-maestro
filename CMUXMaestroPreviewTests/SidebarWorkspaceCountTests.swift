@@ -6,6 +6,180 @@ struct SidebarWorkspaceCountTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func collapsedWorkspaceKeepsWorkingCountWithoutDoubleCountingManagedSessions() throws {
+        let root = owner(sessionID: fixtures.sessionID)
+        let observed = tree([
+            session(fixtures.sessionID, surface: fixtures.surfaceA),
+            session(fixtures.otherSessionID, surface: fixtures.surfaceB)
+        ])
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: observed.sessions, managed: [root], availability: .ready, now: now, observations: observed
+        )
+        let activity = try #require(summary(observed, managed: [root]).collapsedActivity(attention: attention))
+        #expect(activity.count == 2)
+        #expect(activity.visual == SidebarPresentation.state(.working))
+    }
+
+    @Test(arguments: ["input", "blocked", "failed", "idle", "unknown", "incomplete"])
+    func collapsedWorkspacePrioritizesActionAndNeverHidesUncertainty(_ scenario: String) throws {
+        let state: AgentWorkState = switch scenario {
+        case "blocked": .blocked
+        case "failed": .failed
+        case "unknown": .unknown
+        default: .idle
+        }
+
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA, state: state)
+        if scenario == "input" {
+            observed.attention = [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()),
+                                        occurredAt: now)]
+        }
+        if scenario == "incomplete" { observed.attentionDegraded = true }
+        let competing = ["input", "blocked", "failed"].contains(scenario)
+            ? [session(fixtures.otherSessionID, surface: fixtures.surfaceB)] : []
+        let snapshot = tree([observed] + competing)
+        let activity = SidebarPresentation.collapsedActivity(
+            sessions: snapshot.sessions, managed: [], availability: .ready, observations: snapshot, now: now
+        )
+        if scenario == "idle" {
+            #expect(activity == nil)
+        } else {
+            let cue = try #require(activity)
+            let expected = switch scenario {
+            case "input": "Needs input"
+            case "blocked": "Blocked"
+            case "failed": "Failed"
+            case "unknown": "Unknown"
+            default: "Counts incomplete"
+            }
+            #expect(cue.title == expected)
+            #expect(cue.count == (scenario == "incomplete" ? 0 : 1))
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func collapsedActivityIncludesInternalWorkButDoesNotReviveStaleChildWork(_ stale: Bool) throws {
+        let root = owner(sessionID: fixtures.sessionID)
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle)
+        observed.nodes = [
+            .init(id: "running", parentID: nil, depth: 0, kind: .subagent, name: "Internal task",
+                  state: .working, model: nil, ancestryUnresolved: false, hasChildren: false,
+                  observedParent: .session(.init(providerID: "copilot", sessionID: observed.id.uuidString)))
+        ]
+        let snapshot = tree([observed], generatedAt: stale ? now.addingTimeInterval(-9) : now)
+        let summary = SidebarPresentation.workspaceSummary(
+            surfaces: [], sessions: snapshot.sessions, managed: [root], orchestrationAvailability: .ready,
+            countsComplete: true, now: now, observations: snapshot, scope: .activity
+        )
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: snapshot.sessions, managed: [root], availability: .ready, now: now, observations: snapshot
+        )
+        let cue = try #require(summary.collapsedActivity(attention: attention))
+        #expect(cue.visual == SidebarPresentation.state(stale ? .unknown : .working))
+        #expect(cue.label == (stale ? "1 unknown, counts incomplete" : "1 working"))
+        #expect(SidebarPresentation.activityTreatment(cue.visual, reduceMotion: true)
+                == (stale ? .none : .steadyWorking))
+    }
+
+    @Test(arguments: [AgentProcessLiveness.dead, .ambiguous, .unknown])
+    func collapsedActivityKeepsRetainedTaskFailureAheadOfOtherWorkingSessions(_ liveness: AgentProcessLiveness) throws {
+        var ended = session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle, liveness: liveness)
+        ended.nodes = [
+            .init(id: "failed", parentID: nil, depth: 0, kind: .subagent, name: "Failed task",
+                  state: .failed, model: nil, ancestryUnresolved: false, hasChildren: false,
+                  terminalEvent: .init(id: UUID(), timestamp: now),
+                  observedParent: .session(.init(providerID: "copilot", sessionID: ended.id.uuidString)))
+        ]
+        let observed = tree([ended, session(fixtures.otherSessionID, surface: fixtures.surfaceB)])
+        let cue = try #require(SidebarPresentation.collapsedActivity(
+            sessions: observed.sessions, managed: [], availability: .ready,
+            observations: observed, now: now
+        ))
+        #expect(cue.visual == SidebarPresentation.state(.failed))
+        #expect(cue.count == 1)
+    }
+
+    @Test(arguments: [SidebarOrchestrationAvailability.stale, .waiting, .ready], [false, true])
+    func quietCollapsedScopeIgnoresOtherWorkspacesIncompleteEvidence(
+        _ availability: SidebarOrchestrationAvailability, _ hasIdleSession: Bool
+    ) {
+        let scoped = hasIdleSession ? [session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle)] : []
+        var unrelated = session(fixtures.otherSessionID, surface: fixtures.surfaceB,
+                                state: .unknown, workspace: fixtures.workspaceB)
+        unrelated.internalTaskCountsIncomplete = true
+        let snapshot = tree(scoped + [unrelated])
+        #expect(!snapshot.hasCompleteCounts)
+        #expect(SidebarPresentation.collapsedActivity(
+            sessions: scoped, managed: [], availability: availability,
+            observations: snapshot, now: now
+        ) == nil)
+    }
+
+    @Test func emptyCollapsedScopeDoesNotTurnMissingObservationIntoActivity() {
+        let snapshot = SidebarCopilotTree.waiting
+        #expect(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [], availability: .waiting,
+            observations: snapshot, now: now
+        ) == nil)
+    }
+
+    @Test(arguments: [SidebarOrchestrationAvailability.loading, .partial, .unavailable])
+    func collapsedScopeKeepsFailuresThatMayHideManagedNodes(_ availability: SidebarOrchestrationAvailability) throws {
+        let cue = try #require(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [], availability: availability, observations: tree([]), now: now
+        ))
+        #expect(cue.label == "Counts incomplete")
+        #expect(cue.visual.symbol == "circle.dashed")
+    }
+
+    @Test(arguments: [SidebarOrchestrationAvailability.stale, .waiting])
+    func collapsedScopeKeepsItsOwnUnverifiedManagedNode(_ availability: SidebarOrchestrationAvailability) throws {
+        let cue = try #require(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [owner()], availability: availability, observations: tree([]), now: now
+        ))
+        #expect(cue.label == "1 unknown, counts incomplete")
+    }
+
+    @Test(arguments: ["unavailable", "loading", "waiting", "denied", "stale"])
+    func managedOnlyActivityQualifiesMissingCopilotEvidence(_ scenario: String) throws {
+        var snapshot = tree([])
+        switch scenario {
+        case "unavailable": snapshot.availability = .unavailable
+        case "loading": snapshot.availability = .loading
+        case "waiting": snapshot = .waiting
+        case "denied": snapshot.issues = [.permissionDenied]
+        case "stale": snapshot.generatedAt = now.addingTimeInterval(-9)
+        default: preconditionFailure("Unknown missing observation fixture")
+        }
+        let running = directNode(role: "worker", phase: "turn-running", age: 0, mode: .bounded)
+        let activity = try #require(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [running], availability: .ready, observations: snapshot, now: now
+        ))
+        #expect(activity.label == "1 working, counts incomplete")
+        #expect(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [], availability: .ready, observations: snapshot, now: now
+        ) == nil)
+    }
+
+    @Test(arguments: ["session", "child"])
+    func attentionDegradationQualifiesActivityWithoutChangingAgentCounts(_ owner: String) throws {
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
+        observed.nodes = [
+            .init(id: "legacy-child", parentID: nil, depth: 0, kind: .subagent, name: "Legacy child",
+                  state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)
+        ]
+        if owner == "session" { observed.attentionDegraded = true }
+        else { observed.nodes[0].attentionDegraded = true }
+        let snapshot = tree([observed])
+        let agents = summary(snapshot, managed: [])
+        #expect(agents.agentLine == "2 agents · 2 working")
+        #expect(!agents.incomplete)
+        let activity = try #require(SidebarPresentation.collapsedActivity(
+            sessions: snapshot.sessions, managed: [], availability: .ready, observations: snapshot, now: now
+        ))
+        #expect(activity.label == "2 working, counts incomplete")
+    }
+
     @Test func legacyCoordinatorCountsOneSurfaceWithoutClaimingSessionContents() throws {
         let root = owner()
         let observed = session(fixtures.sessionID, surface: fixtures.surfaceA)

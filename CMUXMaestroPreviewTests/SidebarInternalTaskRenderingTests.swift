@@ -6,6 +6,125 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test func collapsedActivityRendersStaticWorkingRingAndCount() throws {
+        func pixels<V: View>(_ content: V) throws -> Data {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 60, height: 32),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            let host = NSHostingView(rootView: content
+                .environment(\._accessibilityReduceMotion, true)
+                .frame(width: 60, height: 32).background(Color.white))
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        let actual = try pixels(SidebarCollapsedActivityButton(
+            activity: .init(visual: SidebarPresentation.state(.working), count: 4), expand: {}
+        ))
+        // Literal ring/count oracle: catches an absent ring, missing count or a rotating reduced-motion cue.
+        let expected = try pixels(SidebarTitleButton(label: "4 working", hint: "4 working", action: {}) {
+            HStack(spacing: 4) {
+                Circle().trim(from: 0.15, to: 1)
+                    .stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+                    .frame(width: 9, height: 9)
+                    .foregroundStyle(SidebarTone.green.color)
+                    .frame(width: 12, height: 14)
+                Text("4").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            .frame(minWidth: 24, minHeight: 24)
+        }.fixedSize())
+        #expect(actual == expected, "Reduced-motion aggregate must show the literal static ring and count")
+    }
+
+    @Test(arguments: [SidebarProjection.subAgents, .worktrees])
+    func collapsedWorkspaceActivityExpandsWithoutNavigation(_ projection: SidebarProjection) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let model = await makeModel(data, children: (0..<4).map { data.child("task-\($0)", state: .working) },
+                                    now: now, managed: true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        preferences.projection = projection
+        preferences.setExpanded(false, for: .workspace(data.workspaceA))
+        let mounted = mount(model, preferences, width: 280, reduceMotion: true, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        mounted.host.layoutSubtreeIfNeeded()
+        let activity = try #require(buttons(mounted.host).first { $0.accessibilityLabel() == "4 working" })
+        #expect(activity.toolTip == "4 working")
+        #expect(activity.isEnabled)
+        try capture(mounted.host, name: "collapsed-workspace-\(projection.rawValue)")
+        activity.performClick(nil)
+        #expect(preferences.layout.isExpanded(.workspace(data.workspaceA)))
+        #expect(model.navigation.status == .idle)
+    }
+
+    @Test func collapsedWorktreeActivityIncludesOwnedTasksAndExpands() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let model = await makeModel(data, children: (0..<4).map { data.child("task-\($0)", state: .working) },
+                                    now: now, managed: true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        preferences.projection = .worktrees
+        let group = SidebarExpansionID.worktreeGroup(.unknown, workspaceID: data.workspaceA)
+        preferences.setExpanded(false, for: group)
+        let mounted = mount(model, preferences, width: 280, reduceMotion: true, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        mounted.host.layoutSubtreeIfNeeded()
+        let activity = try #require(buttons(mounted.host).first { $0.accessibilityLabel() == "4 working" })
+        try capture(mounted.host, name: "collapsed-worktree-activity")
+        activity.performClick(nil)
+        #expect(preferences.layout.isExpanded(group))
+        #expect(model.navigation.status == .idle)
+    }
+
+    @Test(arguments: [CopilotWorkState.idle, .working])
+    func collapsedWorktreeLegacyCoordinatorRetainsNeedsInput(_ state: CopilotWorkState) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let owner = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Managed owner",
+            workspaceId: data.workspaceA, surfaceId: data.surfaceA, generation: 1, phase: "registered",
+            availability: "active", createdAt: now, updatedAt: now
+        )
+        let session = CopilotSessionObservation(
+            sessionID: data.sessionID, surfaceID: data.surfaceA, launchWorkspaceID: data.workspaceA,
+            liveness: .alive, state: state, model: nil, children: [], observedAt: now,
+            attention: [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()),
+                              occurredAt: now)]
+        )
+        let model = await makeModel(data, children: [], now: now, managedNodes: [owner], sessionOverride: session)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        #expect(owner.copilotSessionId == nil)
+        #expect(SidebarPresentation.managedNeedsInput(owner, tree: model.copilot.tree, now: now))
+        preferences.projection = .worktrees
+        let group = SidebarExpansionID.worktreeGroup(.unknown, workspaceID: data.workspaceA)
+        preferences.setExpanded(false, for: group)
+        let mounted = mount(model, preferences, width: 280, reduceMotion: true, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        mounted.host.layoutSubtreeIfNeeded()
+        let activity = try #require(buttons(mounted.host).first { $0.accessibilityLabel() == "1 needs input" })
+        activity.performClick(nil)
+        #expect(preferences.layout.isExpanded(group))
+        #expect(model.navigation.status == .idle)
+    }
+
     @Test(arguments: [false, true])
     func hiddenUnknownTaskDoesNotMakeManagedLeafExpandable(_ expanded: Bool) async throws {
         let fixture = try SidebarPreferenceFixture()
@@ -608,9 +727,12 @@ struct SidebarInternalTaskRenderingTests {
         _ data: SidebarTreeFixtures, children: [CopilotChildWork], now: Date,
         liveness: CopilotLiveness = .alive, managed: Bool = false,
         additional: [CopilotSessionObservation] = [], managedNodes: [SidebarOrchestrationNode]? = nil,
-        hierarchyOverride: HierarchySnapshot? = nil
+        hierarchyOverride: HierarchySnapshot? = nil, sessionOverride: CopilotSessionObservation? = nil
     ) async -> SidebarConnectionModel {
-        let snapshot = data.snapshot(sessions: [data.session(liveness: liveness, children: children, now: now)] + additional, now: now)
+        let snapshot = data.snapshot(
+            sessions: [sessionOverride ?? data.session(liveness: liveness, children: children, now: now)] + additional,
+            now: now
+        )
         let polling = SidebarCopilotPolling(
             read: neutralRead { _ in snapshot }, pause: { try await sidebarFrozenExpiry(0) },
             expiryPause: sidebarFrozenExpiry, now: { now }
