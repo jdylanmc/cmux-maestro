@@ -70,7 +70,7 @@ struct SidebarWorkspaceCountTests {
         let snapshot = tree([observed], generatedAt: stale ? now.addingTimeInterval(-9) : now)
         let summary = SidebarPresentation.workspaceSummary(
             surfaces: [], sessions: snapshot.sessions, managed: [root], orchestrationAvailability: .ready,
-            countsComplete: true, now: now, observations: snapshot, includingInternalTasks: true
+            countsComplete: true, now: now, observations: snapshot, scope: .activity
         )
         let attention = SidebarPresentation.workspaceAttention(
             sessions: snapshot.sessions, managed: [root], availability: .ready, now: now, observations: snapshot
@@ -93,11 +93,52 @@ struct SidebarWorkspaceCountTests {
         ]
         let observed = tree([ended, session(fixtures.otherSessionID, surface: fixtures.surfaceB)])
         let cue = try #require(SidebarPresentation.collapsedActivity(
-            sessions: observed.sessions, managed: [], availability: .ready, countsComplete: true,
+            sessions: observed.sessions, managed: [], availability: .ready,
             observations: observed, now: now
         ))
         #expect(cue.visual == SidebarPresentation.state(.failed))
         #expect(cue.count == 1)
+    }
+
+    @Test(arguments: [SidebarOrchestrationAvailability.stale, .waiting, .ready], [false, true])
+    func quietCollapsedScopeIgnoresOtherWorkspacesIncompleteEvidence(
+        _ availability: SidebarOrchestrationAvailability, _ hasIdleSession: Bool
+    ) {
+        let scoped = hasIdleSession ? [session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle)] : []
+        var unrelated = session(fixtures.otherSessionID, surface: fixtures.surfaceB,
+                                state: .unknown, workspace: fixtures.workspaceB)
+        unrelated.internalTaskCountsIncomplete = true
+        let snapshot = tree(scoped + [unrelated])
+        #expect(!snapshot.hasCompleteCounts)
+        #expect(SidebarPresentation.collapsedActivity(
+            sessions: scoped, managed: [], availability: availability,
+            observations: snapshot, now: now
+        ) == nil)
+    }
+
+    @Test func emptyCollapsedScopeDoesNotTurnMissingObservationIntoActivity() {
+        let snapshot = SidebarCopilotTree.waiting
+        #expect(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [], availability: .waiting,
+            observations: snapshot, now: now
+        ) == nil)
+    }
+
+    @Test(arguments: [SidebarOrchestrationAvailability.loading, .partial, .unavailable])
+    func collapsedScopeKeepsFailuresThatMayHideManagedNodes(_ availability: SidebarOrchestrationAvailability) throws {
+        let cue = try #require(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [], availability: availability, observations: tree([]), now: now
+        ))
+        #expect(cue.label == "Counts incomplete")
+        #expect(cue.visual.symbol == "circle.dashed")
+    }
+
+    @Test(arguments: [SidebarOrchestrationAvailability.stale, .waiting])
+    func collapsedScopeKeepsItsOwnUnverifiedManagedNode(_ availability: SidebarOrchestrationAvailability) throws {
+        let cue = try #require(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [owner()], availability: availability, observations: tree([]), now: now
+        ))
+        #expect(cue.label == "1 unknown, counts incomplete")
     }
 
     @Test func legacyCoordinatorCountsOneSurfaceWithoutClaimingSessionContents() throws {

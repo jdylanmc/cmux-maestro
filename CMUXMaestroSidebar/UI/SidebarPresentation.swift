@@ -104,6 +104,12 @@ struct SidebarWorkspaceTabCount: Equatable, Identifiable {
 }
 
 struct SidebarWorkspaceSummary: Equatable {
+    enum Scope {
+        case agents
+        /// Header activity includes internal tasks and scopes source completeness to its contents.
+        case activity
+    }
+
     let agentCount: Int
     let states: [SidebarWorkspaceStateCount]
     let tabs: [SidebarWorkspaceTabCount]
@@ -933,8 +939,9 @@ enum SidebarPresentation {
         countsComplete: Bool,
         now: Date,
         observations: SidebarCopilotTree? = nil,
-        includingInternalTasks: Bool = false
+        scope: SidebarWorkspaceSummary.Scope = .agents
     ) -> SidebarWorkspaceSummary {
+        let includingInternalTasks = scope == .activity
         let managedSurfaces = Set(managed.map(\.surfaceId))
         let placements = sessionPlacements(sessions, managed: managed, observations: observations, now: now)
         // Counting a destination is independent of attesting its session contents.
@@ -946,11 +953,17 @@ enum SidebarPresentation {
                 && $0.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
         } ?? true
         var counts: [AgentSummaryState: Int] = [:]
-        var incomplete = !countsComplete || orchestrationAvailability != .ready || !currentSnapshot
+        let orchestrationIncomplete = orchestrationAvailability != .ready
+            && (!managed.isEmpty || ![.stale, .waiting].contains(orchestrationAvailability))
+        let sourcesIncomplete = scope == .activity
+            ? orchestrationIncomplete || (!sessions.isEmpty && !currentSnapshot)
+            : orchestrationAvailability != .ready || !currentSnapshot
+        var incomplete = !countsComplete || sourcesIncomplete
             || sessions.contains {
                 !SidebarCopilotTree.isFresh($0.observedAt, now: now) || identityCounts[$0.id] != 1
                     || !$0.childrenComplete || $0.treeDegraded || $0.internalTaskCountsIncomplete
                     || $0.attentionDegraded
+                    || (scope == .activity && $0.nodes.contains { $0.state == .unknown || $0.attentionDegraded })
             }
             || bySurface.values.contains { $0.filter { $0.liveness != .dead }.count > 1 }
 
@@ -1003,12 +1016,14 @@ enum SidebarPresentation {
 
     static func collapsedActivity(
         sessions: [SidebarCopilotSession], managed: [SidebarOrchestrationNode],
-        availability: SidebarOrchestrationAvailability, countsComplete: Bool,
+        availability: SidebarOrchestrationAvailability,
         observations: SidebarCopilotTree, now: Date
     ) -> SidebarWorkspaceSummary.Activity? {
+        // The summary checks these sessions' completeness; a window-wide count flag
+        // would let an unrelated workspace's missing children decorate this header.
         workspaceSummary(
             surfaces: [], sessions: sessions, managed: managed, orchestrationAvailability: availability,
-            countsComplete: countsComplete, now: now, observations: observations, includingInternalTasks: true
+            countsComplete: true, now: now, observations: observations, scope: .activity
         ).collapsedActivity(attention: workspaceAttention(
             sessions: sessions, managed: managed, availability: availability, now: now, observations: observations
         ))

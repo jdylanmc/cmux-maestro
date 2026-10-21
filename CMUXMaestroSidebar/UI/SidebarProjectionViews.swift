@@ -218,7 +218,7 @@ struct WorktreeProjectionContent: View {
         }
         return SidebarPresentation.collapsedActivity(
             sessions: sessions, managed: managed, availability: orchestration.availability,
-            countsComplete: countsComplete, observations: tree, now: now()
+            observations: tree, now: now()
         )
     }
 

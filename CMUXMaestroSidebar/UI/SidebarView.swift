@@ -2015,7 +2015,7 @@ private struct WorkspaceRow: View {
                 }
                 if !expanded, let activity = SidebarPresentation.collapsedActivity(
                     sessions: sessions, managed: managedNodes, availability: orchestration.availability,
-                    countsComplete: countsComplete, observations: copilotTree, now: now()
+                    observations: copilotTree, now: now()
                 ) {
                     SidebarCollapsedActivityButton(activity: activity) {
                         setExpanded(.workspace(workspace.id), true)
