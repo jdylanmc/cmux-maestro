@@ -71,6 +71,15 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+      - name: Upload bounded multiwindow teardown phases
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: multiwindow-teardown-phases
+          path: .build/tests/scoped-results/multiwindow-diagnostics/**/*.json
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
 
   validate-contracts:
     # Script, contract and standalone native suites, short suites first; the long preview-transaction

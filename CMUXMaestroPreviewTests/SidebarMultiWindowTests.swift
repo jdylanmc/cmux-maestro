@@ -26,7 +26,7 @@ struct SidebarMultiWindowTests {
         windowA.send(sequence: 1)
         await sidebarEventually { bindingA.model.hierarchy.workspaces.map(\.id) == [windowA.workspaceID] }
 
-        let windowB = try SyntheticCmuxWindow(scene: sceneB, title: "Beta")
+        let windowB = try SyntheticCmuxWindow(scene: sceneB, title: "Beta", diagnosticTest: #function)
         windowB.send(sequence: 1)
         await sidebarEventually { bindingB.model.hierarchy.workspaces.map(\.id) == [windowB.workspaceID] }
         windowA.send(sequence: 2)
@@ -102,7 +102,7 @@ struct SidebarMultiWindowTests {
             if case .unpaired = state {} else { disclosedWhileUnpaired = true }
         }
         defer { observation.cancel() }
-        let windowB = try SyntheticCmuxWindow(scene: scene, title: "Beta")
+        let windowB = try SyntheticCmuxWindow(scene: scene, title: "Beta", diagnosticTest: #function)
         defer { windowB.close() }
         windowB.send(sequence: 5)
         windowA.send(sequence: 6)
@@ -267,9 +267,10 @@ private final class SyntheticCmuxWindow {
     var isAccepted: Bool { extensionSide.accepted }
     var selectedWorkspaces: [UUID] { host.selectedWorkspaces }
 
-    init(scene: CmuxSidebarScene, title: String) throws {
+    init(scene: CmuxSidebarScene, title: String, diagnosticTest: String? = nil) throws {
         self.title = title
         host = SyntheticHostObject()
+        if let diagnosticTest { try host.enableDiagnostics(test: diagnosticTest) }
         extensionSide = ExtensionSideListener(scene: scene, onInvalidation: { [host] in
             host.recordCloseEvent("extension-invalidation")
         })
@@ -334,12 +335,14 @@ private final class ExtensionSideListener: NSObject, NSXPCListenerDelegate, @unc
     }
 }
 
+// Synchronous XPC callbacks share only lock-protected synthetic observations.
 private final class SyntheticHostObject: NSObject, CMUXSidebarHostXPC, @unchecked Sendable {
     private let lock = NSLock()
     private var selected: [UUID] = []
     private var isInvalidated = false
     private var closeStarted: ContinuousClock.Instant?
     private var closeEvents: [String: Duration] = [:]
+    private var diagnostics: (directory: URL, test: String)?
 
     var selectedWorkspaces: [UUID] { lock.withLock { selected } }
     var invalidated: Bool { lock.withLock { isInvalidated } }
@@ -350,16 +353,45 @@ private final class SyntheticHostObject: NSObject, CMUXSidebarHostXPC, @unchecke
     }
 
     func beginClose() {
-        lock.withLock {
-            if closeStarted == nil { closeStarted = ContinuousClock.now }
+        let started = lock.withLock {
+            guard closeStarted == nil else { return false }
+            closeStarted = ContinuousClock.now
+            return true
         }
+        if started { saveCloseEvent("close-requested", elapsed: .zero) }
     }
 
     func recordCloseEvent(_ phase: String) {
         let instant = ContinuousClock.now
-        lock.withLock {
-            guard let closeStarted, closeEvents[phase] == nil else { return }
-            closeEvents[phase] = closeStarted.duration(to: instant)
+        let elapsed = lock.withLock { () -> Duration? in
+            guard let closeStarted, closeEvents[phase] == nil else { return nil }
+            let elapsed = closeStarted.duration(to: instant)
+            closeEvents[phase] = elapsed
+            return elapsed
+        }
+        if let elapsed { saveCloseEvent(phase, elapsed: elapsed) }
+    }
+
+    func enableDiagnostics(test: String) throws {
+        let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let directory = repository.appendingPathComponent(
+            ".build/tests/scoped-results/multiwindow-diagnostics/\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        lock.withLock { diagnostics = (directory, test) }
+        saveCloseEvent("fixture-created", elapsed: nil)
+    }
+
+    private func saveCloseEvent(_ phase: String, elapsed: Duration?) {
+        guard let diagnostics = lock.withLock({ diagnostics }) else { return }
+        do {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "schema": "1", "test": diagnostics.test, "phase": phase,
+                "elapsedSinceClose": elapsed.map(String.init(describing:)) ?? "not-started",
+            ], options: [.sortedKeys])
+            // One immutable file per phase cannot overwrite a concurrent callback's evidence.
+            try data.write(to: diagnostics.directory.appendingPathComponent("\(phase).json"), options: .atomic)
+        } catch {
+            Issue.record("Cannot write synthetic teardown phase artifact")
         }
     }
 
