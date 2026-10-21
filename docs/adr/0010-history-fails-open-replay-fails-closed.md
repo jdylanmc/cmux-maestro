@@ -8,6 +8,26 @@ Rejected: silent repair, overwrite on corruption, eviction of exact evidence at 
 
 Consequence: users may see more history until reset. A false positive in the 128-KiB spill filter rejects a fresh event.
 
+## Clarification (2026-10-21, #269): isolate child-local doubt
+
+An invalid child field or disagreement between its legacy and observed
+projections disables hiding for that child, not every child in the session.
+Suspect evidence still cannot hide its owner or required ancestry; unrelated
+valid children retain their history controls. Malformed inherited ancestry
+protects the affected descendants. Rejected duplicate or empty child identities
+protect their identifiable ancestor chains before the rows are filtered out.
+Children whose parent transitively names a rejected duplicate, empty or
+foreign-owner identity also remain invalid and unresolved before history filtering.
+Consistency checks cannot be
+waived by an invalid peer in either projection. Strict validation still rejects
+the snapshot, and the session's counts remain partial.
+
+Unattributable doubt stays session-wide: a legacy child absent from observed
+evidence, a truncated legacy traversal, or a rejected identity without an
+identifiable child ancestor chain disables child hiding for the session.
+Malformed stored settings, schema mismatch, replay and capacity policy do not
+change.
+
 ## Amendment (2026-10-20, #280): ended nodes' launch payload leaves control state
 
 Retired history filled the 1 MiB control-state cap with launch-only payload (task text, PATH), and every write refused. Compaction is not eviction: on each state write, an ended node (`resource-retired`, `terminal-disappeared`, `process-disappeared`, `launch-failed`, `startup-failed`) with no launch lease, archive in progress or unresolved surface moves its `task` and `copilotExecutable` to `control/retired/<node-id>.json` (owner-only directory and file, same protection as `state.json`), keyed by generation, and drops its `launchPath` (a resume uses its own terminal's PATH). Identity, lineage, generation, outcome, timestamps, account, launch settings, policy, messaging and Git evidence stay in state, so resume, archive, capacity and the sidebar projection read the node as before.

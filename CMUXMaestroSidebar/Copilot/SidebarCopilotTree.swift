@@ -307,14 +307,14 @@ struct SidebarCopilotTree: Equatable {
             }
             var sessionAttention = signals(
                 observation.attention, sessionID: sessionID, ownerID: nil,
-                settings: attention, observedAt: observedAt, now: now
+                settings: attention, generatedAt: snapshot.generatedAt, now: now
             )
             if !assessment.sessionStateIsValid || assessment.hasUncountedChildren { sessionAttention.degraded = true }
             let sessionActivity = safeActivity(observation.activity.knownValue, liveness: liveness,
-                                               observedAt: observedAt, now: now)
+                                               generatedAt: snapshot.generatedAt, now: now)
             let childAttention = Dictionary(uniqueKeysWithValues: validated.map { child in
                 var value = signals(child.attention, sessionID: sessionID, ownerID: child.id.rawValue,
-                                    settings: attention, observedAt: observedAt, now: now)
+                                    settings: attention, generatedAt: snapshot.generatedAt, now: now)
                 if assessment.invalidChildren.contains(child.id) || assessment.hasUncountedChildren { value.degraded = true }
                 return (child.id.rawValue, value)
             })
@@ -336,7 +336,7 @@ struct SidebarCopilotTree: Equatable {
                     }
                 } else if history.isDismissed(sessionID: sessionID, child: child) {
                     hidden.insert(child.id.rawValue)
-                } else if let deadline = history.deadline(for: child, observedAt: observedAt, now: now) {
+                } else if let deadline = history.deadline(for: child, generatedAt: snapshot.generatedAt, now: now) {
                     if deadline <= now {
                         hidden.insert(child.id.rawValue)
                     } else {
@@ -358,7 +358,7 @@ struct SidebarCopilotTree: Equatable {
             // every surviving state, including idle and unknown, not just running work.
             var tree = childTree(
                 validated.filter { retained.contains($0.id.rawValue) }, liveness: liveness,
-                historyAncestors: hidden.intersection(retained), observedAt: observedAt, now: now,
+                historyAncestors: hidden.intersection(retained), generatedAt: snapshot.generatedAt, now: now,
                 attention: childAttention, invalidStates: assessment.invalidStates,
                 unresolvedParents: assessment.unresolvedParents
             )
@@ -454,7 +454,7 @@ struct SidebarCopilotTree: Equatable {
 
     private static func childTree(
         _ children: [AgentChildWork], liveness: AgentProcessLiveness,
-        historyAncestors: Set<String>, observedAt: Date, now: Date,
+        historyAncestors: Set<String>, generatedAt: Date, now: Date,
         attention: [String: (values: [AgentAttention], degraded: Bool)],
         invalidStates: Set<ChildWorkID>, unresolvedParents: Set<ChildWorkID>
     ) -> (nodes: [SidebarCopilotNode], degraded: Bool, omitted: Int, omittedActive: Int) {
@@ -517,7 +517,7 @@ struct SidebarCopilotTree: Equatable {
             }
             let descendants = byParent[child.id.rawValue] ?? []
             let signals = attention[child.id.rawValue]
-            let activity = safeActivity(child.activity.knownValue, liveness: liveness, observedAt: observedAt, now: now)
+            let activity = safeActivity(child.activity.knownValue, liveness: liveness, generatedAt: generatedAt, now: now)
             if signals?.degraded == true || activity.degraded || child.state.isDegraded
                 || child.activity.isDegraded || child.title.isDegraded || child.model?.isDegraded == true {
                 degraded = true
@@ -532,7 +532,7 @@ struct SidebarCopilotTree: Equatable {
                 ancestryUnresolved: unresolved,
                 hasChildren: false,
                 terminalEvent: child.terminalEvent,
-                terminalTimestamp: SidebarHistorySettings.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now),
+                terminalTimestamp: SidebarHistorySettings.knownTimestamp(child.terminalEvent, generatedAt: generatedAt, now: now),
                 historyAncestor: historyAncestors.contains(child.id.rawValue),
                 attention: signals?.values ?? [], attentionDegraded: signals?.degraded ?? false, activity: activity.value,
                 stateDetail: child.stateDetail, observedParent: child.parent
@@ -562,7 +562,7 @@ struct SidebarCopilotTree: Equatable {
 
     private static func signals(
         _ attention: [AgentAttention]?, sessionID: UUID, ownerID: String?,
-        settings: SidebarAttentionSettings, observedAt: Date, now: Date
+        settings: SidebarAttentionSettings, generatedAt: Date, now: Date
     ) -> (values: [AgentAttention], degraded: Bool) {
         var seen: Set<AgentEvidenceID> = []
         var degraded = (attention?.count ?? 0) > 4096
@@ -574,13 +574,13 @@ struct SidebarCopilotTree: Equatable {
             }
             guard !settings.contains(signal, sessionID: sessionID, ownerID: ownerID) else { return nil }
             return AgentAttention(kind: signal.kind, evidence: signal.evidence,
-                                  occurredAt: SidebarHistorySettings.knownDate(signal.occurredAt, observedAt: observedAt, now: now))
+                                  occurredAt: SidebarHistorySettings.knownDate(signal.occurredAt, generatedAt: generatedAt, now: now))
         }
         return (values, degraded)
     }
 
     private static func safeActivity(
-        _ activity: AgentActivity?, liveness: AgentProcessLiveness, observedAt: Date, now: Date
+        _ activity: AgentActivity?, liveness: AgentProcessLiveness, generatedAt: Date, now: Date
     ) -> (value: AgentActivity?, degraded: Bool) {
         guard let activity else { return (nil, false) }
         let prefix: String
@@ -594,7 +594,7 @@ struct SidebarCopilotTree: Equatable {
         if activity.kind == .executing && liveness != .alive { return (nil, false) }
         return (AgentActivity(
             kind: activity.kind, summary: summary,
-            lastEventAt: SidebarHistorySettings.knownDate(activity.lastEventAt, observedAt: observedAt, now: now)
+            lastEventAt: SidebarHistorySettings.knownDate(activity.lastEventAt, generatedAt: generatedAt, now: now)
         ), false)
     }
 }

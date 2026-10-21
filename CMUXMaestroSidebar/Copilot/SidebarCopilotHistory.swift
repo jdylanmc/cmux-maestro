@@ -54,21 +54,21 @@ nonisolated struct SidebarHistorySettings: Codable, Equatable, Sendable {
         return dismissed.contains(.init(sessionID: sessionID, childID: child.id.rawValue, eventID: event.id))
     }
 
-    func deadline(for child: AgentChildWork, observedAt: Date, now: Date) -> Date? {
+    func deadline(for child: AgentChildWork, generatedAt: Date, now: Date) -> Date? {
         guard !child.isInternalTask, child.workState.isTerminal, child.workState != .failed, let duration = retention.duration,
-              let timestamp = Self.knownTimestamp(child.terminalEvent, observedAt: observedAt, now: now) else {
+              let timestamp = Self.knownTimestamp(child.terminalEvent, generatedAt: generatedAt, now: now) else {
             return nil
         }
         return timestamp.addingTimeInterval(duration)
     }
 
-    static func knownTimestamp(_ event: AgentTerminalEvent?, observedAt: Date, now: Date) -> Date? {
-        knownDate(event?.timestamp, observedAt: observedAt, now: now)
+    static func knownTimestamp(_ event: AgentTerminalEvent?, generatedAt: Date, now: Date) -> Date? {
+        knownDate(event?.timestamp, generatedAt: generatedAt, now: now)
     }
 
-    static func knownDate(_ date: Date?, observedAt: Date, now: Date) -> Date? {
+    static func knownDate(_ date: Date?, generatedAt: Date, now: Date) -> Date? {
         guard let timestamp = date, timestamp.timeIntervalSince1970.isFinite,
-              timestamp <= observedAt, timestamp <= now else { return nil }
+              timestamp <= generatedAt, timestamp <= now else { return nil }
         return timestamp
     }
 }

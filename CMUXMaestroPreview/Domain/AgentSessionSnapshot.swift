@@ -797,28 +797,81 @@ extension AgentSessionSnapshot {
         result.unresolvedParents = evidence.unresolvedParents
         result.omittedChildren = evidence.omittedChildren
         result.hasUncountedChildren = evidence.hasUncountedChildren
-        if session.childWorkObservation != nil, !legacy.isValid {
-            result.invalidChildren.formUnion(evidence.children.map(\.id))
-        }
-        if let observation = session.childWorkObservation, legacy.isValid {
-            // Unrelated errors cannot waive consistency; only unique, valid
-            // entries may establish a match against the compatibility view.
-            let groups = Dictionary(grouping: evidence.children, by: \.id)
-            let byID = groups.compactMapValues { matches -> AgentChildWork? in
+        result.invalidChildren.formUnion(evidence.unresolvedParents)
+        let groups = Dictionary(grouping: evidence.children, by: \.id)
+        if let observation = session.childWorkObservation {
+            result.invalidChildren.formUnion(legacy.invalidChildren)
+            result.invalidChildren.formUnion(legacy.unresolvedParents)
+            let legacyGroups = Dictionary(grouping: legacy.children, by: \.id)
+            var inconsistentIDs = Set<ChildWorkID>()
+            for (id, matches) in legacyGroups {
                 guard matches.count == 1, let child = matches.first,
-                      !evidence.invalidChildren.contains(child.id),
-                      !evidence.unresolvedParents.contains(child.id) else { return nil }
-                return child
+                      let observed = groups[id], observed.count == 1,
+                      observed.first == child.containing([]) else {
+                    inconsistentIDs.insert(id)
+                    continue
+                }
             }
-            let consistent = result.check {
-                guard legacy.children.allSatisfy({ byID[$0.id] == $0.containing([]) }),
-                      !observation.legacyProjectionIsLossless
-                        || (evidence.isValid && legacy.children.count == observation.items.count) else {
+            if observation.legacyProjectionIsLossless {
+                inconsistentIDs.formUnion(groups.keys.filter { legacyGroups[$0] == nil })
+            }
+            result.check {
+                guard inconsistentIDs.isEmpty else {
                     throw AgentSessionSnapshotValidationError.inconsistentChildProjection(path: "\(path).childWork")
                 }
             }
-            if !consistent { result.invalidChildren.formUnion(evidence.children.map(\.id)) }
+            result.invalidChildren.formUnion(inconsistentIDs)
+            // Missing compatibility children or a truncated traversal cannot be
+            // attributed to a displayed row. Keep history fail-open in that case.
+            if legacy.hasUncountedChildren || legacyGroups.keys.contains(where: { groups[$0] == nil }) {
+                result.invalidChildren.formUnion(evidence.children.map(\.id))
+            }
         }
+        // Rejected identities cannot survive the consumer's ancestor walk.
+        // Protect their exact ancestry here, before those observations disappear.
+        var protectedAncestors = Set<ChildWorkID>()
+        var unattributedDoubt = false
+        let rejected = evidence.children.filter { child in
+            if child.id.rawValue.isEmpty || groups[child.id]?.count != 1 { return true }
+            if case .session(let owner) = child.parent { return owner != session.identity }
+            return false
+        }
+        var childrenByParent: [ChildWorkID: [ChildWorkID]] = [:]
+        for child in evidence.children {
+            if case .child(let parent) = child.parent {
+                childrenByParent[parent, default: []].append(child.id)
+            }
+        }
+        var unresolved = Set(rejected.map(\.id)).union(evidence.unresolvedParents)
+        var pending = Array(unresolved)
+        while let parent = pending.popLast() {
+            for descendant in childrenByParent[parent] ?? [] {
+                guard unresolved.insert(descendant).inserted else { continue }
+                result.invalidChildren.insert(descendant)
+                result.unresolvedParents.insert(descendant)
+                pending.append(descendant)
+            }
+        }
+        for child in rejected {
+            var parent = child.parent
+            if case .session = parent {
+                unattributedDoubt = true
+            }
+            while case .child(let id) = parent {
+                guard protectedAncestors.insert(id).inserted else { break }
+                guard !id.rawValue.isEmpty, let matches = groups[id],
+                      matches.count == 1, let ancestor = matches.first else {
+                    unattributedDoubt = true
+                    break
+                }
+                result.invalidChildren.insert(id)
+                parent = ancestor.parent
+                if case .session(let owner) = parent, owner != session.identity {
+                    unattributedDoubt = true
+                }
+            }
+        }
+        if unattributedDoubt { result.invalidChildren.formUnion(groups.keys) }
         return result
     }
 }
