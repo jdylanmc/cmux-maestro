@@ -108,7 +108,7 @@ struct SidebarIconPicker: View {
             }
             HStack(spacing: 4) {
                 ForEach(SidebarAvatarColor.allCases) { color in
-                    Button { selectColor(color) } label: {
+                    Button { colorEdit.reset { selectColor(color) } } label: {
                         Circle().fill(Color(nsColor: color.nativeColor))
                             .frame(width: 18, height: 18)
                             .overlay {

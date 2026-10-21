@@ -220,7 +220,7 @@ struct SidebarTagEditor: View {
         VStack(alignment: .leading, spacing: 6) {
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(22), spacing: 6), count: 7), spacing: 6) {
                 ForEach(SidebarTagSwatch.allCases, id: \.self) { swatch in
-                    Button { draft.colors[tag.slug] = .some(swatch) } label: {
+                    Button { colorEdit.reset { draft.colors[tag.slug] = .some(swatch) } } label: {
                         Circle().fill(swatch.color.swiftUI).frame(width: 18, height: 18)
                             .overlay { if tag.swatch == swatch { Circle().strokeBorder(Color.primary, lineWidth: 2) } }
                             .frame(width: 22, height: 22).contentShape(Rectangle())
@@ -238,7 +238,7 @@ struct SidebarTagEditor: View {
                 choose: { draft.colors[tag.slug] = .some(.custom($0)) }
             )
             .id(tag.slug)
-            Button("Use automatic color") { draft.colors[tag.slug] = .some(nil) }
+            Button("Use automatic color") { colorEdit.reset { draft.colors[tag.slug] = .some(nil) } }
                 .disabled(tag.swatch == nil)
                 .font(.caption)
                 .accessibilityIdentifier("sidebar-tag-automatic-color")

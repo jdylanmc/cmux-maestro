@@ -207,6 +207,68 @@ struct SidebarIconPickerTests {
         #expect(preferences.icons.resolve(target: target, standard: standard, agent: agent).choice == resolved.choice)
     }
 
+    @Test func sameNamedIconSwatchDiscardsPendingCustomColor() throws {
+        let initial = SidebarIconChoice(glyph: "md-duck", color: .teal)
+        var selection = initial
+        var choices: [SidebarIconChoice] = []
+        let picker = SidebarIconPicker(
+            catalog: try SidebarGlyphCatalog.shared.get(), selection: initial, source: "Your choice",
+            choose: { selection = $0; choices.append($0) }, resetDefault: {}, close: {}
+        )
+        let edit = SidebarColorEdit()
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        edit.attach(well)
+        let choose: (SidebarTagColor) -> Void = { picker.selectColor(.custom($0)) }
+        well.configure(color: initial.color.nativeColor, label: "Custom", choose: choose, unavailable: { _ in })
+        #expect(well.accessibilityPerformPress())
+        defer { NSColorPanel.shared.close() }
+        well.color = .red
+        #expect(well.sendAction(well.action, to: well.target))
+        edit.reset { picker.selectColor(.teal) }
+        well.configure(color: selection.color.nativeColor, label: "Custom", choose: choose, unavailable: { _ in })
+        NSColorPanel.shared.close()
+        edit.finish()
+        #expect(selection == initial)
+        #expect(choices == [initial], "Only the explicit named choice may reach the owner")
+    }
+
+    @Test(arguments: [false, true])
+    func sameRGBTagChoiceDiscardsPendingCustomColor(useAutomatic: Bool) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let session = UUID()
+        let slug = "release"
+        let initial: SidebarTagSwatch = useAutomatic ? .custom(SidebarTagPalette.automatic(slug)) : .teal
+        let requested: SidebarTagSwatch? = useAutomatic ? nil : .teal
+        #expect(preferences.setHumanTags(slug, for: session) == nil)
+        #expect(preferences.setTagColor(initial, for: slug) == nil)
+        var draft = SidebarTagDraft(text: slug)
+        var customChoices = 0
+        let edit = SidebarColorEdit()
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        edit.attach(well)
+        let choose: (SidebarTagColor) -> Void = {
+            customChoices += 1
+            draft.colors[slug] = .some(.custom($0))
+        }
+        well.configure(color: initial.color.nativeColor, label: "Custom", choose: choose, unavailable: { _ in })
+        #expect(well.accessibilityPerformPress())
+        defer { NSColorPanel.shared.close() }
+        well.color = .red
+        #expect(well.sendAction(well.action, to: well.target))
+        edit.reset { draft.colors[slug] = .some(requested) }
+        let preview = try #require(draft.preview(preferences.tags(for: session)).first)
+        #expect(preview.background == initial.color, "The explicit choice must keep the same source RGB")
+        well.configure(color: preview.background.nativeColor, label: "Custom", choose: choose, unavailable: { _ in })
+        if !useAutomatic { NSColorPanel.shared.close() }
+        edit.finish()
+        #expect(draft.commit(to: preferences, session: session) == nil)
+        #expect(customChoices == 0)
+        #expect(preferences.tags(for: session).first?.swatch == requested)
+        #expect(preferences.tags(for: session).first?.background == initial.color)
+    }
+
     @Test func externalResetCancelsAnOpenColorEditWithoutOverwritingIt() throws {
         let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
         var changes: [SidebarTagColor] = []

@@ -76,6 +76,8 @@ deactivates, only if the canonical color changed. **Done** finishes the pending
 color before closing. Named swatches still save immediately. Both reset actions
 keep their existing precedence; either reset explicitly cancels an open custom edit,
 even when the resulting color is unchanged.
+Clicking a named swatch also cancels any pending custom edit, including when
+choosing the already-selected swatch.
 
 Human choices stay in the sidebar container's `sidebar-icons.json`, never in
 agent appearance records. Version 2 stores color as a named string or uppercase

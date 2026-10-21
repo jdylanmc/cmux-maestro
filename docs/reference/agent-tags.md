@@ -53,6 +53,8 @@ to the same output.
   to every occurrence on every session. **Use automatic color** removes it. Editor color changes,
   like tag text, are written only on **Save**; **Cancel** discards both. Agents cannot set colors.
   Colors are fixed sRGB values; light/dark appearance never changes them.
+  Choosing a named swatch or **Use automatic color** cancels any pending system-panel
+  edit before changing the draft, even when the resulting RGB is unchanged.
 - **Custom…** opens the macOS system color panel, with opacity disabled. Any chosen or entered
   color converts to opaque, eight-bit sRGB (wide-gamut channels clamp), stored as uppercase
   `#RRGGBB`. The native well shows the current color; a checkmark marks a custom choice and its
