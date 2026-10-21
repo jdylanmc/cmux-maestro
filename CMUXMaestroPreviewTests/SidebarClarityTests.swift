@@ -285,6 +285,7 @@ struct SidebarClarityTests {
         #expect(summary.blocked == 0)
         #expect(summary.label == "2 need input")
         #expect(summary.total == 2)
+        #expect(summary.detail == "Questions: 1 · Approvals: 1")
     }
 
     @Test func workspaceAttentionKeepsLastReportedBlocksWithoutInventingAQuestion() {
@@ -296,7 +297,7 @@ struct SidebarClarityTests {
         #expect(summary.needsInput == 0)
         #expect(summary.questions == 0)
         #expect(summary.lastReportedBlocked == 1)
-        #expect(summary.detail.contains("live state unverified"))
+        #expect(summary.detail == "Blocked: 1 · Input reason: Unreported · Last-reported blockers: 1 · Live state: Unverified")
     }
 
     @Test func glyphHasTwoPointInsetsInsideItsExistingTwentyFourPointSlot() throws {

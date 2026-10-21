@@ -122,7 +122,7 @@ struct NeutralObservationValidationTests {
         #expect(tree.hasUncountedChildren && tree.omittedChildrenCount >= 1)
         #expect(!tree.hasCompleteCounts && tree.availability == .partial)
         #expect(tree.dismissibleOutcomes.isEmpty && tree.acknowledgeableOutcomes.isEmpty)
-        #expect(tree.omittedChildrenDescription.contains("At least") && tree.omittedChildrenDescription.contains("unknown"))
+        #expect(tree.omittedChildrenDescription == "\(tree.omittedChildrenCount)+ · Total: Unknown")
         #expect(SidebarPresentation.overviewWarnings(tree).contains { $0.contains("Total/active counts: Unknown") })
     }
 

@@ -611,6 +611,24 @@ struct SidebarAgentHoverTests {
         }
     }
 
+    @Test(arguments: [0.0, 61.0])
+    func freshSnapshotKeepsManagedNodeAgeVisibleInHoverAndRowStatus(age: TimeInterval) throws {
+        let node = SidebarOrchestrationNode(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "worker", label: "Managed agent",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 2,
+            phase: "turn-running", availability: "busy", executionMode: .bounded,
+            createdAt: now.addingTimeInterval(-100), updatedAt: now.addingTimeInterval(-age)
+        )
+        let hover = try #require(card(.managed(node.id, generation: 2), sessions: [], nodes: [node],
+                                     availability: .ready))
+        let rowState = SidebarPresentation.managedState(node, availability: .ready, now: now)
+        let expected = age == 0 ? "Working" : "State unverified · Observation: Stale"
+        #expect(hover.subtitle == expected)
+        #expect(SidebarPresentation.statusDescription(rowState) == expected,
+                "The row tooltip and VoiceOver state retain the node's stale qualifier")
+        #expect(rowState.tone == (age == 0 ? .green : .neutral))
+    }
+
     @Test func managedPreviewRejectsAReplacedGenerationAndShowsOnlyVerifiedMetrics() throws {
         let node = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "worker", label: "Managed agent",
