@@ -797,27 +797,33 @@ extension AgentSessionSnapshot {
         result.unresolvedParents = evidence.unresolvedParents
         result.omittedChildren = evidence.omittedChildren
         result.hasUncountedChildren = evidence.hasUncountedChildren
-        if session.childWorkObservation != nil, !legacy.isValid {
-            result.invalidChildren.formUnion(evidence.children.map(\.id))
-        }
-        if let observation = session.childWorkObservation, legacy.isValid {
-            // Unrelated errors cannot waive consistency; only unique, valid
-            // entries may establish a match against the compatibility view.
+        if let observation = session.childWorkObservation {
+            result.invalidChildren.formUnion(legacy.invalidChildren)
+            let legacyGroups = Dictionary(grouping: legacy.children, by: \.id)
             let groups = Dictionary(grouping: evidence.children, by: \.id)
-            let byID = groups.compactMapValues { matches -> AgentChildWork? in
+            var inconsistentIDs = Set<ChildWorkID>()
+            for (id, matches) in legacyGroups {
                 guard matches.count == 1, let child = matches.first,
-                      !evidence.invalidChildren.contains(child.id),
-                      !evidence.unresolvedParents.contains(child.id) else { return nil }
-                return child
+                      let observed = groups[id], observed.count == 1,
+                      observed.first == child.containing([]) else {
+                    inconsistentIDs.insert(id)
+                    continue
+                }
             }
-            let consistent = result.check {
-                guard legacy.children.allSatisfy({ byID[$0.id] == $0.containing([]) }),
-                      !observation.legacyProjectionIsLossless
-                        || (evidence.isValid && legacy.children.count == observation.items.count) else {
+            if observation.legacyProjectionIsLossless {
+                inconsistentIDs.formUnion(groups.keys.filter { legacyGroups[$0] == nil })
+            }
+            result.check {
+                guard inconsistentIDs.isEmpty else {
                     throw AgentSessionSnapshotValidationError.inconsistentChildProjection(path: "\(path).childWork")
                 }
             }
-            if !consistent { result.invalidChildren.formUnion(evidence.children.map(\.id)) }
+            result.invalidChildren.formUnion(inconsistentIDs)
+            // Missing compatibility children or a truncated traversal cannot be
+            // attributed to a displayed row. Keep history fail-open in that case.
+            if legacy.hasUncountedChildren || legacyGroups.keys.contains(where: { groups[$0] == nil }) {
+                result.invalidChildren.formUnion(evidence.children.map(\.id))
+            }
         }
         return result
     }
