@@ -194,9 +194,10 @@ struct SidebarIconPickerTests {
         defer { NSColorPanel.shared.close() }
         well.color = .red
         #expect(well.sendAction(well.action, to: well.target))
-        edit.cancel()
-        if resetToAgent { preferences.resetIconToAgentSelection(for: target) }
-        else { preferences.resetIconToDefault(for: target) }
+        edit.reset {
+            if resetToAgent { preferences.resetIconToAgentSelection(for: target) }
+            else { preferences.resetIconToDefault(for: target) }
+        }
         let resolved = preferences.icons.resolve(target: target, standard: standard, agent: agent)
         #expect(resolved.choice == (resetToAgent ? agent : standard))
         well.configure(color: resolved.choice.color.nativeColor, label: "Custom", choose: choose, unavailable: { _ in })
