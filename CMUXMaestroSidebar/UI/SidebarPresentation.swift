@@ -777,14 +777,14 @@ enum SidebarPresentation {
             if !tree.hasCompleteCounts { result.append("Task states/counts: Unknown") }
         }
         if tree.issues.contains(.permissionDenied) { result.append("Copilot access denied") }
-        if tree.issues.contains(.integrationNotInstalled) { result.append("Copilot integration is not enabled") }
-        if tree.issues.contains(.loadingHistory), tree.availability != .loading { result.append("Child history is still loading") }
+        if tree.issues.contains(.integrationNotInstalled) { result.append("Integration: Not enabled") }
+        if tree.issues.contains(.loadingHistory), tree.availability != .loading { result.append("Child history: Loading") }
         for (issue, message): (AgentSnapshotIssue, String) in [
-            (.malformedData, "Some Copilot history is unreadable"),
+            (.malformedData, "History: Partially unreadable"),
             (.unsupportedFormat, "Unsupported Copilot history format"),
             (.identityChanged, "Session identity changed"),
-            (.ambiguousIdentity, "Session identity is unconfirmed"),
-            (.ambiguousTurn, "Turn identity is unconfirmed"),
+            (.ambiguousIdentity, "Session identity: Unconfirmed"),
+            (.ambiguousTurn, "Turn identity: Unconfirmed"),
             (.stateUnavailable, "Copilot state unavailable"),
             (.readLimitReached, "History read limit reached"),
             (.appearanceUnavailable, "Session icon metadata unavailable")
