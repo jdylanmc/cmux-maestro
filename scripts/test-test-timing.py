@@ -88,6 +88,39 @@ class TimingPolicyTests(unittest.TestCase):
                 self.assertTrue(any("unreviewed" in error for error in errors), errors)
                 self.assertTrue(any("stale/excess" in error for error in errors), errors)
 
+    def test_shell_command_boundaries_cannot_hide_sleeps(self):
+        for form in (
+            "PAUSE 0.1",
+            "echo ready; PAUSE 0.1",
+            "echo ready && PAUSE 0.1",
+            "false || PAUSE 0.1",
+            "printf x | PAUSE 0.1",
+            "for item in 1; do PAUSE 0.1; done",
+            "if true; then PAUSE 0.1; fi",
+            "if false; then :; else PAUSE 0.1; fi",
+            "if PAUSE 0.1; then :; fi",
+            "while PAUSE 0.1; do break; done",
+            "until PAUSE 0.1; do break; done",
+            "! PAUSE 0.1",
+            "(PAUSE 0.1; echo done)",
+            "( PAUSE 0.1; echo done)",
+            "value=$(PAUSE 0.1; echo done)",
+            "value=`PAUSE 0.1; echo done`",
+            "{ PAUSE 0.1; }",
+        ):
+            with self.subTest(form=form), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                name = "test-command.sh"
+                file = root / name
+                text = form.replace("PAUSE", "sl" + "eep")
+                file.write_text(text)
+                self.assertTrue(any("unreviewed" in error for error in timing.violations(root, [name], {})))
+                policy = {name: {"reason": "Reviewed process watchdog",
+                                 "statements": timing.statements(text, name)}}
+                self.assertEqual(timing.violations(root, [name], policy), [])
+                file.write_text(text.replace("0.1", "0.2"))
+                self.assertTrue(any("unreviewed" in error for error in timing.violations(root, [name], policy)))
+
     def test_barriers_and_virtual_clock_advancement_need_no_exception(self):
         self.assertEqual(timing.statements("await gate.open()\nclock.advance(by: .seconds(60))"), {})
         self.assertFalse(timing.test_path("Production/Clock.swift"))

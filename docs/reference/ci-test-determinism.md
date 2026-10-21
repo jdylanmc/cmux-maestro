@@ -117,6 +117,8 @@ and indentation do not affect the comparison.
 Removed statements, excess exception counts and missing test files must remove
 their old exceptions too. Test helpers under `scripts/test-fixtures/` and
 installed skill `tests/` directories are included.
+Shell sleeps are also detected after control words, negation, grouping and
+command substitution; changing their delay requires a new reviewed exception.
 
 `scripts/test-timing-allowlist.json` freezes existing occurrences, including
 real-process hang guards, fake-provider delays, offscreen native settlement,

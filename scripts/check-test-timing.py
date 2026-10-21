@@ -13,7 +13,7 @@ POLICY = ROOT / "scripts/test-timing-allowlist.json"
 PATTERN = re.compile(
     r"(?:Task|Thread|time)\s*\.\s*sleep\s*\("
     r"|(?:setTimeout|setInterval|delay|usleep|XCTWaiter)\s*\("
-    r"|(?:^|[;&|]\s*)\s*sleep\s+[^\n;&|]+"
+    r"|(?:^|[;&|({`!]|\b(?:do|then|else|if|while|until)\b)\s*sleep\s+[^\n;&|]+"
     r"|DispatchTime\s*\.\s*now\s*\("
     r"|(?:ContinuousClock|SuspendingClock)(?:\s*\(\s*\))?\s*\.\s*now\b"
     r"|Date\s*\.\s*now\b"
