@@ -43,12 +43,16 @@ class TimingPolicyTests(unittest.TestCase):
             ("NewTests/Clock.swift", "let now = CFAbsoluteTimeGet" + "Current()"),
             ("NewTests/Clock.swift", "await fulfill" + "ment(of: [done], timeout: 0.1)"),
             ("NewTests/Clock.swift", "wait(" + "for: [done], timeout: 0.1)"),
+            ("NewTests/Clock.swift", "waitFor" + "Expectations(timeout: 0.1)"),
+            ("NewTests/Clock.swift", "Date(timeInterval" + "SinceNow: 0.1)"),
             ("scripts/test-clock.mjs", "performance." + "now()"),
             ("scripts/test-clock.mjs", "process." + "hrtime.bigint()"),
             ("scripts/test-clock.mjs", "AbortSignal." + "timeout(2000)"),
             ("scripts/test-fixtures/clock.py", "time." + "perf_counter()"),
             ("scripts/test-fixtures/clock.py", "time." + "monotonic_ns()"),
             ("scripts/test-fixtures/clock.py", "datetime." + "now()"),
+            ("scripts/test-fixtures/clock.py", "datetime.datetime." + "utcnow()"),
+            ("scripts/test-fixtures/clock.py", "time." + "time_ns()"),
             (".agents/skills/example/tests/clock.test.mjs", "await de" + "lay(100)"),
         ]:
             with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
@@ -57,6 +61,26 @@ class TimingPolicyTests(unittest.TestCase):
                 file.parent.mkdir(parents=True)
                 file.write_text(text)
                 self.assertTrue(timing.violations(root, [name], {}))
+
+    def test_continuation_arguments_are_part_of_the_exception(self):
+        for original in [
+            "set" + "Timeout(() => {\n  consume(')'); // misleading )\n},\n  50)",
+            "try await Task\n .sl" + "eep(\n for: .milliseconds(50)\n)",
+            "await de" + "lay(\n /* misleading ) */\n 50\n)",
+            "waitFor" + "Expectations(\n timeout: 50\n)",
+        ]:
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                name = "tests/clock.test.mjs"
+                file = root / name
+                file.parent.mkdir()
+                policy = {name: {"reason": "Reviewed hang guard", "statements": timing.statements(original)}}
+                file.write_text(original)
+                self.assertEqual(timing.violations(root, [name], policy), [])
+                file.write_text(original.replace("50", "2"))
+                errors = timing.violations(root, [name], policy)
+                self.assertTrue(any("unreviewed" in error for error in errors), errors)
+                self.assertTrue(any("stale/excess" in error for error in errors), errors)
 
     def test_barriers_and_virtual_clock_advancement_need_no_exception(self):
         self.assertEqual(timing.statements("await gate.open()\nclock.advance(by: .seconds(60))"), {})

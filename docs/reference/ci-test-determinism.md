@@ -5,6 +5,10 @@ schedule work within a few seconds. A real-process readiness/exit bound is a
 60-second **hang guard**, not the behavior being asserted. Do not add retries.
 Use injected time for expiry, explicit continuations/streams for ordering, and
 fixed identities when exercising deliberately tiny probabilistic replay filters.
+The shared sidebar hang guard retains **both** the original 300 actor scheduling
+opportunities and a 60-second minimum: expiration requires exhausting both.
+A wall-only deadline had shortened the old effective bound under full-suite
+contention. Injected-clock tests cover both slow and fast actor turns.
 
 ## Required behavioral coverage
 
@@ -15,6 +19,15 @@ fixed identities when exercising deliberately tiny probabilistic replay filters.
 - Orchestration snapshots and naming use an injected clock. Polling tests await
   publication at the existing pause boundary rather than counting scheduler yields.
   Cadence fixtures suspend until cancellation, never a 60-second accidental tick.
+- Multiwindow teardown awaits a subscribed scene publication, not host-local
+  connection invalidation. The shared-scene test still sends its final snapshot
+  during teardown. Synthetic endpoint and publication durations distinguish XPC
+  propagation from actor scheduling; these measurements are diagnostics, not
+  speed assertions. The earlier hosted failure's exported diagnostics exceeded
+  the artifact cap, so they do not establish which stage stalled.
+- A denied installer process-group probe is conservatively treated as present.
+  Only proven absence permits recovery; a transient permission refusal cannot
+  crash a completion wait or release its retained guard.
 - Cross-process preference tests still exercise real locks, writes, file
   presentation, and existing observable projections. Their 60-second bounds only
   detect a missing event; no manual refresh substitutes for notification delivery.
@@ -83,7 +96,9 @@ never spoof the venue variables to turn that refusal into passing evidence.
 `scripts/check-test-timing.py`, including documentation-only changes. The guard
 scans tracked Swift, Python, JavaScript and shell test sources for sleeps, wall
 clock reads/comparisons, OCR and key-window dependence. New files, changed
-statements, and additional copies of an existing statement fail. Line numbers
+statements, and additional copies of an existing statement fail. Multiline calls
+include their balanced argument lists, including continuation-line delays.
+Line numbers
 and indentation do not affect the comparison.
 Removed statements, excess exception counts and missing test files must remove
 their old exceptions too. Test helpers under `scripts/test-fixtures/` and

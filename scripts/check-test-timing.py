@@ -17,19 +17,20 @@ PATTERN = re.compile(
     r"|DispatchTime\s*\.\s*now\s*\("
     r"|(?:ContinuousClock|SuspendingClock)(?:\s*\(\s*\))?\s*\.\s*now\b"
     r"|Date\s*\.\s*now\b"
-    r"|(?<!\w)\.now\b|Date\s*\(\s*\)"
+    r"|(?<!\w)\.now\b|Date\s*\(\s*(?:\)|timeIntervalSinceNow\s*:)"
     r"|CFAbsoluteTimeGetCurrent\s*\("
     r"|\b(?:fulfillment|wait)\s*\(\s*(?:of|for)\s*:"
+    r"|\bwaitForExpectations\s*\(\s*timeout\s*:"
     r"|\b(?:performance\s*\.\s*now|process\s*\.\s*hrtime(?:\s*\.\s*bigint)?"
     r"|AbortSignal\s*\.\s*timeout)\s*\("
-    r"|\bdatetime(?:\s*\.\s*datetime)?\s*\.\s*now\s*\("
+    r"|\bdatetime(?:\s*\.\s*datetime)?\s*\.\s*(?:now|utcnow)\s*\("
     r"|\.duration\s*\(\s*to\s*:"
     r"|\.timeIntervalSince\s*\("
     r"|#(?:expect|require)\s*\([^\n]*\b(?:elapsed|duration)\b"
     r"|\bassert(?:Less|Greater)(?:Equal)?\s*\([^\n]*(?:elapsed|duration|time\.)"
     r"|\bisKeyWindow\b"
     r"|\bVNRecognizeTextRequest\b"
-    r"|\b(?:time\s*\.\s*(?:monotonic(?:_ns)?|perf_counter(?:_ns)?|time)|Date\.now)\s*\("
+    r"|\b(?:time\s*\.\s*(?:monotonic(?:_ns)?|perf_counter(?:_ns)?|time(?:_ns)?)|Date\.now)\s*\("
     r"|\b(?:RunLoop\.[\w.]+\.run|Thread\.sleep)\s*\("
     r"|\b(?:asyncAfter|sleep)\s*\(",
     re.MULTILINE,
@@ -45,15 +46,60 @@ def test_path(path):
                  or ("scripts" in value.parts and "Test" in value.name)))
 
 
+def statement_end(text, start, minimum):
+    """Continue past newlines inside call arguments, including nested callbacks."""
+    depth = 0
+    quote = None
+    block_comment = False
+    index = start
+    while index < len(text):
+        char = text[index]
+        if quote:
+            if char == "\\":
+                index += 2
+                continue
+            if text.startswith(quote, index):
+                index += len(quote)
+                quote = None
+                continue
+        elif block_comment:
+            if text.startswith("*/", index):
+                block_comment = False
+                index += 2
+                continue
+        elif text.startswith("//", index) or (
+            char == "#" and (index + 1 == len(text) or text[index + 1].isspace())
+        ):
+            newline = text.find("\n", index)
+            index = len(text) if newline < 0 else newline
+            if index >= minimum and depth == 0:
+                return index
+            continue
+        elif text.startswith("/*", index):
+            block_comment = True
+            index += 2
+            continue
+        elif char in "\"'`":
+            quote = char * 3 if text.startswith(char * 3, index) else char
+            index += len(quote)
+            continue
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        elif char == "\n" and index >= minimum and depth == 0:
+            return index
+        index += 1
+    return len(text)
+
+
 def statements(text):
-    """Retain the complete affected line(s), not only the API name or a mutable line number."""
+    """Fingerprint whole affected statements, not just the first line of a call."""
     result = Counter()
     spans = set()
     for match in PATTERN.finditer(text):
         start = text.rfind("\n", 0, match.start()) + 1
-        end = text.find("\n", match.end())
-        if end < 0:
-            end = len(text)
+        end = statement_end(text, start, match.end())
         spans.add((start, end))
     for start, end in sorted(spans):
         statement = " ".join(text[start:end].split())
