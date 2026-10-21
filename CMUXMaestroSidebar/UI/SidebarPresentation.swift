@@ -109,6 +109,10 @@ struct SidebarWorkspaceSummary: Equatable {
     let tabs: [SidebarWorkspaceTabCount]
     let incomplete: Bool
 
+    func collapsedActivity(attention: SidebarWorkspaceAttention) -> SidebarWorkspaceStateCount? {
+        states.first { $0.title == "Working" }
+    }
+
     var agentLine: String {
         var parts = ["\(agentCount) \(agentCount == 1 ? "agent" : "agents")"]
         parts += states.map { "\($0.count) \($0.title.lowercased())" }

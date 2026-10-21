@@ -6,6 +6,57 @@ struct SidebarWorkspaceCountTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func collapsedWorkspaceKeepsWorkingCountWithoutDoubleCountingManagedSessions() throws {
+        let root = owner(sessionID: fixtures.sessionID)
+        let observed = tree([
+            session(fixtures.sessionID, surface: fixtures.surfaceA),
+            session(fixtures.otherSessionID, surface: fixtures.surfaceB)
+        ])
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: observed.sessions, managed: [root], availability: .ready, now: now, observations: observed
+        )
+        let activity = try #require(summary(observed, managed: [root]).collapsedActivity(attention: attention))
+        #expect(activity.count == 2)
+        #expect(activity.visual == SidebarPresentation.state(.working))
+    }
+
+    @Test(arguments: ["input", "blocked", "failed", "idle", "unknown", "incomplete"])
+    func collapsedWorkspacePrioritizesActionAndNeverHidesUncertainty(_ scenario: String) throws {
+        let state: AgentWorkState = switch scenario {
+        case "blocked": .blocked
+        case "failed": .failed
+        case "unknown": .unknown
+        default: .idle
+        }
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA, state: state)
+        if scenario == "input" {
+            observed.attention = [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()),
+                                        occurredAt: now)]
+        }
+        if scenario == "incomplete" { observed.attentionDegraded = true }
+        let competing = ["input", "blocked", "failed"].contains(scenario)
+            ? [session(fixtures.otherSessionID, surface: fixtures.surfaceB)] : []
+        let snapshot = tree([observed] + competing)
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: snapshot.sessions, managed: [], availability: .ready, now: now, observations: snapshot
+        )
+        let activity = summary(snapshot, managed: []).collapsedActivity(attention: attention)
+        if scenario == "idle" {
+            #expect(activity == nil)
+        } else {
+            let cue = try #require(activity)
+            let expected = switch scenario {
+            case "input": "Needs input"
+            case "blocked": "Blocked"
+            case "failed": "Failed"
+            case "unknown": "Unknown"
+            default: "Counts incomplete"
+            }
+            #expect(cue.title == expected)
+            #expect(cue.count == (scenario == "incomplete" ? 0 : 1))
+        }
+    }
+
     @Test func legacyCoordinatorCountsOneSurfaceWithoutClaimingSessionContents() throws {
         let root = owner()
         let observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
