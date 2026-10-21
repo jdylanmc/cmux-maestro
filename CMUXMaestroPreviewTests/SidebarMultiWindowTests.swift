@@ -105,6 +105,8 @@ struct SidebarMultiWindowTests {
 
         windowB.close()
         scene.viewDidDisappear(viewB)
+        // Preserve the regression's update-during-teardown interleaving.
+        windowA.send(sequence: 7)
         await sidebarEventually {
             if case .bound(_, _, let context) = scene.state {
                 return context?.snapshot.windowID == windowA.windowID
@@ -112,7 +114,6 @@ struct SidebarMultiWindowTests {
             return false
         }
         #expect(!windowA.wasInvalidated)
-        windowA.send(sequence: 7)
         await sidebarEventually { bindingA.model.hierarchy.sequence == 7 }
         #expect(bindingA.model.hierarchy.workspaces.map(\.id) == [windowA.workspaceID])
         #expect(bindingA.model.hierarchy.windowID == windowA.windowID)
