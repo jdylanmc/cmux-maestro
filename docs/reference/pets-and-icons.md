@@ -72,9 +72,9 @@ macOS color well that opens the system color panel. Choose or enter any opaque
 sRGB hex. The well displays the current color; a checkmark marks a custom
 selection and its accessibility label includes the hex. Custom changes preview
 in the native well and panel, then save once when the panel closes or the well
-deactivates, only if the canonical color changed. Named swatches still save
-immediately. Both reset actions keep their existing precedence; a reset cancels
-an open custom edit.
+deactivates, only if the canonical color changed. **Done** finishes the pending
+color before closing. Named swatches still save immediately. Both reset actions
+keep their existing precedence; a reset cancels an open custom edit.
 
 Human choices stay in the sidebar container's `sidebar-icons.json`, never in
 agent appearance records. Version 2 stores color as a named string or uppercase
@@ -94,6 +94,8 @@ edge. Named colors and theme inheritance are unchanged. This is human-only:
 `maestro_spawn`, `register`, `spawn` and `icon` still accept only the named
 palette. The Python controller reads agent records, not either human color store;
 its stored agent-color validation intentionally remains named-only.
+The sidebar also rejects hex in agent `current.json` and version-1 `icons.json`;
+accepting custom human preferences does not widen those decoded contracts.
 
 ### Agent appearance records
 

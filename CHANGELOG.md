@@ -26,7 +26,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Icon and tag editors keep their swatches and add **Custom…**, the macOS system
   color picker, for any opaque sRGB hex (#294). Custom tags retain readable
   black/white text; custom icons retain a contrasting outline. Dragging previews
-  locally and commits once on panel close; the editor stays open. Named-only
+  locally and commits once on panel close or Save/Done; the editor stays open. Named-only
   preferences remain format 1; custom choices use format 2, which older builds
   preserve but cannot display. Agent color APIs remain named-only.
 - `/maestro-demo` runs a human-requested live demo with two visible workers (three

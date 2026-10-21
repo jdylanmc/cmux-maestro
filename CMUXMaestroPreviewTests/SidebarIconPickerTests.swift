@@ -46,7 +46,7 @@ struct SidebarIconPickerTests {
         host.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
         let well = try #require(descendants(host).compactMap { $0 as? NSColorWell }.first)
-        well.activate(true)
+        #expect(well.accessibilityPerformPress())
         let panel = NSColorPanel.shared
         defer { panel.close() }
         #expect(panel.isVisible)
@@ -65,13 +65,14 @@ struct SidebarIconPickerTests {
         #expect(writes == 1, "Opening and closing an unchanged canonical color must not write")
     }
 
-    @Test func nativePanelKeepsTransientTagPopoverAndDraftUntilSave() throws {
+    @Test func nativePanelKeepsTransientTagPopoverAndSavesItsOpenDraft() throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
         let session = UUID()
         #expect(preferences.setHumanTags("release", for: session) == nil)
         var draft = SidebarTagDraft(text: "release, review")
+        let edit = SidebarColorEdit()
         let original = preferences.tagSettings
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 320, height: 200),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -83,7 +84,7 @@ struct SidebarIconPickerTests {
         popover.animates = false
         popover.behavior = .transient
         let content = NSHostingController(rootView: SidebarCustomColorPicker(
-            color: NSColor.systemTeal, choose: { draft.colors["release"] = .some(.custom($0)) }
+            color: NSColor.systemTeal, edit: edit, choose: { draft.colors["release"] = .some(.custom($0)) }
         ).padding(12).frame(width: 220, height: 80))
         popover.contentViewController = content
         defer { NSColorPanel.shared.close(); popover.close(); window.close() }
@@ -92,7 +93,13 @@ struct SidebarIconPickerTests {
         func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
         let well = try #require(descendants(content.view).compactMap { $0 as? SidebarNativeColorWell }.first)
         #expect(popover.isShown)
-        well.activate(true)
+        let nativeWindow = try #require(well.window)
+        let point = well.convert(NSPoint(x: well.bounds.midX, y: well.bounds.midY), to: nil)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: nativeWindow.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        well.mouseDown(with: down)
         let panel = NSColorPanel.shared
         #expect(panel.isVisible)
         #expect(!well.supportsAlpha)
@@ -103,15 +110,48 @@ struct SidebarIconPickerTests {
         popover.performClose(nil)
         #expect(popover.isShown, "The open native panel must prevent outside-click dismissal")
         #expect(draft.text == "release, review" && draft.colors.isEmpty)
-        panel.close()
+        edit.finish()
         #expect(popover.isShown)
         #expect(draft.colors["release"] == .some(.custom(try #require(SidebarTagColor(hex: "#123456")))))
-        #expect(preferences.tagSettings == original, "Panel close edits only the draft")
+        #expect(preferences.tagSettings == original, "Finishing the native edit changes only the draft")
         #expect(draft.commit(to: preferences, session: session) == nil)
         #expect(preferences.humanTags(for: session) == ["release", "review"])
         #expect(preferences.tags(for: session).first?.background.hex == "#123456")
         popover.performClose(nil)
         #expect(!popover.isShown, "Closing the panel must restore normal popover dismissal")
+    }
+
+    @Test func refusingAForeignPanelDoesNotDetachOrCloseIt() throws {
+        let foreignWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 100, height: 100),
+                                     styleMask: .borderless, backing: .buffered, defer: false)
+        foreignWindow.isReleasedWhenClosed = false
+        let panel = NSColorPanel.shared
+        foreignWindow.addChildWindow(panel, ordered: .above)
+        panel.orderFront(nil)
+        defer { foreignWindow.removeChildWindow(panel); panel.close(); foreignWindow.close() }
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        var unavailable = false
+        var writes = 0
+        well.configure(color: .systemTeal, label: "Custom", choose: { _ in writes += 1 }, unavailable: { unavailable = $0 })
+        #expect(!well.accessibilityPerformPress())
+        #expect(unavailable && !well.isActive)
+        well.cancel()
+        well.finish()
+        #expect(panel.parent === foreignWindow && panel.isVisible)
+        #expect(writes == 0)
+    }
+
+    @Test func cancellingAPendingNativeColorDiscardsTheDraft() {
+        let well = SidebarNativeColorWell(frame: NSRect(x: 0, y: 0, width: 44, height: 24))
+        var changes: [SidebarTagColor] = []
+        well.configure(color: .systemTeal, label: "Custom", choose: { changes.append($0) }, unavailable: { _ in })
+        #expect(well.accessibilityPerformPress())
+        defer { NSColorPanel.shared.close() }
+        well.color = .red
+        #expect(well.sendAction(well.action, to: well.target))
+        well.cancel()
+        #expect(!well.isActive && !NSColorPanel.shared.isVisible)
+        #expect(changes.isEmpty)
     }
 
     @Test func externalResetCancelsAnOpenColorEditWithoutOverwritingIt() throws {

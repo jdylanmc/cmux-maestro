@@ -4,6 +4,7 @@ import SwiftUI
 struct SidebarCustomColorPicker: View {
     let color: NSColor
     var selected: SidebarTagColor?
+    var edit: SidebarColorEdit? = nil
     let choose: (SidebarTagColor) -> Void
     @State private var unavailable = false
     private var title: String { String(localized: "color.custom", defaultValue: "Custom…") }
@@ -13,7 +14,7 @@ struct SidebarCustomColorPicker: View {
             Text(title)
             SidebarColorWell(
                 color: color, label: selected.map { "\(title) \($0.hex)" } ?? title,
-                choose: choose, unavailable: { unavailable = $0 }
+                edit: edit, choose: choose, unavailable: { unavailable = $0 }
             )
             .frame(width: 44, height: 24)
             .accessibilityAddTraits(selected == nil ? [] : .isSelected)

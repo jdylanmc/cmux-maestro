@@ -7,6 +7,7 @@ final class SidebarNativeColorWell: NSColorWell {
     private var editing = false
     private var discard = false
     private weak var panelParent: NSWindow?
+    private weak var ownedPanel: NSColorPanel?
     private var choose: (SidebarTagColor) -> Void = { _ in }
     private var unavailable: (Bool) -> Void = { _ in }
 
@@ -17,8 +18,6 @@ final class SidebarNativeColorWell: NSColorWell {
         isContinuous = true
         target = self
         action = #selector(colorChanged)
-        pulldownTarget = self
-        pulldownAction = #selector(openPanel)
     }
 
     required init?(coder: NSCoder) { nil }
@@ -37,39 +36,60 @@ final class SidebarNativeColorWell: NSColorWell {
         setAccessibilityValue(SidebarTagColor(nativeColor: self.color)?.hex ?? "")
     }
 
-    @objc private func openPanel() { activate(true) }
+    override func accessibilityPerformPress() -> Bool {
+        guard isEnabled else { return false }
+        activate(true)
+        return isActive
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        // Route the entire well to our owned panel, not AppKit's separate swatch popover.
+        activate(true)
+    }
 
     override func activate(_ exclusive: Bool) {
         guard !editing else { return }
+        let panel = NSColorPanel.shared
+        guard panel.parent == nil else {
+            unavailable(true)
+            return
+        }
         editing = true
         super.activate(true)
+        ownedPanel = panel
         if let window {
-            let panel = NSColorPanel.shared
             // NSPopover refuses outside-click dismissal while it owns a child window.
-            if panel.parent == nil {
-                window.addChildWindow(panel, ordered: .above)
-                panelParent = window
-            }
+            window.addChildWindow(panel, ordered: .above)
+            panelParent = window
         }
+        panel.orderFront(nil)
     }
 
     override func deactivate() {
         guard editing else { super.deactivate(); return }
         editing = false
-        if let panelParent, NSColorPanel.shared.parent === panelParent {
-            panelParent.removeChildWindow(NSColorPanel.shared)
+        if let panelParent, let ownedPanel, ownedPanel.parent === panelParent {
+            panelParent.removeChildWindow(ownedPanel)
         }
         panelParent = nil
+        ownedPanel = nil
         super.deactivate()
         if !discard { commit() }
     }
 
     func cancel() {
-        guard editing else { return }
+        guard editing, let ownedPanel else { return }
         discard = true
+        ownedPanel.close()
         deactivate()
         discard = false
-        NSColorPanel.shared.close()
+    }
+
+    func finish() {
+        guard editing, let ownedPanel else { return }
+        ownedPanel.close()
+        deactivate()
     }
 
     @objc private func colorChanged() {

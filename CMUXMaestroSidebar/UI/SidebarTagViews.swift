@@ -162,6 +162,7 @@ struct SidebarTagEditor: View {
     @State private var draft = SidebarTagDraft()
     @State private var error: String?
     @State private var coloring: String?
+    @State private var colorEdit = SidebarColorEdit()
 
     private var tags: [SidebarResolvedTag] { draft.preview(preferences.tags(for: session)) }
 
@@ -184,7 +185,10 @@ struct SidebarTagEditor: View {
             if !tags.isEmpty {
                 SidebarTagFlow {
                     ForEach(tags) { tag in
-                        Button { coloring = coloring == tag.slug ? nil : tag.slug } label: {
+                        Button {
+                            colorEdit.finish()
+                            coloring = coloring == tag.slug ? nil : tag.slug
+                        } label: {
                             SidebarTagChip(tag: tag, compact: false)
                         }
                         .buttonStyle(.plain)
@@ -230,6 +234,7 @@ struct SidebarTagEditor: View {
             SidebarCustomColorPicker(
                 color: tag.background.nativeColor,
                 selected: tag.swatch.flatMap { if case .custom(let color) = $0 { return color }; return nil },
+                edit: colorEdit,
                 choose: { draft.colors[tag.slug] = .some(.custom($0)) }
             )
             .id(tag.slug)
@@ -248,6 +253,7 @@ struct SidebarTagEditor: View {
     }
 
     private func save() {
+        colorEdit.finish()
         if let message = draft.commit(to: preferences, session: session) {
             error = message
         } else {

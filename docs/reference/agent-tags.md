@@ -57,9 +57,11 @@ to the same output.
   color converts to opaque, eight-bit sRGB (wide-gamut channels clamp), stored as uppercase
   `#RRGGBB`. The native well shows the current color; a checkmark marks a custom choice and its
   accessibility label includes the hex. The panel previews without writing; closing it updates
-  the draft once, and only if its canonical color changed. Save and Cancel apply to custom colors
-  too. While active, the system panel is a child window of the editor's popover, preventing
-  outside-click dismissal from losing the draft.
+  the draft once, and only if its canonical color changed. **Save** or switching the edited tag
+  finishes the pending color first; **Cancel** discards it. While active, the system panel is a
+  child window of the editor's popover, preventing outside-click dismissal from losing the draft.
+  If another window already owns the system panel, the well reports **Color unavailable**
+  without detaching or closing that panel.
 - Human preference **format version 2** accepts named strings or `#RRGGBB`; version-1 named files
   read without writing. Named-only edits continue writing version 1; version 2 is written only
   while the file contains a custom hex. Removing the last custom color restores version 1.

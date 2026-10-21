@@ -29,6 +29,7 @@ struct SidebarIconPicker: View {
     let close: () -> Void
 
     @State private var query = ""
+    @State private var colorEdit = SidebarColorEdit()
     @FocusState private var focus: Field?
     private enum Field: Hashable { case search, glyph(String) }
     private static let columns = 7
@@ -47,7 +48,7 @@ struct SidebarIconPicker: View {
                         .accessibilityIdentifier("icon-picker-source")
                 }
                 Spacer()
-                Button("Done", action: close)
+                Button("Done") { colorEdit.finish(); close() }
                     .keyboardShortcut(.cancelAction)
             }
             Text(selection.glyph).font(.caption).foregroundStyle(.secondary)
@@ -127,6 +128,7 @@ struct SidebarIconPicker: View {
             }
             SidebarCustomColorPicker(
                 color: selection.color.nativeColor, selected: selection.color.customColor,
+                edit: colorEdit,
                 choose: { selectColor(.custom($0)) }
             )
             Divider()
