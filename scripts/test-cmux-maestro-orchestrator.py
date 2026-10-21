@@ -1691,8 +1691,14 @@ class RetiredCapacityStatusTests(unittest.TestCase):
         self.state["nodes"][self.actor["id"]] = self.actor
         self.args = CONTROLLER_API["parser"]().parse_args([
             "status", "--actor-id", self.actor["id"], "--token", token])
-        self.cmux = CONTROLLER_API["Cmux"]()
+        cmux = self.root.parent / "cmux"
+        cmux.write_text(FAKE_CMUX)
+        cmux.chmod(0o700)
         self.addCleanup(patch.stopall)
+        patch.dict(os.environ, {
+            "PATH": str(cmux.parent) + os.pathsep + os.environ.get("PATH", "/usr/bin:/bin"),
+        }).start()
+        self.cmux = CONTROLLER_API["Cmux"]()
         patch.object(self.cmux, "surface_exists",
                      side_effect=lambda workspace, surface: surface == self.actor["surfaceId"]).start()
         patch.object(self.cmux, "workspace_surfaces", return_value={self.actor["surfaceId"]}).start()
