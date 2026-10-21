@@ -150,6 +150,9 @@ completions pair with their own active invocation/owner identities. Contradictor
 start/completion timestamps keep completed evidence with **unknown timing**.
 They never resurrect executing work on later replay. Validate observation freshness
 and future display timestamps separately in sidebar projection.
+Display times and retention deadlines accept timestamps through the snapshot's
+post-read `generatedAt`, not the session's read-start `observedAt`, and never
+after the current display clock. Session freshness still uses `observedAt`.
 Missing tool ownership never creates error or executing activity. Bounded
 completion tombstone prevents later start from resurrecting that invocation.
 Delayed tool metadata for already-ended spawn cannot reopen its owner.
@@ -195,6 +198,13 @@ limit, visited evidence stays partial, history actions are disabled for that
 session, and omission counts are explicitly lower bounds with unknown totals.
 Existing display caps stay 256 nodes and 12 levels. Legacy invalid parent
 references still fail validation even when additional observation evidence exists.
+Invalid child fields and compatibility disagreements fail history open for
+their exact child identities, without degrading unrelated children (#269).
+Consistency checks still run when either projection contains invalid peers.
+A falsely lossless projection degrades unmatched observed children. A legacy
+child absent from the observed projection, or a truncated legacy traversal,
+cannot be attributed to a displayed row and keeps session-wide history fail-open.
+Strict validation and partial-count reporting remain unchanged.
 
 Reader identity, partial-read, corruption, freshness and replay-cap safeguards,
 history/attention actions and exact host navigation stay unchanged. No PID,

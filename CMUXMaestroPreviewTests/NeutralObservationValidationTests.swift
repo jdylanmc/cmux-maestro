@@ -170,6 +170,53 @@ struct NeutralObservationValidationTests {
         #expect(session.nodes.first?.activity?.lastEventAt == nil)
     }
 
+    @Test(arguments: HistoryAction.allCases, [false, true])
+    func projectionDisagreementStaysLocalEvenWithMalformedLegacyPeer(
+        _ action: HistoryAction, _ malformedLegacy: Bool
+    ) throws {
+        let terminal = terminalForHistory(action)
+        let safe = child("safe", state: .known(.done), terminal: true, kind: .skill)
+        let noise = child("noise")
+        let invalidNoise = child("noise", activity: .known(.init(
+            kind: .executing, summary: "Executing tool: view", lastEventAt: now.addingTimeInterval(60)
+        )))
+        let input = snapshot(legacy: [child("active"), safe, malformedLegacy ? invalidNoise : noise],
+                             observed: [terminal, safe, noise], lossless: true)
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now, history: historyFor(action))
+        let session = try #require(tree.sessions.first)
+        #expect(session.nodes.first { $0.id == "active" }?.attentionDegraded == true)
+        #expect(session.nodes.first { $0.id == "safe" }?.attentionDegraded != true)
+        #expect(!tree.dismissibleOutcomes.contains(historyKey))
+        #expect(tree.acknowledgeableOutcomes.isEmpty)
+        if action == .expire {
+            #expect(session.nodes.map(\.id) == ["noise", "active"])
+            #expect(tree.hiddenHistoryCount == 1)
+        } else {
+            #expect(tree.dismissibleOutcomes.map(\.childID) == ["safe"])
+        }
+    }
+
+    @Test func falselyLosslessProjectionDegradesOnlyUnmatchedObservedChildren() throws {
+        let safe = child("safe", state: .known(.done), terminal: true, kind: .skill)
+        let input = snapshot(legacy: [safe], observed: [safe, terminalForHistory(.expire)], lossless: true)
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now)
+        #expect(tree.sessions.first?.nodes.map(\.id) == ["active"])
+        #expect(tree.sessions.first?.nodes.first?.attentionDegraded == true)
+        #expect(tree.hiddenHistoryCount == 1)
+    }
+
+    @Test func unrepresentedLegacyChildKeepsHistoryFailOpen() throws {
+        let terminal = terminalForHistory(.expire)
+        let input = snapshot(legacy: [terminal, child("missing")], observed: [terminal])
+        #expect(throws: AgentSessionSnapshotValidationError.self) { try input.validate() }
+        let tree = SidebarCopilotTree.project(input, onto: fixtures.topology(), now: now)
+        #expect(tree.sessions.first?.nodes.map(\.id) == ["active"])
+        #expect(tree.sessions.first?.nodes.first?.attentionDegraded == true)
+        #expect(tree.hiddenHistoryCount == 0 && tree.dismissibleOutcomes.isEmpty)
+    }
+
     @Test(arguments: InvalidCanonicalPeer.allCases, [false, true])
     func canonicalErrorsCannotWeakenConsistencyHistorySafety(
         _ invalidPeer: InvalidCanonicalPeer, _ falselyLossless: Bool

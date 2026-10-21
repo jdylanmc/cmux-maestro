@@ -255,6 +255,10 @@ Notable changes are recorded using Keep a Changelog categories.
 - Status reads preserve proven resource retirement instead of charging ended
   workers against workspace capacity again (#182). Restored or uncertain
   resources remain charged; stored history and its independent limits stay intact.
+- One invalid or clock-skewed child no longer exposes unrelated child history.
+  Mid-read event times remain known for activity, attention and history retention
+  instead of disappearing for one refresh (#269).
+
 - Installer recovery keeps its guard when a process-group existence probe is
   permission-denied, and releases it only after absence is proven (#276).
 

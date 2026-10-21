@@ -110,8 +110,8 @@ struct CopilotSnapshotAdapterTests {
         #expect(session.workspaceID == fixtures.workspaceB)
         #expect(session.iconId == "md-robot" && session.iconColor == "blue")
         #expect(session.treeDegraded && !tree.hasCompleteCounts)
-        #expect(session.nodes.first { $0.id == "child" }?.activity?.lastEventAt == nil,
-                "An activity timestamp later than its observation remains unknown")
+        #expect(session.nodes.first { $0.id == "child" }?.activity?.lastEventAt == now,
+                "An activity timestamp through snapshot generation is known")
     }
 
     @Test func vanishedSurfaceKeepsOnlyLaunchEvidenceWithoutInventingCurrentTopology() throws {
