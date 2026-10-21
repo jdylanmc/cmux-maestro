@@ -140,6 +140,27 @@ struct SidebarWorkspaceCountTests {
         #expect(cue.label == "1 unknown, counts incomplete")
     }
 
+    @Test(arguments: ["unavailable", "loading", "waiting", "denied", "stale"])
+    func managedOnlyActivityQualifiesMissingCopilotEvidence(_ scenario: String) throws {
+        var snapshot = tree([])
+        switch scenario {
+        case "unavailable": snapshot.availability = .unavailable
+        case "loading": snapshot.availability = .loading
+        case "waiting": snapshot = .waiting
+        case "denied": snapshot.issues = [.permissionDenied]
+        case "stale": snapshot.generatedAt = now.addingTimeInterval(-9)
+        default: preconditionFailure("Unknown missing observation fixture")
+        }
+        let running = directNode(role: "worker", phase: "turn-running", age: 0, mode: .bounded)
+        let activity = try #require(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [running], availability: .ready, observations: snapshot, now: now
+        ))
+        #expect(activity.label == "1 working, counts incomplete")
+        #expect(SidebarPresentation.collapsedActivity(
+            sessions: [], managed: [], availability: .ready, observations: snapshot, now: now
+        ) == nil)
+    }
+
     @Test(arguments: ["session", "child"])
     func attentionDegradationQualifiesActivityWithoutChangingAgentCounts(_ owner: String) throws {
         var observed = session(fixtures.sessionID, surface: fixtures.surfaceA)
