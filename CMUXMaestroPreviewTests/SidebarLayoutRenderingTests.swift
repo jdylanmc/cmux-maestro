@@ -241,8 +241,37 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
+    @Test(arguments: [AgentAttentionKind.permission, .error])
+    func collapsedParentKeepsAttentionAndOmittedTasksInsideCard(_ attention: AgentAttentionKind) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        let projection = await makeProjectionModel(parentAttention: attention, crowdedChildren: true)
+        defer { projection.model.setVisible(false); fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.projection = .subAgents
+        preferences.setExpanded(false, for: .managed(projection.root))
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/visual-target/projections")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try await render(model: projection.model, preferences: preferences, width: 280, height: 640,
+                         appearance: .dark, managed: true, expectedSessions: 5, nativeBackground: true,
+                         destination: folder.appendingPathComponent("collapsed-\(attention.rawValue)-omitted.png")) { host in
+            let rows = Dictionary(nativeTitles(in: host).map {
+                ($0.accessibilityLabel() ?? "", host.convert($0.bounds, from: $0))
+            }, uniquingKeysWith: { first, _ in first })
+            let parent = try #require(rows["Focus Coordinator"])
+            let following = try #require(rows["Focus Unrelated"])
+            #expect(following.minY - parent.minY <= preferences.layout.density.agentRowHeight + 36,
+                    "Attention and omitted-task warnings cannot create prose rows outside the collapsed card")
+            let session = try #require(projection.model.copilot.tree.sessions.first { !$0.attention.isEmpty })
+            #expect(session.omittedActiveChildrenCount > 0, "Exercise real bounded child projection")
+            let summary = SidebarBranchSummary(sessions: [session])
+            #expect(summary.attention > 0 && summary.omittedActive > 0 && summary.incomplete)
+        }
+    }
+
     /// `failures` adds a failed worker with a spawned child and a failed leaf worker, all Unknown.
-    private func makeProjectionModel(failures: [String] = []) async -> (
+    private func makeProjectionModel(failures: [String] = [], parentAttention: AgentAttentionKind? = nil,
+                                     crowdedChildren: Bool = false) async -> (
         model: SidebarConnectionModel, workspace: UUID, root: UUID, keys: [SidebarWorktreeGroupKey], extra: [UUID]
     ) {
         let now = Date()
@@ -296,9 +325,14 @@ struct SidebarLayoutRenderingTests {
             var observation = CopilotSessionObservation(
                 sessionID: sessions[index], surfaceID: surfaces[index], launchWorkspaceID: workspace,
                 liveness: .alive, state: index == 3 ? .idle : .working, model: "synthetic-model",
-                children: index == 0 ? [.init(id: "scan", parentID: nil, kind: .subagent, name: "Scan sources",
-                                              state: .working, model: nil)] : [],
-                observedAt: now
+                children: index == 0 ? (0..<(crowdedChildren ? 300 : 1)).map {
+                    .init(id: "scan-\($0)", parentID: nil, kind: .subagent, name: "Scan sources",
+                          state: .working, model: nil)
+                } : [],
+                observedAt: now,
+                attention: index == 0 ? parentAttention.map {
+                    [.init(kind: $0, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)]
+                } : nil
             )
             observation.currentWorktree = worktrees[index]
             return observation
