@@ -199,10 +199,10 @@ struct SidebarClarityTests {
             childrenComplete: false, treeDegraded: true, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
         #expect(SidebarPresentation.sessionStatus(session) ==
-                "State unavailable. Child history incomplete; missing work is not assumed finished")
+                "State unavailable · Child history: Incomplete")
         #expect(SidebarPresentation.activityTreatment(SidebarPresentation.sessionState(session), reduceMotion: false) == .none)
         let history = SidebarPresentation.sessionDetails(session).first { $0.title == "Child history" }
-        #expect(history?.value == "Incomplete; missing work is not assumed finished")
+        #expect(history?.value == "Incomplete")
         #expect(history?.copyableValue == "incomplete")
     }
 
@@ -1184,7 +1184,7 @@ struct SidebarClarityTests {
     @Test func unknownPartialDeniedAndOmittedActiveSignalsStayPrimary() {
         var tree = makeTree(nodes: [node(state: .unknown)], complete: false, omittedActive: 3)
         #expect(SidebarPresentation.overview(tree).contains("state unknown"))
-        #expect(SidebarPresentation.overviewWarnings(tree).contains("Partial data · counts may be incomplete"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Partial data · Counts: Incomplete"))
         #expect(SidebarPresentation.overviewWarnings(tree).contains("3 working/blocked tasks beyond display limits"))
         tree.issues = [.permissionDenied]
         #expect(SidebarPresentation.overviewWarnings(tree).contains("Copilot access denied"))
@@ -1217,7 +1217,7 @@ struct SidebarClarityTests {
         #expect(SidebarPresentation.attention([], state: .blocked) == ["Blocking reason unavailable"])
         #expect(SidebarPresentation.attention([signal(.turnFinished)], state: .idle).isEmpty)
         #expect(SidebarPresentation.attentionDetails([signal(.turnFinished)]).contains {
-            $0.value == "Main turn only; background work may continue."
+            $0.value == "Main turn only"
         })
         let summary = SidebarBranchSummary(nodes: [node(state: .blocked, attention: [permission]), node(state: .unknown)])
         #expect(SidebarPresentation.collapsed(summary).contains("States or counts incomplete"))

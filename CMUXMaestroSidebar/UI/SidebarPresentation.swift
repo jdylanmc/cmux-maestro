@@ -416,7 +416,7 @@ enum SidebarPresentation {
     static func sessionStatus(_ session: SidebarCopilotSession) -> String {
         let state = statusDescription(sessionState(session), needsInput: needsInput(session.attention))
         return session.childrenComplete && !session.treeDegraded && !session.internalTaskCountsIncomplete ? state
-            : "\(state). Child history incomplete; missing work is not assumed finished"
+            : "\(state) · Child history: Incomplete"
     }
 
     static func rowMetadata(kind: String, directory: String? = nil, activity: String? = nil) -> String {
@@ -648,7 +648,7 @@ enum SidebarPresentation {
             return .init(
                 title: node.title, visual: managedState(node, availability: availability, now: now, tree: tree),
                 lines: managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now),
-                notice: current ? nil : "Managed observation is stale. Last-known metadata is not live state.",
+                notice: current ? nil : "Observation: Stale",
                 isAgent: true,
                 needsInput: managedNeedsInput(node, tree: tree, now: now),
                 petSessionID: managedPet(node, tree: tree, now: now)?.session,
@@ -679,7 +679,7 @@ enum SidebarPresentation {
                 let current = tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
                     && SidebarCopilotTree.isFresh(session.observedAt, now: now)
                 let unfocusable = session.statusOnly
-                let notice = current ? nil : "Session observation is stale. Last-known metadata is not live state."
+                let notice = current ? nil : "Observation: Stale"
                 if case .child(_, let childID) = selection {
                     guard let child = session.nodes.first(where: { $0.id == childID }) else { return nil }
                     let context = unfocusable ? [] : paths(
@@ -687,7 +687,7 @@ enum SidebarPresentation {
                         isParent: true, copyable: true
                     )
                     return .init(title: child.name, lines: nodeDetails(child, session: session) + [
-                        .init(title: "Placement", value: "Observed child; native placement belongs to its parent session")
+                        .init(title: "Placement", value: "Parent session")
                     ] + context, notice: notice, isAgent: child.kind == .subagent,
                     needsInput: needsInput(child.attention))
                 }
@@ -771,10 +771,10 @@ enum SidebarPresentation {
         case .loading: result.append("Loading Copilot history")
         case .hidden: result.append("Copilot updates paused")
         case .disconnected: result.append("Copilot disconnected")
-        case .unavailable: result.append("Copilot unavailable · no live state inferred")
-        case .partial: result.append("Partial data · counts may be incomplete")
+        case .unavailable: result.append("Copilot: Unavailable")
+        case .partial: result.append("Partial data · Counts: Incomplete")
         case .ready:
-            if !tree.hasCompleteCounts { result.append("Some task states or counts are unknown") }
+            if !tree.hasCompleteCounts { result.append("Task states/counts: Unknown") }
         }
         if tree.issues.contains(.permissionDenied) { result.append("Copilot access denied") }
         if tree.issues.contains(.integrationNotInstalled) { result.append("Copilot integration is not enabled") }
@@ -790,7 +790,7 @@ enum SidebarPresentation {
             (.appearanceUnavailable, "Session icon metadata unavailable")
         ] where tree.issues.contains(issue) { result.append(message) }
         if tree.hasUncountedChildren {
-            result.append("At least \(tree.omittedChildrenCount) tasks omitted; total and active counts unknown")
+            result.append("Omitted tasks: \(tree.omittedChildrenCount)+ · Total/active counts: Unknown")
         } else if tree.omittedActiveChildrenCount > 0 {
             result.append("\(tree.omittedActiveChildrenCount) working/blocked tasks beyond display limits")
         } else if tree.omittedChildrenCount > 0 {
@@ -805,7 +805,7 @@ enum SidebarPresentation {
         else if tree.issues.contains(.integrationNotInstalled) { warnings.append("Enable Copilot integration") }
         else if let warning = overviewWarnings(tree).first { warnings.append(warning) }
         if tree.hasUncountedChildren {
-            warnings.append("Child observation limit reached; omitted totals unknown")
+            warnings.append("Child observation: Limit reached · Omitted total: Unknown")
         } else if tree.omittedActiveChildrenCount > 0 {
             warnings.append("\(tree.omittedActiveChildrenCount) working/blocked tasks not shown")
         }
@@ -1081,13 +1081,13 @@ enum SidebarPresentation {
         let age = now.timeIntervalSince(node.updatedAt)
         guard (availability == .ready || availability == .partial),
               age >= -1, age <= SidebarOrchestrationReader.staleInterval else {
-            return .init(title: "State unverified · last observation is not current",
+            return .init(title: "State unverified",
                          symbol: "circle.dashed", tone: .neutral)
         }
         let phase = SidebarOrchestrationPhase(rawValue: node.phase)
         let title = phase?.title(availability: node.availability) ?? "Unrecognized state"
         switch phase {
-        case .registered: return state(.idle).titled("Registered · activity not inferred")
+        case .registered: return state(.idle).titled("Registered · Activity: Unknown")
         case .launching, .turnQueued: return .init(title: title, symbol: "clock", tone: .neutral)
         case .turnRunning: return state(.working).titled(title)
         case .reportedCompleted: return state(.completed).titled(title)
@@ -1133,7 +1133,7 @@ enum SidebarPresentation {
 
     static let assignedGitHelp = String(
         localized: "sidebar.git.assignedDirectory.help",
-        defaultValue: "Git is probed at the directory assigned to this managed session, not Copilot's current /cwd or a tool's working directory."
+        defaultValue: "Git source: Assigned directory"
     )
 
     static func assignedGitValue(_ value: String) -> String {
@@ -1141,7 +1141,9 @@ enum SidebarPresentation {
     }
 
     static func assignedGitChangesDescription(_ changes: SidebarGitChanges?) -> String {
-        assignedGitValue(changes?.description ?? "Current counts unavailable")
+        changes.map { assignedGitValue($0.description) } ?? String(
+            localized: "sidebar.git.unavailable", defaultValue: "Unavailable"
+        )
     }
 
     static func managedGitDetails(_ node: SidebarOrchestrationNode, now: Date) -> [SidebarDetailLine] {
@@ -1163,7 +1165,7 @@ enum SidebarPresentation {
                 let location = [node.branchLabel, node.worktreeLabel.map(SidebarPathDisplay.text)].compactMap { $0 }
                 if !location.isEmpty {
                     result.append(.init(title: "Last verified location",
-                                        value: "Not current Git state: \(location.joined(separator: " · "))"))
+                                        value: "Stale · \(location.joined(separator: " · "))"))
                 }
             }
         }
@@ -1175,8 +1177,8 @@ enum SidebarPresentation {
     }
 
     static func managedGitMetadataHelp(_ node: SidebarOrchestrationNode, now: Date) -> String {
-        managedGitDetails(node, now: now).map { "\($0.title): \($0.value)" }.joined(separator: ". ")
-            + ". \(assignedGitHelp)"
+        (managedGitDetails(node, now: now).map { "\($0.title): \($0.value)" } + [assignedGitHelp])
+            .joined(separator: " · ")
     }
 
     static func managedNodeDetails(
@@ -1212,8 +1214,8 @@ enum SidebarPresentation {
             result.append(.init(
                 title: "Interaction",
                 value: node.executionMode == .interactive
-                    ? "Interactive Copilot session · talk directly in its tab"
-                    : "Legacy bounded worker · coordinator follow-up required"
+                    ? "Interactive Copilot session"
+                    : "Legacy bounded worker · Follow-up: Coordinator"
             ))
         }
         let warnings = overviewWarnings(tree)
@@ -1345,9 +1347,9 @@ enum SidebarPresentation {
             .init(title: "Retained outcomes", value: "\(session.retainedHistoryCount)"),
             .init(title: "Hidden history", value: "\(session.hiddenHistoryCount)"),
             .init(title: "Omitted children", value: session.hasUncountedChildren
-                  ? "At least \(session.omittedChildrenCount); total unknown" : "\(session.omittedChildrenCount)"),
+                  ? "\(session.omittedChildrenCount)+ · Total: Unknown" : "\(session.omittedChildrenCount)"),
             .init(title: "Child history", value: session.childrenComplete && !session.treeDegraded
-                ? "Complete" : "Incomplete; missing work is not assumed finished",
+                ? "Complete" : "Incomplete",
                   copyableValue: session.childrenComplete && !session.treeDegraded ? "complete" : "incomplete")
         ]
         result.insert(.init(title: session.liveness == .alive ? "Model" : "Last reported model",
@@ -1378,7 +1380,7 @@ enum SidebarPresentation {
             SidebarDetailLine(title: "Attention \(index + 1)", value: "\(signal.kind.title) · \(signal.occurredAt.map(date) ?? "Event time unknown")")
         }
         if signals.contains(where: { $0.kind == .turnFinished }) {
-            result.append(.init(title: "Turn scope", value: "Main turn only; background work may continue."))
+            result.append(.init(title: "Turn scope", value: "Main turn only"))
         }
         return result
     }

@@ -123,7 +123,7 @@ struct NeutralObservationValidationTests {
         #expect(!tree.hasCompleteCounts && tree.availability == .partial)
         #expect(tree.dismissibleOutcomes.isEmpty && tree.acknowledgeableOutcomes.isEmpty)
         #expect(tree.omittedChildrenDescription.contains("At least") && tree.omittedChildrenDescription.contains("unknown"))
-        #expect(SidebarPresentation.overviewWarnings(tree).contains { $0.contains("active counts unknown") })
+        #expect(SidebarPresentation.overviewWarnings(tree).contains { $0.contains("Total/active counts: Unknown") })
     }
 
     @Test func compatibilityProjectionCannotContradictOrFalselyClaimFullObservationCoverage() {

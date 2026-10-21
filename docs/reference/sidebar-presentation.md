@@ -31,7 +31,9 @@ atomic snapshot of concurrent edits. Missing current counts stay unavailable.
 Count freshness has its own timestamp, independent of branch metadata refreshed
 by older supervisors.
 Hover cards and pinned details reuse one wrapping semantic Git summary. It includes
-the assigned-directory label, comparison basis and untracked/binary exclusions.
+the assigned-directory label, comparison basis and terse untracked/binary counts
+and exclusions. Missing counts display **Git changes: Unavailable**; the tooltip's
+**Git source: Assigned directory** retains provenance without an explanatory sentence.
 Large counts wrap, never widen either detail surface. Text signs and
 accessible descriptions keep meaning without color. User tint never recolors
 additions or deletions. Missing current counts stay explicit text, not a
@@ -120,6 +122,15 @@ Managed agent previews add one wrapping **Processes** field:
 overflow. Copy gives visible current PIDs, one per line, only for a complete,
 current observation. Helpers stay counted separately; listeners keep their
 endpoint rows ([background processes and ports](processes-and-ports.md)).
+
+Hover, details, footer and row tooltips use labels and terse values rather than
+explanatory prose. **Observation: Stale/Unavailable**, **Owner: Unconfirmed** and
+**Child history: Incomplete** retain uncertainty visibly; no collection, retention,
+acknowledgement or permission behavior changes. Child placement is **Parent session**.
+Directory hints retain **Source**, **Report time: Unknown** and the unverified
+agent/tool or child-directory distinction. Observation summaries and warnings use
+the same compact statuses wherever shared. Omitted lower bounds remain `N+` with
+unknown totals; **Turn scope: Main turn only** never claims background completion.
 
 `SidebarHoverRegion` and `SidebarHoverCard` accept presentation data, independent
 of sessions, navigation, preferences, and the bottom details. Passive panels

@@ -150,8 +150,8 @@ struct SidebarAgentHoverTests {
             let fields = lines.filter { $0.title.lowercased().contains("directory") }
             let field = try #require(fields.first, "\(name) must retain its source-qualified directory field")
             let expectedHelp = parent
-                ? "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory."
-                : "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+                ? "Source: CMUX parent surface · Report time: Unknown · Child directory: Unverified"
+                : "Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified"
             #expect(fields.count == 1 && field.title == (parent ? "Parent surface directory" : "Surface directory")
                     && field.value == expectedValue && field.help == expectedHelp,
                     "\(name) must retain its source-qualified directory field, including grant/nil state")
@@ -162,7 +162,7 @@ struct SidebarAgentHoverTests {
         }
         #expect(paths.workingDirectory == (granted ? .available(directory) : .unavailable))
         #expect(paths.accessibilityDescription ==
-            "Workspace: \(granted ? "/synthetic/workspace" : "Path unavailable"). Project: \(granted ? "/synthetic/project" : "Path unavailable"). Surface directory: \(expectedValue). Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
+            "Workspace: \(granted ? "/synthetic/workspace" : "Path unavailable"). Project: \(granted ? "/synthetic/project" : "Path unavailable"). Surface directory: \(expectedValue). Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified")
         #expect(consumers.first { $0.0 == "managed hover" }?.1.contains(
             .init(title: "Worktree", value: "Assigned directory: /synthetic/assigned-git-label",
                   help: SidebarPresentation.assignedGitHelp)
@@ -200,11 +200,11 @@ struct SidebarAgentHoverTests {
             for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
         ))
         let tooltip = SidebarPresentation.managedGitMetadataHelp(node, now: now)
-        let expectedHelp = "Git is probed at the directory assigned to this managed session, not Copilot's current /cwd or a tool's working directory."
+        let expectedHelp = "Git source: Assigned directory"
         let currentCounts = ["fresh", "detached"].contains(evidence)
         let expectedCounts = currentCounts
-            ? "Assigned directory: 3 changed files · +24 / −2 lines vs HEAD. Includes 1 untracked and 1 binary files; their lines and submodule contents are excluded."
-            : "Assigned directory: Current counts unavailable"
+            ? "Assigned directory: 3 changed files · +24 / −2 tracked lines vs HEAD · Untracked: 1 · Binary: 1 · Excludes: untracked/binary lines, submodule contents"
+            : "Unavailable"
         #expect(pinned.gitChanges == (currentCounts ? changes : nil))
         #expect(SidebarPresentation.assignedGitTitle == "Assigned directory")
         #expect(SidebarPresentation.assignedGitChangesDescription(pinned.gitChanges) == expectedCounts)
@@ -212,7 +212,10 @@ struct SidebarAgentHoverTests {
         for lines in [hover.lines, pinned.lines, details.lines] {
             let git = lines.filter { ["Branch", "Worktree", "Git evidence", "Last verified location", "Git changes"].contains($0.title) }
             #expect(!git.isEmpty)
-            #expect(git.allSatisfy { $0.value.hasPrefix("Assigned directory: ") && $0.help == expectedHelp })
+            #expect(git.allSatisfy {
+                ($0.value.hasPrefix("Assigned directory: ") || $0.title == "Git changes" && $0.value == "Unavailable")
+                    && $0.help == expectedHelp
+            })
             #expect(git.allSatisfy { tooltip.contains("\($0.title): \($0.value)") })
             #expect(git.first { $0.title == "Git changes" }?.value == expectedCounts)
             #expect(git.first { $0.title == "Git changes" }?.gitChanges == (currentCounts ? changes : nil),
@@ -221,7 +224,7 @@ struct SidebarAgentHoverTests {
             #expect(surfaceDirectory.value == "/synthetic/independent-host-report")
             #expect(surfaceDirectory.copyableValue == "/synthetic/independent-host-report")
             #expect(surfaceDirectory.help ==
-                "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
+                "Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified")
             if verified && evidence != "stale" {
                 #expect(git.first { $0.title == "Worktree" }?.value == "Assigned directory: assigned-worktree")
                 #expect(git.first { $0.title == "Branch" }?.value ==
@@ -239,7 +242,7 @@ struct SidebarAgentHoverTests {
             #expect(!git.contains { $0.value.contains("/synthetic/independent-host-report") })
         }
         if evidence == "stale" {
-            let expectedLocation = "Assigned directory: Not current Git state: assigned-branch · assigned-worktree"
+            let expectedLocation = "Assigned directory: Stale · assigned-branch · assigned-worktree"
             for lines in [hover.lines, details.lines] {
                 #expect(lines.first { $0.title == "Last verified location" }?.value == expectedLocation)
             }
@@ -352,16 +355,16 @@ struct SidebarAgentHoverTests {
         let hierarchy = directoryHierarchy("/synthetic/host-report")
         let ended = session(liveness: .dead)
         let hover = try #require(card(.session(ended.id), sessions: [ended], hierarchy: hierarchy))
-        #expect(hover.notice == "Live session ownership is not confirmed.")
+        #expect(hover.notice == "Owner: Unconfirmed")
         let hostDirectory = try #require(hover.lines.first { $0.title == "Surface directory" })
         #expect(hostDirectory.value == "/synthetic/host-report")
         #expect(hostDirectory.copyableValue == "/synthetic/host-report")
         #expect(hostDirectory.help ==
-            "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
+            "Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified")
         let node = directoryNode(ended)
         let stale = try #require(card(.managed(node.id, generation: 2), sessions: [ended], hierarchy: hierarchy,
                                      nodes: [node], availability: .stale))
-        #expect(stale.notice == "Managed observation is stale or unavailable. Last-known metadata is not live state.")
+        #expect(stale.notice == "Observation: Stale")
         #expect(stale.lines.first { $0.title == "Surface directory" } == hover.lines.first { $0.title == "Surface directory" })
         #expect(card(.managed(node.id, generation: 1), sessions: [ended], hierarchy: hierarchy, nodes: [node]) == nil)
         let expired = try #require(card(.session(ended.id), sessions: [ended], hierarchy: hierarchy,
@@ -424,7 +427,7 @@ struct SidebarAgentHoverTests {
     @Test func staleOrMissingAgentEvidenceCannotAdvertiseCurrentMetrics() throws {
         let a = session()
         let result = try #require(card(.session(a.id), sessions: [a], generatedAt: now.addingTimeInterval(-9)))
-        #expect(result.notice == "Session observation is no longer current.")
+        #expect(result.notice == "Observation: Stale")
         #expect(result.lines.isEmpty && result.subtitle == nil)
         let current = try #require(card(.session(a.id), sessions: [a]))
         #expect(!current.lines.contains { ["Context", "Elapsed", "Git changes", "Pet"].contains($0.title) })
@@ -464,7 +467,7 @@ struct SidebarAgentHoverTests {
         let result = try #require(card(.child(sessionID: a.id, childID: "child"), sessions: [a]))
         #expect(result.title == "Review agent")
         #expect(result.lines.contains(.init(title: "Model", value: "child-model")))
-        #expect(result.lines.contains(.init(title: "Placement", value: "Observed child; native placement belongs to its parent session")))
+        #expect(result.lines.contains(.init(title: "Placement", value: "Parent session")))
         #expect(!result.lines.contains { $0.title == "Surface ID" || $0.title == "Session glyph" })
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(a.id, isParent: true)])
         #expect(result.lines.contains { $0.title == "Parent session ID" && $0.value == a.id.uuidString })
@@ -622,7 +625,7 @@ struct SidebarAgentHoverTests {
         #expect(result.lines.contains(.init(title: "Model", value: "model", copyableValue: "model")))
         #expect(!result.lines.contains { $0.value == "old-branch" || $0.value == "not-current" })
         #expect(result.lines.contains(.init(title: "Last verified location",
-                                           value: "Assigned directory: Not current Git state: old-branch · not-current",
+                                           value: "Assigned directory: Stale · old-branch · not-current",
                                            help: SidebarPresentation.assignedGitHelp)))
         #expect(result.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Assigned directory: Stale") })
         #expect(result.lines.filter { $0.copyableSessionID != nil } == [.sessionID(fixtures.sessionID)])
@@ -634,7 +637,7 @@ struct SidebarAgentHoverTests {
         let stale = try #require(card(
             .managed(node.id, generation: 2), sessions: [], nodes: [node], availability: .stale
         ))
-        #expect(stale.notice == "Managed observation is stale or unavailable. Last-known metadata is not live state.")
+        #expect(stale.notice == "Observation: Stale")
         let line = try #require(stale.lines.first { $0.copyableSessionID != nil })
         let sessionID = try #require(line.copyableSessionID)
         #expect(sessionID == node.copilotSessionId)

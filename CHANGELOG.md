@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Hover cards, details, footer and tooltips use terse evidence labels instead of
+  explanatory prose. Stale/unavailable observations, incomplete child history,
+  directory provenance and Git count exclusions remain visible (#298).
 - Agent hover processes share one wrapping **Processes** field with named PIDs
   and inline overflow. Copy returns visible current PIDs, one per line; stale,
   incomplete and retained process states remain explicit (#296).

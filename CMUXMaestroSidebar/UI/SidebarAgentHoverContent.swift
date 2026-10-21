@@ -55,7 +55,7 @@ enum SidebarAgentHoverContent {
                 id: "managed-\(id)-\(generation)", category: "Agent preview", title: node.title,
                 subtitle: state.title,
                 lines: lines,
-                notice: current ? nil : "Managed observation is stale or unavailable. Last-known metadata is not live state.",
+                notice: current ? nil : availability == .stale ? "Observation: Stale" : "Observation: Unavailable",
                 pet: SidebarPresentation.managedPet(node, tree: tree, now: now).map {
                     .init(session: $0.session, choice: $0.choice, state: .resolve(
                         visual: state, needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now)))
@@ -76,22 +76,23 @@ enum SidebarAgentHoverContent {
             guard matches.count == 1, let child = matches.first else { return nil }
             guard isFresh(session, tree: tree, now: now) else {
                 return .init(id: "child-\(sessionID)-\(childID)", category: "Agent preview", title: child.name,
-                             notice: "Child observation is no longer current.")
+                             notice: "Observation: Stale")
             }
             let allowed = Set(["Name", "Kind", "Model", "Last reported model", "Ancestry", "Completion", "Child ID", "Parent session ID"])
             var lines = SidebarPresentation.nodeDetails(child, session: session).filter { allowed.contains($0.title) }
             lines += [
-                .init(title: "Placement", value: "Observed child; native placement belongs to its parent session"),
+                .init(title: "Placement", value: "Parent session"),
                 SidebarSurfaceDirectory.line(hierarchy.pathContext(
                     workspaceID: session.workspaceID, surfaceID: session.surfaceID
                 ).workingDirectory, isParent: true, copyable: true)
             ]
-            let notices = [session.childrenComplete && !session.treeDegraded ? nil : "Child history is incomplete; missing work is not assumed finished."]
-                .compactMap { $0 }
+            if !session.childrenComplete || session.treeDegraded {
+                lines.append(.init(title: "Child history", value: "Incomplete"))
+            }
             return .init(
                 id: "child-\(sessionID)-\(childID)", category: child.kind == .subagent ? "Agent preview" : "Activity preview", title: child.name,
                 subtitle: session.liveness == .alive ? SidebarPresentation.state(child.state).title : "Last reported: \(child.state.rawValue)",
-                lines: lines, notice: notices.isEmpty ? nil : notices.joined(separator: " ")
+                lines: lines
             )
         }
     }
@@ -112,7 +113,7 @@ enum SidebarAgentHoverContent {
         let title = SidebarPresentation.agentTitle(for: session, in: hierarchy)
         guard isFresh(session, tree: tree, now: now) else {
             return .init(id: "session-\(session.id)", category: "Agent preview", title: title,
-                         notice: "Session observation is no longer current.")
+                         notice: "Observation: Stale")
         }
         let allowed = Set(["Model", "Last reported model", "Observed", "Child history", "Session ID"])
         var lines = SidebarPresentation.sessionDetails(session).filter { allowed.contains($0.title) }
@@ -124,7 +125,7 @@ enum SidebarAgentHoverContent {
         return .init(
             id: "session-\(session.id)", category: "Agent preview", title: title,
             subtitle: state.title,
-            lines: lines, notice: session.liveness == .alive ? nil : "Live session ownership is not confirmed.",
+            lines: lines, notice: session.liveness == .alive ? nil : "Owner: Unconfirmed",
             pet: unfocusable ? nil : .init(session: session.id, choice: session.petId, state: .resolve(
                 visual: state, needsInput: SidebarPresentation.needsInput(session.attention)))
         )

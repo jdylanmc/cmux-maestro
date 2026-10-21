@@ -69,6 +69,10 @@ The managed agent hover shows:
 - **Copilot helpers**: the count of `provider` processes plus `omittedHelperCount`. Not listed.
 - **Listening (loopback | all interfaces | network)**: one line per listener of any owned process, as `127.0.0.1:5173 · TCP · python3.12 4242`. Copy (complete, current list only) gives the bound endpoint exactly (`127.0.0.1:5173`, `[::1]:9000`, `*:3000`). No open action, no probe, no URL. `Listening: None` only for a complete, current list.
 
+The surrounding hover uses compact observation, owner and child-history labels,
+not explanatory footer prose. Process freshness qualifiers and copy guards are
+unchanged and remain independent of those surrounding metadata fields.
+
 CMUX's workspace-wide port numbers (`networkPorts`) carry no owner, address, protocol or completeness, so they never appear on the agent hover.
 
 ## Known limits

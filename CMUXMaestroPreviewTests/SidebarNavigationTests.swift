@@ -451,7 +451,7 @@ struct SidebarNavigationTests {
                 .init(title: "Workspace path", value: granted ? "/repo/.worktrees/feature" : "Path unavailable"),
                 .init(title: "Project path", value: granted ? "/repo" : "Path unavailable"),
                 .init(title: "Surface directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable",
-                      help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory.")
+                      help: "Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified")
             ]
             let rawPaths = [
                 "Workspace path": "/repo/.worktrees/feature",
@@ -490,7 +490,7 @@ struct SidebarNavigationTests {
                     expected = copyable(Array(expectedPaths.prefix(2))) + [
                         .init(title: "Parent surface directory", value: granted ? "/repo/.worktrees/feature/src" : "Path unavailable",
                               copyableValue: granted ? "/repo/.worktrees/feature/src" : nil,
-                              help: "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory.")
+                              help: "Source: CMUX parent surface · Report time: Unknown · Child directory: Unverified")
                     ]
                 }
                 #expect(detail.lines.filter {

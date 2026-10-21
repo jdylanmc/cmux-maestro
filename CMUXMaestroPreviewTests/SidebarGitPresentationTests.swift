@@ -97,8 +97,8 @@ struct SidebarGitPresentationTests {
                 let line = try #require(hover.lines.first { $0.title == "Git changes" })
                 #expect(line.gitChanges == hovered.gitChanges, "Pinned focus cannot lend counts to another hover")
                 let expected = hovered.id == first.id
-                    ? "Assigned directory: 4 changed files · +123 / −45 lines vs HEAD. Includes 1 untracked and 2 binary files; their lines and submodule contents are excluded."
-                    : "Assigned directory: 9 changed files · +987 / −65 lines vs HEAD. Includes 2 untracked and 3 binary files; their lines and submodule contents are excluded."
+                    ? "Assigned directory: 4 changed files · +123 / −45 tracked lines vs HEAD · Untracked: 1 · Binary: 2 · Excludes: untracked/binary lines, submodule contents"
+                    : "Assigned directory: 9 changed files · +987 / −65 tracked lines vs HEAD · Untracked: 2 · Binary: 3 · Excludes: untracked/binary lines, submodule contents"
                 #expect(line.value == expected)
                 #expect(line.help == SidebarPresentation.assignedGitHelp && line.copyableValue == nil)
                 #expect(SidebarAgentHoverContent.card(
@@ -116,7 +116,7 @@ struct SidebarGitPresentationTests {
         let expected = status == "verified" && age == 0
         #expect(line.gitChanges == (expected ? maximumChanges : nil))
         if !expected {
-            #expect(line.value == "Assigned directory: Current counts unavailable")
+            #expect(line.value == "Unavailable")
             #expect(!line.value.contains("+0") && !line.value.contains("0 files"))
         }
         #expect(SidebarDetailContent(title: "Synthetic", lines: [line]).gitChanges == line.gitChanges)
@@ -128,9 +128,9 @@ struct SidebarGitPresentationTests {
         let missing = SidebarPresentation.managedGitDetails(gitNode(changes: nil), now: now)
         #expect(fresh.first { $0.title == "Git changes" }?.gitChanges == changes)
         #expect(fresh.first { $0.title == "Git changes" }?.value ==
-            "Assigned directory: 0 changed files · +0 / −0 lines vs HEAD. Includes 0 untracked and 0 binary files; their lines and submodule contents are excluded.")
+            "Assigned directory: 0 changed files · +0 / −0 tracked lines vs HEAD · Untracked: 0 · Binary: 0 · Excludes: untracked/binary lines, submodule contents")
         #expect(missing.first { $0.title == "Git changes" }?.gitChanges == nil)
-        #expect(missing.first { $0.title == "Git changes" }?.value == "Assigned directory: Current counts unavailable")
+        #expect(missing.first { $0.title == "Git changes" }?.value == "Unavailable")
     }
 
     @Test(arguments: ["light", "dark", "light-increased", "dark-increased"], [160.0, 280.0])

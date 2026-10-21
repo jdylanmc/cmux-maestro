@@ -207,11 +207,11 @@ struct SidebarLayoutRenderingTests {
                                 - ordinary[1].frame.height) / 2) <= 0.5)
                         #expect(ordinary.prefix(3).allSatisfy { $0.frame.minX == ordinary[0].frame.minX })
                         #expect(geometry.contains { $0.help.contains("State unavailable")
-                            && $0.help.contains("Child history incomplete")
+                            && $0.help.contains("Child history: Incomplete")
                             && $0.help.contains("~/git/_opensource/example/maestro-design-location-with-a-deliberately-long-component") })
-                        #expect(geometry.contains { $0.help.contains("Last verified location: Assigned directory: Not current Git state")
-                            && $0.help.contains("Git changes: Assigned directory: Current counts unavailable")
-                            && $0.help.contains("not Copilot's current /cwd") })
+                        #expect(geometry.contains { $0.help.contains("Last verified location: Assigned directory: Stale")
+                            && $0.help.contains("Git changes: Unavailable")
+                            && $0.help.contains("Git source: Assigned directory") })
                     }
                 }
             }
