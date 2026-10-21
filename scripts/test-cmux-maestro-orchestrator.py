@@ -1679,6 +1679,74 @@ class WorkspaceCapacityCLITests(unittest.TestCase):
         self.assertEqual(self.capacity()["capacity"]["used"], 2)
 
 
+class RetiredCapacityStatusTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve() / "Orchestration"
+        self.workspace, self.pane = str(uuid.uuid4()), str(uuid.uuid4())
+        self.state = CONTROLLER_API["empty_state"]()
+        self.actor, token = CONTROLLER_API["new_root"](
+            self.workspace, str(uuid.uuid4()), self.pane, "Coordinator")
+        self.state["nodes"][self.actor["id"]] = self.actor
+        self.args = CONTROLLER_API["parser"]().parse_args([
+            "status", "--actor-id", self.actor["id"], "--token", token])
+        self.cmux = CONTROLLER_API["Cmux"]()
+        self.addCleanup(patch.stopall)
+        patch.object(self.cmux, "surface_exists",
+                     side_effect=lambda workspace, surface: surface == self.actor["surfaceId"]).start()
+        patch.object(self.cmux, "workspace_surfaces", return_value={self.actor["surfaceId"]}).start()
+        patch.dict(CONTROLLER_API["command_status"].__globals__, {
+            "process_start": lambda pid: None,
+            "process_observation": lambda process: False if process else None,
+        }).start()
+
+    def worker(self, parent=None, *, phase="reported-completed"):
+        parent = parent or self.actor
+        node, _ = CONTROLLER_API["new_root"](
+            parent["workspaceId"], str(uuid.uuid4()), self.pane, "Synthetic worker")
+        node.update(
+            role="worker", parentId=parent["id"], runId=parent["runId"],
+            executionMode="bounded", phase=phase,
+            availability="idle", generation=1, copilotSessionId=str(uuid.uuid4()),
+            supervisor={"pid": 999999, "start": "synthetic-ended-process"},
+            verifiedBoundaryGeneration=1, result="Synthetic verified outcome",
+        )
+        self.state["nodes"][node["id"]] = node
+        return node
+
+    def save(self):
+        with CONTROLLER_API["Store"](self.root) as store:
+            store.write(self.state)
+
+    def retire(self):
+        self.save()
+        snapshot = CONTROLLER_API["read_state"](self.root)
+        observations, retained_gone = CONTROLLER_API["resource_observations"](
+            snapshot, self.cmux, self.workspace)
+        CONTROLLER_API["mutate"](self.root, lambda state: CONTROLLER_API["reconcile_resources"](
+            state, snapshot, observations, retained_gone))
+
+    def status(self):
+        return CONTROLLER_API["command_status"](self.args, self.root, self.cmux)
+
+    def test_repeated_status_preserves_exact_retirement_and_live_capacity(self):
+        worker = self.worker()
+        self.retire()
+        before = CONTROLLER_API["read_state"](self.root)
+        self.assertEqual(before["nodes"][worker["id"]]["phase"], "resource-retired")
+        for _ in range(3):
+            result = self.status()
+            self.assertEqual(result["capacity"]["used"], 0)
+            self.assertEqual(result["capacity"]["storedNodes"], 2)
+            observed = next(node for node in result["workers"] if node["workerId"] == worker["id"])
+            self.assertEqual(observed["phase"], "resource-retired")
+            self.assertFalse(observed["surfacePresent"])
+            self.assertFalse(observed["supervisorRunning"])
+            self.assertEqual(CONTROLLER_API["read_state"](self.root)["nodes"][worker["id"]],
+                             before["nodes"][worker["id"]])
+
+
 class LaunchPayloadCompactionTests(unittest.TestCase):
     """Ended nodes' launch payload leaves control state for a private per-node archive (#280)."""
 
