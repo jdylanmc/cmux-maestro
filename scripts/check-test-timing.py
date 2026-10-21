@@ -46,11 +46,34 @@ def test_path(path):
                  or ("scripts" in value.parts and "Test" in value.name)))
 
 
-def statement_end(text, start, minimum):
+def regex_end(text, start):
+    """Ignore regex delimiters conservatively; division may overcapture, never truncate."""
+    bracket = False
+    index = start + 1
+    while index < len(text) and text[index] != "\n":
+        char = text[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == "[":
+            bracket = True
+        elif char == "]":
+            bracket = False
+        elif char == "/" and not bracket:
+            return index + 1
+        index += 1
+    return None
+
+
+def statement_end(text, start, minimum, path):
     """Continue past newlines inside call arguments, including nested callbacks."""
     depth = 0
     quote = None
-    block_comment = False
+    block_comment = 0
+    suffix = Path(path).suffix
+    hash_comments = suffix in {"", ".py", ".sh"}
+    slash_comments = suffix not in {".py", ".sh"}
+    regex_literals = suffix in {"", ".js", ".mjs", ".cjs", ".ts", ".tsx"}
     index = start
     while index < len(text):
         char = text[index]
@@ -63,21 +86,26 @@ def statement_end(text, start, minimum):
                 quote = None
                 continue
         elif block_comment:
-            if text.startswith("*/", index):
-                block_comment = False
+            if text.startswith("/*", index):
+                block_comment += 1
                 index += 2
                 continue
-        elif text.startswith("//", index) or (
-            char == "#" and (index + 1 == len(text) or text[index + 1].isspace())
-        ):
+            elif text.startswith("*/", index):
+                block_comment -= 1
+                index += 2
+                continue
+        elif (slash_comments and text.startswith("//", index)) or (hash_comments and char == "#"):
             newline = text.find("\n", index)
             index = len(text) if newline < 0 else newline
             if index >= minimum and depth == 0:
                 return index
             continue
-        elif text.startswith("/*", index):
-            block_comment = True
+        elif slash_comments and text.startswith("/*", index):
+            block_comment = 1
             index += 2
+            continue
+        elif regex_literals and char == "/" and (end := regex_end(text, index)) is not None:
+            index = end
             continue
         elif char in "\"'`":
             quote = char * 3 if text.startswith(char * 3, index) else char
@@ -93,13 +121,13 @@ def statement_end(text, start, minimum):
     return len(text)
 
 
-def statements(text):
+def statements(text, path=""):
     """Fingerprint whole affected statements, not just the first line of a call."""
     result = Counter()
     spans = set()
     for match in PATTERN.finditer(text):
         start = text.rfind("\n", 0, match.start()) + 1
-        end = statement_end(text, start, match.end())
+        end = statement_end(text, start, match.end(), path)
         spans.add((start, end))
     for start, end in sorted(spans):
         statement = " ".join(text[start:end].split())
@@ -114,7 +142,7 @@ def violations(root, paths, policy):
     for name in sorted(set(policy) - selected):
         errors.append(f"{name}: stale exception for an absent or unscanned test source")
     for name in sorted(selected):
-        found = statements((root / name).read_text())
+        found = statements((root / name).read_text(), name)
         entry = policy.get(name, {})
         allowed = entry.get("statements", {})
         if entry and (not isinstance(entry.get("reason"), str) or not entry["reason"].strip()):

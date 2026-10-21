@@ -63,18 +63,20 @@ class TimingPolicyTests(unittest.TestCase):
                 self.assertTrue(timing.violations(root, [name], {}))
 
     def test_continuation_arguments_are_part_of_the_exception(self):
-        for original in [
-            "set" + "Timeout(() => {\n  consume(')'); // misleading )\n},\n  50)",
-            "try await Task\n .sl" + "eep(\n for: .milliseconds(50)\n)",
-            "await de" + "lay(\n /* misleading ) */\n 50\n)",
-            "waitFor" + "Expectations(\n timeout: 50\n)",
+        for name, original in [
+            ("tests/clock.test.mjs", "set" + "Timeout(() => {\n  consume(')'); // misleading )\n},\n  50)"),
+            ("Tests/Clock.swift", "try await Task\n .sl" + "eep(\n for: .milliseconds(50)\n)"),
+            ("tests/clock.test.mjs", "await de" + "lay(\n /* misleading ) */\n 50\n)"),
+            ("Tests/Clock.swift", "waitFor" + "Expectations(\n timeout: 50\n)"),
+            ("scripts/test-clock.py", "time.sl" + "eep( #guard )\n    50\n)"),
+            ("tests/clock.test.mjs", "set" + "Timeout(() => /[)]/.test(value),\n    50\n)"),
+            ("Tests/Clock.swift", "await Task.sl" + "eep(/* outer /* inner */ ) */\n for: .seconds(50)\n)"),
         ]:
             with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
-                name = "tests/clock.test.mjs"
                 file = root / name
                 file.parent.mkdir()
-                policy = {name: {"reason": "Reviewed hang guard", "statements": timing.statements(original)}}
+                policy = {name: {"reason": "Reviewed hang guard", "statements": timing.statements(original, name)}}
                 file.write_text(original)
                 self.assertEqual(timing.violations(root, [name], policy), [])
                 file.write_text(original.replace("50", "2"))
