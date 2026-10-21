@@ -162,6 +162,16 @@ struct SidebarLayoutRenderingTests {
                 #expect(rows["Focus Left helper"] == nil)
                 #expect(rows.keys.contains { $0.hasPrefix("Left helper, ") })
                 #expect(rows.keys.contains { $0.hasPrefix("Right helper, ") })
+                let parent = try #require(rows["Focus Coordinator"])
+                let left = try #require(rows.first { $0.key.hasPrefix("Left helper, ") }?.value)
+                let right = try #require(rows.first { $0.key.hasPrefix("Right helper, ") }?.value)
+                let following = try #require(rows["Focus Unrelated"])
+                #expect(left.width == 28 && right.width == 28, "Compact, equal icon targets")
+                #expect(right.minX - left.minX == 32, "Even four-point gaps, no leading state lane")
+                #expect(left.minY == right.minY)
+                #expect(left.minX == parent.minX + 4, "Card starts at the parent title edge, with four-point inset")
+                #expect(following.minY - parent.minY <= preferences.layout.density.agentRowHeight + 36,
+                        "Retained task state belongs inside the card, not in a second summary row")
             }
             preferences.setExpanded(true, for: .managed(projection.root))
         }
