@@ -237,7 +237,7 @@ struct SidebarRowGroupTests {
     }
 
     /// Hover on either the parent or a child highlights one continuous background over the whole group.
-    @Test(arguments: ["parent", "child"])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: ["parent", "child"])
     func hoveringAnyRowHighlightsTheWholeGroup(_ entry: String) async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

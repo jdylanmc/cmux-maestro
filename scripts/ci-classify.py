@@ -48,7 +48,8 @@ RULE_KEYS = {"id", "paths", "suites", "reason"}
 # Selection and gate files always select every suite, even if an edited map says otherwise.
 FULL_COVERAGE_FLOOR = (".github/workflows/**", "scripts/ci-classify.py", "scripts/ci-suite-map.json",
                        "scripts/test-ci-classify.py", "scripts/ci-gate.py", "scripts/ci-required-suites.json",
-                       "scripts/test-ci-gate.py")
+                       "scripts/test-ci-gate.py", "scripts/check-test-timing.py", "scripts/test-test-timing.py",
+                       "scripts/test-timing-allowlist.json", "scripts/local-ui-acceptance.json")
 SUMMARY_FILE_LIMIT = 300
 
 

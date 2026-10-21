@@ -370,7 +370,7 @@ struct SidebarLayoutRenderingTests {
         return model
     }
 
-    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [NSScroller.Style.overlay, .legacy])
     func nativeEightLevelOutlineRetainsMinimumTitleWidthAt280(style: NSScroller.Style) async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
@@ -414,7 +414,7 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [NSScroller.Style.overlay, .legacy])
     func productionEightLevelOutlineRetainsNameAndStableActionsAt280(budget: NSScroller.Style) async throws {
         let fixtures = SidebarTreeFixtures()
         let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
@@ -462,7 +462,7 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [NSScroller.Style.overlay, .legacy])
     func deepOutlineViewportRemainsStableWithoutFocus(budget: NSScroller.Style) async throws {
         let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
@@ -485,7 +485,7 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [NSScroller.Style.overlay, .legacy])
     func deepOutlineFrameComparisonRejectsRealWidthChange(budget: NSScroller.Style) async throws {
         let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
@@ -522,7 +522,7 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    @Test(arguments: [NSScroller.Style.overlay, .legacy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [NSScroller.Style.overlay, .legacy])
     func deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline(style: NSScroller.Style) async throws {
         let model = makeModel(fixtures: SidebarTreeFixtures(), longMetadata: true, deep: true)
         let fixture = try SidebarPreferenceFixture()
@@ -574,7 +574,8 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
-    @Test(arguments: [NSScroller.Style.overlay, .legacy], [NSScroller.Style.overlay, .legacy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled),
+          arguments: [NSScroller.Style.overlay, .legacy], [NSScroller.Style.overlay, .legacy])
     func deepOutlineFixedViewportSurvivesNativeStyleChanges(
         budget: NSScroller.Style, initialStyle: NSScroller.Style
     ) async throws {
@@ -1035,7 +1036,8 @@ struct SidebarLayoutRenderingTests {
         #expect((treeHeight - rootHeight) / 4 == SidebarDensity.compact.agentRowHeight)
     }
 
-    @Test func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes() async throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/layout-validation/offscreen")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

@@ -35,7 +35,7 @@ class GuideModuleImportTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             for name in ("run-integrated-test-scopes.py", "run-guide-ui-validation.py",
-                         "verify-build-metadata.py", "guide-acceptance-evidence.py"):
+                         "verify-build-metadata.py", "guide-acceptance-evidence.py", "local-ui-acceptance.json"):
                 shutil.copyfile(ROOT / "scripts" / name, scripts / name)
             result = subprocess.run([
                 sys.executable, "-I", "-c",

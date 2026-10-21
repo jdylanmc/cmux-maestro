@@ -1,0 +1,426 @@
+{
+  "CMUXMaestroPreviewTests/CLIIntegrationGuideRenderingTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .seconds(180))": 1,
+      "&& window.isVisible && window.isKeyWindow && window.occlusionState.contains(.visible)": 1,
+      "+ \"key=\\(window.isKeyWindow) main=\\(window.isMainWindow) occlusion=\\(window.occlusionState.rawValue) \"": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/CopilotAssetEnvelopeTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let started = ContinuousClock.now": 1,
+      "let batchStart = ContinuousClock.now": 1,
+      "maximumBatch = max(maximumBatch, batchStart.duration(to: .now))": 1,
+      "print(\"READER121_SYNTHETIC bytes=\\(size) reads=\\(reads) elapsed=\\(started.duration(to: .now)) maximumBatch=\\(maximumBatch) processPeakRSSBytes=\\(rss)\")": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/CopilotHookTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "usleep(2_000)": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let deadline = ContinuousClock.now.advanced(by: .seconds(3))": 1,
+      "while !FileManager.default.fileExists(atPath: opened.path), ContinuousClock.now < deadline {": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/CopilotReaderTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let coldElapsed = coldStart.duration(to: measured.now)": 1,
+      "let updateElapsed = updateStart.duration(to: measured.now)": 1,
+      "let failureElapsed = failureStart.duration(to: measured.now)": 1,
+      "var maximumBatch = start.duration(to: clock.now)": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1,
+      "maximumBatch = max(maximumBatch, batchStart.duration(to: clock.now))": 1,
+      "let duration = start.duration(to: clock.now).components": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/CopilotSetupTests.swift": {
+    "reason": "Injected-clock observations, deadline helper and 60-second process readiness/EOF hang guards. Deliberately delayed synthetic launcher tests retain their startup precondition; no upper wall-time performance assertion.",
+    "statements": {
+      "let initial = ContinuousClock.now": 1,
+      "return origin.duration(to: instant)": 1,
+      "waitForTimeout: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },": 1,
+      "guard errno == EAGAIN || errno == EINTR, ContinuousClock.now < deadline else { return nil }": 1,
+      "Thread.sleep(forTimeInterval: 0.01)": 2,
+      "#expect(clock.elapsed == .zero)": 3,
+      "let before = ContinuousClock.now": 1,
+      "#expect(sample >= before && sample <= ContinuousClock.now)": 1,
+      "let readiness = ContinuousClock.now.advanced(by: supervisedWaitLimit)": 1,
+      "while !allReady(), ContinuousClock.now < readiness {": 1,
+      "try await Task.sleep(for: launchDelay)": 1,
+      "#expect(clock.elapsed == (cancel ? .zero : .seconds(runner.timeout)))": 1,
+      "while !ready(), ContinuousClock.now < readiness {": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1,
+      "let started = ContinuousClock.now": 2,
+      "#expect(ContinuousClock.now - started < .seconds(2))": 1,
+      "#expect(ContinuousClock.now - started < .milliseconds(400))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "deadline = ContinuousClock.now.advanced(by: limit)": 2,
+      "let instant = ContinuousClock.now": 1,
+      "while !finished, ContinuousClock.now < deadline {": 1,
+      "lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },": 1,
+      "Thread.sleep(forTimeInterval: 5)": 1,
+      "while ContinuousClock.now < deadline {": 1,
+      "Thread.sleep(forTimeInterval: 0.01)": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarAttentionCoordinationTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let deadline = ContinuousClock.now.advanced(by: .seconds(10))": 1,
+      "while !condition() && ContinuousClock.now < deadline {": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarBeatIndicatorTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "#expect(pulse.duration == 1 && pulse.fromValue as? Float == SidebarBeatGlow.dimmest)": 1,
+      "pause: { try await Task.sleep(for: .milliseconds(20)) }": 1,
+      "try await Task.sleep(for: .milliseconds(50))": 2,
+      "try await Task.sleep(for: .milliseconds(60))": 1,
+      "try await Task.sleep(for: .milliseconds(150))": 4,
+      "try await Task.sleep(for: .milliseconds(80))": 5,
+      "try await Task.sleep(for: .milliseconds(120))": 2,
+      "try await Task.sleep(for: .milliseconds(200))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "pause: { try await Task.sleep(for: .milliseconds(5)) },": 3,
+      "do { try await Task.sleep(for: .seconds(60)) } catch {": 1,
+      "let deadline = ContinuousClock.now.advanced(by: .seconds(60))": 1,
+      "while ContinuousClock.now < deadline {": 1,
+      "try? await Task.sleep(for: .milliseconds(5))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarGitPresentationTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "#expect(!window.isVisible && !window.isKeyWindow && !window.isMainWindow)": 2
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarHeaderTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(20))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarHistoryTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "#expect(tree.nextHistoryExpiry == retention.duration.map { now.addingTimeInterval($0 - 1) })": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarHoverTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "pause: { try await Task.sleep(for: .seconds(60)) }, expiryPause: sidebarFrozenExpiry, now: { date }": 1,
+      "read: { .empty }, pause: { try await Task.sleep(for: .seconds(60)) }": 1,
+      "try await Task.sleep(for: .milliseconds(30))": 2,
+      "await sidebarEventually { window.isKeyWindow }": 1,
+      "try #require(window.isKeyWindow)": 1,
+      "try #require(window.isKeyWindow && presenter.state.mode == .keyboard)": 1,
+      "try #require(panel.isKeyWindow && !window.isKeyWindow && presenter.state.mode == .explicit)": 1,
+      "try #require(panel.isKeyWindow && panel.firstResponder === copy)": 1,
+      "#expect(window.isKeyWindow && window.firstResponder === origin)": 2,
+      "try #require(window.isKeyWindow && window.firstResponder === path.first)": 1,
+      "try #require(window.isKeyWindow && window.firstResponder === target)": 1,
+      "try await Task.sleep(for: .milliseconds(20))": 1,
+      "try await Task.sleep(for: .milliseconds(25))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarIconPickerTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(30))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarInternalTaskRenderingTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let observationAge = model.copilot.tree.generatedAt.map { now.timeIntervalSince($0) }": 1,
+      "let wallClockAge = model.copilot.tree.generatedAt.map { Date().timeIntervalSince($0) }": 1,
+      "let wasKey = mounted.window.isKeyWindow": 2,
+      "#expect(mounted.window.isKeyWindow == wasKey && mounted.window.isMainWindow == wasMain)": 2,
+      "#expect(!window.isVisible && !window.isKeyWindow)": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(20))": 5,
+      "pause: { try await Task.sleep(for: .seconds(60)) },": 3,
+      "pause: { try await Task.sleep(for: .seconds(60)) }": 3,
+      "try await Task.sleep(for: .seconds(SidebarCopilotTree.maximumAge + 0.1))": 1,
+      "read: neutralRead { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarLayoutTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let deadline = ContinuousClock.now.advanced(by: .seconds(60))": 1,
+      "while !condition() && ContinuousClock.now < deadline {": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarMotionTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "pause: { try await Task.sleep(for: .milliseconds(10)) })": 2,
+      "let orchestration = SidebarOrchestrationPolling(read: { raw }, pause: { try await Task.sleep(for: .seconds(60)) })": 2,
+      "pause: { try await Task.sleep(for: .milliseconds(10)) },": 1,
+      "}, pause: { try await Task.sleep(for: .seconds(60)) })": 1,
+      "#expect(observation.observedAt.timeIntervalSince(now) > SidebarCopilotTree.maximumAge,": 1,
+      "try await Task.sleep(for: .milliseconds(40))": 1,
+      "try await Task.sleep(for: .milliseconds(250))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarMultiWindowTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(50))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarNavigationTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "read: neutralRead { await reads.read($0) }, pause: { try await Task.sleep(for: .seconds(60)) }": 2,
+      "let navigation = SidebarNavigation(timeout: { try await Task.sleep(for: .milliseconds(15)) },": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarPinnedDetailsTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "pause: { try await Task.sleep(for: .milliseconds(10)) })": 1,
+      "}, pause: { try await Task.sleep(for: .seconds(60)) })": 1,
+      "try await Task.sleep(for: .milliseconds(100))": 2,
+      "read: { await source.managed }, pause: { try await Task.sleep(for: .seconds(60)) }": 1,
+      "read: neutralRead { _ in await source.observed }, pause: { try await Task.sleep(for: .seconds(60)) },": 1,
+      "try await Task.sleep(for: .milliseconds(30))": 1,
+      "try await Task.sleep(for: .milliseconds(5))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarPreferenceCoordinationTests.swift": {
+    "reason": "60-second hang guards around real child protocol/file-presenter convergence. Assertions inspect persisted state and notification delivery, never elapsed speed.",
+    "statements": {
+      "let deadline = ContinuousClock.now.advanced(by: .seconds(60))": 1,
+      "while !condition() && ContinuousClock.now < deadline {": 1,
+      "try await Task.sleep(for: .milliseconds(10))": 1,
+      "try await Task.sleep(for: .seconds(60))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarPreferencesTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(20))": 3,
+      "read: neutralRead { _ in snapshot }, pause: { try await Task.sleep(for: .seconds(60)) },": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarRenderingEvidence.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let request = VNRecognizeTextRequest()": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarRowGroupTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(350))": 1,
+      "try await Task.sleep(for: .milliseconds(50))": 1,
+      "pause: { try await Task.sleep(for: .milliseconds(20)) }": 1,
+      "}, pause: { try await Task.sleep(for: .seconds(60)) })": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarSessionCopyTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "try await Task.sleep(for: .milliseconds(30))": 1,
+      "#expect(!window.isVisible && !window.isKeyWindow)": 2,
+      "try await Task.sleep(for: .milliseconds(50))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarSessionNameTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "pause: { try await Task.sleep(for: .milliseconds(20)) }": 1,
+      "pause: { try await Task.sleep(for: .milliseconds(200)) }": 1,
+      "try await Task.sleep(for: .milliseconds(50))": 1,
+      "try await Task.sleep(for: .milliseconds(150))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/SidebarStoreInjectionTests.swift": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "let deadline = ContinuousClock.now + .seconds(5)": 1,
+      "while stores.beats.beats.isEmpty, ContinuousClock.now < deadline {": 1,
+      "RunLoop.main.run(until: Date().addingTimeInterval(0.01))": 1
+    }
+  },
+  "scripts/PreferenceCoordinationTestClient.swift": {
+    "reason": "60-second hang guards around real child protocol/file-presenter convergence. Assertions inspect persisted state and notification delivery, never elapsed speed.",
+    "statements": {
+      "let deadline = ContinuousClock.now.advanced(by: .seconds(60))": 3,
+      "guard ContinuousClock.now < deadline else { throw CocoaError(.coderValueNotFound) }": 3,
+      "try await Task.sleep(for: .milliseconds(10))": 3
+    }
+  },
+  "scripts/test-beats.py": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "deadline = time.monotonic() + 30": 1,
+      "while not marker.exists() and process.poll() is None and time.monotonic() < deadline:": 1,
+      "time.sleep(0.02)": 1,
+      "time.sleep(0.3)": 1
+    }
+  },
+  "scripts/test-cmux-maestro-orchestrator.py": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "deadline = time.monotonic() + 10": 6,
+      "if time.monotonic() >= deadline:": 6,
+      "time.sleep(0.01)": 25,
+      "time.sleep(0.8)": 1,
+      "time.sleep(0.35)": 1,
+      "time.sleep(0.45 if \"[DELAY]\" in prompt else 0.08)": 1,
+      "deadline = time.monotonic() + 15": 1,
+      "deadline = time.monotonic() + 5": 11,
+      "while anchor[\"start\"] is None and time.monotonic() < deadline:": 1,
+      "deadline = time.monotonic() + timeout": 1,
+      "while time.monotonic() < deadline:": 1,
+      "time.sleep(0.05)": 3,
+      "deadline = time.monotonic() + 3": 12,
+      "time.sleep(0.02)": 7,
+      "deadline = time.monotonic() + 6": 3,
+      "while not (gate / \"ready\").exists() and time.monotonic() < deadline:": 2,
+      "and time.monotonic() < deadline):": 1,
+      "deadline = time.monotonic() + 2": 1,
+      "for item in roots + providers) and time.monotonic() < deadline:": 1,
+      "stamp = time.time() - age": 1,
+      "while not Path(marker + \".ready\").exists() and time.monotonic() < deadline:": 1,
+      "time.sleep(1) # the other join runs while the first holds its bound route": 1,
+      "f\" os.utime(os.path.join({str(self.extension)!r}, name), (time.time() + 5, time.time() + 5))\")": 1,
+      "time.sleep(2.1) # the marker predates the process that now has its PID": 1,
+      "self.assertLess(time.monotonic(), deadline, \"resume never published its route\")": 1,
+      "while not h.calls() and time.monotonic() < deadline:": 1,
+      "while not (h.path / \"interactive-ready\").exists() and time.monotonic() < deadline:": 2,
+      "while not (h.path / \"interactive-input\").exists() and time.monotonic() < deadline:": 1,
+      "while not (h.path / \"interactive-ready.interrupted\").exists() and time.monotonic() < deadline:": 1,
+      "\"timeout\": \"#!/usr/bin/env python3\\nimport time\\ntime.sleep(2)\\n\",": 1,
+      "while not (ready.exists() and entered.exists()) and time.monotonic() < deadline:": 1,
+      "while not barrier.with_suffix(\".ready\").exists() and time.monotonic() < deadline:": 3,
+      "time.sleep(0.3)": 3,
+      "while not ready.exists() and time.monotonic() < deadline:": 2,
+      "while not log.read_text() and time.monotonic() < deadline:": 6,
+      "time.sleep(2.7)": 1,
+      "started = time.monotonic()": 1,
+      "elapsed = time.monotonic() - started": 1,
+      "while process_start(provider[\"pid\"]) == provider[\"start\"] and time.monotonic() < deadline:": 1,
+      "while CONTROLLER_API[\"process_start\"](supervisor[\"pid\"]) == supervisor[\"start\"] and time.monotonic() < deadline:": 1,
+      "and time.monotonic() < deadline": 1,
+      "while not path.exists() and time.monotonic() < deadline:": 1,
+      "launch.__globals__[\"time\"].sleep(0)": 1,
+      "\"print(s.getsockname()[1],flush=True)\\ntime.sleep(60)\")], stdout=subprocess.PIPE, text=True)": 1,
+      "probe.markers = lambda session: [(own, time.time())]": 1,
+      "projection, _count = CONTROLLER_API[\"observe_processes\"](self.state(node), {}, probe, time.time())": 1
+    }
+  },
+  "scripts/test-copilot-sandbox.sh": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "time.sleep(0.0002)": 2
+    }
+  },
+  "scripts/test-delivery-proof.mjs": {
+    "reason": "60-second synthetic process/event hang guards, plus frozen legacy fake-ledger delays and adapter timing probes. Promise-timer aliases are counted too. These remaining legacy delays are not claimed deterministic; new copies or changes require independent review.",
+    "statements": {
+      "const deadline = Date.now() + 60_000;": 3,
+      "await delay(10);": 3,
+      "delay(60_000, null, { signal: timeout.signal }).then(() => {": 1,
+      "await Promise.race([exit, delay(60_000, null, { signal: timeout.signal }).then(() => {": 1,
+      "await delay(5); // Copilot created schedule 1; the process stops before recording it": 1,
+      "await delay(5);": 2,
+      "add: async (entry) => { await delay(2); entries.push({ id: nextId, ...entry }); return nextId++; },": 2,
+      "read: async () => { await delay(3); return copy(state); },": 1,
+      "write: async (value) => { await delay(3); state = copy(value); },": 1,
+      "read: async () => { await delay(20); return [makeBeat()]; },": 1,
+      "assert.ok(Date.now() < deadline, \"Synthetic lifecycle condition exceeded test watchdog\");": 1,
+      "for (const signal of [\"SIGHUP\", \"SIGTERM\"]) process.once(signal, () => setTimeout(() =>": 1,
+      "const before = Date.now();": 1,
+      "assert.ok(Date.parse(observedAt) >= before && Date.parse(observedAt) <= Date.now());": 1,
+      "const started = Date.now();": 2,
+      "assert.ok(Date.now() - started < 1000);": 1,
+      "await new Promise(resolve => setTimeout(resolve, 20));": 2,
+      "if (mode === \"cancel\") setTimeout(() => process.exit(5), 4000);": 2,
+      "assert.ok(Date.now() < deadline, \"synthetic controller did not receive request\");": 1,
+      "assert.ok(Date.now() < deadline, \"synthetic subtree controller did not receive request\");": 1,
+      "const begun = Date.now();": 1,
+      "const drained = f.endGate.drain(5000).then(() => [f.calls.ended.length, Date.now() - begun < 1000]);": 1,
+      "await new Promise(resolve => setTimeout(resolve, 50));": 1,
+      "assert.ok(Date.now() - started >= 90);": 1,
+      "const quick = Date.now();": 1,
+      "assert.ok(Date.now() - quick < 1000);": 1
+    }
+  },
+  "scripts/test-delivery-proof.py": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "self.assertLessEqual(elapsed, 45.000001, \"all ancestry, source and host work must fit the bounded pass\")": 1,
+      "self.assertLess(elapsed, 60, \"adapter deadline must retain response-serialization headroom\")": 1,
+      "def sleep(seconds):": 1,
+      "self.assertLessEqual(elapsed, 45.000001, \"ancestry probes belong to the same bounded pass\")": 1,
+      "deadline = time.monotonic() + 5": 2,
+      "self.assertLess(time.monotonic(), deadline, \"owned source process did not exit\")": 1,
+      "time.sleep(0.01)": 2,
+      "self.assertLess(time.monotonic(), deadline, \"owned child did not exit within test watchdog\")": 1
+    }
+  },
+  "scripts/test-local-preview.py": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "input=f'#include <unistd.h>\\nint main(void) {{ write(1, \"{label}\", 5); sleep(30); return 0; }}\\n'.encode(),": 1,
+      "deadline = time.monotonic() + 15": 1,
+      "while time.monotonic() < deadline:": 1,
+      "time.sleep(0.015)": 2,
+      "deadline = time.monotonic() + 20": 1,
+      "if time.monotonic() > deadline:": 1
+    }
+  },
+  "scripts/test-metadata-watchdog.py": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "deadline = time.monotonic() + 12": 1,
+      "require(time.monotonic() < deadline, f\"Finite probe child {child} did not exit.\")": 1,
+      "time.sleep(0.05)": 1
+    }
+  },
+  "scripts/test-skill-overrides.mjs": {
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "statements": {
+      "const host = await import(`./check-skill-overrides.mjs?posix-host-${Date.now()}`);": 1
+    }
+  },
+  "scripts/test-test-timing.py": {
+    "reason": "Literal negative-control inputs for this policy checker, never executed as timing operations.",
+    "statements": {
+      "original = \"try await Task.\" + \"sleep(for: .seconds(60))\"": 1,
+      "(\"NewTests/Test.swift\", \"try await Task\\n .sleep(for: .seconds(1))\"),": 1,
+      "(\"scripts/test-new.py\", \"time.\" + \"sleep(0.1)\"),": 1,
+      "(\"NewTests/Window.swift\", \"#expect(window.\" + \"isKeyWindow)\"),": 1
+    }
+  }
+}

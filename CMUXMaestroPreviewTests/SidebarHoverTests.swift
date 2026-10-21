@@ -113,7 +113,7 @@ struct SidebarHoverTests {
         }
     }
 
-    @Test(arguments: ["tab", "escape", "shift-tab"])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: ["tab", "escape", "shift-tab"])
     func hostedPreviewKeysContinueToFollowingRow(exit: String) async throws {
         let fixture = SidebarTreeFixtures()
         try await withProductionKeyboardSidebar { window, hosting, model, preferences, origin, following, pasteboard in

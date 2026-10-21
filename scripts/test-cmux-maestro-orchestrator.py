@@ -4314,6 +4314,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(followed["iconId"], "md-duck")
         self.assertEqual(followed["iconColor"], "teal")
 
+    @unittest.skipUnless(os.environ.get("CMUX_MAESTRO_LOCAL_PROCESS_ACCEPTANCE") == "1",
+                         "Real Git must finish inside the production one-second deadline; local acceptance only (#276)")
     def test_git_counts_cover_net_head_changes_untracked_binary_and_refresh(self):
         worktree = self.h.path / "changes"
         worktree.mkdir()

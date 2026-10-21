@@ -413,7 +413,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertIsNotNone(environment)
 
     def test_allowlisted_disabled_tests_and_skips_have_reasons(self):
-        self.assertEqual(set(scopes.INTENTIONAL_SKIPS), {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST})
+        self.assertEqual(set(scopes.INTENTIONAL_SKIPS),
+                         {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST} | set(scopes.LOCAL_UI_TESTS))
         self.assertTrue(all(reason.strip() for reason in scopes.INTENTIONAL_SKIPS.values()))
         first = scopes.TARGET + "/OtherSuite/first()"
         benchmark = scopes.TARGET + "/" + BENCHMARK_TEST
@@ -424,6 +425,18 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(result, 0)
         [skip] = evidence["remainingCounts"]["skippedTestsByIdentity"]
         self.assertEqual(skip["allowlistReason"], scopes.INTENTIONAL_SKIPS[benchmark])
+
+    def test_local_acceptance_skips_are_exact_and_cannot_hide_enabled_failures(self):
+        identity = next(iter(scopes.LOCAL_UI_TESTS))
+        report = self.report([(identity, "Skipped"), ("Other/test()", "Passed")])
+        counts = scopes.validate_remaining(*report, benchmark_enabled=False)
+        self.assertEqual(counts["skippedTestsByIdentity"][0]["policyReason"], "opt-in-local-ui-acceptance")
+        with self.assertRaisesRegex(ValueError, "Unattributed or enabled"):
+            scopes.validate_remaining(*report, benchmark_enabled=False, local_ui_enabled=True)
+        with self.assertRaisesRegex(ValueError, "Local UI acceptance"):
+            scopes.hosted_test_environment({"GITHUB_ACTIONS": "true", scopes.LOCAL_UI_FLAG: "1"})
+        environment = scopes.hosted_test_environment({scopes.LOCAL_UI_FLAG: "1"})
+        self.assertEqual(environment["TEST_RUNNER_" + scopes.LOCAL_UI_FLAG], "1")
 
     def test_failed_isolated_regression_still_runs_complement_and_remains_red(self):
         result, evidence = self.execute(self.report([(scopes.TEST, "Failed")]),
@@ -650,6 +663,47 @@ class IntegratedTestScopeTests(unittest.TestCase):
                        "-test-iterations", "-only-test-configuration", "-resultBundlePath", "-xctestrun"):
             with self.subTest(option=option), self.assertRaises(ValueError):
                 scopes.validate_arguments(["xcodebuild", option])
+
+    def test_focused_diagnostics_bound_runs_and_reject_nonpassing_parameter_executions(self):
+        for status in ("Passed", "Skipped", "Expected Failure"):
+            with self.subTest(status=status):
+                summary, tree = self.report([("OtherSuite/parameterized(value:)", "Passed")])
+                summary["devicesAndConfigurations"] = [{
+                    "passedTests": 1 + int(status == "Passed"), "failedTests": 0,
+                    "skippedTests": int(status == "Skipped"),
+                    "expectedFailures": int(status == "Expected Failure")}]
+                tree["testNodes"][0]["children"][0]["children"] = [
+                    {"nodeType": "Arguments", "name": name, "result": result, "children": [
+                        {"nodeType": "Test Case Run", "name": "Run", "result": result}]}
+                    for name, result in (("one", "Passed"), ("two", status))]
+                directory = self.directory / status
+                with patch.dict(os.environ, {"GITHUB_ACTIONS": "false"}), \
+                        patch.object(scopes, "read_result", return_value=(summary, tree)), \
+                        patch("builtins.print"):
+                    runner = lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0)
+                    if status == "Passed":
+                        self.assertEqual(scopes.run_focused(["xcodebuild"], directory, ["OtherSuite"], 2, runner), 0)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "failed or skipped"):
+                            scopes.run_focused(["xcodebuild"], directory, ["OtherSuite"], 2, runner)
+                evidence = json.loads((directory / "focused.json").read_text())
+                self.assertFalse(evidence["requiredCoverage"])
+                self.assertEqual(len(evidence["runs"]), 2 if status == "Passed" else 1)
+
+    def test_focused_diagnostics_refuse_ci_missing_selectors_and_invalid_run_counts(self):
+        for environment, selectors, repeats, error in (
+            ("true", ["OtherSuite"], 1, "required CI"),
+            ("false", ["OtherSuite"], 0, "repeat count"),
+            ("false", ["OtherSuite"], 101, "repeat count"),
+            ("false", ["MissingSuite"], 1, "did not execute"),
+        ):
+            with self.subTest(environment=environment, repeats=repeats), \
+                    patch.dict(os.environ, {"GITHUB_ACTIONS": environment}), \
+                    patch.object(scopes, "read_result",
+                                 return_value=self.report([("OtherSuite/test()", "Passed")])):
+                with self.assertRaisesRegex(ValueError, error):
+                    scopes.run_focused(["xcodebuild"], self.directory / str(uuid.uuid4()), selectors, repeats,
+                                      lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0))
 
     def test_actual_xcresult_identifier_url_is_bound_to_expected_method(self):
         summary, tree = self.report([(scopes.TEST, "Passed")])
@@ -1402,6 +1456,9 @@ class BuildMetadataTests(unittest.TestCase):
         "      - name: Verify suite classifier\n"
         "        if: always()\n"
         "        run: python3 scripts/test-ci-classify.py\n"
+        "      - name: Reject new timing-sensitive tests\n"
+        "        if: always()\n"
+        "        run: python3 scripts/test-test-timing.py && python3 scripts/check-test-timing.py\n"
         "      - name: Evaluate required suites\n"
         "        if: always()\n"
         "        env:\n"

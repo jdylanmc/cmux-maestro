@@ -187,6 +187,9 @@ jobs:
       - name: Verify suite classifier
         if: always()
         run: python3 scripts/test-ci-classify.py
+      - name: Reject new timing-sensitive tests
+        if: always()
+        run: python3 scripts/test-test-timing.py && python3 scripts/check-test-timing.py
       - name: Evaluate required suites
         if: always()
         env:

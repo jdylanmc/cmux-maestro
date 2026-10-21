@@ -10,7 +10,11 @@
         "scripts/test-ci-classify.py",
         "scripts/ci-gate.py",
         "scripts/ci-required-suites.json",
-        "scripts/test-ci-gate.py"
+        "scripts/test-ci-gate.py",
+        "scripts/check-test-timing.py",
+        "scripts/test-test-timing.py",
+        "scripts/test-timing-allowlist.json",
+        "scripts/local-ui-acceptance.json"
       ],
       "suites": "all",
       "reason": "Workflow, suite map, classifier and gate changes are merge-policy changes; they always run every suite."

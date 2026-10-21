@@ -133,6 +133,15 @@ Moved here from the README. Reasons are in the ADRs.
 
 ## Validation
 
+Required tests assert causality and state, not runner speed. Use controlled clocks
+and explicit continuations/barriers; real-process bounds are generous hang guards,
+never elapsed-time assertions. Native focus, animation, OCR and late viewport
+settlement belong to explicitly inventoried local acceptance when they cannot be
+made deterministic. Do not retry until green or silently skip coverage.
+Run `python3 scripts/check-test-timing.py` after test changes. Its counted,
+statement-exact exceptions are a ratchet, not permission to add another sleep.
+See [CI test determinism](docs/reference/ci-test-determinism.md).
+
 Use the checked-in scripts, which select full Xcode explicitly:
 
 ```sh

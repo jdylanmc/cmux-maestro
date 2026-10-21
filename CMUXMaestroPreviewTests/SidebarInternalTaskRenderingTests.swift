@@ -162,7 +162,8 @@ struct SidebarInternalTaskRenderingTests {
         try capture(mounted.host, name: "review1-exact-session-only-\(mode.rawValue)")
     }
 
-    @Test(arguments: [SidebarHistoryRetention.fifteenSeconds, .never], [SidebarMode.hierarchy])
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled),
+          arguments: [SidebarHistoryRetention.fifteenSeconds, .never], [SidebarMode.hierarchy])
     func review002DisplayedDismissControlHandlesHiddenCompletedChild(
         _ retention: SidebarHistoryRetention, _ mode: SidebarMode
     ) async throws {

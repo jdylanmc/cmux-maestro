@@ -1,9 +1,14 @@
+import Foundation
 import Testing
 
 // Swift Testing's body stays concurrent with NonisolatedNonsendingByDefault enabled.
 typealias SidebarScopedTestBody = @concurrent @Sendable () async throws -> Void
 
 nonisolated struct SidebarAppKitTestScope: TestTrait, SuiteTrait, TestScoping {
+    static var localAcceptanceEnabled: Bool {
+        ProcessInfo.processInfo.environment["CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE"] == "1"
+    }
+
     var isRecursive: Bool { true }
 
     func provideScope(

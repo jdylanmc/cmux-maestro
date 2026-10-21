@@ -1,0 +1,90 @@
+# Required CI and local acceptance
+
+Required tests assert state and ordering, never that a loaded macOS runner can
+schedule work within a few seconds. A real-process readiness/exit bound is a
+60-second **hang guard**, not the behavior being asserted. Do not add retries.
+Use injected time for expiry, explicit continuations/streams for ordering, and
+fixed identities when exercising deliberately tiny probabilistic replay filters.
+
+## Required behavioral coverage
+
+- Setup supervision starts both gated children before advancing their injected
+  deadlines; neither can finish early. The observer retains the MainActor versus
+  detached-driver distinction. Deadline-helper tests release an explicit timeout
+  signal instead of measuring elapsed wall time.
+- Orchestration snapshots and naming use an injected clock. Polling tests await
+  publication at the existing pause boundary rather than counting scheduler yields.
+  Cadence fixtures suspend until cancellation, never a 60-second accidental tick.
+- Cross-process preference tests still exercise real locks, writes, file
+  presentation, and existing observable projections. Their 60-second bounds only
+  detect a missing event; no manual refresh substitutes for notification delivery.
+- The replay saturation fixture fixes setup event identities before applying
+  pressure. A random false positive in its one-word filter is not a product defect.
+- Guide acceptance remains required. The historical missing-evidence failures
+  came from the producer's shallow-checkout parent check, not demonstrated
+  environment-forwarding loss. Current source uses raw `git cat-file commit`
+  parents; `GuideSourceParentTests` verifies real shallow/full repositories and
+  rejects changed base, candidate, order, tree, and workflow SHA. Failed production
+  still fails the integrated invocation, never becomes an accepted skip.
+
+## Explicit local-only native acceptance
+
+`scripts/local-ui-acceptance.json` inventories each opt-in test and its reason.
+The same identities appear as attributed skips in `coverage.json`; an unlisted
+skip, missing inventory entry, or enabled test that skips still fails validation.
+No test body, pixel tolerance, focus oracle, or negative control is weakened.
+
+The local cases depend on native animation sampling, OCR, hosted view discovery,
+key-window ownership, or late AppKit scroller settlement. They are useful manual
+acceptance probes but cannot be mandatory evidence from an uncontrolled runner.
+Pure phase/reduced-motion, key-chain, layout-budget, retention/dismissal-identity,
+and form-state tests remain required. This is a deliberate reduction of *native
+venue* guarantees at the merge gate, not a claim the venue tests were repaired.
+The viewport positive/negative controls move together; #127's runtime mechanism
+is not declared solved. #174's cancellation stall was already removed by an
+earlier owner decision and remains unresolved.
+
+Run specific acceptance methods locally without changing global preferences:
+
+```sh
+CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE=1 ./scripts/test.sh \
+  --focused 'SidebarMotionTests/nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane()'
+CMUX_MAESTRO_LOCAL_PROCESS_ACCEPTANCE=1 python3 scripts/test-cmux-maestro-orchestrator.py \
+  OrchestratorTests.test_git_counts_cover_net_head_changes_untracked_binary_and_refresh
+```
+
+The Git test requires real commands to finish within the unchanged production
+one-second probe deadline. Parser rejection/count tests stay required; successful
+real Git collection is local acceptance, not a promise about runner speed.
+Native local acceptance can require an interactive graphical session; use a
+disposable validation venue, not a live Maestro installation.
+
+## Repeated focused diagnostics
+
+```sh
+./scripts/test.sh --focused CopilotEventReducerTests,SidebarOrchestrationTests --repeat 20
+```
+
+The checked-in script builds once and starts a fresh test invocation each time.
+Every selected suite/method must execute, every run must pass, and any skip or
+failure stops the command. `focused.json` records all runs and explicitly says
+`requiredCoverage: false`. Focused mode refuses GitHub Actions and never replaces
+the full `./scripts/test.sh` CI receipt. No failed iteration is retried.
+
+## Timing policy ratchet
+
+`ci-gate` always runs `scripts/test-test-timing.py` and
+`scripts/check-test-timing.py`, including documentation-only changes. The guard
+scans tracked Swift, Python, JavaScript and shell test sources for sleeps, wall
+clock reads/comparisons, OCR and key-window dependence. New files, changed
+statements, and additional copies of an existing statement fail. Line numbers
+and indentation do not affect the comparison.
+
+`scripts/test-timing-allowlist.json` freezes existing occurrences, including
+real-process hang guards, fake-provider delays, offscreen native settlement,
+benchmark measurements and explicit local acceptance. This is a baseline
+ratchet, **not** proof all legacy timing code is deterministic. Any exception
+addition needs a specific justification and independent review. Prefer removing
+the dependency; do not regenerate the baseline to silence a failure. This
+lightweight lexical check is not a Swift/Python dataflow proof and does not
+replace review of clocks hidden behind helpers.
