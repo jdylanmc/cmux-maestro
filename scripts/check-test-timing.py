@@ -16,6 +16,7 @@ PATTERN = re.compile(
     r"|(?:^|[;&|]\s*)\s*sleep\s+[^\n;&|]+"
     r"|DispatchTime\s*\.\s*now\s*\("
     r"|(?:ContinuousClock|SuspendingClock)(?:\s*\(\s*\))?\s*\.\s*now\b"
+    r"|Date\s*\.\s*now\b"
     r"|(?<!\w)\.now\b|Date\s*\(\s*\)"
     r"|CFAbsoluteTimeGetCurrent\s*\("
     r"|\b(?:fulfillment|wait)\s*\(\s*(?:of|for)\s*:"

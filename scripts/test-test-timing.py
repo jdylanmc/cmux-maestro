@@ -36,6 +36,8 @@ class TimingPolicyTests(unittest.TestCase):
             ("NewTests/Window.swift", "#expect(window." + "isKeyWindow)"),
             ("NewTests/Render.swift", "let oracle = VNRecognize" + "TextRequest()"),
             ("NewTests/Clock.swift", "let now = Da" + "te()"),
+            ("NewTests/Clock.swift", "let deadline = Date." + "now.addingTimeInterval(0.1)"),
+            ("NewTests/Clock.swift", "let now = Date\n ." + "now"),
             ("NewTests/Clock.swift", "let now = ContinuousClock()." + "now"),
             ("NewTests/Clock.swift", "let now = SuspendingClock." + "now"),
             ("NewTests/Clock.swift", "let now = CFAbsoluteTimeGet" + "Current()"),
