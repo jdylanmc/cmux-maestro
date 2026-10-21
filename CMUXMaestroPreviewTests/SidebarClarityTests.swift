@@ -1101,8 +1101,8 @@ struct SidebarClarityTests {
         tree.issues = [.permissionDenied, .malformedData, .ambiguousIdentity, .readLimitReached]
         let primary = SidebarPresentation.primaryWarnings(tree)
         #expect(primary == ["Copilot access denied", "3 working/blocked tasks not shown"])
-        #expect(SidebarPresentation.overviewWarnings(tree).contains("Some Copilot history is unreadable"))
-        #expect(SidebarPresentation.overviewWarnings(tree).contains("Session identity is unconfirmed"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("History: Partially unreadable"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Session identity: Unconfirmed"))
     }
 
     @Test(arguments: [false, true])
@@ -1189,10 +1189,13 @@ struct SidebarClarityTests {
         tree.issues = [.permissionDenied]
         #expect(SidebarPresentation.overviewWarnings(tree).contains("Copilot access denied"))
         tree.issues = [.malformedData, .unsupportedFormat, .identityChanged, .ambiguousIdentity, .ambiguousTurn, .stateUnavailable, .readLimitReached]
-        #expect(SidebarPresentation.overviewWarnings(tree).contains("Some Copilot history is unreadable"))
-        #expect(SidebarPresentation.overviewWarnings(tree).contains("Session identity is unconfirmed"))
-        #expect(SidebarPresentation.overviewWarnings(tree).contains("Turn identity is unconfirmed"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("History: Partially unreadable"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Session identity: Unconfirmed"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Turn identity: Unconfirmed"))
         #expect(SidebarPresentation.overviewWarnings(tree).contains("History read limit reached"))
+        tree.issues = [.integrationNotInstalled, .loadingHistory]
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Integration: Not enabled"))
+        #expect(SidebarPresentation.overviewWarnings(tree).contains("Child history: Loading"))
         for availability: SidebarCopilotAvailability in [.waiting, .loading, .hidden, .disconnected, .unavailable] {
             tree.availability = availability
             #expect(!SidebarPresentation.overviewWarnings(tree).isEmpty)
