@@ -786,14 +786,16 @@ struct SidebarHistoryReaderTests {
         let normal = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(try outline(normal) == ["live"])
         // The next read starts at clock.read(); this tool start lands one second later.
+        let midRead = clock.read().addingTimeInterval(1)
         try fixture.append(attentionEvent("tool.execution_start", agent: "live", data: [
             "toolCallId": "shell", "toolName": "bash"
-        ], timestamp: clock.read().addingTimeInterval(1).ISO8601Format()) + Data([10]))
+        ], timestamp: midRead.ISO8601Format()) + Data([10]))
         let racing = try await reader.read(surfaceIDs: [fixture.surface])
         let racingRows = try outline(racing)
         #expect(racingRows == ["live"])
         let live = try #require(try project(racing, fixture: fixture).sessions.first?.nodes.first { $0.id == "live" })
         #expect(live.activity?.summary == "Executing tool: bash")
+        #expect(live.activity?.lastEventAt == midRead)
         let settled = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(try outline(settled) == ["live"])
     }

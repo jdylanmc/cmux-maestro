@@ -47,12 +47,38 @@ struct SidebarHistoryTests {
         #expect(tree.nextHistoryExpiry == nil)
         #expect(tree.sessions.first?.nodes.allSatisfy { $0.terminalTimestamp == nil } == true)
         #expect(tree.dismissibleOutcomes.count == 2)
+    }
+
+    @Test func terminalTimestampDuringReadHasKnownAgeAndRetentionDeadline() {
         let observedEarlier = fixtures.session(children: [child("later-than-observation", age: 1)], now: now.addingTimeInterval(-2))
         let earlier = SidebarCopilotTree.project(
             fixtures.snapshot(sessions: [observedEarlier], now: now), onto: fixtures.topology(), now: now
         )
-        #expect(earlier.nextHistoryExpiry == nil)
-        #expect(earlier.sessions.first?.nodes.first?.terminalTimestamp == nil)
+        #expect(earlier.nextHistoryExpiry == now.addingTimeInterval(14))
+        #expect(earlier.sessions.first?.nodes.first?.terminalTimestamp == now.addingTimeInterval(-1))
+    }
+
+    @Test func sessionAndChildActivityAndAttentionUseReadCompletionTime() throws {
+        let midRead = now.addingTimeInterval(-1)
+        let activity = AgentActivity(kind: .idle, summary: "Last completed tool: view", lastEventAt: midRead)
+        let attention = AgentAttention(kind: .turnFinished,
+                                       evidence: .init(source: "copilot.events", eventID: eventID), occurredAt: midRead)
+        let session = CopilotSessionObservation(
+            sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            liveness: .alive, state: .idle, model: nil,
+            children: [.init(id: "child", parentID: nil, kind: .subagent, name: "Child", state: .idle, model: nil,
+                             attention: [attention], activity: activity)],
+            observedAt: now.addingTimeInterval(-2), attention: [attention], activity: activity
+        )
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [session], now: now), onto: fixtures.topology(), now: now
+        )
+        let projected = try #require(tree.sessions.first)
+        #expect(projected.activity?.lastEventAt == midRead)
+        #expect(projected.attention.first?.occurredAt == midRead)
+        #expect(projected.nodes.first?.activity?.lastEventAt == midRead)
+        #expect(projected.nodes.first?.attention.first?.occurredAt == midRead)
+        #expect(projected.observedAt == now.addingTimeInterval(-2))
     }
 
     @Test func ancientEvidenceExpiresOnReconstructionNotFirstPoll() {
