@@ -2013,6 +2013,14 @@ private struct WorkspaceRow: View {
                     }
                     .accessibilityValue(accessibilityStatus)
                 }
+                if !expanded, let activity = SidebarPresentation.collapsedActivity(
+                    sessions: sessions, managed: managedNodes, availability: orchestration.availability,
+                    countsComplete: countsComplete, observations: copilotTree, now: now()
+                ) {
+                    SidebarCollapsedActivityButton(activity: activity) {
+                        setExpanded(.workspace(workspace.id), true)
+                    }
+                }
                 SidebarWorkspaceTaskEye(workspaceID: workspace.id)
             }
             .environment(\.sidebarReorderSource, reorder.dragSource)

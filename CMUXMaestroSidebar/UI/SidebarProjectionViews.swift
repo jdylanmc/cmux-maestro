@@ -177,7 +177,12 @@ struct WorktreeProjectionContent: View {
                 let expansion = SidebarExpansionID.worktreeGroup(group.key, workspaceID: workspaceID)
                 let expanded = layout.isExpanded(expansion)
                 VStack(alignment: .leading, spacing: 2) {
-                    WorktreeGroupHeader(group: group, expanded: expanded) { setExpanded(expansion, !expanded) }
+                    HStack(spacing: 4) {
+                        WorktreeGroupHeader(group: group, expanded: expanded) { setExpanded(expansion, !expanded) }
+                        if !expanded, let activity = activity(for: group.members) {
+                            SidebarCollapsedActivityButton(activity: activity) { setExpanded(expansion, true) }
+                        }
+                    }
                     if expanded {
                         // Moves and drops stay among this group's rows; groups have their own order.
                         let order = surfaceOrder.restricted(to: Set(group.members.map(surfaceID)))
@@ -195,6 +200,26 @@ struct WorktreeProjectionContent: View {
                 .accessibilityIdentifier("worktree-group-\(group.key.storageID)")
             }
         }
+    }
+
+    private func activity(for members: [SidebarWorktreeMember]) -> SidebarWorkspaceSummary.Activity? {
+        let managed = members.compactMap { member -> SidebarOrchestrationNode? in
+            if case .managed(let node) = member { return node }
+            return nil
+        }
+        let sessions = members.flatMap { member -> [SidebarCopilotSession] in
+            switch member {
+            case .managed(let node):
+                return tree.sessions.filter {
+                    $0.id == node.copilotSessionId && $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
+                }
+            case .surface(_, let session): return [session]
+            }
+        }
+        return SidebarPresentation.collapsedActivity(
+            sessions: sessions, managed: managed, availability: orchestration.availability,
+            countsComplete: countsComplete, observations: tree, now: now()
+        )
     }
 
     private var managedIDs: Set<UUID> {

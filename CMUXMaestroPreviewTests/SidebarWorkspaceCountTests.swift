@@ -28,6 +28,7 @@ struct SidebarWorkspaceCountTests {
         case "unknown": .unknown
         default: .idle
         }
+
         var observed = session(fixtures.sessionID, surface: fixtures.surfaceA, state: state)
         if scenario == "input" {
             observed.attention = [.init(kind: .permission, evidence: .init(source: "copilot.events", eventID: UUID()),
@@ -55,6 +56,30 @@ struct SidebarWorkspaceCountTests {
             #expect(cue.title == expected)
             #expect(cue.count == (scenario == "incomplete" ? 0 : 1))
         }
+    }
+
+    @Test(arguments: [false, true])
+    func collapsedActivityIncludesInternalWorkButDoesNotReviveStaleChildWork(_ stale: Bool) throws {
+        let root = owner(sessionID: fixtures.sessionID)
+        var observed = session(fixtures.sessionID, surface: fixtures.surfaceA, state: .idle)
+        observed.nodes = [
+            .init(id: "running", parentID: nil, depth: 0, kind: .subagent, name: "Internal task",
+                  state: .working, model: nil, ancestryUnresolved: false, hasChildren: false,
+                  observedParent: .session(.init(providerID: "copilot", sessionID: observed.id.uuidString)))
+        ]
+        let snapshot = tree([observed], generatedAt: stale ? now.addingTimeInterval(-9) : now)
+        let summary = SidebarPresentation.workspaceSummary(
+            surfaces: [], sessions: snapshot.sessions, managed: [root], orchestrationAvailability: .ready,
+            countsComplete: true, now: now, observations: snapshot, includingInternalTasks: true
+        )
+        let attention = SidebarPresentation.workspaceAttention(
+            sessions: snapshot.sessions, managed: [root], availability: .ready, now: now, observations: snapshot
+        )
+        let cue = try #require(summary.collapsedActivity(attention: attention))
+        #expect(cue.visual == SidebarPresentation.state(stale ? .unknown : .working))
+        #expect(cue.label == (stale ? "1 unknown, counts incomplete" : "1 working"))
+        #expect(SidebarPresentation.activityTreatment(cue.visual, reduceMotion: true)
+                == (stale ? .none : .steadyWorking))
     }
 
     @Test func legacyCoordinatorCountsOneSurfaceWithoutClaimingSessionContents() throws {

@@ -233,6 +233,20 @@ Last-reported managed blockers stay visible, with freshness qualified in help.
 Agent totals, idle counts and repeated completeness warnings are not primary UI.
 Source diagnostics stay in details. Glyphs have 2 pt insets in their existing
 24 pt slots.
+Collapsed workspace headers additionally keep a compact aggregate activity cue
+before the workspace eye, in both projections. Collapsed worktree group headers
+use the same cue beside their agent count. Priority: needs input, blocked,
+failed, working, unknown; idle and finished work alone add nothing. The count
+belongs to the selected state, including internal tasks under exact owners, not
+the total group size. Exact managed and observed session representations count
+once. Existing summaries still count agents separately from internal tasks.
+The cue reuses row glyphs and the working ring (static with Reduce Motion).
+Incomplete evidence adds the dashed unknown glyph beside known activity, or
+stands alone when no state is known; no fabricated count represents omitted work.
+State/count and incomplete-count qualification are in accessibility and help,
+not visible prose. Activating the cue expands its workspace or group without
+focus, acknowledgement or session control. Existing observation updates refresh
+it; there is no new poller or persisted state.
 Standalone state keys keep pause/check/error symbols for blocked, finished and
 failed states. Workspace headers have a boxed disclosure.
 Their trailing ellipsis menu offers Focus, Expand/Collapse and Details as separate

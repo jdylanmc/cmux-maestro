@@ -6,6 +6,90 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test func collapsedActivityRendersStaticWorkingRingAndCount() throws {
+        func pixels<V: View>(_ content: V) throws -> Data {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 60, height: 32),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            let host = NSHostingView(rootView: content
+                .environment(\._accessibilityReduceMotion, true)
+                .frame(width: 60, height: 32).background(Color.white))
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        let actual = try pixels(SidebarCollapsedActivityButton(
+            activity: .init(visual: SidebarPresentation.state(.working), count: 4), expand: {}
+        ))
+        // Literal ring/count oracle: catches an absent ring, missing count or a rotating reduced-motion cue.
+        let expected = try pixels(SidebarTitleButton(label: "4 working", hint: "4 working", action: {}) {
+            HStack(spacing: 4) {
+                Circle().trim(from: 0.15, to: 1)
+                    .stroke(style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+                    .frame(width: 9, height: 9)
+                    .foregroundStyle(SidebarTone.green.color)
+                    .frame(width: 12, height: 14)
+                Text("4").font(.caption2.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            .frame(minWidth: 24, minHeight: 24)
+        }.fixedSize())
+        #expect(actual == expected, "Reduced-motion aggregate must show the literal static ring and count")
+    }
+
+    @Test(arguments: [SidebarProjection.subAgents, .worktrees])
+    func collapsedWorkspaceActivityExpandsWithoutNavigation(_ projection: SidebarProjection) async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let model = await makeModel(data, children: (0..<4).map { data.child("task-\($0)", state: .working) },
+                                    now: now, managed: true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        preferences.projection = projection
+        preferences.setExpanded(false, for: .workspace(data.workspaceA))
+        let mounted = mount(model, preferences, width: 280, reduceMotion: true, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        mounted.host.layoutSubtreeIfNeeded()
+        let activity = try #require(buttons(mounted.host).first { $0.accessibilityLabel() == "4 working" })
+        #expect(activity.toolTip == "4 working")
+        #expect(activity.isEnabled)
+        try capture(mounted.host, name: "collapsed-workspace-\(projection.rawValue)")
+        activity.performClick(nil)
+        #expect(preferences.layout.isExpanded(.workspace(data.workspaceA)))
+        #expect(model.navigation.status == .idle)
+    }
+
+    @Test func collapsedWorktreeActivityIncludesOwnedTasksAndExpands() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let model = await makeModel(data, children: (0..<4).map { data.child("task-\($0)", state: .working) },
+                                    now: now, managed: true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        preferences.projection = .worktrees
+        let group = SidebarExpansionID.worktreeGroup(.unknown, workspaceID: data.workspaceA)
+        preferences.setExpanded(false, for: group)
+        let mounted = mount(model, preferences, width: 280, reduceMotion: true, now: now)
+        defer { mounted.window.contentView = nil; mounted.window.close() }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        mounted.host.layoutSubtreeIfNeeded()
+        let activity = try #require(buttons(mounted.host).first { $0.accessibilityLabel() == "4 working" })
+        try capture(mounted.host, name: "collapsed-worktree-activity")
+        activity.performClick(nil)
+        #expect(preferences.layout.isExpanded(group))
+        #expect(model.navigation.status == .idle)
+    }
+
     @Test(arguments: [false, true])
     func hiddenUnknownTaskDoesNotMakeManagedLeafExpandable(_ expanded: Bool) async throws {
         let fixture = try SidebarPreferenceFixture()
