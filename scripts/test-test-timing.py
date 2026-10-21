@@ -100,6 +100,8 @@ class TimingPolicyTests(unittest.TestCase):
             "if false; then :; else PAUSE 0.1; fi",
             "if PAUSE 0.1; then :; fi",
             "while PAUSE 0.1; do break; done",
+            "while PAUSE \\\n  0.1; do break; done",
+            "if true; then PAUSE \\\n  \\\n  0.1; fi",
             "until PAUSE 0.1; do break; done",
             "! PAUSE 0.1",
             "(PAUSE 0.1; echo done)",

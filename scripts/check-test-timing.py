@@ -120,6 +120,9 @@ def statement_end(text, start, minimum, path):
             quote = char * 3 if text.startswith(char * 3, index) else char
             index += len(quote)
             continue
+        elif suffix == ".sh" and char == "\\":
+            index += 2
+            continue
         elif regex_literals and (char.isalnum() or char in "_$"):
             end = index + 1
             while end < len(text) and (text[end].isalnum() or text[end] in "_$"):
