@@ -70,6 +70,10 @@ class TimingPolicyTests(unittest.TestCase):
             ("Tests/Clock.swift", "waitFor" + "Expectations(\n timeout: 50\n)"),
             ("scripts/test-clock.py", "time.sl" + "eep( #guard )\n    50\n)"),
             ("tests/clock.test.mjs", "set" + "Timeout(() => /[)]/.test(value),\n    50\n)"),
+            ("tests/clock.test.mjs", "set" + "Timeout(() => n / f(/x/),\n    50\n)"),
+            ("tests/clock.test.mjs", "set" + "Timeout(() => n++ / f(/x/),\n    50\n)"),
+            ("tests/clock.test.mjs", "set" + "Timeout(() => ({}) / f(/x/),\n    50\n)"),
+            ("tests/clock.test.mjs", "set" + "Timeout(() => { if (check()) /[)]/.test(value); },\n    50\n)"),
             ("Tests/Clock.swift", "await Task.sl" + "eep(/* outer /* inner */ ) */\n for: .seconds(50)\n)"),
         ]:
             with self.subTest(original=original), tempfile.TemporaryDirectory() as directory:

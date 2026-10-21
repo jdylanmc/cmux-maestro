@@ -47,7 +47,7 @@ def test_path(path):
 
 
 def regex_end(text, start):
-    """Ignore regex delimiters conservatively; division may overcapture, never truncate."""
+    """Read regex bodies without counting escaped or character-class parentheses."""
     bracket = False
     index = start + 1
     while index < len(text) and text[index] != "\n":
@@ -74,6 +74,11 @@ def statement_end(text, start, minimum, path):
     hash_comments = suffix in {"", ".py", ".sh"}
     slash_comments = suffix not in {".py", ".sh"}
     regex_literals = suffix in {"", ".js", ".mjs", ".cjs", ".ts", ".tsx"}
+    regex_allowed = True
+    pending_control = False
+    paren_controls = []
+    brace_blocks = []
+    last_token = ""
     index = start
     while index < len(text):
         char = text[index]
@@ -84,6 +89,8 @@ def statement_end(text, start, minimum, path):
             if text.startswith(quote, index):
                 index += len(quote)
                 quote = None
+                regex_allowed = False
+                last_token = "value"
                 continue
         elif block_comment:
             if text.startswith("/*", index):
@@ -104,19 +111,63 @@ def statement_end(text, start, minimum, path):
             block_comment = 1
             index += 2
             continue
-        elif regex_literals and char == "/" and (end := regex_end(text, index)) is not None:
+        elif regex_literals and regex_allowed and char == "/" and (end := regex_end(text, index)) is not None:
             index = end
+            regex_allowed = False
+            last_token = "value"
             continue
         elif char in "\"'`":
             quote = char * 3 if text.startswith(char * 3, index) else char
             index += len(quote)
             continue
+        elif regex_literals and (char.isalnum() or char in "_$"):
+            end = index + 1
+            while end < len(text) and (text[end].isalnum() or text[end] in "_$"):
+                end += 1
+            word = text[index:end]
+            keyword = last_token not in {".", "?."}
+            pending_control = keyword and (
+                word in {"if", "while", "for", "with", "switch", "catch"}
+                or (pending_control and word == "await")
+            )
+            regex_allowed = keyword and word in {
+                "return", "throw", "case", "delete", "void", "typeof", "instanceof",
+                "in", "of", "yield", "await", "else", "do",
+            }
+            last_token = word
+            index = end
+            continue
+        elif regex_literals and text.startswith("=>", index):
+            regex_allowed = True
+            last_token = "=>"
+            index += 2
+            continue
+        elif regex_literals and text[index:index + 2] in {"++", "--"}:
+            last_token = text[index:index + 2]
+            index += 2
+            continue
         elif char == "(":
             depth += 1
+            paren_controls.append(pending_control)
+            pending_control = False
+            regex_allowed = True
+            last_token = char
         elif char == ")":
             depth = max(0, depth - 1)
+            regex_allowed = paren_controls.pop() if paren_controls else False
+            last_token = char
+        elif regex_literals and char == "{":
+            brace_blocks.append(last_token not in {"=", "(", ",", "[", ":", "return", "yield"})
+            regex_allowed = True
+            last_token = char
+        elif regex_literals and char == "}":
+            regex_allowed = brace_blocks.pop() if brace_blocks else True
+            last_token = char
         elif char == "\n" and index >= minimum and depth == 0:
             return index
+        elif regex_literals and not char.isspace():
+            regex_allowed = char in "=,;:!?&|+*-/%^~<>["
+            last_token = char
         index += 1
     return len(text)
 
