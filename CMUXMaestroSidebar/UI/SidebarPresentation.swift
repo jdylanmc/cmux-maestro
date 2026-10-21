@@ -1338,6 +1338,12 @@ enum SidebarPresentation {
         return result + activityDetails(node.activity) + attentionDetails(node.attention)
     }
 
+    static func omittedTaskCaption(_ session: SidebarCopilotSession) -> String {
+        session.hasUncountedChildren
+            ? session.omittedChildrenDescription
+            : "Omitted working/blocked: \(session.omittedActiveChildrenCount)"
+    }
+
     static func sessionDetails(_ session: SidebarCopilotSession) -> [SidebarDetailLine] {
         var result: [SidebarDetailLine] = [
             .sessionID(session.id, canCopy: [.alive, .dead].contains(session.liveness)),

@@ -279,6 +279,10 @@ struct SidebarClarityTests {
         #expect(session.omittedChildrenDescription == expected)
         #expect(tree.omittedChildrenDescription == expected)
         #expect(SidebarPresentation.sessionDetails(session).first { $0.title == "Omitted children" }?.value == expected)
+        let expectedCaption = unknown
+            ? "Omitted tasks: 3+ · Total: Unknown · Active: Unknown"
+            : "Omitted working/blocked: 3"
+        #expect(SidebarPresentation.omittedTaskCaption(session) == expectedCaption)
     }
 
     @Test func workspaceAttentionCountsQuestionsAndApprovalsWithoutManagedDuplicates() {

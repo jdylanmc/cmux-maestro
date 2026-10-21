@@ -2464,9 +2464,7 @@ private struct CopilotSessionContents: View {
             .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if session.hasUncountedChildren || session.omittedActiveChildrenCount > 0 {
-            Text(session.hasUncountedChildren
-                 ? session.omittedChildrenDescription
-                 : "Omitted working/blocked: \(session.omittedActiveChildrenCount)")
+            Text(SidebarPresentation.omittedTaskCaption(session))
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
