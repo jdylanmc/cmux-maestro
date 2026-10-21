@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Agent hover processes share one wrapping **Processes** field with named PIDs
+  and inline overflow. Copy returns visible current PIDs, one per line; stale,
+  incomplete and retained process states remain explicit (#296).
 - Required CI uses causal setup/polling checks and fixed replay identities, with
   a guard against new timing-sensitive tests. Venue-dependent native acceptance
   is explicitly opt-in; its exact exclusions and remaining behavioral coverage

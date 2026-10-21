@@ -63,8 +63,9 @@ It stops at `sessionEnd` and on shutdown. Unmanaged sessions never ask. Output i
 The sidebar reads `processes.json` with the existing read-only `observer/` grant, like `icons.json`. A missing or malformed file shows no list, never an error. It keeps an entry only when its node, session and generation match a node in `current.json`.
 
 The managed agent hover shows:
-- **Background processes**: the count of `separate` processes (including `omittedCount`), `None`, `Scan incomplete`, `Denied`, `Unavailable`, `Not observed` or `Session ended`, with `Stale` after 60 s. After 5 minutes it shows `Unavailable`.
-- One line per `separate` process: its name and `PID <n>`, copyable only on a complete, current (`owned-current`, not stale) list. Detached and exited `separate` processes show `· Detached` or `· Exited`, never copyable; retained helpers are not listed. At most 8 lines, then **More background processes**.
+- **Processes**: one wrapping field, `PID 4242 (python3.12); PID 4243 (node)`, in published order, with at most 8 entries. A trailing `+N` combines display overflow and `omittedCount`. No repeated process-name headings or separate overflow row.
+- Copy gives only the visible current PIDs, one per line, on a complete, current (`owned-current`, not stale) list. Detached and exited `separate` processes retain `· Detached` or `· Exited` beside their entry and never enter the copied list; retained helpers are not listed.
+- Empty or uncertain observations retain `None`, `Scan incomplete`, `Denied`, `Unavailable`, `Not observed` or `Session ended`. Stale and incomplete lists retain their count/status prefix before the entries; `Stale` appears after 60 s, then `Unavailable` after 5 minutes. Neither stale nor incomplete lists offer PID or endpoint copies.
 - **Copilot helpers**: the count of `provider` processes plus `omittedHelperCount`. Not listed.
 - **Listening (loopback | all interfaces | network)**: one line per listener of any owned process, as `127.0.0.1:5173 · TCP · python3.12 4242`. Copy (complete, current list only) gives the bound endpoint exactly (`127.0.0.1:5173`, `[::1]:9000`, `*:3000`). No open action, no probe, no URL. `Listening: None` only for a complete, current list.
 
