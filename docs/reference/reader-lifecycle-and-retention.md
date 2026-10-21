@@ -203,6 +203,8 @@ their exact child identities, without degrading unrelated children (#269).
 Consistency checks still run when either projection contains invalid peers.
 Malformed inherited ancestry protects its descendants; duplicate or empty
 identities protect their identifiable ancestor chains before row filtering.
+Rejected duplicate, empty or foreign-owner identities also invalidate their
+dependent descendants transitively, even when each descendant's own ID is unique.
 A falsely lossless projection degrades unmatched observed children. A legacy
 child absent from the observed projection, or a truncated legacy traversal,
 cannot be attributed to a displayed row and keeps session-wide history fail-open.

@@ -16,6 +16,8 @@ Suspect evidence still cannot hide its owner or required ancestry; unrelated
 valid children retain their history controls. Malformed inherited ancestry
 protects the affected descendants. Rejected duplicate or empty child identities
 protect their identifiable ancestor chains before the rows are filtered out.
+Children whose parent transitively names a rejected duplicate, empty or
+foreign-owner identity also remain invalid and unresolved before history filtering.
 Consistency checks cannot be
 waived by an invalid peer in either projection. Strict validation still rejects
 the snapshot, and the session's counts remain partial.

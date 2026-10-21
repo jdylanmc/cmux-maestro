@@ -836,6 +836,22 @@ extension AgentSessionSnapshot {
             if case .session(let owner) = child.parent { return owner != session.identity }
             return false
         }
+        var childrenByParent: [ChildWorkID: [ChildWorkID]] = [:]
+        for child in evidence.children {
+            if case .child(let parent) = child.parent {
+                childrenByParent[parent, default: []].append(child.id)
+            }
+        }
+        var unresolved = Set(rejected.map(\.id))
+        var pending = Array(unresolved)
+        while let parent = pending.popLast() {
+            for descendant in childrenByParent[parent] ?? [] {
+                guard unresolved.insert(descendant).inserted else { continue }
+                result.invalidChildren.insert(descendant)
+                result.unresolvedParents.insert(descendant)
+                pending.append(descendant)
+            }
+        }
         for child in rejected {
             var parent = child.parent
             if case .session = parent {
