@@ -1580,6 +1580,9 @@ private struct ManagedNodeRow: View {
             ) {
                 SidebarAgentTitleLine(title: node.title, tags: tags) {
                     if attentionIncomplete { AttentionEvidenceIncompleteIcon() }
+                    if let collapsedSummary {
+                        CollapsedBranchSummary(summary: collapsedSummary, compact: true)
+                    }
                     SidebarStateBadge(visual: stateVisual,
                                       needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
                                       detail: metadataHelp)

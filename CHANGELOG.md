@@ -297,8 +297,9 @@ Notable changes are recorded using Keep a Changelog categories.
   independently (#321).
 
 - Collapsed managed sessions no longer show a standalone info glyph beneath the
-  row. Retained-work counts and uncertainty remain in the existing status tooltip
-  and accessibility help; child-history evidence stays in the hover card (#322).
+  row. Compact child-state and incomplete-evidence badges stay inline beside the
+  session status; retained-work counts remain in tooltip and accessibility help,
+  with child-history evidence in the hover card (#322).
 - Setup quiescence and session-end timing tests use controlled clocks and timers
   instead of runner-speed assertions. The CI timing guard also catches multiline
   elapsed comparisons and uptime reads (#310).
