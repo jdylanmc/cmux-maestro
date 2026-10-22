@@ -840,7 +840,17 @@ struct SidebarView: View {
         .environment(\.sidebarDismissManaged, dismissManaged)
         .environment(\.sidebarBeats, beats)
         .environment(\.sidebarBeatsPresenter, window)
-        .onChange(of: model.copilot.tree, initial: true) { _, tree in beats.updateLiveness(tree, from: window) }
+        .task {
+            defer { beats.removeLiveness(from: window) }
+            for await tree in model.copilot.evidenceUpdates() {
+                guard !Task.isCancelled else { break }
+                beats.updateLiveness(tree, from: window)
+                model.orchestration.updateObservedSessions(tree)
+                preferences.refreshLayout()
+                // Agent-authored tags can change without changing session observations.
+                preferences.refreshTags()
+            }
+        }
         // A row's Beat icon opens Beats through the controller; it replaces any other header popover.
         .onChange(of: beats.isPresented(in: window)) { _, presented in
             if presented { showingSettings = false; unavailableHeaderAction = nil }
@@ -867,9 +877,6 @@ struct SidebarView: View {
         .onChange(of: model.orchestration.snapshot) { _, snapshot in
             model.copilot.updateManagedSubjects(snapshot)
         }
-        .onChange(of: model.copilot.tree, initial: true) { _, tree in
-            model.orchestration.updateObservedSessions(tree)
-        }
         .onChange(of: model.hierarchy) { old, new in
             preferences.refreshLayout()
             if let target = SidebarPresentation.focusInteraction(from: old, to: new) {
@@ -877,9 +884,6 @@ struct SidebarView: View {
             }
         }
         .onChange(of: model.copilot.tree) { _, _ in
-            preferences.refreshLayout()
-            // Agents write their own tags outside the sidebar; read them with each observation.
-            preferences.refreshTags()
             if let owner = dismissedTaskOwner {
                 dismissedTaskOwner = nil
                 DispatchQueue.main.async { restoreFocus(afterDismissing: owner) }

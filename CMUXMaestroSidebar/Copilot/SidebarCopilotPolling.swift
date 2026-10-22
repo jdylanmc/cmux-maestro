@@ -12,6 +12,7 @@ final class SidebarCopilotPolling {
 
     @ObservationIgnored private var storedTree: SidebarCopilotTree = .waiting
     @ObservationIgnored private var currentTree: SidebarCopilotTree = .waiting
+    @ObservationIgnored private var evidenceObservers: [UUID: AsyncStream<SidebarCopilotTree>.Continuation] = [:]
     private(set) var tree: SidebarCopilotTree {
         get {
             access(keyPath: \.tree)
@@ -23,6 +24,7 @@ final class SidebarCopilotPolling {
             } else {
                 withMutation(keyPath: \.tree) { storedTree = newValue }
             }
+            for observer in evidenceObservers.values { observer.yield(newValue) }
         }
     }
     private(set) var isReading = false
@@ -103,6 +105,18 @@ final class SidebarCopilotPolling {
         self.topology = topology
         self.connected = connected
         invalidate()
+    }
+
+    /// Non-rendering consumers receive refreshed evidence even when the visible tree is equal.
+    func evidenceUpdates() -> AsyncStream<SidebarCopilotTree> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<SidebarCopilotTree>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        evidenceObservers[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { @MainActor in self?.evidenceObservers.removeValue(forKey: id) }
+        }
+        continuation.yield(tree)
+        return stream
     }
 
     func setVisible(_ visible: Bool) {
@@ -300,10 +314,11 @@ final class SidebarCopilotPolling {
     private func reprojectHistory() {
         guard canPoll, let snapshot else { return }
         defer { tree = currentTree }
+        let date = now()
         projectionCount += 1
-        currentTree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
+        currentTree = SidebarCopilotTree.project(snapshot, onto: topology, now: date, history: history, attention: attention,
                                          revealingIdleTasksIn: revealingIdleTasksIn)
-        projectionCache = SidebarCopilotProjectionCache(snapshot: snapshot, tree: currentTree, now: now())
+        projectionCache = SidebarCopilotProjectionCache(snapshot: snapshot, tree: currentTree, now: date)
         currentTree.managedDetails = managedDetails
         if let invalidatedAt { currentTree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
         reconcileStatuses(snapshot)

@@ -66,7 +66,7 @@ final class SidebarBeatsController {
         dismiss()
     }
 
-    /// Liveness for row icons. Called on every tree change; re-evaluated against the clock on each refresh.
+    /// Liveness for row icons. Receives every evidence refresh, not just visible tree changes.
     func updateLiveness(_ tree: SidebarCopilotTree, from window: ObjectIdentifier? = nil) {
         trees[window] = tree
         updateIndicators()

@@ -188,6 +188,9 @@ remain available to action-time checks; the visible minute-resolution **Observed
 labels update when their minute changes. Event times and attention are never
 rounded. The reader cadence remains two seconds; file-driven responsiveness and
 installed CPU/change-to-pixel acceptance are separate follow-up work.
+Beats liveness, born-root naming and external tag refresh consume a separate
+bounded latest-evidence stream, not SwiftUI presentation changes. An unchanged
+render therefore cannot strand a dependent consumer with expired timestamp copies.
 
 Schema version stays 1. Optional observation fields preserve process liveness,
 observation time, appearance, child kinds/models/outcome-event identities, issues
