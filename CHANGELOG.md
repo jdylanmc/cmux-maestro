@@ -276,6 +276,9 @@ Notable changes are recorded using Keep a Changelog categories.
 - Setup quiescence and session-end timing tests use controlled clocks and timers
   instead of runner-speed assertions. The CI timing guard also catches multiline
   elapsed comparisons and uptime reads (#310).
+- Unchanged sidebar binding records no longer reopen and decode on every poll.
+  A bounded metadata cache rechecks each file's exact identity and permissions;
+  changed records still take the full verification path (#315).
 
 - Sidebar pets and status cues animate in the render server instead of continuously
   relaying frames through sidebar layout. Unchanged session event files reuse their

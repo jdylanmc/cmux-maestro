@@ -270,6 +270,17 @@ independent terminal. This literal #10 integration does not complete broader
   Check cached bindings before process/transcript access and publication.
   Replaced directories, revoked surfaces, and cancellation discard cached state.
   EOF, errors, cancellation, and destruction close the directory stream.
+- Decoded routing metadata has a separate cache of at most 1,024 records
+  (`maximumBindings`), including off-surface records already read by discovery.
+  Every reuse requires a descriptor-relative, no-follow file stat matching
+  device, inode, birth time, owner, mode, size, and nanosecond modification/change
+  times. Directory timestamps alone never establish unchanged contents.
+  Changed files take the full owner/mode, bounded decode and before/after
+  descriptor/path verification path; failures discard the cached entry.
+  Completed stable discovery prunes unseen entries, and discovery reset clears
+  the cache. Cache capacity never limits discovery or grants authority: uncached
+  entries take the full read path. Current surface grants, process/marker
+  evidence and pre-publication routing/directory fences still run every poll.
 - Capture fixed prefix length and observation time for each catch-up pass.
   Later appends do not extend that lease forever. Verified complete prefix may
   be published with its captured observation time and `loadingHistory` when

@@ -73,6 +73,9 @@ actor CopilotSessionReader {
     private var fastDiscoveryCycle = true
     private var sessionNames = CopilotSessionNameCache()
     private var managedNames = CopilotSessionNameCache()
+    // Bounded decoded routing metadata, not process/session evidence or grants.
+    private var identityCache: [String: Binding] = [:]
+    private var unseenIdentities: Set<String> = []
     private(set) var eventReadBytes = 0
     private(set) var projectionBuilds = 0
     private(set) var identityReads = 0
@@ -241,6 +244,7 @@ actor CopilotSessionReader {
                 cycleChanged = false
                 cycleOverflowed = false
                 cycleIssues.removeAll()
+                unseenIdentities = Set(identityCache.keys)
                 fastDiscoveryCycle = lastDiscoveryCycle != stamp
             } else if stamp != discoveryStamp {
                 // Do not repeatedly restart a moving directory at its prefix.
@@ -255,8 +259,8 @@ actor CopilotSessionReader {
         }
     }
 
-    // The cache contains only granted identities and is re-read before ANY
-    // process or transcript access. A cached routing decision is not a grant.
+    // Revalidate routing metadata before ANY process or transcript access.
+    // A decoded cache entry is reusable only with an exact current file stamp.
     private func refreshCachedBindings(_ index: BindingIndex, surfaceIDs: Set<UUID>) throws {
         for id in bindingOrder {
             guard let cached = bindingsByID[id] else { continue }
@@ -664,10 +668,14 @@ actor CopilotSessionReader {
         (bindingsByID.count, tails.count, waitingBinding == nil ? 0 : 1, publishedCohort.count)
     }
 
+    func identityCacheCount() -> Int { identityCache.count }
+
     private func resetDiscovery() {
         discovery?.closeStream()
         discovery = nil
         discoveryStamp = nil
+        identityCache.removeAll()
+        unseenIdentities.removeAll()
         bindingsByID.removeAll()
         bindingOrder.removeAll()
         tails.removeAll()
@@ -689,6 +697,8 @@ actor CopilotSessionReader {
     private func finishDiscoveryCycle() {
         if discovery?.finished == true && cohortFinished && !cycleChanged {
             lastDiscoveryCycle = discoveryStamp
+            for filename in unseenIdentities { identityCache.removeValue(forKey: filename) }
+            unseenIdentities.removeAll()
         }
     }
 
@@ -750,8 +760,26 @@ actor CopilotSessionReader {
     private func readIdentity(
         at directory: Int32, filename: String
     ) throws -> (CopilotIdentityRecord, CopilotFileStamp) {
-        identityReads += 1
-        return try CopilotFileAccess.readIdentity(at: directory, filename: filename, owner: verifier.uid)
+        do {
+            try Task.checkCancellation()
+            unseenIdentities.remove(filename)
+            let current = try CopilotFileAccess.statEntry(at: directory, name: filename)
+            if let cached = identityCache[filename], cached.stamp == current {
+                return (cached.record, cached.stamp)
+            }
+            identityCache.removeValue(forKey: filename)
+            identityReads += 1
+            let (record, stamp) = try CopilotFileAccess.readIdentity(
+                at: directory, filename: filename, owner: verifier.uid
+            )
+            if identityCache.count < limits.maximumBindings {
+                identityCache[filename] = Binding(record: record, stamp: stamp, filename: filename)
+            }
+            return (record, stamp)
+        } catch {
+            identityCache.removeValue(forKey: filename)
+            throw error
+        }
     }
 
     private func advance(
