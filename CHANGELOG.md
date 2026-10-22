@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Agent hover process lists omit exited PIDs, including from overflow counts.
+  Current and detached processes remain visible; ended sessions and uncertain
+  observations retain their status labels (#304).
 - Hover cards, details, footer and tooltips use terse evidence labels instead of
   explanatory prose. Stale/unavailable observations, incomplete child history,
   directory provenance and Git count exclusions remain visible. Old managed
