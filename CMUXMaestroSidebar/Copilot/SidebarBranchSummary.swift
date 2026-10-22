@@ -49,6 +49,16 @@ struct SidebarBranchSummary: Equatable {
         }
     }
 
+    /// Child work only; the owning session already has its own state badge.
+    init(childrenOf sessions: [SidebarCopilotSession]) {
+        self.init(nodes: sessions.flatMap(\.nodes))
+        for session in sessions {
+            incomplete = incomplete || !session.childrenComplete || session.internalTaskCountsIncomplete
+                || session.treeDegraded || session.attentionDegraded
+            omittedActive += session.omittedActiveChildrenCount
+        }
+    }
+
     mutating func include(
         managed nodes: [SidebarOrchestrationNode],
         availability: SidebarOrchestrationAvailability, now: Date

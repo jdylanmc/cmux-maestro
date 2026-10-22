@@ -1398,7 +1398,7 @@ struct ManagedHierarchyContent: View {
                             availability: polling.availability,
                             copilotTree: copilotTree,
                             collapsedSummary: !expanded && !row.hasChildren && showsRetainedWork(retained)
-                                ? SidebarBranchSummary(sessions: retained) : nil,
+                                ? SidebarBranchSummary(childrenOf: retained) : nil,
                             attentionIncomplete: SidebarPresentation.attentionEvidenceIncomplete(retained),
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,

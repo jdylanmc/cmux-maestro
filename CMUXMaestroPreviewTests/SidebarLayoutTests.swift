@@ -242,6 +242,25 @@ struct SidebarLayoutTests {
         #expect(unknownSummary.attention == 1)
     }
 
+    @Test(arguments: ["complete", "children", "tasks", "tree", "attention", "omitted"])
+    func childOnlySummaryPreservesEvidenceLimitsWithoutCountingOwner(_ condition: String) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .working, model: nil, observedAt: now, nodes: [],
+            childrenComplete: condition != "children", treeDegraded: condition == "tree",
+            omittedChildrenCount: 0, omittedActiveChildrenCount: condition == "omitted" ? 3 : 0,
+            attention: [.init(kind: .error, evidence: .init(source: "unsupported", eventID: UUID()), occurredAt: now)],
+            attentionDegraded: condition == "attention", internalTaskCountsIncomplete: condition == "tasks")
+        let summary = SidebarBranchSummary(childrenOf: [session])
+        #expect(summary.running == 0 && summary.blocked == 0 && summary.attention == 0)
+        #expect(summary.incomplete == ["children", "tasks", "tree", "attention"].contains(condition))
+        #expect(summary.omittedActive == (condition == "omitted" ? 3 : 0))
+        if condition == "omitted" {
+            #expect(SidebarPresentation.collapsed(summary) == ["3 working/blocked tasks not shown"])
+        }
+    }
+
     @Test func twoIndependentViewsMergeActionsImmediatelyAndObserveWithoutGetterWrites() throws {
         try withFile { file in
             let first = SidebarLayoutStore(file: file)
