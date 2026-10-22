@@ -147,20 +147,20 @@ enum SidebarProcessPresentation {
         let separate = owned.filter { $0.group == "separate" }
         let helpers = owned.count - separate.count + (entry.omittedHelperCount ?? 0)
         let total = separate.count + entry.omittedCount
-        // An incomplete scan never claims zero.
+        // Only a complete, current scan can claim zero.
         var summary = entry.state == "exited" ? ["Session ended"]
-            : total > 0 ? ["\(total)"] : incomplete ? [] : ["None"]
+            : total > 0 ? ["\(total)"] : incomplete || stale ? [] : ["None"]
         if incomplete { summary.append("Scan incomplete") }
         if stale { summary.append("Stale") }
-        // Helpers are counted, never listed, whether current or retained.
-        let listed = separate + entry.processes.filter { $0.state != "owned-current" && $0.group == "separate" }
+        // Exited entries stay in the observation, but never in the list or its overflow count.
+        let listed = separate + entry.processes.filter { $0.state == "escaped" && $0.group == "separate" }
         // Only a complete, current list was re-verified; a kept or partial list is not.
         let canCopy = entry.state == "owned-current" && !stale
         let visible = listed.prefix(maximumLines)
         var values = stale || incomplete || entry.state == "exited" || listed.isEmpty && total == 0
             ? [summary.joined(separator: " · ")] : []
         for process in visible {
-            let state = ["escaped": " · Detached", "exited": " · Exited"][process.state] ?? ""
+            let state = process.state == "escaped" ? " · Detached" : ""
             values.append("PID \(process.pid) (\(process.name))\(state)")
         }
         let hidden = max(0, listed.count - maximumLines) + entry.omittedCount
