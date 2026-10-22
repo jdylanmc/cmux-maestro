@@ -6,6 +6,84 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test(arguments: [SidebarDensity.compact, .comfortable], [AgentWorkState.idle, .working])
+    func collapsedManagedHistoryUsesRowStatusWithoutOrphanLine(
+        density: SidebarDensity, childState: AgentWorkState
+    ) throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fixtures = SidebarTreeFixtures()
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setDensity(density)
+        let node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic laboratory",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.sessionID,
+            executionMode: .interactive, iconId: "md-flask_outline", createdAt: now, updatedAt: now)
+        let session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .idle, model: nil, observedAt: now,
+            nodes: [.init(id: "child", parentID: nil, depth: 0, kind: .subagent,
+                          name: "Synthetic helper", state: childState, model: nil,
+                          ancestryUnresolved: false, hasChildren: false)],
+            childrenComplete: false, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        preferences.setExpanded(false, for: .managed(node.id))
+        #expect(session.hasShownOutline(preferences.layout))
+        let polling = SidebarOrchestrationPolling(read: {
+            Issue.record("Synthetic rendering must not read live orchestration")
+            throw CancellationError()
+        })
+        let navigation = SidebarNavigation()
+        navigation.update(topology: SidebarTopology(fixtures.hierarchy()), connected: true,
+                          workspaceAllowed: true, surfaceAllowed: true,
+                          perform: { _ in Issue.record("Synthetic rendering must not navigate") })
+        let host = NSHostingView(rootView: ManagedHierarchyContent(
+            polling: polling, hierarchy: fixtures.hierarchy(), navigation: navigation,
+            layout: preferences.layout, setExpanded: { _, _ in },
+            selectedNode: .constant(nil), dismiss: { _ in }, acknowledge: { _ in },
+            selection: .constant(nil), showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree
+        ).environment(preferences).environment(\.sidebarDensity, density)
+            .environment(\.sidebarPresentationNow, { now })
+            .environment(\._accessibilityReduceMotion, true)
+            .frame(width: 300).fixedSize(horizontal: false, vertical: true)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 100)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = frame
+        host.layoutSubtreeIfNeeded()
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: folder.appendingPathComponent(
+            "collapsed-managed-history-\(density.rawValue)-\(childState.rawValue).png"
+        ))
+        #expect(!window.isVisible)
+        #expect(abs(host.fittingSize.height - density.agentRowHeight) <= 0.5,
+                "A collapsed managed session must not allocate a standalone summary line")
+        let title = try #require(nativeTitles(in: host).first)
+        let summary = SidebarPresentation.collapsed(SidebarBranchSummary(sessions: [session]))
+        #expect(summary.contains("States or counts incomplete"))
+        for line in summary {
+            #expect(title.toolTip?.contains(line) == true)
+            #expect(title.accessibilityHelp()?.contains(line) == true)
+        }
+        let card = try #require(SidebarAgentHoverContent.card(
+            for: .managed(node.id, generation: node.generation), hierarchy: fixtures.hierarchy(), connected: true,
+            tree: tree, managed: .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node]),
+            availability: .ready, now: now
+        ))
+        #expect(card.lines.contains { $0.title == "Child history" && $0.value == "Incomplete" })
+    }
+
     @Test func collapsedWorkspacesStackWithoutExpandedContentMargins() throws {
         let fixture = try SidebarPreferenceFixture()
         let stores = SidebarStoreFixture()
