@@ -88,7 +88,9 @@ struct SidebarLayoutRenderingTests {
         #expect(card.lines.contains { $0.title == "Child history" && $0.value == "Incomplete" })
 
         func statusPixels() throws -> Data {
-            let lane = NSRect(x: title.bounds.maxX - 44, y: 0, width: 44, height: title.bounds.height)
+            let badgeCount = childState == .idle ? 2 : 3
+            let width = CGFloat(badgeCount * 12 + (badgeCount - 1) * 4 + 8)
+            let lane = NSRect(x: title.bounds.maxX - width, y: 0, width: width, height: title.bounds.height)
             let image = try #require(title.bitmapImageRepForCachingDisplay(in: lane))
             title.cacheDisplay(in: lane, to: image)
             return Data(bytes: try #require(image.bitmapData), count: image.bytesPerRow * image.pixelsHigh)
