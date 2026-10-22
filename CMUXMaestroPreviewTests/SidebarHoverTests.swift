@@ -5,11 +5,123 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [false, true])
+    func mountedProductionSidebarStopsRequestingLayoutWhenUnchanged(visualActivity: Bool) async throws {
+        try await withProductionKeyboardSidebar(visualActivity: visualActivity, animatedPet: true) { window, host, _, _, _, _, _ in
+            let hosting = try #require(host as? IdleLayoutHostingView<AnyView>)
+            try #require(descendants(host).contains { $0 is SidebarPetAnimationView })
+            func flush() {
+                window.layoutIfNeeded()
+                hosting.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                CATransaction.flush()
+                _ = RunLoop.current.run(mode: .default, before: .distantPast)
+            }
+            func observeDisplayCycles() {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
+            }
+            observeDisplayCycles()
+            for _ in 0..<10 { flush(); await Task.yield() }
+            let settled = hosting.layouts
+            observeDisplayCycles()
+            for _ in 0..<20 { flush(); await Task.yield() }
+            print("Mounted sidebar layouts: warmup=\(settled), unchanged=\(hosting.layouts - settled)")
+            #expect(hosting.layouts == settled)
+        }
+    }
+
+    @Test func compositorAnimationsKeepTheirFramesAndStopWhenHiddenOrDetached() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 120, height: 120),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = NSView(frame: window.frame)
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        let context = try #require(CGContext(
+            data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        let first = try #require(context.makeImage())
+        context.setFillColor(NSColor.red.cgColor)
+        context.fill(CGRect(x: 0, y: 0, width: 2, height: 2))
+        let second = try #require(context.makeImage())
+        let pet = SidebarPetAnimationView(frame: CGRect(x: 0, y: 0, width: 38, height: 42))
+        pet.setFrames([first, second])
+        hosting.addSubview(pet)
+        pet.layoutSubtreeIfNeeded()
+        let image = try #require(pet.layer?.sublayers?.first)
+        let sequence = try #require(image.animation(forKey: SidebarPetAnimationView.animationKey) as? CAKeyframeAnimation)
+        #expect(sequence.calculationMode == .discrete && sequence.values?.count == 2)
+        #expect(sequence.keyTimes == [0, 0.5])
+        #expect(sequence.duration == 2.0 / 7 && sequence.repeatCount == .infinity)
+        #expect(image.frame == pet.bounds)
+        pet.isHidden = true
+        #expect(image.animationKeys()?.isEmpty != false)
+        pet.isHidden = false
+        #expect(image.animationKeys()?.count == 1)
+        pet.setFrames([second])
+        #expect(image.animationKeys()?.isEmpty != false)
+        #expect((image.contents as AnyObject?) === second)
+        pet.setFrames([first, second])
+        pet.removeFromSuperview()
+        #expect(image.animationKeys()?.isEmpty != false)
+
+        let status = SidebarStatusAnimationView(frame: CGRect(x: 0, y: 0, width: 14, height: 16))
+        hosting.addSubview(status)
+        for (kind, count) in [(SidebarStatusAnimationView.Kind.working, 1), (.question, 2), (.background, 1)] {
+            status.configure(kind)
+            status.layoutSubtreeIfNeeded()
+            let layers = try #require(status.layer?.sublayers)
+            func animations() -> [CAAnimation] {
+                layers.compactMap { $0.animation(forKey: SidebarStatusAnimationView.animationKey) }
+            }
+            #expect(animations().count == count)
+            #expect(animations().allSatisfy { $0.repeatCount == .infinity })
+            status.isHidden = true
+            #expect(animations().isEmpty)
+            status.isHidden = false
+            #expect(animations().count == count)
+        }
+        status.removeFromSuperview()
+        #expect(status.layer?.sublayers?.allSatisfy { $0.animationKeys()?.isEmpty != false } == true)
+        #expect(!window.isVisible)
+    }
+
+    @Test(arguments: [false, true])
+    func productionDecorationsHonorReduceMotion(reduceMotion: Bool) throws {
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let petID = try installSyntheticPet(in: stores)
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 160, height: 60),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: HStack {
+            SidebarPetView(store: stores.pets, petID: petID, state: .idle)
+            SidebarStateBadge(visual: SidebarPresentation.state(.working))
+            SidebarStateBadge(visual: SidebarPresentation.state(.blocked), needsInput: true)
+        }.background(SidebarActivityBackground(visual: SidebarPresentation.state(.blocked), needsInput: true))
+            .environment(\._accessibilityReduceMotion, reduceMotion))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        let views = descendants(host)
+        #expect(views.compactMap { $0 as? SidebarPetAnimationView }.count == (reduceMotion ? 0 : 1))
+        #expect(views.compactMap { $0 as? SidebarStatusAnimationView }.count == (reduceMotion ? 0 : 3))
+    }
+
     @Test func titleIdealSizeRetainsTheLabelWidth() {
         let button = SidebarTitleNativeButton()
         button.labelContent = AnyView(Text("Activity").frame(width: 64, height: 28))
         #expect(button.measure(width: nil) == CGSize(width: 64, height: 28))
         #expect(button.measure(width: .infinity) == CGSize(width: 64, height: 28))
+    }
+
+    @MainActor
+    private final class IdleLayoutHostingView<Content: View>: NSHostingView<Content> {
+        private(set) var layouts = 0
+        override func layout() {
+            layouts += 1
+            super.layout()
+        }
     }
 
     @Test func repeatedTitleMeasurementDoesNotInvalidateTheMountedLabel() {
@@ -50,18 +162,37 @@ struct SidebarHoverTests {
         view.subviews.flatMap { [$0] + descendants($0) }
     }
 
+    private func installSyntheticPet(in stores: SidebarStoreFixture) throws -> String {
+        let image = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 768, pixelsHigh: 936, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let file = stores.root.appendingPathComponent("synthetic-pet.png")
+        try FileManager.default.createDirectory(at: stores.root, withIntermediateDirectories: true)
+        try #require(image.representation(using: .png, properties: [:])).write(to: file)
+        return try #require(stores.pets.upload(from: file))
+    }
+
     private func withProductionKeyboardSidebar(
+        visualActivity: Bool = false,
+        animatedPet: Bool = false,
         _ check: @MainActor (NSWindow, NSView, SidebarConnectionModel, SidebarPreferences,
                   SidebarTitleNativeButton, SidebarTitleNativeButton, NSPasteboard) async throws -> Void
     ) async throws {
         let fixture = SidebarTreeFixtures()
         let preferenceFixture = try SidebarPreferenceFixture()
         defer { preferenceFixture.cleanup() }
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        if animatedPet {
+            let petID = try installSyntheticPet(in: stores)
+            stores.pets.choose(petID, session: fixture.sessionID)
+            stores.pets.choose(petID, session: fixture.otherSessionID)
+        }
         let pasteboard = NSPasteboard.withUniqueName()
         defer { pasteboard.releaseGlobally() }
         let preferences = preferenceFixture.preferences()
         let date = Date()
-        let evidence = AgentAttention(kind: .turnFinished,
+        let evidence = AgentAttention(kind: visualActivity ? .answer : .turnFinished,
                                       evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: date)
         let observations = [
             CopilotSessionObservation(
@@ -69,7 +200,8 @@ struct SidebarHoverTests {
                 liveness: .alive, state: .idle, model: "keyboard-model", children: [], observedAt: date,
                 attention: [evidence]
             ),
-            fixture.session(id: fixture.otherSessionID, surface: fixture.surfaceB, now: date)
+            fixture.session(id: fixture.otherSessionID, surface: fixture.surfaceB,
+                            state: visualActivity ? .working : .idle, now: date)
         ]
         let snapshot = fixture.snapshot(sessions: observations, now: date)
         let polling = SidebarCopilotPolling(
@@ -107,8 +239,9 @@ struct SidebarHoverTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 600),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
-            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) }))
+        let hosting = IdleLayoutHostingView(rootView: AnyView(SidebarView(model: model, preferences: preferences, stores: stores)
+            .environment(\._accessibilityReduceMotion, false)
+            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) })))
         window.contentView = hosting
         defer {
             for anchor in descendants(hosting).compactMap({ $0 as? SidebarHoverAnchorView }) {

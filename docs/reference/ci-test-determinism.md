@@ -81,7 +81,7 @@ The same identities appear as attributed skips in `coverage.json`; an unlisted
 skip, missing inventory entry, or enabled test that skips still fails validation.
 No test body, pixel tolerance, focus oracle, or negative control is weakened.
 
-The five local cases have observed failures involving native animation sampling,
+The local cases include native animation sampling,
 OCR or hosted view discovery. They are useful manual
 acceptance probes but cannot be mandatory evidence from an uncontrolled runner.
 Pure phase/reduced-motion, key-chain, layout-budget, retention/dismissal-identity,
@@ -91,6 +91,14 @@ The key-window test and all six viewport positive/negative controls remain
 required: no failures for them were established in the mined history. #127's
 runtime mechanism is not declared solved. #174's cancellation stall was already removed by an
 earlier owner decision and remains unresolved.
+
+The #307 mounted-sidebar probe is also opt-in: it observes real display cycles with
+synthetic idle or working/input rows, enabled pets and frozen poll inputs. Two
+half-second run-loop windows expose continuing layout, not a required runner-speed
+budget. The root layout count must remain unchanged during the second window.
+Required tests separately cover compositor frame/state changes, hide/detach cleanup,
+Reduce Motion and stat-only unchanged event-file reads. A passing offscreen probe
+does not establish the installed ExtensionKit process's CPU use.
 
 Run specific acceptance methods locally without changing global preferences:
 

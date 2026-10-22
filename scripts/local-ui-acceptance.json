@@ -1,4 +1,5 @@
 {
+  "SidebarHoverTests/mountedProductionSidebarStopsRequestingLayoutWhenUnchanged(visualActivity:)": "Real native display-cycle observation with synthetic mounted SidebarView, motion enabled and polls frozen. Compositor frame/state and hide/detach lifecycle checks remain required.",
   "SidebarRowGroupTests/hoveringAnyRowHighlightsTheWholeGroup(_:)": "Native hosted subview discovery and hover pixels; groupHoverActionRules stays required.",
   "SidebarMotionTests/nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane()": "Wall-clock native animation/pixel sampling; deterministic phase and reduced-motion controls stay required.",
   "SidebarLayoutRenderingTests/activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes()": "Native footer clearance and OCR depend on venue; deterministic layout/state and exact title-oracle controls stay required.",

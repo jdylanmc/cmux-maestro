@@ -200,11 +200,7 @@ struct SidebarActivityBackground: View {
                 if reduceMotion {
                     RoundedRectangle(cornerRadius: 4).fill(SidebarQuestionGlow.lightBlue.opacity(0.14))
                 } else {
-                    TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
-                        let pulse = 0.5 + 0.5 * sin(context.date.timeIntervalSinceReferenceDate * 1.5)
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(SidebarQuestionGlow.lightBlue.opacity(0.06 + 0.14 * pulse))
-                    }
+                    SidebarStatusAnimation(kind: .background)
                 }
             } else if visual.tone == .red {
                 RoundedRectangle(cornerRadius: 4).fill(.red.opacity(0.065))
@@ -272,9 +268,7 @@ struct SidebarStateBadge: View {
                 if reduceMotion {
                     SidebarWorkingRing(rotation: 0)
                 } else {
-                    TimelineView(.animation(minimumInterval: 1.0 / 30)) { context in
-                        SidebarWorkingRing(rotation: SidebarPresentation.workingRotation(at: context.date, reduceMotion: false))
-                    }
+                    SidebarStatusAnimation(kind: .working).frame(width: 9, height: 9)
                 }
             } else {
                 Image(systemName: visual.symbol).font(.system(size: 10, weight: .semibold))
@@ -296,9 +290,7 @@ struct SidebarQuestionGlow: View {
         if reduceMotion {
             glyph(glow: 0.8)
         } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 20)) { context in
-                glyph(glow: 0.55 + 0.45 * sin(context.date.timeIntervalSinceReferenceDate * 1.5))
-            }
+            SidebarStatusAnimation(kind: .question).frame(width: 14, height: 16).clipped()
         }
     }
 

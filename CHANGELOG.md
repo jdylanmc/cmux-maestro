@@ -273,9 +273,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
-- Sidebar title measurement no longer schedules another layout on every size
-  proposal, avoiding continuous idle CPU use. Unchanged orchestration files reuse
-  bounded decoded values while access checks and evidence expiry still run (#307).
+- Sidebar pets and status cues animate in the render server instead of continuously
+  relaying frames through sidebar layout. Unchanged session event files reuse their
+  projection without rereading event bytes; identity checks and freshness still run.
+  Title measurement and bounded orchestration decode reuse are retained (#307).
 - Setup process-isolation tests no longer hang in unrelated fixture teardown.
   Exit observation is asynchronous with the full 60-second wait budget; an
   independent 70-second phase watchdog preserves diagnostics for non-cooperative

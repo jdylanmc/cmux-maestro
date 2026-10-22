@@ -34,6 +34,11 @@ and hidden state, never the active agent's. Row **Appearance > Choose pet…**
 opens the same picker for that exact session; activity-only children, status-only
 sessions, terminals and browsers have no pet. Reduce Motion shows still frame.
 
+Pet playback uses a bounded render-server frame sequence at seven frames per second,
+not a SwiftUI timeline. Working rings and input glows also animate in layers.
+Hidden or detached native views remove their animations; changing the pet or state
+replaces its sequence. No frame tick publishes evidence or requests sidebar layout.
+
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
 Bundled `/cmux-maestro-native:maestro-icon` skill searches local Nerd Fonts catalog. It saves

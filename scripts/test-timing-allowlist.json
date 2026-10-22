@@ -204,8 +204,11 @@
     }
   },
   "CMUXMaestroPreviewTests/SidebarHoverTests.swift": {
-    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "reason": "Existing #276 statements remain frozen. #307 adds one nonwaiting run-loop pump and a 0.5s observation helper called twice only in inventoried opt-in mounted display-cycle acceptance: no speed assertion or CI settlement promise. The CAAnimation duration assertion checks configured playback, not elapsed time. Required compositor lifecycle tests use explicit state changes, not time. See docs/reference/ci-test-determinism.md.",
     "statements": {
+      "#expect(sequence.duration == 2.0 / 7 && sequence.repeatCount == .infinity)": 1,
+      "_ = RunLoop.current.run(mode: .default, before: .distantPast)": 1,
+      "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))": 1,
       "let date = Date()": 1,
       "pause: { try await Task.sleep(for: .seconds(60)) }, expiryPause: sidebarFrozenExpiry, now: { date }": 1,
       "read: { .empty }, pause: { try await Task.sleep(for: .seconds(60)) }": 1,

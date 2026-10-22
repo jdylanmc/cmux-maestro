@@ -5,6 +5,45 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarMotionTests {
+    @Test(arguments: [AgentWorkState.unknown, .queued, .working, .idle, .blocked, .completed, .failed, .cancelled])
+    func statusDecorationFootprintAndMotionFollowStateAndReduceMotion(state: AgentWorkState) throws {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 160, height: 28),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: AnyView(EmptyView()))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        func views(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + views($0) } }
+        func animations(_ decoration: SidebarStatusAnimationView) -> [CAPropertyAnimation] {
+            (decoration.layer?.sublayers ?? []).compactMap {
+                $0.animation(forKey: SidebarStatusAnimationView.animationKey) as? CAPropertyAnimation
+            }
+        }
+        for needsInput in [false, true] {
+            var previous: [SidebarStatusAnimationView] = []
+            for reduceMotion in [false, true, false] {
+                let visual = SidebarPresentation.state(state)
+                host.rootView = AnyView(SidebarStateBadge(visual: visual, needsInput: needsInput)
+                    .background(SidebarActivityBackground(visual: visual, needsInput: needsInput))
+                    .environment(\._accessibilityReduceMotion, reduceMotion))
+                host.layoutSubtreeIfNeeded()
+                #expect(host.fittingSize == CGSize(width: 12, height: 14),
+                        "Status keeps its fixed footprint, including while motion preferences change")
+                let decorations = views(host).compactMap { $0 as? SidebarStatusAnimationView }
+                let paths = decorations.flatMap(animations).compactMap(\.keyPath).sorted()
+                let expected: [String] = reduceMotion ? [] : needsInput
+                    ? ["opacity", "shadowOpacity", "shadowOpacity"]
+                    : state == .working ? ["transform.rotation.z"] : []
+                #expect(paths == expected,
+                        "Only working rotation or input glow/tint may animate; Reduce Motion stops all three")
+                #expect(decorations.count == (reduceMotion ? 0 : needsInput ? 2 : state == .working ? 1 : 0))
+                #expect(previous.filter { $0.window == nil }.allSatisfy { animations($0).isEmpty },
+                        "Replaced native decorations must not retain animations")
+                previous = decorations
+            }
+        }
+    }
+
     @Test(arguments: SidebarMode.allCases, [false, true])
     func obsoleteRegistrationDoesNotBecomeAUserFacingRecord(mode: SidebarMode, showEnded: Bool) async throws {
         let f = SidebarTreeFixtures()
