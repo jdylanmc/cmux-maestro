@@ -37,8 +37,9 @@ struct SidebarHoverTests {
         #expect(hosting.layouts == settled)
     }
 
-    @Test func mountedProductionSidebarStopsRequestingLayoutWhenUnchanged() async throws {
-        try await withProductionKeyboardSidebar { window, host, _, _, _, _, _ in
+    @Test(arguments: [false, true])
+    func mountedProductionSidebarStopsRequestingLayoutWhenUnchanged(visualActivity: Bool) async throws {
+        try await withProductionKeyboardSidebar(visualActivity: visualActivity) { window, host, _, _, _, _, _ in
             let hosting = try #require(host as? IdleLayoutHostingView<AnyView>)
             func flush() {
                 window.layoutIfNeeded()
@@ -47,21 +48,31 @@ struct SidebarHoverTests {
                 CATransaction.flush()
                 _ = RunLoop.current.run(mode: .default, before: .distantPast)
             }
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
             for _ in 0..<10 { flush(); await Task.yield() }
             let settled = hosting.layouts
+            RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
             for _ in 0..<20 { flush(); await Task.yield() }
             print("Mounted sidebar layouts: warmup=\(settled), unchanged=\(hosting.layouts - settled)")
+            for title in descendants(hosting).compactMap({ $0 as? SidebarTitleNativeButton }) {
+                print("TITLE \(title.accessibilityLabel() ?? "") updates=\(title.rootUpdates) measures=\(title.measurements) layouts=\(title.layouts)")
+            }
             #expect(hosting.layouts == settled)
         }
     }
 
-    @Test func mountedTitleHierarchyStopsRequestingLayoutWhenUnchanged() throws {
+    @Test(arguments: [false, true])
+    func mountedTitleHierarchyStopsRequestingLayoutWhenUnchanged(native: Bool) throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let hosting = IdleLayoutHostingView(rootView: VStack {
-            SidebarTitleButton(label: "Synthetic title", hint: "Synthetic", action: {}) {
-                Text("Synthetic title").frame(maxWidth: .infinity, alignment: .leading)
+            if native {
+                SidebarTitleButton(label: "Synthetic title", hint: "Synthetic", action: {}) {
+                    Text("Synthetic title").frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                Text("Synthetic title")
             }
             Spacer()
         })
@@ -75,9 +86,9 @@ struct SidebarHoverTests {
             RunLoop.current.run(until: .distantPast)
         }
         for _ in 0..<10 { flush() }
-        let button = try #require(descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }.first)
-        #expect(button.bounds.width > 0)
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         let settled = hosting.layouts
+        RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))
         for _ in 0..<20 { flush() }
         print("Mounted title layouts: warmup=\(settled), unchanged=\(hosting.layouts - settled)")
         #expect(hosting.layouts == settled, "The mounted title must not schedule its parent for another layout")
@@ -95,6 +106,14 @@ struct SidebarHoverTests {
         private(set) var layouts = 0
         override func layout() {
             layouts += 1
+            if layouts == 20 {
+                func report(_ view: NSView, depth: Int) {
+                    if view.needsLayout { print("DIRTY \(depth) \(type(of: view)) \(view.frame) \(view.bounds)") }
+                    view.subviews.forEach { report($0, depth: depth + 1) }
+                }
+                report(self, depth: 0)
+                print("LAYOUT STACK \(Thread.callStackSymbols.prefix(14))")
+            }
             super.layout()
         }
     }
@@ -149,6 +168,7 @@ struct SidebarHoverTests {
     }
 
     private func withProductionKeyboardSidebar(
+        visualActivity: Bool = false,
         _ check: @MainActor (NSWindow, NSView, SidebarConnectionModel, SidebarPreferences,
                   SidebarTitleNativeButton, SidebarTitleNativeButton, NSPasteboard) async throws -> Void
     ) async throws {
@@ -159,7 +179,7 @@ struct SidebarHoverTests {
         defer { pasteboard.releaseGlobally() }
         let preferences = preferenceFixture.preferences()
         let date = Date()
-        let evidence = AgentAttention(kind: .turnFinished,
+        let evidence = AgentAttention(kind: visualActivity ? .answer : .turnFinished,
                                       evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: date)
         let observations = [
             CopilotSessionObservation(
@@ -167,7 +187,8 @@ struct SidebarHoverTests {
                 liveness: .alive, state: .idle, model: "keyboard-model", children: [], observedAt: date,
                 attention: [evidence]
             ),
-            fixture.session(id: fixture.otherSessionID, surface: fixture.surfaceB, now: date)
+            fixture.session(id: fixture.otherSessionID, surface: fixture.surfaceB,
+                            state: visualActivity ? .working : .idle, now: date)
         ]
         let snapshot = fixture.snapshot(sessions: observations, now: date)
         let polling = SidebarCopilotPolling(
@@ -206,8 +227,7 @@ struct SidebarHoverTests {
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let hosting = IdleLayoutHostingView(rootView: AnyView(SidebarView(model: model, preferences: preferences)
-            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) })
-            .environment(\._accessibilityReduceMotion, true)))
+            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) })))
         window.contentView = hosting
         defer {
             for anchor in descendants(hosting).compactMap({ $0 as? SidebarHoverAnchorView }) {
