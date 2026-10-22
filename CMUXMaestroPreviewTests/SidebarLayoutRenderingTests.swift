@@ -7,10 +7,12 @@ import Testing
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
     @Test(arguments: [SidebarDensity.compact, .comfortable],
-          [AgentWorkState.idle, .working, .blocked, .failed])
+          [(AgentWorkState.idle, AgentWorkState.idle), (.idle, .working),
+           (.idle, .blocked), (.idle, .failed), (.working, .idle), (.blocked, .idle)])
     func collapsedManagedHistoryUsesRowStatusWithoutOrphanLine(
-        density: SidebarDensity, childState: AgentWorkState
-    ) throws {
+        density: SidebarDensity, states: (owner: AgentWorkState, child: AgentWorkState)
+    ) async throws {
+        let childState = states.child
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let fixtures = SidebarTreeFixtures()
         let fixture = try SidebarPreferenceFixture()
@@ -24,7 +26,7 @@ struct SidebarLayoutRenderingTests {
             executionMode: .interactive, iconId: "md-flask_outline", createdAt: now, updatedAt: now)
         let session = SidebarCopilotSession(
             id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
-            liveness: .alive, state: .idle, model: nil, observedAt: now,
+            liveness: .alive, state: states.owner, model: nil, observedAt: now,
             nodes: [.init(id: "child", parentID: nil, depth: 0, kind: .subagent,
                           name: "Synthetic helper", state: childState, model: nil,
                           ancestryUnresolved: false, hasChildren: false,
@@ -32,14 +34,27 @@ struct SidebarLayoutRenderingTests {
                             .init(kind: .error, evidence: .init(source: "unsupported", eventID: UUID()), occurredAt: now)
                           ] : [])],
             childrenComplete: false, treeDegraded: false,
-            omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0,
+            attention: states.owner == .blocked ? [
+                .init(kind: .answer, evidence: .init(source: "unsupported", eventID: UUID()), occurredAt: now)
+            ] : [])
         let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
         preferences.setExpanded(false, for: .managed(node.id))
         #expect(session.hasShownOutline(preferences.layout))
-        let polling = SidebarOrchestrationPolling(read: {
-            Issue.record("Synthetic rendering must not read live orchestration")
-            throw CancellationError()
-        })
+        let finished = AsyncStream<Void>.makeStream()
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let polling = SidebarOrchestrationPolling(
+            read: { snapshot }, pause: { throw CancellationError() },
+            expiryPause: { _ in throw CancellationError() }, now: { now },
+            taskFinished: { _ in finished.continuation.yield(); finished.continuation.finish() })
+        polling.update(topology: SidebarTopology(fixtures.hierarchy()), connected: true)
+        polling.setVisible(true)
+        for await _ in finished.stream {}
+        defer { polling.setVisible(false) }
+        #expect(polling.availability == .ready)
+        #expect(SidebarPresentation.managedState(node, availability: polling.availability, now: now, tree: tree)
+                == SidebarPresentation.state(states.owner))
         let navigation = SidebarNavigation()
         navigation.update(topology: SidebarTopology(fixtures.hierarchy()), connected: true,
                           workspaceAllowed: true, surfaceAllowed: true,
@@ -68,17 +83,25 @@ struct SidebarLayoutRenderingTests {
         let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: bitmap)
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: folder.appendingPathComponent(
-            "collapsed-managed-history-\(density.rawValue)-\(childState.rawValue).png"
+            "collapsed-managed-history-\(density.rawValue)-\(states.owner.rawValue)-\(childState.rawValue).png"
         ))
         #expect(!window.isVisible)
         #expect(abs(host.fittingSize.height - density.agentRowHeight) <= 0.5,
                 "A collapsed managed session must not allocate a standalone summary line")
         let title = try #require(nativeTitles(in: host).first)
-        let summary = SidebarPresentation.collapsed(SidebarBranchSummary(sessions: [session]))
+        var children = SidebarBranchSummary(nodes: session.nodes)
+        children.incomplete = true
+        let summary = SidebarPresentation.collapsed(children)
         #expect(summary.contains("States or counts incomplete"))
         for line in summary {
             #expect(title.toolTip?.contains(line) == true)
             #expect(title.accessibilityHelp()?.contains(line) == true)
+        }
+        if childState == .idle {
+            for count in ["1 known working", "1 blocked", "1 needs attention"] {
+                #expect(title.toolTip?.contains(count) == false)
+                #expect(title.accessibilityHelp()?.contains(count) == false)
+            }
         }
         let card = try #require(SidebarAgentHoverContent.card(
             for: .managed(node.id, generation: node.generation), hierarchy: fixtures.hierarchy(), connected: true,
@@ -113,7 +136,7 @@ struct SidebarLayoutRenderingTests {
             .fixedSize(horizontal: false, vertical: true)
             SidebarStateBadge(visual: SidebarPresentation.managedState(
                 node, availability: polling.availability, now: now, tree: tree
-            ))
+            ), needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now))
         }.environment(\.sidebarDensity, density).environment(\._accessibilityReduceMotion, true))
         title.layoutSubtreeIfNeeded()
         #expect(try actualStatus == statusPixels(),
