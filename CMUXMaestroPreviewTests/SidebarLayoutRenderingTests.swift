@@ -6,7 +6,8 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
-    @Test(arguments: [SidebarDensity.compact, .comfortable], [AgentWorkState.idle, .working])
+    @Test(arguments: [SidebarDensity.compact, .comfortable],
+          [AgentWorkState.idle, .working, .blocked, .failed])
     func collapsedManagedHistoryUsesRowStatusWithoutOrphanLine(
         density: SidebarDensity, childState: AgentWorkState
     ) throws {
@@ -26,7 +27,10 @@ struct SidebarLayoutRenderingTests {
             liveness: .alive, state: .idle, model: nil, observedAt: now,
             nodes: [.init(id: "child", parentID: nil, depth: 0, kind: .subagent,
                           name: "Synthetic helper", state: childState, model: nil,
-                          ancestryUnresolved: false, hasChildren: false)],
+                          ancestryUnresolved: false, hasChildren: false,
+                          attention: childState == .failed ? [
+                            .init(kind: .error, evidence: .init(source: "unsupported", eventID: UUID()), occurredAt: now)
+                          ] : [])],
             childrenComplete: false, treeDegraded: false,
             omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
         let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
@@ -82,6 +86,36 @@ struct SidebarLayoutRenderingTests {
             availability: .ready, now: now
         ))
         #expect(card.lines.contains { $0.title == "Child history" && $0.value == "Incomplete" })
+
+        func statusPixels() throws -> Data {
+            let lane = NSRect(x: title.bounds.maxX - 44, y: 0, width: 44, height: title.bounds.height)
+            let image = try #require(title.bitmapImageRepForCachingDisplay(in: lane))
+            title.cacheDisplay(in: lane, to: image)
+            return Data(bytes: try #require(image.bitmapData), count: image.bytesPerRow * image.pixelsHigh)
+        }
+        let actualStatus = try statusPixels()
+        // Independent glyph oracle: child activity/attention and incomplete evidence must
+        // remain visible beside the unchanged own-state badge, not only in hover text.
+        title.labelContent = AnyView(SidebarAgentTitleLine(title: node.title, tags: []) {
+            HStack(spacing: 4) {
+                if childState == .blocked {
+                    SidebarStateBadge(visual: SidebarPresentation.state(.blocked))
+                } else if childState == .failed {
+                    SidebarStateBadge(visual: .init(title: "Attention", symbol: "exclamationmark.circle", tone: .attention))
+                } else if childState == .working {
+                    SidebarStateBadge(visual: SidebarPresentation.state(.working))
+                }
+                SidebarStateBadge(visual: SidebarPresentation.state(.unknown))
+            }
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            SidebarStateBadge(visual: SidebarPresentation.managedState(
+                node, availability: polling.availability, now: now, tree: tree
+            ))
+        }.environment(\.sidebarDensity, density).environment(\._accessibilityReduceMotion, true))
+        title.layoutSubtreeIfNeeded()
+        #expect(try actualStatus == statusPixels(),
+                "Collapsed child signals must render inline, including the dashed incomplete badge")
     }
 
     @Test func collapsedWorkspacesStackWithoutExpandedContentMargins() throws {
