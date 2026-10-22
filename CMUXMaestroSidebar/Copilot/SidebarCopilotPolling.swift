@@ -10,8 +10,26 @@ final class SidebarCopilotPolling {
     typealias ExpiryPause = @Sendable (TimeInterval) async throws -> Void
     typealias ReadManaged = @Sendable (Set<UUID>) async -> [UUID: CopilotManagedSessionDetails]
 
-    private(set) var tree: SidebarCopilotTree = .waiting
+    @ObservationIgnored private var storedTree: SidebarCopilotTree = .waiting
+    @ObservationIgnored private var currentTree: SidebarCopilotTree = .waiting
+    @ObservationIgnored private var evidenceObservers: [UUID: AsyncStream<SidebarCopilotTree>.Continuation] = [:]
+    private(set) var tree: SidebarCopilotTree {
+        get {
+            access(keyPath: \.tree)
+            return storedTree
+        }
+        set {
+            if storedTree.hasSamePresentation(as: newValue) {
+                storedTree = newValue
+            } else {
+                withMutation(keyPath: \.tree) { storedTree = newValue }
+            }
+            for observer in evidenceObservers.values { observer.yield(newValue) }
+        }
+    }
     private(set) var isReading = false
+    @ObservationIgnored private(set) var projectionCount = 0
+    @ObservationIgnored private var projectionCache: SidebarCopilotProjectionCache?
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
@@ -89,6 +107,18 @@ final class SidebarCopilotPolling {
         invalidate()
     }
 
+    /// Non-rendering consumers receive refreshed evidence even when the visible tree is equal.
+    func evidenceUpdates() -> AsyncStream<SidebarCopilotTree> {
+        let id = UUID()
+        let (stream, continuation) = AsyncStream<SidebarCopilotTree>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        evidenceObservers[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { @MainActor in self?.evidenceObservers.removeValue(forKey: id) }
+        }
+        continuation.yield(tree)
+        return stream
+    }
+
     func setVisible(_ visible: Bool) {
         guard visible != self.visible else { return }
         self.visible = visible
@@ -126,6 +156,7 @@ final class SidebarCopilotPolling {
     }
 
     private func invalidate(scopeChanged: Bool = true) {
+        defer { tree = currentTree }
         // Once reading starts, a new scope must not relabel cached evidence.
         if scopeChanged && hasStartedPolling {
             invalidatedAt = now()
@@ -137,10 +168,11 @@ final class SidebarCopilotPolling {
         expiryDeadline = nil
         cancelHistoryExpiry()
         snapshot = nil
+        projectionCache = nil
         lastStatuses.removeAll()
         managedDetails = [:]
         lastGeneratedAt = nil
-        tree = SidebarCopilotTree(
+        currentTree = SidebarCopilotTree(
             availability: !visible ? .hidden : !connected ? .disconnected
                 : !topology.canReadSessions ? .waiting : .loading,
             sessions: [], issues: [], generatedAt: nil
@@ -177,16 +209,18 @@ final class SidebarCopilotPolling {
                     hasUnreadHistory = accepted && !snapshot.isComplete && pending
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    defer { self.tree = self.currentTree }
                     self.expiry?.cancel()
                     self.expiry = nil
                     self.expiryDeadline = nil
                     self.cancelHistoryExpiry()
                     self.snapshot = nil
+                    self.projectionCache = nil
                     if Self.invalidatesStatus(error) {
                         self.lastStatuses.removeAll()
                         self.invalidatedAt = self.now()
                     }
-                    self.tree = SidebarCopilotTree(
+                    self.currentTree = SidebarCopilotTree(
                         availability: .unavailable, sessions: [], issues: [], generatedAt: nil
                     )
                     self.projectStatusLoss()
@@ -206,6 +240,8 @@ final class SidebarCopilotPolling {
     }
 
     private func accept(_ snapshot: AgentSessionSnapshot, topology: SidebarTopology) -> Bool {
+        defer { tree = currentTree }
+        let date = now()
         let unsafeIssues: [AgentSnapshotIssue] = [
             .permissionDenied, .identityChanged, .ambiguousIdentity,
             .integrationNotInstalled, .noIdentityRecords
@@ -217,17 +253,19 @@ final class SidebarCopilotPolling {
             lastStatuses.removeAll()
             invalidatedAt = now()
             self.snapshot = nil
-            tree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
+            projectionCache = nil
+            currentTree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
             cancelHistoryExpiry()
             scheduleStatusExpiry()
         }
         if snapshot.issues?.contains(.permissionDenied) == true {
             self.snapshot = nil
+            projectionCache = nil
             expiry?.cancel()
             expiry = nil
             expiryDeadline = nil
             cancelHistoryExpiry()
-            tree = SidebarCopilotTree(
+            currentTree = SidebarCopilotTree(
                 availability: .partial, sessions: [], issues: snapshot.issues ?? [], generatedAt: snapshot.generatedAt
             )
             return false
@@ -237,7 +275,8 @@ final class SidebarCopilotPolling {
         guard SidebarCopilotTree.isFresh(snapshot.generatedAt, now: now()),
               SnapshotSchemaVersion.supported.contains(snapshot.schemaVersion) else {
             self.snapshot = nil
-            tree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
+            projectionCache = nil
+            currentTree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
             cancelHistoryExpiry()
             projectStatusLoss()
             scheduleStatusExpiry()
@@ -245,10 +284,27 @@ final class SidebarCopilotPolling {
         }
         lastGeneratedAt = snapshot.generatedAt
         self.snapshot = snapshot
-        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
-                                         revealingIdleTasksIn: revealingIdleTasksIn)
-        tree.managedDetails = managedDetails
-        if let invalidatedAt { tree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
+        if let projectionCache, projectionCache.matches(snapshot, now: date) {
+            // Reconcile the original projection, not its status-loss-filtered result.
+            // Every timestamp comes from this read, never from the display clock.
+            var refreshed = projectionCache.tree
+            refreshed.generatedAt = snapshot.generatedAt
+            let observations = Dictionary(grouping: snapshot.sessions, by: { UUID(uuidString: $0.identity.sessionID) })
+            for index in refreshed.sessions.indices {
+                let id = refreshed.sessions[index].id
+                if let matches = observations[id], matches.count == 1, let observedAt = matches.first?.observedAt {
+                    refreshed.sessions[index].observedAt = observedAt
+                }
+            }
+            currentTree = refreshed
+        } else {
+            projectionCount += 1
+            currentTree = SidebarCopilotTree.project(snapshot, onto: topology, now: date, history: history, attention: attention,
+                                             revealingIdleTasksIn: revealingIdleTasksIn)
+            projectionCache = SidebarCopilotProjectionCache(snapshot: snapshot, tree: currentTree, now: date)
+        }
+        currentTree.managedDetails = managedDetails
+        if let invalidatedAt { currentTree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
         reconcileStatuses(snapshot)
         scheduleHistoryExpiry()
         scheduleStatusExpiry()
@@ -257,10 +313,14 @@ final class SidebarCopilotPolling {
 
     private func reprojectHistory() {
         guard canPoll, let snapshot else { return }
-        tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
+        defer { tree = currentTree }
+        let date = now()
+        projectionCount += 1
+        currentTree = SidebarCopilotTree.project(snapshot, onto: topology, now: date, history: history, attention: attention,
                                          revealingIdleTasksIn: revealingIdleTasksIn)
-        tree.managedDetails = managedDetails
-        if let invalidatedAt { tree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
+        projectionCache = SidebarCopilotProjectionCache(snapshot: snapshot, tree: currentTree, now: date)
+        currentTree.managedDetails = managedDetails
+        if let invalidatedAt { currentTree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
         reconcileStatuses(snapshot)
         scheduleHistoryExpiry()
         scheduleStatusExpiry()
@@ -278,8 +338,8 @@ final class SidebarCopilotPolling {
     private func reconcileStatuses(_ snapshot: AgentSessionSnapshot) {
         let groups = Dictionary(grouping: snapshot.sessions, by: { UUID(uuidString: $0.identity.sessionID) })
         if groups[nil] != nil { lastStatuses.removeAll() }
-        let current = Dictionary(grouping: tree.sessions, by: \.surfaceID)
-        let unreadable = Set(tree.sessions.filter {
+        let current = Dictionary(grouping: currentTree.sessions, by: \.surfaceID)
+        let unreadable = Set(currentTree.sessions.filter {
             [.alive, .dead].contains($0.liveness)
                 && snapshot.issues?.contains(.stateUnavailable) == true
                 && $0.observedAt < snapshot.generatedAt
@@ -296,7 +356,7 @@ final class SidebarCopilotPolling {
                   observation.liveness != .ambiguous else { return false }
             return true
         }
-        for session in tree.sessions where [.alive, .dead].contains(session.liveness) {
+        for session in currentTree.sessions where [.alive, .dead].contains(session.liveness) {
             guard current[session.surfaceID]?.count == 1 else {
                 lastStatuses.removeValue(forKey: session.id)
                 continue
@@ -318,12 +378,12 @@ final class SidebarCopilotPolling {
             }
             lastStatuses[session.id] = LastStatus(session: saved)
         }
-        let accepted = Set(tree.sessions.filter { session in
+        let accepted = Set(currentTree.sessions.filter { session in
             guard let saved = lastStatuses[session.id] else { return false }
             return !unreadable.contains(session.id) && saved.lostAt == nil && saved.session.observedAt == session.observedAt
                 && [.alive, .dead].contains(session.liveness)
         }.map(\.id))
-        tree.sessions.removeAll {
+        currentTree.sessions.removeAll {
             unreadable.contains($0.id) || (lastStatuses[$0.id] != nil && !accepted.contains($0.id))
         }
         projectStatusLoss()
@@ -331,11 +391,11 @@ final class SidebarCopilotPolling {
 
     private func projectStatusLoss() {
         let date = now()
-        let currentIDs = Set(tree.sessions.map(\.id))
+        let currentIDs = Set(currentTree.sessions.map(\.id))
         for id in lastStatuses.keys where !currentIDs.contains(id) && lastStatuses[id]?.lostAt == nil {
             lastStatuses[id]?.lostAt = date
         }
-        tree.statusSessions = lastStatuses.values.compactMap { saved in
+        currentTree.statusSessions = lastStatuses.values.compactMap { saved in
             guard let lostAt = saved.lostAt, !currentIDs.contains(saved.session.id) else { return nil }
             return SidebarCopilotTree.statusOnly(saved.session, retainingStatus: date < lostAt.addingTimeInterval(Self.statusGrace))
         }.sorted { $0.id.uuidString < $1.id.uuidString }
@@ -343,8 +403,9 @@ final class SidebarCopilotPolling {
 
     private func scheduleStatusExpiry() {
         let date = now()
-        let freshness = tree.generatedAt.map { generated in
-            ([generated] + tree.sessions.map(\.observedAt)).min()!.addingTimeInterval(SidebarCopilotTree.maximumAge)
+        let freshness = currentTree.generatedAt.map { generated in
+            ([generated] + currentTree.sessions.map(\.observedAt) + currentTree.managedDetails.values.map(\.readAt))
+                .min()!.addingTimeInterval(SidebarCopilotTree.maximumAge)
         }
         let grace = lastStatuses.values.compactMap { $0.lostAt?.addingTimeInterval(Self.statusGrace) }
             .filter { $0 > date }.min()
@@ -360,12 +421,14 @@ final class SidebarCopilotPolling {
         expiry = Task { [weak self] in
             do { try await expiryPause(max(0, deadline.timeIntervalSince(date))) } catch { return }
             guard let self, self.generation == token, !Task.isCancelled else { return }
+            defer { self.tree = self.currentTree }
             self.expiryDeadline = nil
             self.expiry = nil
             if expiresEvidence {
                 self.snapshot = nil
+                self.projectionCache = nil
                 self.cancelHistoryExpiry()
-                self.tree = .init(availability: .unavailable, sessions: [], issues: [], generatedAt: nil)
+                self.currentTree = .init(availability: .unavailable, sessions: [], issues: [], generatedAt: nil)
             }
             self.projectStatusLoss()
             self.scheduleStatusExpiry()
@@ -380,7 +443,10 @@ final class SidebarCopilotPolling {
     }
 
     private func scheduleHistoryExpiry() {
-        let deadline = canPoll ? tree.nextHistoryExpiry : nil
+        let date = now()
+        let futureObservation = snapshot?.sessions.compactMap { $0.observedAt?.addingTimeInterval(-1) }
+            .filter { $0 > date }.min()
+        let deadline = canPoll ? [projectionCache?.nextClockChange, futureObservation].compactMap { $0 }.min() : nil
         guard deadline != historyDeadline else { return }
         cancelHistoryExpiry()
         guard let deadline else { return }

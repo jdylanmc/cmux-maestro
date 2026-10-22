@@ -1,10 +1,70 @@
 import Foundation
+import Observation
 import Testing
 
 @MainActor
 struct SidebarHistoryPollingTests {
     private let fixtures = SidebarTreeFixtures()
     private let initial = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func unchangedPollsRefreshEvidenceWithoutProjectionOrPublication() async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(now: initial)], now: initial.addingTimeInterval(0.25)
+        ))
+        await sidebarEventually { await harness.isPaused }
+        let builds = poller.projectionCount
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let beats = SidebarBeatsController(
+            file: SidebarBeatsFile(root: stores.root.appendingPathComponent("Beats")), now: { clock.read() }
+        )
+        #expect(beats.perform { _ = try $0.create(
+            session: fixtures.sessionID, cron: "0 9 * * *", prompt: "Synthetic"
+        ) } == nil)
+        var evidence = poller.evidenceUpdates().makeAsyncIterator()
+        beats.updateLiveness(try #require(await evidence.next()))
+        let changes = HistoryTestClock(initial)
+        withObservationTracking {
+            _ = poller.tree
+        } onChange: {
+            changes.advance(1)
+        }
+        for index in 2...30 {
+            clock.advance(2)
+            await harness.nextRead()
+            await sidebarEventually { await harness.reads == index }
+            await harness.succeed(fixtures.snapshot(
+                sessions: [fixtures.session(now: clock.read())], now: clock.read().addingTimeInterval(0.25)
+            ))
+            await sidebarEventually { await harness.isPaused }
+            beats.updateLiveness(try #require(await evidence.next()))
+            beats.refresh()
+            #expect(beats.indicators.state(for: fixtures.sessionID) == .lit)
+        }
+        #expect(poller.projectionCount == builds)
+        #expect(changes.read() == initial)
+        #expect(poller.tree.generatedAt == clock.read().addingTimeInterval(0.25))
+        #expect(poller.tree.sessions.first?.observedAt == clock.read())
+        #expect(poller.tree.exactLiveSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA, now: clock.read()
+        ) != nil)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 31 }
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(state: .working, now: clock.read())], now: clock.read().addingTimeInterval(0.25)
+        ))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.projectionCount == builds + 1)
+        #expect(changes.read() == initial.addingTimeInterval(1))
+        #expect(poller.tree.sessions.first?.state == .working)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
 
     @Test func acknowledgementReprojectsWithoutReadingAndCannotRestoreExpiredObservation() async {
         let clock = HistoryTestClock(initial)
@@ -38,6 +98,153 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test func futureEventBecomesKnownAtDeadlineWithoutAnotherRead() async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        let future = initial.addingTimeInterval(1)
+        let signal = AgentAttention(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: UUID()),
+                                    occurredAt: future)
+        let observation = CopilotSessionObservation(
+            sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            liveness: .alive, state: .idle, model: nil, children: [], observedAt: future, attention: [signal]
+        )
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(sessions: [observation], now: future))
+        await sidebarEventually {
+            let paused = await harness.isPaused
+            return await harness.activeTimers == 2 && paused
+        }
+        #expect(poller.tree.sessions.first?.attention.first?.occurredAt == nil)
+        let count = poller.projectionCount
+        clock.advance(1)
+        await harness.fire(delay: 1)
+        await sidebarEventually { poller.tree.sessions.first?.attention.first?.occurredAt == future }
+        #expect(poller.projectionCount == count + 1)
+        #expect(await harness.reads == 1)
+        #expect(await harness.delays.allSatisfy { $0 > 0 })
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test func settingsProjectionUsesOneClockSampleAcrossFutureDateBoundary() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        let future = initial.addingTimeInterval(1)
+        let observation = CopilotSessionObservation(
+            sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            liveness: .alive, state: .idle, model: nil, children: [], observedAt: initial,
+            attention: [.init(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: UUID()),
+                              occurredAt: future)]
+        )
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(sessions: [observation], now: future))
+        await sidebarEventually { await harness.delays.count == 2 }
+        clock.advance(0.5)
+        clock.advanceAfterEachRead(0.5)
+        poller.updateHistory(.init(retention: .never))
+        clock.advanceAfterEachRead(0)
+        await harness.fire(delay: 1)
+        await sidebarEventually { poller.tree.sessions.first?.attention.first?.occurredAt == future }
+        #expect(await harness.reads == 1)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test func generatedTimeCrossingFutureEventAndMinuteLabelInvalidatesOnlyWhenNeeded() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        let future = initial.addingTimeInterval(4)
+        let outcome = CopilotChildWork(
+            id: "ended", parentID: nil, kind: .skill, name: "Ended", state: .completed, model: nil,
+            terminalEvent: .init(id: UUID(), timestamp: future)
+        )
+        start(poller)
+        for index in 1...3 {
+            await sidebarEventually { await harness.reads == index }
+            await harness.succeed(fixtures.snapshot(
+                sessions: [fixtures.session(children: [outcome], now: clock.read())], now: clock.read()
+            ))
+            await sidebarEventually { await harness.isPaused }
+            #expect(poller.projectionCount == (index == 3 ? 2 : 1))
+            #expect(poller.tree.sessions.first?.nodes.first?.terminalTimestamp == (index == 3 ? future : nil))
+            if index < 3 {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        poller.updateHistory(.init(retention: .never))
+        let builds = poller.projectionCount
+        let changes = HistoryTestClock(initial)
+        withObservationTracking { _ = poller.tree } onChange: { changes.advance(1) }
+        clock.advance(56)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 4 }
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(children: [outcome], now: clock.read())], now: clock.read()
+        ))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.projectionCount == builds)
+        #expect(changes.read() == initial.addingTimeInterval(1))
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test func unchangedStaleEvidenceCannotBorrowRefreshedEnvelopeTime() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        let observation = fixtures.session(now: initial)
+        start(poller)
+        for index in 1...2 {
+            await sidebarEventually { await harness.reads == index }
+            await harness.succeed(fixtures.snapshot(sessions: [observation], now: clock.read()))
+            await sidebarEventually { await harness.isPaused }
+            if index == 1 {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        #expect(poller.tree.sessions.first?.observedAt == initial)
+        clock.advance(6)
+        await harness.fire(delay: 8)
+        await sidebarEventually { poller.tree.sessions.isEmpty }
+        #expect(poller.tree.availability == .unavailable)
+        #expect(poller.tree.statusSessions.first?.lastKnownState == .idle)
+        #expect(poller.tree.exactLiveSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA, now: clock.read()
+        ) == nil)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test func equalFinalProjectionDoesNotPublishIntermediateStatusLoss() async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(sessions: [fixtures.session(now: initial)], now: initial))
+        await sidebarEventually { await harness.isPaused }
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        clock.advance(1)
+        let missing = fixtures.snapshot(sessions: [], complete: false, now: clock.read())
+        await harness.succeed(missing)
+        await sidebarEventually { await harness.isPaused && !poller.tree.statusSessions.isEmpty }
+        let changes = HistoryTestClock(initial)
+        withObservationTracking { _ = poller.tree } onChange: { changes.advance(1) }
+        poller.updateHistory(.init(retention: .never))
+        #expect(changes.read() == initial)
+        #expect(poller.tree.statusSessions.first?.lastKnownState == .idle)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test func rapidRefreshDoesNotResetHistoryDeadlineAndBoundaryDoesNotBusyLoop() async {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()
@@ -59,10 +266,12 @@ struct SidebarHistoryPollingTests {
             await sidebarEventually { await harness.isPaused }
         }
         #expect(poller.tree.nextHistoryExpiry == initial.addingTimeInterval(5))
+        #expect(poller.projectionCount == 1)
         #expect(await harness.delays.filter { $0 == 5 }.count == 1)
         clock.advance(2)
         await harness.fire(delay: 5)
         await sidebarEventually { poller.tree.retainedHistoryCount == 0 }
+        #expect(poller.projectionCount == 2)
         #expect(poller.tree.knownRunningChildren == 1)
         #expect(poller.tree.hiddenHistoryCount == 1)
         #expect(poller.tree.nextHistoryExpiry == nil)
@@ -736,9 +945,17 @@ struct SidebarHistoryPollingTests {
 private final class HistoryTestClock: @unchecked Sendable {
     private let lock = NSLock()
     private var date: Date
+    private var step: TimeInterval = 0
     init(_ date: Date) { self.date = date }
-    func read() -> Date { lock.withLock { date } }
+    func read() -> Date {
+        lock.withLock {
+            let value = date
+            date.addTimeInterval(step)
+            return value
+        }
+    }
     func advance(_ seconds: TimeInterval) { lock.withLock { date.addTimeInterval(seconds) } }
+    func advanceAfterEachRead(_ seconds: TimeInterval) { lock.withLock { step = seconds } }
 }
 
 private actor HistoryPollingHarness {

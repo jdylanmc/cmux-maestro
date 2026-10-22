@@ -279,6 +279,12 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Unchanged sidebar observations no longer rebuild the session tree or invalidate
+  its presentation every poll. Explicit one-shot deadlines keep managed-node,
+  branch-summary, Git and process freshness current even without Copilot updates;
+  history expiry, future-dated evidence and observation-loss grace still advance
+  independently (#321).
+
 - Setup quiescence and session-end timing tests use controlled clocks and timers
   instead of runner-speed assertions. The CI timing guard also catches multiline
   elapsed comparisons and uptime reads (#310).

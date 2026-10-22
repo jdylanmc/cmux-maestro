@@ -581,7 +581,7 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     let childWork: [AgentChildWork]
     let stateDetail: AgentSessionStateDetail?
     let liveness: AgentProcessLiveness?
-    let observedAt: Date?
+    var observedAt: Date?
     let launchBinding: AgentSessionBinding?
     let appearance: AgentSessionAppearance?
     let attention: [AgentAttention]?

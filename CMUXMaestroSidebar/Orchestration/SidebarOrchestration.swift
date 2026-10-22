@@ -505,6 +505,7 @@ nonisolated enum SidebarOrchestrationReader {
 final class SidebarOrchestrationPolling {
     typealias Read = @Sendable () async throws -> SidebarOrchestrationSnapshot
     typealias Pause = @Sendable () async throws -> Void
+    typealias ExpiryPause = @Sendable (TimeInterval) async throws -> Void
 
     private(set) var availability: SidebarOrchestrationAvailability = .waiting
     private(set) var snapshot = SidebarOrchestrationSnapshot.empty
@@ -519,12 +520,16 @@ final class SidebarOrchestrationPolling {
     private let read: Read
     private let pause: Pause
     private let now: @Sendable () -> Date
+    private let expiryPause: ExpiryPause
+    @ObservationIgnored private var presentationExpiry: Task<Void, Never>?
+    @ObservationIgnored private var presentationDeadline: Date?
     // Observe quiescence without exposing cancellable task handles.
     private let taskFinished: @MainActor @Sendable (UInt64) -> Void
 
     init(
         read: Read? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
+        expiryPause: @escaping ExpiryPause = { try await Task.sleep(for: .seconds($0)) },
         now: @escaping @Sendable () -> Date = { Date() },
         taskFinished: @escaping @MainActor @Sendable (UInt64) -> Void = { _ in }
     ) {
@@ -534,6 +539,7 @@ final class SidebarOrchestrationPolling {
         }
         self.pause = pause
         self.now = now
+        self.expiryPause = expiryPause
         self.taskFinished = taskFinished
     }
 
@@ -575,6 +581,7 @@ final class SidebarOrchestrationPolling {
     }
 
     private func invalidate() {
+        cancelPresentationExpiry()
         generation &+= 1
         worker?.cancel()
         worker = nil
@@ -617,21 +624,89 @@ final class SidebarOrchestrationPolling {
                     self.retitle(now: self.now())
                     self.availability = SidebarOrchestrationReader.isStale(raw, now: self.now())
                         ? .stale : self.snapshot.complete ? .ready : .partial
+                    self.schedulePresentationExpiry()
                 } catch CopilotFileError.missing {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     self.snapshot = .empty
                     self.projected = .empty
                     self.availability = .waiting
+                    self.cancelPresentationExpiry()
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     self.snapshot = .empty
                     self.projected = .empty
                     self.availability = .unavailable
+                    self.cancelPresentationExpiry()
                 }
                 do { try await pause() } catch { break }
             }
             guard let self, self.generation == token else { return }
             self.worker = nil
         }
+    }
+
+    private func cancelPresentationExpiry() {
+        presentationExpiry?.cancel()
+        presentationExpiry = nil
+        presentationDeadline = nil
+    }
+
+    private func schedulePresentationExpiry() {
+        let date = now()
+        // A poll can win the actor before an already-due timer; don't cancel its redraw.
+        if let pending = presentationDeadline, pending <= date {
+            withMutation(keyPath: \.snapshot) {}
+        }
+        let deadline = nextPresentationDeadline(after: date)
+        guard deadline != presentationDeadline else { return }
+        cancelPresentationExpiry()
+        guard let deadline else { return }
+        presentationDeadline = deadline
+        let token = generation
+        let expiryPause = expiryPause
+        presentationExpiry = Task { [weak self] in
+            do { try await expiryPause(max(0, deadline.timeIntervalSince(date))) }
+            catch { return }
+            guard let self, !Task.isCancelled, self.generation == token, self.visible, self.connected else { return }
+            self.presentationExpiry = nil
+            self.presentationDeadline = nil
+            self.availability = SidebarOrchestrationReader.isStale(self.projected, now: self.now())
+                ? .stale : self.projected.complete ? .ready : .partial
+            // Time changes presentation, not evidence. Equal snapshots still need a redraw here.
+            self.withMutation(keyPath: \.snapshot) {}
+            self.schedulePresentationExpiry()
+        }
+    }
+
+    private func nextPresentationDeadline(after date: Date) -> Date? {
+        var next: Date?
+        func include(_ candidate: Date) {
+            guard candidate > date else { return }
+            next = min(next ?? candidate, candidate)
+        }
+        func expires(_ evidence: Date, after interval: TimeInterval) {
+            // Freshness is inclusive at the boundary; wake at the next representable instant.
+            let boundary = evidence.addingTimeInterval(interval).timeIntervalSinceReferenceDate
+            include(Date(timeIntervalSinceReferenceDate: boundary.nextUp))
+        }
+        func freshness(_ evidence: Date, interval: TimeInterval) {
+            include(evidence.addingTimeInterval(-1))
+            expires(evidence, after: interval)
+        }
+        freshness(projected.generatedAt, interval: SidebarOrchestrationReader.staleInterval)
+        for node in projected.nodes {
+            freshness(node.updatedAt, interval: SidebarOrchestrationReader.staleInterval)
+            if let gitAt = node.gitEvidenceAt {
+                freshness(gitAt, interval: SidebarOrchestrationReader.gitEvidenceFreshInterval)
+            }
+            if let changesAt = node.gitChangesAt {
+                freshness(changesAt, interval: SidebarOrchestrationReader.gitEvidenceFreshInterval)
+            }
+        }
+        for process in projected.processes.values {
+            expires(process.observedAt, after: SidebarProcessPresentation.staleInterval)
+            expires(process.observedAt, after: SidebarProcessPresentation.unavailableInterval)
+        }
+        return next
     }
 }
