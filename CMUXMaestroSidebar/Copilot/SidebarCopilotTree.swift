@@ -89,7 +89,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     let liveness: AgentProcessLiveness
     let state: AgentWorkState
     let model: String?
-    let observedAt: Date
+    var observedAt: Date
     var nodes: [SidebarCopilotNode]
     let childrenComplete: Bool
     let treeDegraded: Bool

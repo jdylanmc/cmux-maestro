@@ -171,6 +171,24 @@ Launch workspace/surface evidence is separate. It cannot create current topology
 Activity and attention reuse `Domain/AgentSignals.swift`. These shared types
 compile into app, sidebar and tests, not the hook.
 
+Unchanged polling reuses the structural sidebar projection (#321), not reader
+identity checks. The key compares the complete typed content, keeping observation
+freshness and envelope-validity classifications separate from the read-start and
+post-read timestamps. Every accepted read still replaces the exact timestamps
+and reconciles observation-loss memory. Topology, registration generation,
+permissions, schema and stale/regressing envelope guards run before reuse.
+Content/settings changes, clock rollback and time-dependent transitions rebuild
+the projection. One-shot deadlines cover history expiry, future display times,
+observation freshness and status grace; no extra timer polls the projection.
+An over-limit deadline traversal disables reuse rather than ignoring evidence.
+
+Publication compares the final reconciled presentation, not intermediate trees.
+Equal output does not invalidate observation subscribers. Exact evidence times
+remain available to action-time checks; the visible minute-resolution **Observed**
+labels update when their minute changes. Event times and attention are never
+rounded. The reader cadence remains two seconds; file-driven responsiveness and
+installed CPU/change-to-pixel acceptance are separate follow-up work.
+
 Schema version stays 1. Optional observation fields preserve process liveness,
 observation time, appearance, child kinds/models/outcome-event identities, issues
 and completeness. Absent completeness field means unknown, not complete.

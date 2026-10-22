@@ -279,6 +279,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Unchanged sidebar observations no longer rebuild the session tree or invalidate
+  its presentation every poll. Freshness checks, history expiry, future-dated
+  evidence and observation-loss grace still advance at their deadlines (#321).
+
 - Setup quiescence and session-end timing tests use controlled clocks and timers
   instead of runner-speed assertions. The CI timing guard also catches multiline
   elapsed comparisons and uptime reads (#310).
