@@ -1,10 +1,55 @@
 import Foundation
+import Observation
 import Testing
 
 @MainActor
 struct SidebarHistoryPollingTests {
     private let fixtures = SidebarTreeFixtures()
     private let initial = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test func unchangedPollsRefreshEvidenceWithoutProjectionOrPublication() async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(sessions: [fixtures.session(now: initial)], now: initial))
+        await sidebarEventually { await harness.isPaused }
+        let builds = poller.projectionCount
+        let changes = HistoryTestClock(initial)
+        withObservationTracking {
+            _ = poller.tree
+        } onChange: {
+            changes.advance(1)
+        }
+        for index in 2...30 {
+            clock.advance(2)
+            await harness.nextRead()
+            await sidebarEventually { await harness.reads == index }
+            await harness.succeed(fixtures.snapshot(
+                sessions: [fixtures.session(now: clock.read())], now: clock.read()
+            ))
+            await sidebarEventually { await harness.isPaused }
+        }
+        #expect(poller.projectionCount == builds)
+        #expect(changes.read() == initial)
+        #expect(poller.tree.generatedAt == clock.read())
+        #expect(poller.tree.sessions.first?.observedAt == clock.read())
+        #expect(poller.tree.exactLiveSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA, now: clock.read()
+        ) != nil)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 31 }
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(state: .working, now: clock.read())], now: clock.read()
+        ))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.projectionCount == builds + 1)
+        #expect(changes.read() == initial.addingTimeInterval(1))
+        #expect(poller.tree.sessions.first?.state == .working)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
 
     @Test func acknowledgementReprojectsWithoutReadingAndCannotRestoreExpiredObservation() async {
         let clock = HistoryTestClock(initial)

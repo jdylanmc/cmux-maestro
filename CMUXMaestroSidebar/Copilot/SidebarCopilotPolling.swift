@@ -12,6 +12,7 @@ final class SidebarCopilotPolling {
 
     private(set) var tree: SidebarCopilotTree = .waiting
     private(set) var isReading = false
+    @ObservationIgnored private(set) var projectionCount = 0
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
@@ -245,6 +246,7 @@ final class SidebarCopilotPolling {
         }
         lastGeneratedAt = snapshot.generatedAt
         self.snapshot = snapshot
+        projectionCount += 1
         tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
                                          revealingIdleTasksIn: revealingIdleTasksIn)
         tree.managedDetails = managedDetails
@@ -257,6 +259,7 @@ final class SidebarCopilotPolling {
 
     private func reprojectHistory() {
         guard canPoll, let snapshot else { return }
+        projectionCount += 1
         tree = SidebarCopilotTree.project(snapshot, onto: topology, now: now(), history: history, attention: attention,
                                          revealingIdleTasksIn: revealingIdleTasksIn)
         tree.managedDetails = managedDetails
