@@ -6,6 +6,91 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test func collapsedWorkspacesStackWithoutExpandedContentMargins() throws {
+        let fixture = try SidebarPreferenceFixture()
+        let stores = SidebarStoreFixture()
+        let model = SidebarConnectionModel(
+            copilot: SidebarCopilotPolling(read: neutralRead { _ in
+                Issue.record("Offscreen spacing fixture must not read live observations")
+                throw CancellationError()
+            }),
+            orchestration: SidebarOrchestrationPolling(read: {
+                Issue.record("Offscreen spacing fixture must not read live orchestration")
+                throw CancellationError()
+            })
+        )
+        defer { model.setVisible(false); fixture.cleanup(); stores.cleanup() }
+        let preferences = fixture.preferences()
+        let workspaces = ["Atlas", "Birch", "Cedar", "Delta", "Elm"].map { name in
+            HierarchyWorkspace(
+                id: UUID(), title: .available("\(name) (synthetic)"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .available(nil), projectRootPath: .available(nil), surfaces: .available([])
+            )
+        }
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: workspaces, windowID: UUID()
+        )
+        model.replaceHierarchy(with: hierarchy)
+        model.showConnected(workspaceCount: workspaces.count, surfaceCount: 0)
+        model.navigation.update(topology: SidebarTopology(hierarchy), connected: true,
+                                workspaceAllowed: true, surfaceAllowed: true,
+                                perform: { _ in Issue.record("Rendering must not navigate") })
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        func capture(width: Int, name: String) throws -> [NSRect] {
+            let frame = NSRect(x: 0, y: 0, width: width, height: 700)
+            let host = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores)
+                .environment(\._accessibilityReduceMotion, true)
+                .background(Color(nsColor: .windowBackgroundColor)))
+            let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .darkAqua)
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.frame = frame
+            host.layoutSubtreeIfNeeded()
+            let titles = nativeTitles(in: host).filter { $0.localFocusID?.hasPrefix("workspace:") == true }
+            try #require(titles.count == workspaces.count)
+            let frames = titles.map { host.convert($0.bounds, from: $0) }
+            #expect(frames.allSatisfy { $0.height >= 24 })
+            #expect(titles.allSatisfy { $0.accessibilityLabel()?.hasPrefix("Focus workspace") == true })
+            #expect(!window.isVisible)
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            try #require(bitmap.representation(using: .png, properties: [:]))
+                .write(to: folder.appendingPathComponent("workspace-spacing-\(name)-\(width).png"))
+            try JSONEncoder().encode(frames).write(
+                to: folder.appendingPathComponent("workspace-spacing-\(name)-\(width).json"))
+            return frames
+        }
+
+        for density in SidebarDensity.allCases {
+            preferences.setDensity(density)
+            for width in [220, 280, 350] {
+                for workspace in workspaces { preferences.setExpanded(true, for: .workspace(workspace.id)) }
+                let expanded = try capture(width: width, name: "\(density.rawValue)-expanded")
+                for workspace in workspaces.prefix(3) {
+                    preferences.setExpanded(false, for: .workspace(workspace.id))
+                }
+                let mixed = try capture(width: width, name: "\(density.rawValue)-collapsed")
+                for index in 0..<2 {
+                    #expect(abs(mixed[index + 1].minY - mixed[index].minY
+                        - (28 + density.spacing(6))) <= 0.5,
+                        "Collapsed headers need only a 24-point control, 2-point padding and the list gap")
+                }
+                #expect(abs((mixed[4].minY - mixed[3].minY)
+                    - (expanded[4].minY - expanded[3].minY)) <= 0.5,
+                    "Expanded workspace layout must not change")
+                #expect(mixed[3].size == expanded[3].size)
+            }
+        }
+    }
+
     @Test func managedRowRendersSelfSelectionAndHumanReset() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let fixtures = SidebarTreeFixtures()
