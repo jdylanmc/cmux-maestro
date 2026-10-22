@@ -3265,37 +3265,59 @@ test("born managed: a failed exit record is retried once, then reported", async 
   assert.match(errors.join("\n"), /could not record this session's exit/);
 });
 
+function controlledEndGate() {
+  const timers = [];
+  const cancelled = [];
+  const gate = createSessionEndGate({
+    schedule: (fire, ms) => { const timer = { fire, ms }; timers.push(timer); return timer; },
+    cancel: timer => cancelled.push(timer),
+  });
+  return { gate, timers, cancelled };
+}
+
 test("born managed: a SessionEnd after a hangup is never recorded (quit, close, or signal)", async (t) => {
   // Copilot 1.0.98 reports user_exit for all of these; only the SIGHUP that precedes them differs.
-  const f = await bornFixture(t);
+  const clock = controlledEndGate();
+  const f = await bornFixture(t, { endGate: clock.gate });
   f.endGate.hungUp = true;
   await f.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: f.own.sessionId });
   assert.equal(f.calls.ended.length, 0);
-  const started = Date.now();
   await f.endGate.drain(5000);
-  assert.ok(Date.now() - started < 1000);
+  assert.deepEqual(clock.timers, []);
 });
 
 test("born managed: exit waits, bounded, for a /exit SessionEnd record to land", async (t) => {
   let release;
-  const f = await bornFixture(t, { endSession: () => new Promise(resolve => { release = resolve; }) });
+  let entered;
+  const recording = new Promise(resolve => { entered = resolve; });
+  const clock = controlledEndGate();
+  const f = await bornFixture(t, { endGate: clock.gate,
+    endSession: () => new Promise(resolve => { release = resolve; entered(); }) });
   assert.equal(f.endGate.armed, true);
-  const begun = Date.now();
-  const drained = f.endGate.drain(5000).then(() => [f.calls.ended.length, Date.now() - begun < 1000]);
+  let didDrain = false;
+  const drained = f.endGate.drain(5000).then(() => { didDrain = true; return f.calls.ended.length; });
   const ending = f.hooks.onSessionEnd({ reason: "user_exit" }, { sessionId: f.own.sessionId });
-  await new Promise(resolve => setTimeout(resolve, 50));
+  await recording;
+  assert.equal(didDrain, false);
+  assert.deepEqual(clock.timers.map(timer => timer.ms), [5000]);
   release();
   await ending;
-  assert.deepEqual(await drained, [1, true]);
-  const idle = createSessionEndGate();
-  idle.armed = true;
-  const started = Date.now();
-  await idle.drain(100);
-  assert.ok(Date.now() - started >= 90);
-  const unarmed = createSessionEndGate();
-  const quick = Date.now();
-  await unarmed.drain(5000);
-  assert.ok(Date.now() - quick < 1000);
+  assert.equal(await drained, 1);
+  assert.deepEqual(clock.cancelled, clock.timers);
+  const idle = controlledEndGate();
+  idle.gate.armed = true;
+  let expired = false;
+  const waiting = idle.gate.drain(100).then(() => { expired = true; });
+  await Promise.resolve();
+  assert.equal(expired, false);
+  assert.deepEqual(idle.timers.map(timer => timer.ms), [100]);
+  idle.timers[0].fire();
+  await waiting;
+  assert.equal(expired, true);
+  assert.deepEqual(idle.cancelled, idle.timers);
+  const unarmed = controlledEndGate();
+  await unarmed.gate.drain(5000);
+  assert.deepEqual(unarmed.timers, []);
 });
 
 test("born managed: a committed enrollment with deferred projection is used; a runtime failure is distinct", async (t) => {

@@ -209,15 +209,15 @@ const launchNative = (request, controller) => invokeController("native-spawn", r
 
 // Copilot 1.0.98 reports user_exit for /exit, a terminal hangup, and a signal alike; only /exit
 // reaches the extension without a SIGHUP first, so a hung-up provider never records an end.
-export function createSessionEndGate() {
+export function createSessionEndGate({ schedule = setTimeout, cancel = clearTimeout } = {}) {
   let finish;
   const settled = new Promise(resolve => { finish = resolve; });
   return { hungUp: false, armed: false, finish,
     async drain(ms) {
       if (!this.armed || this.hungUp) return;
       let timer;
-      await Promise.race([settled, new Promise(resolve => { timer = setTimeout(resolve, ms); })]);
-      clearTimeout(timer);
+      await Promise.race([settled, new Promise(resolve => { timer = schedule(resolve, ms); })]);
+      cancel(timer);
     } };
 }
 export const sessionEndGate = createSessionEndGate();

@@ -1925,14 +1925,17 @@ struct CopilotSetupTests {
 struct CopilotProcessQuiescenceTests {
     @Test func unkillableGroupStopsWaitingAtItsDeadline() {
         var polls = 0
+        let clock = SetupDeadlineClock()
         let stopped = LocalCopilotSetupRunner.waitForQuiescence(
-            until: .now, pollInterval: 0.001
+            until: clock.now(), now: clock.now,
+            sleep: { _ in Issue.record("An expired deadline must not sleep") }
         ) { polls += 1; return false }
         #expect(!stopped)
         #expect(polls == 1)
     }
 
     private func seam(quiescent: @escaping (Int) -> Bool, signals: Box<[Int32]>, reaps: Box<Int>,
+                      clock: SetupDeadlineClock,
                       postKillGrace: TimeInterval = 0.05) -> LocalCopilotSetupRunner.GroupStopSeam {
         var seam = LocalCopilotSetupRunner.GroupStopSeam()
         let polls = Box(0)
@@ -1941,44 +1944,59 @@ struct CopilotProcessQuiescenceTests {
         seam.isQuiescent = { _ in polls.value += 1; return quiescent(polls.value) }
         seam.reap = { _ in reaps.value += 1 }
         seam.postKillGrace = postKillGrace
+        seam.now = clock.now
+        seam.sleep = { clock.advance(by: .seconds($0)) }
         return seam
     }
 
-    @Test func stopGroupTimesOutWithinItsHardBoundIgnoringALargeCallerGraceAndDoesNotReap() {
+    @Test func stopGroupTimesOutAtItsPostKillBoundAndDoesNotReap() {
         let signals = Box<[Int32]>([]), reaps = Box(0)
-        // Quiescence is reported after SIGTERM's zero grace but never after SIGKILL.
-        let started = ContinuousClock.now
+        let clock = SetupDeadlineClock()
         let stopped = LocalCopilotSetupRunner.stopGroup(
-            4242, grace: 0, seam: seam(quiescent: { _ in false }, signals: signals, reaps: reaps))
+            4242, grace: 0, seam: seam(quiescent: { _ in false }, signals: signals, reaps: reaps, clock: clock))
         #expect(!stopped)
         #expect(signals.value == [SIGTERM, SIGKILL])
         #expect(reaps.value == 0)
-        #expect(ContinuousClock.now - started < .seconds(2))
+        #expect(clock.elapsed == .milliseconds(50))
     }
 
     @Test func postKillBoundDoesNotGrowWithTheCallerGrace() {
         let signals = Box<[Int32]>([]), reaps = Box(0)
-        let started = ContinuousClock.now
+        let clock = SetupDeadlineClock()
+        var signalTimes: [Duration] = []
+        var stopSeam = seam(quiescent: { _ in false }, signals: signals, reaps: reaps, clock: clock)
+        let signal = stopSeam.signal
+        stopSeam.signal = { pid, value in
+            signalTimes.append(clock.elapsed)
+            return signal(pid, value)
+        }
         // A caller grace of 0.2 s is consumed by the SIGTERM wait; the post-kill wait must
         // still use its own 0.05 s bound rather than max(grace, bound).
         let stopped = LocalCopilotSetupRunner.stopGroup(
-            4242, grace: 0.2, seam: seam(quiescent: { _ in false }, signals: signals, reaps: reaps))
+            4242, grace: 0.2, seam: stopSeam)
         #expect(!stopped)
-        #expect(ContinuousClock.now - started < .milliseconds(400))
+        #expect(signals.value == [SIGTERM, SIGKILL])
+        #expect(signalTimes == [.zero, .milliseconds(200)])
+        #expect(clock.elapsed == .milliseconds(250))
+        #expect(reaps.value == 0)
     }
 
     @Test func stopGroupReapsOnlyAfterQuiescence() {
         let signals = Box<[Int32]>([]), reaps = Box(0)
+        let clock = SetupDeadlineClock()
         let stopped = LocalCopilotSetupRunner.stopGroup(
-            4242, grace: 0, seam: seam(quiescent: { $0 >= 3 }, signals: signals, reaps: reaps, postKillGrace: 5))
+            4242, grace: 0, seam: seam(quiescent: { $0 >= 3 }, signals: signals, reaps: reaps,
+                                     clock: clock, postKillGrace: 5))
         #expect(stopped)
         #expect(reaps.value == 1)
     }
 
     @Test func quiescenceObservedBeforeTheDeadlineSucceeds() {
         var polls = 0
+        let clock = SetupDeadlineClock()
         let stopped = LocalCopilotSetupRunner.waitForQuiescence(
-            until: .now.advanced(by: supervisedWaitLimit), pollInterval: 0.001
+            until: clock.now().advanced(by: .seconds(1)), pollInterval: 0.001,
+            now: clock.now, sleep: { clock.advance(by: .seconds($0)) }
         ) { polls += 1; return polls == 3 }
         #expect(stopped)
         #expect(polls == 3)
