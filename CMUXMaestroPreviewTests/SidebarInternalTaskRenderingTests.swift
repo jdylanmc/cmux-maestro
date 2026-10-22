@@ -18,6 +18,9 @@ struct SidebarInternalTaskRenderingTests {
             window.contentView = host
             defer { window.contentView = nil; window.close() }
             host.layoutSubtreeIfNeeded()
+            let title = try #require(buttons(host).first)
+            #expect(title.bounds.width >= 24 && title.bounds.height >= 24,
+                    "The fixed-size activity control must retain its independent minimum hit target")
             let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
             host.cacheDisplay(in: host.bounds, to: bitmap)
             return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)

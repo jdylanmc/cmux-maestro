@@ -730,7 +730,7 @@ final class SidebarTitleNativeButton: NSButton {
         target = self
         action = #selector(pressTitle)
         focusRingType = .exterior
-        labelController.sizingOptions = []
+        labelController.sizingOptions = [.intrinsicContentSize]
         addSubview(hosting)
     }
     required init?(coder: NSCoder) { nil }

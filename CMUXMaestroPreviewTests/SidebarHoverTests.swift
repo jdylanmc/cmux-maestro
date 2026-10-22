@@ -5,6 +5,13 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test func titleIdealSizeRetainsTheLabelWidth() {
+        let button = SidebarTitleNativeButton()
+        button.labelContent = AnyView(Text("Activity").frame(width: 64, height: 28))
+        #expect(button.measure(width: nil) == CGSize(width: 64, height: 28))
+        #expect(button.measure(width: .infinity) == CGSize(width: 64, height: 28))
+    }
+
     @Test func repeatedTitleMeasurementDoesNotInvalidateTheMountedLabel() {
         let button = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
         button.labelContent = AnyView(Text("Unchanged title").frame(maxWidth: .infinity, alignment: .leading))
