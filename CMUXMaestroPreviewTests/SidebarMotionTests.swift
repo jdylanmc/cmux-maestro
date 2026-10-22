@@ -649,20 +649,25 @@ struct SidebarMotionTests {
             try await Task.sleep(for: .milliseconds(250))
             let secondValues = try presentationValues(in: host)
             let second = try capture(window, to: folder.appendingPathComponent("polish-\(name)-frame1.png"))
+            // A single pair can alias a full rotation or equal values on either side of a pulse peak.
+            try await Task.sleep(for: .milliseconds(370))
+            let thirdValues = try presentationValues(in: host)
+            let third = try capture(window, to: folder.appendingPathComponent("polish-\(name)-frame2.png"))
             #expect(window.isVisible)
-            let left = differences(first, second, columns: 0..<40)
-            let rest = differences(first, second, columns: 40..<first.pixelsWide)
-            #expect(rest == 0, "No row shimmer or text motion: \(name)")
+            let left = [second, third].map { differences(first, $0, columns: 0..<40) }
+            let rest = [second, third].map { differences(first, $0, columns: 40..<first.pixelsWide) }
+            let values = [firstValues, secondValues, thirdValues]
+            #expect(rest.allSatisfy { $0 == 0 }, "No row shimmer or text motion in any sample: \(name)")
             if !reduceMotion {
-                #expect(left > 0, "The native status badge animates inside its lane while hosted: \(name)")
-                #expect(!firstValues.isEmpty && firstValues != secondValues,
+                #expect(left.contains { $0 > 0 }, "The native status badge animates inside its lane while hosted: \(name)")
+                #expect(values.allSatisfy { !$0.isEmpty } && values.contains { $0 != firstValues },
                         "Actual windowed presentation properties must advance: \(name)")
             } else {
-                #expect(left == 0, "Static negative control: \(name)")
-                #expect(firstValues.isEmpty && secondValues.isEmpty)
+                #expect(left.allSatisfy { $0 == 0 }, "Static negative control in every sample: \(name)")
+                #expect(values.allSatisfy { $0.isEmpty })
             }
             print("Native presentation motion \(name): changedStatusPixels=\(left), changedOtherPixels=\(rest), "
-                  + "values=\(firstValues) -> \(secondValues)")
+                  + "values=\(values)")
         }
     }
 
@@ -694,7 +699,8 @@ struct SidebarMotionTests {
                     let animation = try #require(layer.animation(forKey: key) as? CAPropertyAnimation)
                     let presentation = try #require(layer.presentation())
                     switch animation.keyPath {
-                    case "transform.rotation.z": values.append(presentation.transform.m11)
+                    case "transform.rotation.z":
+                        values.append(contentsOf: [presentation.transform.m11, presentation.transform.m12])
                     case "shadowOpacity": values.append(Double(presentation.shadowOpacity))
                     case "contents":
                         let contents = try #require(presentation.contents)
@@ -716,7 +722,7 @@ struct SidebarMotionTests {
         try #require(window.isVisible && window.occlusionState.contains(.visible) && view.window === window,
                      "Animation acceptance needs a real ordered window, not an offscreen cache")
         try #require(view.bounds == NSRect(x: 0, y: 0, width: 280, height: 40),
-                     "Both native snapshots must use the same logical viewport, not a transient intrinsic height")
+                     "All native snapshots must use the same logical viewport, not a transient intrinsic height")
         // cacheDisplay renders model state and cannot observe render-server animations.
         // Only this synthetic window's live presentation tree is rendered, never the desktop.
         let presentation = try #require(view.layer?.presentation())

@@ -105,7 +105,12 @@ the app. It renders that window's live **presentation** layer tree into local
 PNGs and checks advancing rotation/glow/pet-frame properties. `cacheDisplay`
 of a hidden window only records model state and cannot observe Core Animation
 motion. Positive pixel changes remain confined to the status/pet lane; text
-and all Reduce Motion controls must remain exactly unchanged. The idle pet uses
+and all Reduce Motion controls must remain exactly unchanged in every sample.
+Three fixed samples, separated by 250 ms then 370 ms after initial setup, avoid
+relying on one pair that can alias a rotation or straddle a pulse peak. Any
+pairwise lane/property difference proves motion; no elapsed time is asserted
+and no failed test is retried. Actual native scheduling remains venue-dependent.
+The idle pet uses
 a synthetic six-frame sequence through the production pet view/store.
 Required tests separately check attached animation configuration and preservation
 of phase across unchanged updates/layout, without advancing wall time.
