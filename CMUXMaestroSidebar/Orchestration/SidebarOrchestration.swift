@@ -272,7 +272,40 @@ nonisolated enum SidebarOrchestrationReader {
     static let staleInterval: TimeInterval = 60
     static let gitEvidenceFreshInterval: TimeInterval = 60
 
+    actor Cached {
+        private var cache = Cache()
+
+        func read() throws -> SidebarOrchestrationSnapshot {
+            try SidebarOrchestrationReader.read(cache: &cache)
+        }
+    }
+
+    struct Cache {
+        var current = Decoded<SidebarOrchestrationSnapshot>()
+        var icons = Decoded<SidebarIconOverrides>()
+        var processes = Decoded<SidebarProcessObservation>()
+    }
+
+    struct Decoded<Value: Decodable & Sendable> {
+        private var entry: (bytes: Data, result: Result<Value, Error>)?
+
+        mutating func value(
+            for data: Data, decode: (Data) throws -> Value = { try decoder().decode(Value.self, from: $0) }
+        ) throws -> Value {
+            if let entry, entry.bytes == data { return try entry.result.get() }
+            // One bounded input per source, including malformed input; never reuse last-good evidence.
+            let result = Result { try decode(data) }
+            entry = (data, result)
+            return try result.get()
+        }
+    }
+
     static func read() throws -> SidebarOrchestrationSnapshot {
+        var cache = Cache()
+        return try read(cache: &cache)
+    }
+
+    private static func read(cache: inout Cache) throws -> SidebarOrchestrationSnapshot {
         let owner = getuid()
         let observer = try CopilotFileAccess.openDirectory(
             try CopilotPaths.orchestrationObserverDirectory(), owner: owner
@@ -282,32 +315,45 @@ nonisolated enum SidebarOrchestrationReader {
             at: observer, filename: "current.json", owner: owner,
             maximum: maximumBytes, permissions: 0o600
         )
-        var snapshot = try decoder().decode(SidebarOrchestrationSnapshot.self, from: data)
-        try validate(snapshot)
-        if let iconData = try? CopilotFileAccess.readStableRegular(
+        let iconData = try? CopilotFileAccess.readStableRegular(
             at: observer, filename: "icons.json", owner: owner,
             maximum: maximumBytes, permissions: 0o600
-        ) {
-            snapshot = SidebarIconOverrides.overlaid(iconData, onto: snapshot)
-        }
-        // Optional, like icons: a missing or malformed file shows no process lines, never an error.
-        if let processData = try? CopilotFileAccess.readStableRegular(
+        )
+        let processData = try? CopilotFileAccess.readStableRegular(
             at: observer, filename: "processes.json", owner: owner,
             maximum: maximumBytes, permissions: 0o600
-        ) {
-            snapshot.processes = SidebarProcessObservation.matching(processData, snapshot: snapshot, now: Date())
+        )
+        // Still securely open and validate every file: metadata alone must not preserve revoked access.
+        return try resolve(current: data, icons: iconData, processes: processData, cache: &cache, now: Date())
+    }
+
+    static func resolve(
+        current data: Data, icons iconData: Data?, processes processData: Data?, cache: inout Cache, now: Date
+    ) throws -> SidebarOrchestrationSnapshot {
+        var snapshot = try cache.current.value(for: data)
+        try validate(snapshot, now: now)
+        if let iconData, let icons = try? cache.icons.value(for: iconData),
+           let overlaid = try? icons.applying(to: snapshot) {
+            snapshot = overlaid
+        } else if iconData == nil {
+            cache.icons = .init()
+        }
+        if let processData, let processes = try? cache.processes.value(for: processData) {
+            snapshot.processes = processes.matching(snapshot: snapshot, now: now)
+        } else if processData == nil {
+            cache.processes = .init()
         }
         return snapshot
     }
 
     static func decoder() -> JSONDecoder {
         let decoder = JSONDecoder()
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
         decoder.dateDecodingStrategy = .custom { decoder in
             let value = try decoder.singleValueContainer().decode(String.self)
-            let fractional = ISO8601DateFormatter()
-            fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-            let standard = ISO8601DateFormatter()
-            standard.formatOptions = [.withInternetDateTime]
             guard let date = fractional.date(from: value) ?? standard.date(from: value) else {
                 throw DecodingError.dataCorruptedError(
                     in: try decoder.singleValueContainer(), debugDescription: "Invalid timestamp"
@@ -482,8 +528,9 @@ final class SidebarOrchestrationPolling {
         now: @escaping @Sendable () -> Date = { Date() },
         taskFinished: @escaping @MainActor @Sendable (UInt64) -> Void = { _ in }
     ) {
+        let reader = SidebarOrchestrationReader.Cached()
         self.read = read ?? {
-            try await Task.detached { try SidebarOrchestrationReader.read() }.value
+            try await reader.read()
         }
         self.pause = pause
         self.now = now
@@ -567,7 +614,6 @@ final class SidebarOrchestrationPolling {
                         complete: raw.complete, omittedCount: raw.omittedCount,
                         nodes: nodes, processes: raw.processes
                     )
-                    self.snapshot = self.projected
                     self.retitle(now: self.now())
                     self.availability = SidebarOrchestrationReader.isStale(raw, now: self.now())
                         ? .stale : self.snapshot.complete ? .ready : .partial

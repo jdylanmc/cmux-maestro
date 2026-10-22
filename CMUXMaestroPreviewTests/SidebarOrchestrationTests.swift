@@ -11,6 +11,63 @@ private func publicationArrived(_ stream: AsyncStream<Void>) async -> Bool {
 
 @MainActor
 struct SidebarOrchestrationTests {
+    @Test func unchangedObserverBytesDoNotDecodeAgainAndInvalidInputDoesNotReuseSuccess() throws {
+        var cache = SidebarOrchestrationReader.Decoded<[Int]>()
+        var decodes = 0
+        let decode: (Data) throws -> [Int] = {
+            decodes += 1
+            return try JSONDecoder().decode([Int].self, from: $0)
+        }
+        for _ in 0..<20 {
+            #expect(try cache.value(for: Data("[1]".utf8), decode: decode) == [1])
+        }
+        #expect(decodes == 1)
+        #expect(try cache.value(for: Data("[2]".utf8), decode: decode) == [2])
+        #expect(decodes == 2)
+        for _ in 0..<20 {
+            #expect(throws: (any Error).self) {
+                try cache.value(for: Data("malformed".utf8), decode: decode)
+            }
+        }
+        #expect(decodes == 3)
+        #expect(try cache.value(for: Data("[1]".utf8), decode: decode) == [1])
+        #expect(decodes == 4, "The cache retains one source version, not an unbounded history")
+    }
+
+    @Test func cachedObserverStillValidatesTimeAndRemovesMissingOptionalOverlays() throws {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let root = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Coordinator",
+            workspaceId: UUID(), surfaceId: UUID(), generation: 0, phase: "registered",
+            availability: "active", createdAt: now, updatedAt: now
+        )
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [root]
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(snapshot)
+        let icons = try encoder.encode(SidebarIconOverrides(version: 1, icons: [
+            .init(nodeId: root.id, runId: root.runId, workspaceId: root.workspaceId,
+                  surfaceId: root.surfaceId, iconId: "md-robot")
+        ]))
+        var cache = SidebarOrchestrationReader.Cache()
+        let first = try SidebarOrchestrationReader.resolve(
+            current: data, icons: icons, processes: nil, cache: &cache, now: now
+        )
+        #expect(first.nodes.first?.iconId == "md-robot")
+        let expired = try SidebarOrchestrationReader.resolve(
+            current: data, icons: nil, processes: nil, cache: &cache, now: now.addingTimeInterval(61)
+        )
+        #expect(expired.nodes.first?.iconId == nil)
+        #expect(SidebarOrchestrationReader.isStale(expired, now: now.addingTimeInterval(61)))
+        #expect(throws: CopilotFileError.unsafePath) {
+            try SidebarOrchestrationReader.resolve(
+                current: data, icons: nil, processes: nil, cache: &cache, now: now.addingTimeInterval(-301)
+            )
+        }
+    }
+
     /// The controller's projected phases, read by executing it, must each decode into the typed sidebar vocabulary.
     @Test func controllerProjectedPhasesDecodeExactlyIntoTypedPhases() throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

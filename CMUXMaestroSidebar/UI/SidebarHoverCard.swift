@@ -706,8 +706,13 @@ extension EnvironmentValues {
 }
 
 final class SidebarTitleNativeButton: NSButton {
-    let hosting = NSHostingView(rootView: AnyView(EmptyView()))
-    var labelContent = AnyView(EmptyView())
+    private let labelController = NSHostingController(rootView: AnyView(EmptyView()))
+    var hosting: NSView { labelController.view }
+    var labelContent = AnyView(EmptyView()) {
+        didSet {
+            labelController.rootView = AnyView(labelContent.frame(maxWidth: .infinity, alignment: .leading))
+        }
+    }
     var activate: () -> Void = {}
     var preview = SidebarPreviewInteraction()
     var showActions: (() -> Void)?
@@ -725,6 +730,7 @@ final class SidebarTitleNativeButton: NSButton {
         target = self
         action = #selector(pressTitle)
         focusRingType = .exterior
+        labelController.sizingOptions = [.intrinsicContentSize]
         addSubview(hosting)
     }
     required init?(coder: NSCoder) { nil }
@@ -792,8 +798,10 @@ final class SidebarTitleNativeButton: NSButton {
     }
     func measure(width proposedWidth: CGFloat?) -> CGSize {
         let width = proposedWidth.flatMap { $0.isFinite ? max(0, $0) : nil }
-        hosting.rootView = AnyView(labelContent.frame(width: width, alignment: .leading))
-        let size = hosting.fittingSize
+        // A size proposal must not replace the mounted root or invalidate its layout.
+        let size = width.map {
+            labelController.sizeThatFits(in: CGSize(width: $0, height: .greatestFiniteMagnitude))
+        } ?? hosting.fittingSize
         return CGSize(width: width ?? size.width, height: max(24, size.height))
     }
 }
@@ -840,7 +848,6 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
         button.setAccessibilityCustomActions(actions.isEmpty ? nil : actions)
         button.localFocusID = localFocusID
         if let localFocusID { localFocus?.register(button, id: localFocusID) }
-        _ = button.measure(width: button.bounds.width > 0 ? button.bounds.width : nil)
     }
     func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarTitleNativeButton, context: Context) -> CGSize? {
         nsView.measure(width: proposal.width)

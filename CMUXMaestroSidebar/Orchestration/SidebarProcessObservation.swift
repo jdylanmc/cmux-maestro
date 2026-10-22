@@ -50,11 +50,15 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
 
     /// Entries for exactly the snapshot's node bindings; a malformed file contributes nothing.
     static func matching(_ data: Data, snapshot: SidebarOrchestrationSnapshot, now: Date) -> [UUID: Node] {
-        guard let value = try? SidebarOrchestrationReader.decoder().decode(Self.self, from: data),
-              value.valid(now: now) else { return [:] }
+        guard let value = try? SidebarOrchestrationReader.decoder().decode(Self.self, from: data) else { return [:] }
+        return value.matching(snapshot: snapshot, now: now)
+    }
+
+    func matching(snapshot: SidebarOrchestrationSnapshot, now: Date) -> [UUID: Node] {
+        guard valid(now: now) else { return [:] }
         let bindings = Dictionary(uniqueKeysWithValues: snapshot.nodes.map { ($0.id, $0) })
         var result: [UUID: Node] = [:]
-        for entry in value.nodes {
+        for entry in nodes {
             guard let node = bindings[entry.nodeId], node.copilotSessionId == entry.copilotSessionId,
                   node.generation == entry.generation else { continue }
             result[entry.nodeId] = entry
