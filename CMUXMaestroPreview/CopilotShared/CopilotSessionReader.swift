@@ -760,6 +760,19 @@ actor CopilotSessionReader {
         let file = try CopilotFileAccess.openRegular(at: session, name: "events.jsonl", owner: verifier.uid)
         defer { close(file) }
         let before = try CopilotFileAccess.statFile(file)
+        if tail.stamp == before, tail.offset == before.size, tail.target == nil {
+            guard before == (try CopilotFileAccess.statFile(file)),
+                  before == (try CopilotFileAccess.statEntry(at: session, name: "events.jsonl")) else {
+                throw CopilotFileError.changed
+            }
+            var issues = tail.reducer.issues
+            if !tail.partial.isEmpty || tail.droppingOversizedLine {
+                issues.append(.loadingHistory)
+            } else if tail.reducer.canPublishProjection, tail.lastComplete != nil {
+                tail.lastCompleteAt = now
+            }
+            return (issues, true)
+        }
         var reset = false
         if let previous = tail.stamp {
             reset = !previous.sameFile(as: before) || before.size < previous.size || before.size < tail.offset

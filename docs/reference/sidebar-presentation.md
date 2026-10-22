@@ -71,6 +71,28 @@ binding validation and time-dependent freshness are not cached. The published
 named snapshot changes only when its value changes, not through an intermediate
 unnamed snapshot. There is no new timer, process scan or filesystem grant.
 
+Copilot event tails at a verified unchanged EOF skip event-byte reads and projection
+rebuilding. They still securely open the file and compare descriptor and directory
+entry stamps (identity, size, mode, owner, modification and change times); routing,
+session and process verification still run. A changed file takes the existing
+bounded append/rebuild path. Torn final lines remain incomplete without fast polling.
+Pet frames and status decorations run as render-server animations, not SwiftUI
+timelines; they must not drive continuous hierarchy layout between observations.
+
+For installed CPU acceptance, select the exact extension PID and record the installed
+commit separately, then run this read-only local probe:
+
+```sh
+python3 scripts/measure-sidebar-cpu.py --pid <exact-pid> --output <new-private-directory>
+```
+
+It records 13 `ps` observations over 60 seconds and a five-second stack sample,
+refusing process-start changes. The interval CPU percentage uses CPU TIME delta,
+not the smoothed `ps` percentage. `sample.txt` is private diagnostic evidence and
+may contain local paths: do not upload it. Compare the same sidebar content and
+motion settings before/after an explicitly authorized install. A build, synthetic
+mounted test or sample capture alone does not prove the 0-2% idle CPU target.
+
 Agent icons come from the bundled **Nerd Fonts Symbols 3.5.1** font and its
 pinned glyph-name catalog. No system font installation or uploaded images are
 required. Catalog offers **10,994 drawable names**. Intentionally empty

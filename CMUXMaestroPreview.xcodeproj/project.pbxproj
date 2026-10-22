@@ -70,6 +70,10 @@
 		C0A600000000000000000001 /* SidebarWorktreeGroups.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A600000000000000000002; };
 		C0A600000000000000000003 /* SidebarProjectionViews.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0A600000000000000000004; };
 		C0B290000000000000000001 /* SidebarCollapsedActivityButton.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0B290000000000000000002; };
+		C0307B000000000000000001 /* SidebarPetAnimation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0307B000000000000000011; };
+		C0307B000000000000000002 /* SidebarPetAnimationView.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0307B000000000000000012; };
+		C0307B000000000000000003 /* SidebarStatusAnimation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0307B000000000000000013; };
+		C0307B000000000000000004 /* SidebarStatusAnimationView.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0307B000000000000000014; };
 		C08100000000000000000001 /* AgentSignals.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
 		C08100000000000000000002 /* AgentSignals.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
 		C06100000000000000000001 /* Helper in Embed Helpers */ = {isa = PBXBuildFile; fileRef = C06100000000000000000002; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
@@ -232,6 +236,10 @@
 		C0A600000000000000000002 /* SidebarWorktreeGroups.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarWorktreeGroups.swift; sourceTree = SOURCE_ROOT; };
 		C0A600000000000000000004 /* SidebarProjectionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarProjectionViews.swift; sourceTree = SOURCE_ROOT; };
 		C0B290000000000000000002 /* SidebarCollapsedActivityButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarCollapsedActivityButton.swift; sourceTree = SOURCE_ROOT; };
+		C0307B000000000000000011 /* SidebarPetAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPetAnimation.swift; sourceTree = SOURCE_ROOT; };
+		C0307B000000000000000012 /* SidebarPetAnimationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarPetAnimationView.swift; sourceTree = SOURCE_ROOT; };
+		C0307B000000000000000013 /* SidebarStatusAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarStatusAnimation.swift; sourceTree = SOURCE_ROOT; };
+		C0307B000000000000000014 /* SidebarStatusAnimationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarStatusAnimationView.swift; sourceTree = SOURCE_ROOT; };
 		C08100000000000000000003 /* AgentSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentSignals.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000002 /* CMUXMaestroCopilotHook */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CMUXMaestroCopilotHook; sourceTree = BUILT_PRODUCTS_DIR; };
 		C06100000000000000000011 /* CopilotHookRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotHookRecorder.swift; sourceTree = SOURCE_ROOT; };
@@ -443,6 +451,10 @@
 				C0A600000000000000000002 /* SidebarWorktreeGroups.swift */,
 				C0A600000000000000000004 /* SidebarProjectionViews.swift */,
 				C0B290000000000000000002 /* SidebarCollapsedActivityButton.swift */,
+				C0307B000000000000000011 /* SidebarPetAnimation.swift */,
+				C0307B000000000000000012 /* SidebarPetAnimationView.swift */,
+				C0307B000000000000000013 /* SidebarStatusAnimation.swift */,
+				C0307B000000000000000014 /* SidebarStatusAnimationView.swift */,
 				C08100000000000000000003 /* AgentSignals.swift */,
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				D12700000000000000000002 /* SidebarPreferenceStore.swift */,
@@ -755,6 +767,10 @@
 				C0A600000000000000000001 /* SidebarWorktreeGroups.swift in Test Sources */,
 				C0A600000000000000000003 /* SidebarProjectionViews.swift in Test Sources */,
 				C0B290000000000000000001 /* SidebarCollapsedActivityButton.swift in Test Sources */,
+				C0307B000000000000000001 /* SidebarPetAnimation.swift in Test Sources */,
+				C0307B000000000000000002 /* SidebarPetAnimationView.swift in Test Sources */,
+				C0307B000000000000000003 /* SidebarStatusAnimation.swift in Test Sources */,
+				C0307B000000000000000004 /* SidebarStatusAnimationView.swift in Test Sources */,
 				D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */,
 				C0A200000000000000000001 /* SidebarPetStore.swift in Test Sources */,
 				C0A200000000000000000003 /* SidebarPetViews.swift in Test Sources */,

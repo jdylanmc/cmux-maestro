@@ -21,8 +21,13 @@ struct SidebarPetView: View {
     var body: some View {
         Group {
             if Self.animates(animated, reduceMotion: reduceMotion) {
-                TimelineView(.periodic(from: .now, by: 1.0 / 7.0)) { context in
-                    cell(store.frame(petID: petID, session: session, state: state, index: Int(context.date.timeIntervalSinceReferenceDate * 7)))
+                let frames = (0..<state.frameCount).compactMap {
+                    store.frame(petID: petID, session: session, state: state, index: $0)
+                }
+                if frames.count == state.frameCount {
+                    SidebarPetAnimation(frames: frames)
+                } else {
+                    cell(frames.first)
                 }
             } else {
                 cell(store.frame(petID: petID, session: session, state: state, index: 0))

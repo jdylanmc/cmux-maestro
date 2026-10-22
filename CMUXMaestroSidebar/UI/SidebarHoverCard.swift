@@ -706,14 +706,10 @@ extension EnvironmentValues {
 }
 
 final class SidebarTitleNativeButton: NSButton {
-    private(set) var rootUpdates = 0
-    private(set) var measurements = 0
-    private(set) var layouts = 0
     private let labelController = NSHostingController(rootView: AnyView(EmptyView()))
     var hosting: NSView { labelController.view }
     var labelContent = AnyView(EmptyView()) {
         didSet {
-            rootUpdates += 1
             labelController.rootView = AnyView(labelContent.frame(maxWidth: .infinity, alignment: .leading))
         }
     }
@@ -797,12 +793,10 @@ final class SidebarTitleNativeButton: NSButton {
     }
     override var focusRingMaskBounds: NSRect { bounds }
     override func layout() {
-        layouts += 1
         super.layout()
         hosting.frame = bounds
     }
     func measure(width proposedWidth: CGFloat?) -> CGSize {
-        measurements += 1
         let width = proposedWidth.flatMap { $0.isFinite ? max(0, $0) : nil }
         // A size proposal must not replace the mounted root or invalidate its layout.
         let size = width.map {
