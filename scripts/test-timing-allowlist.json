@@ -1,17 +1,28 @@
 {
   "CMUXMaestroGuideUITests/GuideAcceptanceTests.swift": {
-    "reason": "Existing synthetic timestamps, fixture clocks and timer bounds newly covered by the expanded #276 review guard. Exact legacy occurrences only; not a claim all old timing dependencies are deterministic. New or changed occurrences require review.",
+    "reason": "Native guide acceptance retains its existing 180-second whole-case hang guard and records monotonic stage provenance; not a subsecond speed assertion. Uptime reads are audited in #310. XCTest waits use only the remaining case budget.",
     "statements": {
       "XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: predicate, object: object)], timeout: timeout) == .completed": 1,
       "try Evidence.require(app.wait(for: .runningForeground, timeout: try remaining()), \"Host not foreground\")": 1,
-      "let result = XCTWaiter.wait(for: [closed], timeout: time)": 1
+      "let result = XCTWaiter.wait(for: [closed], timeout: time)": 1,
+      "let started = ProcessInfo.processInfo.systemUptime": 1,
+      "let value = deadline - ProcessInfo.processInfo.systemUptime": 1,
+      "elapsed: ProcessInfo.processInfo.systemUptime - started)": 1,
+      "sourceHead: head, sourceTree: tree, elapsed: ProcessInfo.processInfo.systemUptime - started,": 1,
+      "evidence.elapsed = ProcessInfo.processInfo.systemUptime - started": 1,
+      "if !finalization.terminated && ProcessInfo.processInfo.systemUptime < deadline {": 1,
+      "&& ProcessInfo.processInfo.systemUptime < deadline {": 1,
+      "let time = max(0, deadline - ProcessInfo.processInfo.systemUptime)": 1
     }
   },
   "CMUXMaestroGuideUITests/GuideConsumerReadinessTests.swift": {
-    "reason": "Existing synthetic timestamps, fixture clocks and timer bounds newly covered by the expanded #276 review guard. Exact legacy occurrences only; not a claim all old timing dependencies are deterministic. New or changed occurrences require review.",
+    "reason": "Existing 180-second native consumer whole-case hang guard and diagnostic phase timestamps, audited in #310. No elapsed performance threshold; waits spend only the remaining case budget.",
     "statements": {
       "let result = XCTWaiter.wait(for: [expectation], timeout: try remaining())": 1,
-      "try require(app.wait(for: .runningForeground, timeout: try remaining()), \"Host did not launch foreground.\")": 1
+      "try require(app.wait(for: .runningForeground, timeout: try remaining()), \"Host did not launch foreground.\")": 1,
+      "let started = ProcessInfo.processInfo.systemUptime": 1,
+      "let value = deadline - ProcessInfo.processInfo.systemUptime": 1,
+      "let elapsed = ProcessInfo.processInfo.systemUptime - started": 1
     }
   },
   "CMUXMaestroPreviewTests/AgentSessionSnapshotTests.swift": {
@@ -100,6 +111,7 @@
   "CMUXMaestroPreviewTests/CopilotSetupTests.swift": {
     "reason": "Injected-clock observations, deadline helper and 60-second process readiness/EOF hang guards. Cleanup's shared watchdog is strictly outside these bounds (supervisedWaitLimit + 10 seconds), preserving in-test diagnostics before its non-cooperative-stall backstop. Deliberately delayed synthetic launcher tests retain their startup precondition; no upper wall-time performance assertion.",
     "statements": {
+      "precondition(duration >= .zero)": 1,
       "let initial = ContinuousClock.now": 1,
       "return origin.duration(to: instant)": 1,
       "waitForTimeout: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) },": 1,
@@ -119,11 +131,18 @@
       "while !ready(), ContinuousClock.now < readiness {": 1,
       "try await Task.sleep(for: .milliseconds(10))": 1,
       "until: .now.advanced(by: supervisedWaitLimit)) else {": 1,
-      "until: .now, pollInterval: 0.001": 1,
-      "let started = ContinuousClock.now": 2,
-      "#expect(ContinuousClock.now - started < .seconds(2))": 1,
-      "#expect(ContinuousClock.now - started < .milliseconds(400))": 1,
-      "until: .now.advanced(by: supervisedWaitLimit), pollInterval: 0.001": 1
+      "#expect(clock.elapsed == .milliseconds(50))": 1,
+      "#expect(clock.elapsed == .milliseconds(250))": 1
+    }
+  },
+  "CMUXMaestroPreviewTests/GuideAcceptanceEvidence.swift": {
+    "reason": "Evidence validation preserves the existing 180-second whole-case native hang guard and finite, monotonic producer/consumer ordering. #310 audit: these are provenance and lifetime checks, not subsecond performance claims; changing the native acceptance contract is out of scope.",
+    "statements": {
+      "try Self.require(h.elapsed.isFinite && c.elapsed.isFinite && h.elapsed >= 0 && h.elapsed >= elapsed && c.elapsed >= h.elapsed && c.elapsed < 180, \"Late/nonmonotonic stage\")": 1,
+      "&& c.elapsed >= h.elapsed && c.elapsed < 180, \"Late/nonmonotonic stage\")": 1,
+      "try Self.require(self.elapsed.isFinite && self.elapsed >= completion.elapsed && self.elapsed < 180 && completion.invocation == invocation && completion.producer == producer && completion.elapsed >= elapsed && completion.elapsed < 180 && completion.cleanups.count == names.count * 2, \"Missing/late cleanup evidence\")": 1,
+      "&& completion.elapsed >= elapsed && completion.elapsed < 180": 1,
+      "&& cleanup.elapsed >= 0 && cleanup.elapsed < 180, \"Cleanup/lifetime not preserved\")": 1
     }
   },
   "CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift": {
@@ -204,11 +223,13 @@
     }
   },
   "CMUXMaestroPreviewTests/SidebarHoverTests.swift": {
-    "reason": "Existing #276 statements remain frozen. #307 adds one nonwaiting run-loop pump and a 0.5s observation helper called twice only in inventoried opt-in mounted display-cycle acceptance: no speed assertion or CI settlement promise. The CAAnimation duration assertion checks configured playback, not elapsed time. Required compositor lifecycle tests use explicit state changes, not time. See docs/reference/ci-test-determinism.md.",
+    "reason": "Existing #276 statements remain frozen. #307 adds one nonwaiting run-loop pump and a 0.5s observation helper called twice only in inventoried opt-in mounted display-cycle acceptance: no speed assertion or CI settlement promise. The CAAnimation duration assertion checks configured playback, not elapsed time. Required compositor lifecycle tests use explicit state changes, not time. #310 duration comparisons select explicitly released continuations in HoverPauseGate, not elapsed wall time. See docs/reference/ci-test-determinism.md.",
     "statements": {
       "#expect(sequence.duration == 2.0 / 7 && sequence.repeatCount == .infinity)": 1,
       "_ = RunLoop.current.run(mode: .default, before: .distantPast)": 1,
       "RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.5))": 1,
+      "let due = entries.filter { $0.duration <= duration }": 1,
+      "entries.removeAll { $0.duration <= duration }": 1,
       "let date = Date()": 1,
       "pause: { try await Task.sleep(for: .seconds(60)) }, expiryPause: sidebarFrozenExpiry, now: { date }": 1,
       "read: { .empty }, pause: { try await Task.sleep(for: .seconds(60)) }": 1,
@@ -523,20 +544,13 @@
       "await new Promise(resolve => setTimeout(resolve, 20));": 2,
       "if (mode === \"cancel\") setTimeout(() => process.exit(5), 4000);": 2,
       "assert.ok(Date.now() < deadline, \"synthetic controller did not receive request\");": 1,
-      "assert.ok(Date.now() < deadline, \"synthetic subtree controller did not receive request\");": 1,
-      "const started = Date.now();": 2,
-      "assert.ok(Date.now() - started < 1000);": 1,
-      "const begun = Date.now();": 1,
-      "const drained = f.endGate.drain(5000).then(() => [f.calls.ended.length, Date.now() - begun < 1000]);": 1,
-      "await new Promise(resolve => setTimeout(resolve, 50));": 1,
-      "assert.ok(Date.now() - started >= 90);": 1,
-      "const quick = Date.now();": 1,
-      "assert.ok(Date.now() - quick < 1000);": 1
+      "assert.ok(Date.now() < deadline, \"synthetic subtree controller did not receive request\");": 1
     }
   },
   "scripts/test-delivery-proof.py": {
-    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "reason": "#310 audit: elapsed assertions and duration/timeout comparison use a synthetic counter advanced by mocked probes, never wall time. Existing five-second process-exit hang guards and polling are retained, not performance assertions.",
     "statements": {
+      "if duration >= timeout:": 1,
       "self.assertLessEqual(elapsed, 45.000001, \"all ancestry, source and host work must fit the bounded pass\")": 1,
       "self.assertLess(elapsed, 60, \"adapter deadline must retain response-serialization headroom\")": 1,
       "def sleep(seconds):": 1,

@@ -2167,6 +2167,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         var isQuiescent: (Int32) -> Bool = { LocalCopilotSetupRunner.groupIsQuiescent($0) }
         var reap: (Int32) -> Void = { LocalCopilotSetupRunner.reap($0) }
         var postKillGrace: TimeInterval = LocalCopilotSetupRunner.postKillQuiescenceGrace
+        var now: () -> ContinuousClock.Instant = { ContinuousClock.now }
+        var sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) }
     }
 
     private static func stopGroup(_ pid: Int32, grace: TimeInterval, observation: CopilotSetupObservation? = nil) -> Bool {
@@ -2189,11 +2191,11 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         observation?.begin(.termSignal)
         let termResult = seam.signal(pid, SIGTERM)
         let termError = termResult < 0 ? errno : 0
-        let deadline = ContinuousClock.now.advanced(by: .seconds(grace))
+        let deadline = seam.now().advanced(by: .seconds(grace))
         observation?.note(.termSignal, .init(result: termResult, error: termError, pid: pid, status: SIGTERM))
         observation?.end(.termSignal)
-        while !seam.isQuiescent(pid), ContinuousClock.now < deadline {
-            Thread.sleep(forTimeInterval: 0.01)
+        while !seam.isQuiescent(pid), seam.now() < deadline {
+            seam.sleep(0.01)
         }
         if seam.childUnavailable(pid) { return false }
         observation?.begin(.killSignal)
@@ -2206,7 +2208,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         // caller's SIGTERM grace. Leave the leader unreaped so its process-group anchor
         // stays valid, and report the group as not stopped.
         let stopped = waitForQuiescence(
-            until: .now.advanced(by: .seconds(seam.postKillGrace))
+            until: seam.now().advanced(by: .seconds(seam.postKillGrace)),
+            now: seam.now, sleep: seam.sleep
         ) { seam.isQuiescent(pid) }
         guard stopped else { return false }
         seam.reap(pid)
@@ -2218,11 +2221,13 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
     static func waitForQuiescence(
         until deadline: ContinuousClock.Instant,
         pollInterval: TimeInterval = 0.01,
+        now: () -> ContinuousClock.Instant = { ContinuousClock.now },
+        sleep: (TimeInterval) -> Void = { Thread.sleep(forTimeInterval: $0) },
         isQuiescent: () -> Bool
     ) -> Bool {
         while !isQuiescent() {
-            guard ContinuousClock.now < deadline else { return false }
-            Thread.sleep(forTimeInterval: pollInterval)
+            guard now() < deadline else { return false }
+            sleep(pollInterval)
         }
         return true
     }

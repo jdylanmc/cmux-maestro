@@ -88,6 +88,25 @@ class TimingPolicyTests(unittest.TestCase):
                 self.assertTrue(any("unreviewed" in error for error in errors), errors)
                 self.assertTrue(any("stale/excess" in error for error in errors), errors)
 
+    def test_elapsed_assertions_cannot_hide_behind_multiline_calls_or_aliases(self):
+        for name, text in [
+            ("Tests/Clock.swift", "#expect(ContinuousClock." + "now - started < .milliseconds(400))"),
+            ("Tests/Clock.swift", "#expect(Da" + "te().timeInterval" + "Since(started) < 0.4)"),
+            ("Tests/Clock.swift", "#ex" + "pect(\n elapsed" + " < .milliseconds(400)\n)"),
+            ("Tests/Clock.swift", "XCTAssertLessThan(\n ContinuousClock." + "now - start, .seconds(1)\n)"),
+            ("Tests/Clock.swift", "let start = ProcessInfo.processInfo." + "systemUptime"),
+            ("scripts/test-clock.py", "assert elapsed" + " < 0.4"),
+            ("scripts/test-clock.mjs", "assert.ok(\n elapsed" + " < 400\n);"),
+            ("scripts/test-clock.mjs", "assert.ok(400 > " + "elapsed);"),
+            ("scripts/test-clock.mjs", "assert.ok(Date." + "now() - started < 400);"),
+        ]:
+            with self.subTest(text=text), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                file = root / name
+                file.parent.mkdir()
+                file.write_text(text)
+                self.assertTrue(any("unreviewed" in error for error in timing.violations(root, [name], {})))
+
     def test_shell_command_boundaries_cannot_hide_sleeps(self):
         for form in (
             "PAUSE 0.1",

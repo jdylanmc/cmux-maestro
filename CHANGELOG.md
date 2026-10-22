@@ -273,6 +273,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Setup quiescence and session-end timing tests use controlled clocks and timers
+  instead of runner-speed assertions. The CI timing guard also catches multiline
+  elapsed comparisons and uptime reads (#310).
+
 - Sidebar pets and status cues animate in the render server instead of continuously
   relaying frames through sidebar layout. Unchanged session event files reuse their
   projection without rereading event bytes; identity checks and freshness still run.
