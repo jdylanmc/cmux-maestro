@@ -296,6 +296,9 @@ Notable changes are recorded using Keep a Changelog categories.
   history expiry, future-dated evidence and observation-loss grace still advance
   independently (#321).
 
+- Collapsed managed sessions no longer show a standalone info glyph beneath the
+  row. Retained-work counts and uncertainty remain in the existing status tooltip
+  and accessibility help; child-history evidence stays in the hover card (#322).
 - Setup quiescence and session-end timing tests use controlled clocks and timers
   instead of runner-speed assertions. The CI timing guard also catches multiline
   elapsed comparisons and uptime reads (#310).
