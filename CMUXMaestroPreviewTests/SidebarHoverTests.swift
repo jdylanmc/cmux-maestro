@@ -5,11 +5,109 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test func titleVisualUpdatesDoNotRelayoutTheOuterHierarchy() throws {
+        let phase = IdleLayoutPhase()
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = IdleLayoutHostingView(rootView: VStack {
+            SidebarTitleButton(label: "Synthetic title", hint: "Synthetic", action: {}) {
+                HStack {
+                    IdleLayoutRing(phase: phase)
+                    Text("Synthetic title")
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer()
+        })
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        func flush() {
+            window.layoutIfNeeded()
+            hosting.layoutSubtreeIfNeeded()
+            CATransaction.flush()
+            _ = RunLoop.current.run(mode: .default, before: .distantPast)
+        }
+        for _ in 0..<10 { flush() }
+        let settled = hosting.layouts
+        for index in 1...20 {
+            phase.rotation = Double(index * 12)
+            flush()
+        }
+        print("Title visual-only layouts: \(hosting.layouts - settled)")
+        #expect(hosting.layouts == settled)
+    }
+
+    @Test func mountedProductionSidebarStopsRequestingLayoutWhenUnchanged() async throws {
+        try await withProductionKeyboardSidebar { window, host, _, _, _, _, _ in
+            let hosting = try #require(host as? IdleLayoutHostingView<AnyView>)
+            func flush() {
+                window.layoutIfNeeded()
+                hosting.layoutSubtreeIfNeeded()
+                window.displayIfNeeded()
+                CATransaction.flush()
+                _ = RunLoop.current.run(mode: .default, before: .distantPast)
+            }
+            for _ in 0..<10 { flush(); await Task.yield() }
+            let settled = hosting.layouts
+            for _ in 0..<20 { flush(); await Task.yield() }
+            print("Mounted sidebar layouts: warmup=\(settled), unchanged=\(hosting.layouts - settled)")
+            #expect(hosting.layouts == settled)
+        }
+    }
+
+    @Test func mountedTitleHierarchyStopsRequestingLayoutWhenUnchanged() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 300, height: 120),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let hosting = IdleLayoutHostingView(rootView: VStack {
+            SidebarTitleButton(label: "Synthetic title", hint: "Synthetic", action: {}) {
+                Text("Synthetic title").frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Spacer()
+        })
+        window.contentView = hosting
+        defer { window.contentView = nil; window.close() }
+        func flush() {
+            window.layoutIfNeeded()
+            hosting.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            CATransaction.flush()
+            RunLoop.current.run(until: .distantPast)
+        }
+        for _ in 0..<10 { flush() }
+        let button = try #require(descendants(hosting).compactMap { $0 as? SidebarTitleNativeButton }.first)
+        #expect(button.bounds.width > 0)
+        let settled = hosting.layouts
+        for _ in 0..<20 { flush() }
+        print("Mounted title layouts: warmup=\(settled), unchanged=\(hosting.layouts - settled)")
+        #expect(hosting.layouts == settled, "The mounted title must not schedule its parent for another layout")
+    }
+
     @Test func titleIdealSizeRetainsTheLabelWidth() {
         let button = SidebarTitleNativeButton()
         button.labelContent = AnyView(Text("Activity").frame(width: 64, height: 28))
         #expect(button.measure(width: nil) == CGSize(width: 64, height: 28))
         #expect(button.measure(width: .infinity) == CGSize(width: 64, height: 28))
+    }
+
+    @MainActor
+    private final class IdleLayoutHostingView<Content: View>: NSHostingView<Content> {
+        private(set) var layouts = 0
+        override func layout() {
+            layouts += 1
+            super.layout()
+        }
+    }
+
+    @MainActor
+    @Observable
+    fileprivate final class IdleLayoutPhase {
+        var rotation: Double = 0
+    }
+
+    private struct IdleLayoutRing: View {
+        let phase: IdleLayoutPhase
+        var body: some View { SidebarWorkingRing(rotation: phase.rotation) }
     }
 
     @Test func repeatedTitleMeasurementDoesNotInvalidateTheMountedLabel() {
@@ -107,8 +205,9 @@ struct SidebarHoverTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 600),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
-            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) }))
+        let hosting = IdleLayoutHostingView(rootView: AnyView(SidebarView(model: model, preferences: preferences)
+            .environment(\.sidebarClipboardWrite, { SidebarSessionCopy.copy($0, to: pasteboard) })
+            .environment(\._accessibilityReduceMotion, true)))
         window.contentView = hosting
         defer {
             for anchor in descendants(hosting).compactMap({ $0 as? SidebarHoverAnchorView }) {

@@ -6,6 +6,32 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test func unchangedEventFileDoesNotReadBytesOrRebuildProjection() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let clock = CopilotReaderTestClock()
+        let reader = fixture.reader(clock: { clock.now() })
+        let first = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(first.isComplete && first.sessions.first?.state == .idle)
+        let bytes = await reader.eventReadBytes
+        let builds = await reader.projectionBuilds
+        clock.advance(by: 600)
+        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(unchanged.isComplete && unchanged.sessions.first?.state == .idle)
+        #expect(unchanged.sessions.first?.observedAt == clock.now())
+        #expect(await reader.eventReadBytes == bytes)
+        #expect(await reader.projectionBuilds == builds)
+        #expect(await reader.hasPendingHistory() == false)
+
+        let appended = try copilotTestEvent("assistant.turn_start", data: ["turnId": "new"]) + Data([10])
+        try fixture.append(appended)
+        let changed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(changed.isComplete && changed.sessions.first?.state == .working)
+        #expect(await reader.projectionBuilds == builds + 1)
+        #expect(await reader.eventReadBytes <= bytes + appended.count + 512)
+    }
+
     @MainActor
     @Test func twentyOpenBackgroundChatsRefreshIdleAndReportFailureWithoutChangingBounds() async throws {
         let fixture = try CopilotReaderFixture()

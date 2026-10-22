@@ -73,6 +73,8 @@ actor CopilotSessionReader {
     private var fastDiscoveryCycle = true
     private var sessionNames = CopilotSessionNameCache()
     private var managedNames = CopilotSessionNameCache()
+    private(set) var eventReadBytes = 0
+    private(set) var projectionBuilds = 0
 
     init() {
         roots = { (try CopilotPaths.bindingDirectory(), try CopilotPaths.sessionStateRoot()) }
@@ -762,8 +764,8 @@ actor CopilotSessionReader {
         if let previous = tail.stamp {
             reset = !previous.sameFile(as: before) || before.size < previous.size || before.size < tail.offset
             if !reset && tail.offset > 0 {
-                let prefix = try CopilotFileAccess.read(file, offset: 0, count: tail.prefix.count)
-                let anchor = try CopilotFileAccess.read(
+                let prefix = try readEventBytes(file, offset: 0, count: tail.prefix.count)
+                let anchor = try readEventBytes(
                     file, offset: tail.offset - Int64(tail.anchor.count), count: tail.anchor.count
                 )
                 reset = prefix != tail.prefix || anchor != tail.anchor
@@ -793,7 +795,7 @@ actor CopilotSessionReader {
         while tail.offset < targetSize && remaining > 0 && lines < limits.linesPerSession {
             try Task.checkCancellation()
             let count = min(262_144, remaining, Int(min(Int64(Int.max), targetSize - tail.offset)))
-            let chunk = try CopilotFileAccess.read(file, offset: tail.offset, count: count)
+            let chunk = try readEventBytes(file, offset: tail.offset, count: count)
             guard !chunk.isEmpty else { throw CopilotFileError.changed }
             var consumed = 0
             while consumed < chunk.count && lines < limits.linesPerSession {
@@ -848,11 +850,12 @@ actor CopilotSessionReader {
               after.sameFile(as: try CopilotFileAccess.statEntry(at: session, name: "events.jsonl")) else {
             throw CopilotFileError.changed
         }
-        tail.prefix = try CopilotFileAccess.read(file, offset: 0, count: Int(min(tail.offset, 128)))
-        tail.anchor = try CopilotFileAccess.read(
+        tail.prefix = try readEventBytes(file, offset: 0, count: Int(min(tail.offset, 128)))
+        tail.anchor = try readEventBytes(
             file, offset: max(0, tail.offset - 128), count: Int(min(tail.offset, 128))
         )
         tail.stamp = after
+        projectionBuilds += 1
         let value = tail.reducer.value()
         var issues = tail.reducer.issues
         let reachedBoundary = tail.offset >= targetSize
@@ -874,6 +877,12 @@ actor CopilotSessionReader {
             if tail.offset < after.size { issues.append(.readLimitReached) }
         }
         return (issues, reachedBoundary)
+    }
+
+    private func readEventBytes(_ descriptor: Int32, offset: Int64, count: Int) throws -> Data {
+        let bytes = try CopilotFileAccess.read(descriptor, offset: offset, count: count)
+        eventReadBytes += bytes.count
+        return bytes
     }
 
     private func observation(
