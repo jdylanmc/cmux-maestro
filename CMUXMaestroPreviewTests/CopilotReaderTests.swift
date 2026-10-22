@@ -6,6 +6,113 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test func unchangedBindingIndexDoesNotReopenOrDecodeIdentities() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        for _ in 0..<20 { _ = try fixture.addSession(surface: UUID()) }
+        let reader = fixture.reader()
+        let first = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(first.sessions.count == 1)
+        let reads = await reader.identityReads
+        let builds = await reader.projectionBuilds
+        #expect(reads >= 21)
+        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(unchanged.sessions.first?.state == .idle)
+        #expect(await reader.identityReads == reads)
+        #expect(await reader.projectionBuilds == builds)
+
+        try fixture.writeRecord(fixture.record, atomic: true)
+        let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(refreshed.sessions.first?.state == .idle)
+        #expect(await reader.identityReads == reads + 1)
+    }
+
+    @Test func inPlaceOffSurfaceRerouteWithRestoredModificationTimeIsRediscovered() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let record = fixture.record
+        try fixture.writeRecord(.init(
+            sessionID: record.sessionID, surfaceID: UUID(), launchWorkspaceID: record.launchWorkspaceID,
+            ownerPID: record.ownerPID, ownerStartSeconds: record.ownerStartSeconds,
+            ownerStartMicroseconds: record.ownerStartMicroseconds, recordedAt: record.recordedAt
+        ))
+        let reader = fixture.reader()
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.isEmpty)
+        let reads = await reader.identityReads
+        #expect(await reader.identityCacheCount() == 1)
+        let directory = try CopilotFileAccess.openDirectory(fixture.bindings)
+        defer { close(directory) }
+        let filename = record.sessionID.uuidString.lowercased() + ".json"
+        let beforeDirectory = try CopilotFileAccess.statFile(directory)
+        let before = try CopilotFileAccess.statEntry(at: directory, name: filename)
+        let file = try FileHandle(forWritingTo: fixture.bindings.appendingPathComponent(filename))
+        try file.write(contentsOf: CopilotIdentityJSON.encode(record))
+        try file.close()
+        let modified = timespec(tv_sec: Int(before.modifiedSeconds), tv_nsec: Int(before.modifiedNanoseconds))
+        #expect(utimensat(directory, filename, [modified, modified], 0) == 0)
+        let after = try CopilotFileAccess.statEntry(at: directory, name: filename)
+        #expect(before.sameFile(as: after) && before.size == after.size)
+        #expect(before.modifiedSeconds == after.modifiedSeconds && before.modifiedNanoseconds == after.modifiedNanoseconds)
+        #expect(try CopilotFileAccess.statFile(directory) == beforeDirectory)
+        let rerouted = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(rerouted.sessions.first?.state == .idle)
+        #expect(await reader.identityReads == reads + 1)
+    }
+
+    @Test(arguments: ["permissions", "symlink", "malformed"])
+    func cachedIdentityNeverSurvivesUnsafeFileChange(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let reader = fixture.reader()
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.count == 1)
+        let reads = await reader.identityReads
+        let url = fixture.bindings.appendingPathComponent(fixture.sessionID.uuidString.lowercased() + ".json")
+        switch change {
+        case "permissions":
+            #expect(chmod(url.path, 0o644) == 0)
+        case "symlink":
+            try FileManager.default.removeItem(at: url)
+            try FileManager.default.createSymbolicLink(at: url, withDestinationURL: fixture.events)
+        default:
+            try Data("{}".utf8).write(to: url)
+        }
+        let rejected = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(rejected.sessions.isEmpty)
+        #expect(!rejected.issues.isEmpty)
+        #expect(await reader.identityReads > reads)
+        #expect(await reader.identityCacheCount() == 0)
+        try FileManager.default.removeItem(at: url)
+        try fixture.writeRecord(fixture.record)
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.first?.state == .idle)
+    }
+
+    @Test func decodedIdentityCacheIsBoundedAndPrunesRemovedFiles() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        var files: [URL] = []
+        for _ in 0..<5 {
+            let session = try fixture.addSession(surface: UUID())
+            files.append(fixture.bindings.appendingPathComponent(session.lastPathComponent + ".json"))
+        }
+        let reader = fixture.reader(limits: .init(maximumBindings: 2))
+        for _ in 0..<8 {
+            _ = try await reader.read(surfaceIDs: [fixture.surface])
+            #expect(await reader.identityCacheCount() <= 2)
+        }
+        for file in files { try FileManager.default.removeItem(at: file) }
+        for _ in 0..<8 { _ = try await reader.read(surfaceIDs: [fixture.surface]) }
+        #expect(await reader.identityCacheCount() == 1)
+        let reads = await reader.identityReads
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.first?.state == .idle)
+        #expect(await reader.identityReads == reads)
+        _ = try await reader.read(surfaceIDs: [])
+        #expect(await reader.identityCacheCount() == 0)
+    }
+
     @Test func unchangedEventFileDoesNotReadBytesOrRebuildProjection() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

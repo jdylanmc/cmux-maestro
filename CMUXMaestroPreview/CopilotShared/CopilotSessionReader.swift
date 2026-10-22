@@ -73,8 +73,12 @@ actor CopilotSessionReader {
     private var fastDiscoveryCycle = true
     private var sessionNames = CopilotSessionNameCache()
     private var managedNames = CopilotSessionNameCache()
+    // Bounded decoded routing metadata, not process/session evidence or grants.
+    private var identityCache: [String: Binding] = [:]
+    private var unseenIdentities: Set<String> = []
     private(set) var eventReadBytes = 0
     private(set) var projectionBuilds = 0
+    private(set) var identityReads = 0
 
     init() {
         roots = { (try CopilotPaths.bindingDirectory(), try CopilotPaths.sessionStateRoot()) }
@@ -240,6 +244,7 @@ actor CopilotSessionReader {
                 cycleChanged = false
                 cycleOverflowed = false
                 cycleIssues.removeAll()
+                unseenIdentities = Set(identityCache.keys)
                 fastDiscoveryCycle = lastDiscoveryCycle != stamp
             } else if stamp != discoveryStamp {
                 // Do not repeatedly restart a moving directory at its prefix.
@@ -254,15 +259,13 @@ actor CopilotSessionReader {
         }
     }
 
-    // The cache contains only granted identities and is re-read before ANY
-    // process or transcript access. A cached routing decision is not a grant.
+    // Revalidate routing metadata before ANY process or transcript access.
+    // A decoded cache entry is reusable only with an exact current file stamp.
     private func refreshCachedBindings(_ index: BindingIndex, surfaceIDs: Set<UUID>) throws {
         for id in bindingOrder {
             guard let cached = bindingsByID[id] else { continue }
             do {
-                let (record, stamp) = try CopilotFileAccess.readIdentity(
-                    at: index.descriptor, filename: cached.filename, owner: verifier.uid
-                )
+                let (record, stamp) = try readIdentity(at: index.descriptor, filename: cached.filename)
                 guard surfaceIDs.contains(record.surfaceID) else {
                     bindingsByID.removeValue(forKey: id)
                     recordCycleIssue(.identityChanged)
@@ -289,9 +292,7 @@ actor CopilotSessionReader {
     private func resumeWaitingBinding(_ index: BindingIndex, surfaceIDs: Set<UUID>) throws -> Int {
         guard let waiting = waitingBinding else { return 0 }
         do {
-            let (record, stamp) = try CopilotFileAccess.readIdentity(
-                at: index.descriptor, filename: waiting.filename, owner: verifier.uid
-            )
+            let (record, stamp) = try readIdentity(at: index.descriptor, filename: waiting.filename)
             if !surfaceIDs.contains(record.surfaceID) {
                 waitingBinding = nil
             } else if record.schemaVersion != 1 {
@@ -328,9 +329,7 @@ actor CopilotSessionReader {
                 // Discovery scans only Maestro's bounded, sanitized routing index.
                 // Off-surface records never reach process validation or transcript reads,
                 // and their identifiers/counts are not included in the snapshot.
-                let (record, stamp) = try CopilotFileAccess.readIdentity(
-                    at: index.descriptor, filename: name, owner: verifier.uid
-                )
+                let (record, stamp) = try readIdentity(at: index.descriptor, filename: name)
                 guard surfaceIDs.contains(record.surfaceID) else { continue }
                 guard record.schemaVersion == 1 else { recordCycleIssue(.unsupportedFormat); continue }
                 let entry = Binding(record: record, stamp: stamp, filename: name)
@@ -669,10 +668,14 @@ actor CopilotSessionReader {
         (bindingsByID.count, tails.count, waitingBinding == nil ? 0 : 1, publishedCohort.count)
     }
 
+    func identityCacheCount() -> Int { identityCache.count }
+
     private func resetDiscovery() {
         discovery?.closeStream()
         discovery = nil
         discoveryStamp = nil
+        identityCache.removeAll()
+        unseenIdentities.removeAll()
         bindingsByID.removeAll()
         bindingOrder.removeAll()
         tails.removeAll()
@@ -694,6 +697,8 @@ actor CopilotSessionReader {
     private func finishDiscoveryCycle() {
         if discovery?.finished == true && cohortFinished && !cycleChanged {
             lastDiscoveryCycle = discoveryStamp
+            for filename in unseenIdentities { identityCache.removeValue(forKey: filename) }
+            unseenIdentities.removeAll()
         }
     }
 
@@ -748,10 +753,33 @@ actor CopilotSessionReader {
         if stamp == (try CopilotFileAccess.statEntry(at: directory, name: filename)) { return true }
         // Hooks atomically refresh recordedAt without changing ownership. Re-read
         // the secure record rather than treating every inode change as a new owner.
-        let (refreshed, _) = try CopilotFileAccess.readIdentity(
-            at: directory, filename: filename, owner: verifier.uid
-        )
+        let (refreshed, _) = try readIdentity(at: directory, filename: filename)
         return Self.sameBindingIdentity(record, refreshed)
+    }
+
+    private func readIdentity(
+        at directory: Int32, filename: String
+    ) throws -> (CopilotIdentityRecord, CopilotFileStamp) {
+        do {
+            try Task.checkCancellation()
+            unseenIdentities.remove(filename)
+            let current = try CopilotFileAccess.statEntry(at: directory, name: filename)
+            if let cached = identityCache[filename], cached.stamp == current {
+                return (cached.record, cached.stamp)
+            }
+            identityCache.removeValue(forKey: filename)
+            identityReads += 1
+            let (record, stamp) = try CopilotFileAccess.readIdentity(
+                at: directory, filename: filename, owner: verifier.uid
+            )
+            if identityCache.count < limits.maximumBindings {
+                identityCache[filename] = Binding(record: record, stamp: stamp, filename: filename)
+            }
+            return (record, stamp)
+        } catch {
+            identityCache.removeValue(forKey: filename)
+            throw error
+        }
     }
 
     private func advance(
