@@ -5,6 +5,19 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test func repeatedTitleMeasurementDoesNotInvalidateTheMountedLabel() {
+        let button = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
+        button.labelContent = AnyView(Text("Unchanged title").frame(maxWidth: .infinity, alignment: .leading))
+        _ = button.measure(width: 200)
+        button.hosting.layoutSubtreeIfNeeded()
+        button.hosting.needsLayout = false
+
+        for _ in 0..<20 {
+            _ = button.measure(width: 200)
+            #expect(!button.hosting.needsLayout, "Measuring unchanged content must not schedule another layout")
+        }
+    }
+
     private func descendants(_ view: NSView) -> [NSView] {
         view.subviews.flatMap { [$0] + descendants($0) }
     }
