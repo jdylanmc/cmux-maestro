@@ -47,6 +47,7 @@ enum SidebarAgentHoverContent {
                     var result = line
                     result.copyableSessionID = nil
                     result.copyableValue = nil
+                    result.linkedValue = nil
                     return result
                 }
             }
