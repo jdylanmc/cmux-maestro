@@ -192,6 +192,17 @@ Beats liveness, born-root naming and external tag refresh consume a separate
 bounded latest-evidence stream, not SwiftUI presentation changes. An unchanged
 render therefore cannot strand a dependent consumer with expired timestamp copies.
 
+Managed presentation has its own one-shot deadline, independent of Copilot reads
+or notifications. It covers the earliest node/envelope and Git freshness boundary
+(including future evidence entering the allowed window), and process observation
+staleness/unavailability at 60/300 seconds. At the boundary it invalidates snapshot
+presentation without changing evidence; branch summaries and hover actions
+therefore recompute even when the snapshot bytes are identical or Copilot has no
+sessions. Unchanged polls retain the deadline instead of postponing it, and a poll
+that overtakes a due timer preserves its redraw. Visibility, topology, connection
+changes and read failures cancel obsolete deadlines. No periodic view timer is
+introduced.
+
 Schema version stays 1. Optional observation fields preserve process liveness,
 observation time, appearance, child kinds/models/outcome-event identities, issues
 and completeness. Absent completeness field means unknown, not complete.
