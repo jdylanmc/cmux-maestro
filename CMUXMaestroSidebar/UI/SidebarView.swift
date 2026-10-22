@@ -2038,9 +2038,9 @@ private struct WorkspaceRow: View {
             }
             .environment(\.sidebarReorderSource, reorder.dragSource)
             .sidebarRowActions(title: "workspace \(title)", groups: actions)
-            .padding(.vertical, 5)
+            .padding(.vertical, expanded ? 5 : 2)
             .overlay(alignment: .bottom) { Divider() }
-            .padding(.bottom, 5)
+            .padding(.bottom, expanded ? 5 : 0)
             if renameHintShown {
                 Label("Press ⇧⌘R to rename this workspace", systemImage: "keyboard")
                     .sidebarFont(.caption2).foregroundStyle(.secondary)
@@ -2082,7 +2082,7 @@ private struct WorkspaceRow: View {
             }
         }
         .sidebarReorderDrop(reorder)
-        .padding(.bottom, density.spacing(8))
+        .padding(.bottom, expanded ? density.spacing(8) : 0)
         .onChange(of: title) { renameHintShown = false }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("workspace-\(workspace.id.uuidString)")

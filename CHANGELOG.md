@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Collapsed workspace headers stack compactly without margins reserved for
+  expanded content. Dividers, control targets and expanded layout stay unchanged
+  in both densities (#319).
 - Agent hover process lists omit exited PIDs, including from overflow counts.
   Current and detached processes remain visible; ended sessions and uncertain
   observations retain their status labels (#304).
