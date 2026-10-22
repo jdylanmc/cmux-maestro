@@ -10,6 +10,7 @@ struct SidebarCopyableValue: View {
     let clipboardValue: String
     let copy: (String) -> Bool
     var focusChanged: (Bool) -> Void = { _ in }
+    var linkedValue: AttributedString? = nil
     @State private var labelHovered = false
     @State private var actionFocused = false
     @State private var copied: Bool?
@@ -44,8 +45,24 @@ struct SidebarCopyableValue: View {
             .background(SidebarCopyHoverAnchor(
                 isHovered: $labelHovered, actionWidth: SidebarCopyableValueLayout.actionSize
             ))
-            Text(value).textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            if let linkedValue {
+                Text(linkedValue).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    // Selectable text's native AX links do not implement Press; expose actionable Links.
+                    .accessibilityRepresentation {
+                        ForEach(Array(linkedValue.runs.enumerated()), id: \.offset) { _, run in
+                            let label = String(linkedValue[run.range].characters)
+                            if let url = run.link {
+                                Link(label, destination: url)
+                            } else {
+                                Text(label)
+                            }
+                        }
+                    }
+            } else {
+                Text(value).textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if copied == false {
                 SidebarCopyFeedback(text: feedback)
                     .fixedSize(horizontal: false, vertical: true)

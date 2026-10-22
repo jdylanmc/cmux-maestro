@@ -1,6 +1,20 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "ports.title" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "المنافذ" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Ports" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Ports" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Puertos" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Ports" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "ポート" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "포트" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "端口" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "連接埠" } }
+      }
+    },
     "color.custom" : {
       "extractionState" : "manual",
       "localizations" : {

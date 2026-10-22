@@ -32,12 +32,13 @@ struct SidebarHoverCard: View {
                 } else if let clipboardValue = line.copyableValue {
                     SidebarCopyableValue(
                         value: line.value, label: line.title, clipboardValue: clipboardValue,
-                        copy: copyValue, focusChanged: copyActionFocusChanged
+                        copy: copyValue, focusChanged: copyActionFocusChanged, linkedValue: line.linkedValue
                     )
+                    .help(line.help ?? "")
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(line.title).foregroundStyle(.secondary)
-                        Text(line.value).textSelection(.enabled)
+                        Text(line.linkedValue ?? AttributedString(line.value)).textSelection(.enabled)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .font(.caption)

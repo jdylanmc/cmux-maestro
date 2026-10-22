@@ -3202,7 +3202,7 @@ struct SidebarMetadataDetails: View {
             ForEach(lines) { line in
                 VStack(alignment: .leading, spacing: 1) {
                     Text(line.title).foregroundStyle(.secondary)
-                    Text(line.value).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                    Text(line.linkedValue ?? AttributedString(line.value)).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                 }
                 .accessibilityElement(children: .combine)
                 .help(line.help ?? "")
@@ -3225,8 +3225,10 @@ private struct SidebarSessionDetail: View {
     var body: some View {
         if let clipboardValue = line.copyableValue {
             SidebarCopyableValue(
-                value: line.value, label: line.title, clipboardValue: clipboardValue, copy: copyValue
+                value: line.value, label: line.title, clipboardValue: clipboardValue, copy: copyValue,
+                linkedValue: line.linkedValue
             )
+            .help(line.help ?? "")
         }
     }
 }

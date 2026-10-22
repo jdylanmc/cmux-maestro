@@ -44,6 +44,7 @@ struct SidebarDetailLine: Equatable, Identifiable {
     var copyableValue: String? = nil
     var help: String? = nil
     var gitChanges: SidebarGitChanges? = nil
+    var linkedValue: AttributedString? = nil
     /// Lines that may share a title (one per process or listener) carry their own identity.
     var lineID: String? = nil
     var id: String { lineID ?? title }

@@ -12,6 +12,21 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
 
         /// Exactly as bound: `127.0.0.1:5173`, `[::1]:5173`, `*:3000`. Never a URL.
         var endpoint: String { "\(address):\(port)" }
+
+        /// An explicit browser attempt, not evidence that this TCP listener speaks HTTP.
+        var browserURL: URL? {
+            guard SidebarProcessObservation.valid(self) else { return nil }
+            let host: String
+            switch address {
+            case "*", "0.0.0.0", "127.0.0.1": host = "localhost"
+            case "[::]": host = "[::1]"
+            default:
+                // Preserve specific binds, including 127.0.0.2; avoid URL parsers' octal IPv4 notation.
+                host = address.hasPrefix("[") ? address
+                    : address.split(separator: ".").compactMap { Int($0).map(String.init) }.joined(separator: ".")
+            }
+            return URL(string: "http://\(host):\(port)")
+        }
     }
 
     struct Process: Codable, Equatable, Sendable {
@@ -131,7 +146,7 @@ nonisolated struct SidebarProcessObservation: Codable, Equatable, Sendable {
 enum SidebarProcessPresentation {
     static let title = "Processes"
     static let helpersTitle = "Copilot helpers"
-    static let listenersTitle = "Listening"
+    static let listenersTitle = String(localized: "ports.title", defaultValue: "Ports")
     static let staleInterval: TimeInterval = 60
     static let unavailableInterval: TimeInterval = 300
     static let maximumLines = 8
@@ -175,24 +190,56 @@ enum SidebarProcessPresentation {
             copyableValue: canCopy && !pids.isEmpty ? pids.joined(separator: "\n") : nil
         )]
         if helpers > 0 { lines.append(.init(title: helpersTitle, value: "\(helpers)")) }
-        let listeners = owned.flatMap { process in process.listeners.map { (process, $0) } }
-        // Unprobed processes, helpers included, may listen: unknown is never shown as none.
-        if listeners.isEmpty, entry.state == "owned-current", !stale, entry.omittedCount == 0,
-           (entry.omittedHelperCount ?? 0) == 0 {
-            lines.append(.init(title: listenersTitle, value: "None"))
-        }
-        for (process, listener) in listeners.prefix(maximumLines) {
-            let scope = ["loopback": "loopback", "any": "all interfaces"][listener.scope] ?? "network"
-            lines.append(.init(
-                title: "\(listenersTitle) (\(scope))",
-                value: "\(listener.endpoint) · \(listener.protocol.uppercased()) · \(process.name) \(process.pid)",
-                copyableValue: canCopy ? listener.endpoint : nil,
-                lineID: "listener-\(process.pid)-\(process.startMicros)-\(listener.endpoint)"
-            ))
-        }
-        if listeners.count > maximumLines {
-            lines.append(.init(title: "More listeners", value: "\(listeners.count - maximumLines)"))
-        }
+        lines.append(portsLine(entry, owned: owned, stale: stale, canCopy: canCopy))
         return lines
+    }
+
+    private static func portsLine(
+        _ entry: SidebarProcessObservation.Node, owned: [SidebarProcessObservation.Process],
+        stale: Bool, canCopy: Bool
+    ) -> SidebarDetailLine {
+        var labels: [String] = []
+        var linked = AttributedString()
+        var endpoints: [String] = []
+        var descriptions: [String] = []
+        var count = 0
+        let incomplete = entry.state == "scan-incomplete" || entry.omittedCount > 0
+            || (entry.omittedHelperCount ?? 0) > 0
+
+        func append(_ label: String, url: URL? = nil) {
+            if !labels.isEmpty { linked += AttributedString("; ") }
+            labels.append(label)
+            var part = AttributedString(label)
+            part.link = url
+            linked += part
+        }
+        if entry.state == "exited" { append("Session ended") }
+        if incomplete { append("Scan incomplete") }
+        if stale { append("Stale") }
+        for process in owned {
+            var seen: Set<Int> = []
+            for listener in process.listeners where seen.insert(listener.port).inserted {
+                count += 1
+                guard count <= maximumLines else { continue }
+                let binds = process.listeners.filter { $0.port == listener.port }
+                let nonLoopback = binds.filter { $0.scope != "loopback" }
+                // One port per exact process; all distinct network binds remain visible.
+                let addresses = nonLoopback.map { $0.scope == "any" ? "*" : $0.address }
+                let unique = addresses.reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+                let prefix = unique.isEmpty ? "" : unique.joined(separator: ",")
+                let label = "\(prefix):\(listener.port) (\(process.name))"
+                append(label, url: canCopy ? (binds.first { $0.scope == "any" } ?? listener).browserURL : nil)
+                endpoints += binds.map(\.endpoint)
+                descriptions.append("\(binds.map(\.endpoint).joined(separator: ", ")) · TCP · \(process.name) \(process.pid)")
+            }
+        }
+        if count > maximumLines { append("+\(count - maximumLines)") }
+        if labels.isEmpty { append("None") }
+        return .init(
+            title: listenersTitle, value: labels.joined(separator: "; "),
+            copyableValue: canCopy && !endpoints.isEmpty ? endpoints.joined(separator: "\n") : nil,
+            help: descriptions.isEmpty ? nil : descriptions.joined(separator: "\n"),
+            linkedValue: canCopy && !endpoints.isEmpty ? linked : nil
+        )
     }
 }
