@@ -553,18 +553,76 @@ struct SidebarMotionTests {
         }
     }
 
+    @Test func unchangedNativeUpdatesPreserveAttachedAnimationPhase() throws {
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let petID = try installMotionPet(in: stores)
+        let frames = try (0..<SidebarPetState.idle.frameCount).map {
+            try #require(stores.pets.frame(petID: petID, session: nil, state: .idle, index: $0))
+        }
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 160, height: 40),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let root = NSView(frame: window.frame)
+        root.wantsLayer = true
+        window.contentView = root
+        defer { window.contentView = nil; window.close() }
+        let pet = SidebarPetAnimationView(frame: CGRect(x: 0, y: 0, width: 14, height: 16))
+        root.addSubview(pet)
+        pet.setFrames(frames)
+        let status = SidebarStatusAnimationView(frame: CGRect(x: 20, y: 0, width: 12, height: 14))
+        root.addSubview(status)
+        for kind in [SidebarStatusAnimationView.Kind.working, .question, .background] {
+            status.configure(kind)
+            for view in [pet, status] {
+                view.layoutSubtreeIfNeeded()
+                let backing = try #require(view.layer)
+                #expect(view.superview === root && view.window === window)
+                let animated = (backing.sublayers ?? []).filter { !($0.animationKeys() ?? []).isEmpty }
+                #expect(!animated.isEmpty)
+                for layer in animated {
+                    #expect(layer.superlayer === backing && !layer.isHidden && layer.speed == 1 && layer.opacity > 0)
+                    for key in layer.animationKeys() ?? [] {
+                        let animation = try #require(layer.animation(forKey: key)?.copy() as? CAAnimation)
+                        animation.beginTime = 10
+                        animation.timeOffset = 0.25
+                        layer.add(animation, forKey: key)
+                        for _ in 0..<3 {
+                            status.configure(kind)
+                            pet.setFrames(frames)
+                            view.needsLayout = true
+                            view.layoutSubtreeIfNeeded()
+                        }
+                        let retained = try #require(layer.animation(forKey: key))
+                        #expect(retained.beginTime == 10 && retained.timeOffset == 0.25,
+                                "Unchanged updates/layout must not restart or replace a running animation")
+                        #expect(retained.repeatCount == .infinity && retained.speed == 1)
+                    }
+                }
+            }
+        }
+    }
+
     @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
     func nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane() async throws {
         let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/layout-validation/offscreen")
+            .appendingPathComponent(".build/layout-validation/presentation")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        for (name, reduceMotion, needsInput) in [
-            ("working", false, false), ("reduced-motion", true, false), ("needs-input", false, true),
-            ("needs-input-reduced-motion", true, true)
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let petID = try installMotionPet(in: stores)
+        for (name, reduceMotion, needsInput, isPet) in [
+            ("working", false, false, false), ("reduced-motion", true, false, false),
+            ("needs-input", false, true, false), ("needs-input-reduced-motion", true, true, false),
+            ("idle-pet", false, false, true), ("idle-pet-reduced-motion", true, false, true)
         ] {
             let host = NSHostingView(rootView:
                 HStack {
-                    SidebarStateBadge(visual: SidebarPresentation.state(.working), needsInput: needsInput)
+                    if isPet {
+                        SidebarPetView(store: stores.pets, petID: petID, state: .idle, width: 14)
+                    } else {
+                        SidebarStateBadge(visual: SidebarPresentation.state(.working), needsInput: needsInput)
+                    }
                     Text("Synthetic status").font(.caption)
                     Spacer()
                 }
@@ -577,42 +635,98 @@ struct SidebarMotionTests {
             let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 280, height: 40),
                                   styleMask: .borderless, backing: .buffered, defer: false)
             window.isReleasedWhenClosed = false
+            window.hasShadow = false
             window.appearance = NSAppearance(named: .aqua)
             window.contentView = host
             defer { window.contentView = nil; window.close() }
+            window.orderFront(nil)
             host.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            CATransaction.flush()
             try await Task.sleep(for: .milliseconds(40))
-            let first = try capture(host, to: folder.appendingPathComponent("polish-\(name)-frame0.png"))
+            let firstValues = try presentationValues(in: host)
+            let first = try capture(window, to: folder.appendingPathComponent("polish-\(name)-frame0.png"))
             try await Task.sleep(for: .milliseconds(250))
-            host.layoutSubtreeIfNeeded()
-            let second = try capture(host, to: folder.appendingPathComponent("polish-\(name)-frame1.png"))
-            #expect(!window.isVisible)
+            let secondValues = try presentationValues(in: host)
+            let second = try capture(window, to: folder.appendingPathComponent("polish-\(name)-frame1.png"))
+            #expect(window.isVisible)
             let left = differences(first, second, columns: 0..<40)
             let rest = differences(first, second, columns: 40..<first.pixelsWide)
             #expect(rest == 0, "No row shimmer or text motion: \(name)")
-            if name == "working" || name == "needs-input" {
+            if !reduceMotion {
                 #expect(left > 0, "The native status badge animates inside its lane while hosted: \(name)")
+                #expect(!firstValues.isEmpty && firstValues != secondValues,
+                        "Actual windowed presentation properties must advance: \(name)")
             } else {
                 #expect(left == 0, "Static negative control: \(name)")
+                #expect(firstValues.isEmpty && secondValues.isEmpty)
             }
-            print("P57 native motion \(name): changedStatusPixels=\(left), changedOtherPixels=\(rest)")
+            print("Native presentation motion \(name): changedStatusPixels=\(left), changedOtherPixels=\(rest), "
+                  + "values=\(firstValues) -> \(secondValues)")
         }
     }
 
-    private func capture(_ view: NSView, to file: URL) throws -> NSBitmapImageRep {
-        view.layoutSubtreeIfNeeded()
+    private func installMotionPet(in stores: SidebarStoreFixture) throws -> String {
+        let context = try #require(CGContext(
+            data: nil, width: 768, height: 936, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        for column in 0..<8 {
+            context.setFillColor(NSColor(srgbRed: CGFloat(column + 1) / 8, green: 0.2, blue: 0.5, alpha: 1).cgColor)
+            context.fill(CGRect(x: column * 96, y: 0, width: 96, height: 936))
+        }
+        let bitmap = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
+        let file = stores.root.appendingPathComponent("synthetic-motion-pet.png")
+        try FileManager.default.createDirectory(at: stores.root, withIntermediateDirectories: true)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: file)
+        return try #require(stores.pets.upload(from: file))
+    }
+
+    private func presentationValues(in view: NSView) throws -> [Double] {
+        func descendants(_ view: NSView) -> [NSView] { view.subviews.flatMap { [$0] + descendants($0) } }
+        var values: [Double] = []
+        for native in descendants(view) where native is SidebarStatusAnimationView || native is SidebarPetAnimationView {
+            #expect(native.window === view.window && !native.isHiddenOrHasHiddenAncestor)
+            var ancestor = native.layer
+            while let current = ancestor, current !== view.layer { ancestor = current.superlayer }
+            try #require(ancestor != nil, "Native animations must be attached to the window's rendered layer tree")
+            for layer in native.layer?.sublayers ?? [] {
+                for key in layer.animationKeys() ?? [] {
+                    let animation = try #require(layer.animation(forKey: key) as? CAPropertyAnimation)
+                    let presentation = try #require(layer.presentation())
+                    switch animation.keyPath {
+                    case "transform.rotation.z": values.append(presentation.transform.m11)
+                    case "shadowOpacity": values.append(Double(presentation.shadowOpacity))
+                    case "contents":
+                        let contents = try #require(presentation.contents)
+                        let sequence = try #require(animation as? CAKeyframeAnimation)
+                        let index = try #require(sequence.values?.firstIndex {
+                            ($0 as AnyObject) === (contents as AnyObject)
+                        }, "The displayed pet frame must belong to its idle sequence")
+                        values.append(Double(index))
+                    default: Issue.record("Unexpected native animation path: \(animation.keyPath ?? "nil")")
+                    }
+                }
+            }
+        }
+        return values
+    }
+
+    private func capture(_ window: NSWindow, to file: URL) throws -> NSBitmapImageRep {
+        let view = try #require(window.contentView)
+        try #require(window.isVisible && window.occlusionState.contains(.visible) && view.window === window,
+                     "Animation acceptance needs a real ordered window, not an offscreen cache")
         try #require(view.bounds == NSRect(x: 0, y: 0, width: 280, height: 40),
                      "Both native snapshots must use the same logical viewport, not a transient intrinsic height")
-        let before = view.bounds
-        let bitmap = try #require(NSBitmapImageRep(
-            bitmapDataPlanes: nil, pixelsWide: 560, pixelsHigh: 80,
-            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
-        ))
-        bitmap.size = view.bounds.size
-        view.cacheDisplay(in: view.bounds, to: bitmap)
-        try #require(view.bounds == before && bitmap.size == before.size)
-        print("P57 capture \(file.lastPathComponent): before=\(before), after=\(view.bounds), bitmapSize=\(bitmap.size)")
+        // cacheDisplay renders model state and cannot observe render-server animations.
+        // Only this synthetic window's live presentation tree is rendered, never the desktop.
+        let presentation = try #require(view.layer?.presentation())
+        let context = try #require(CGContext(
+            data: nil, width: 560, height: 80, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.scaleBy(x: 2, y: 2)
+        presentation.render(in: context)
+        let bitmap = NSBitmapImageRep(cgImage: try #require(context.makeImage()))
+        try #require(bitmap.pixelsWide == 560 && bitmap.pixelsHigh == 80)
         try #require(bitmap.representation(using: .png, properties: [:])).write(to: file)
         return bitmap
     }

@@ -1,7 +1,7 @@
 {
   "SidebarHoverTests/mountedProductionSidebarStopsRequestingLayoutWhenUnchanged(visualActivity:)": "Real native display-cycle observation with synthetic mounted SidebarView, motion enabled and polls frozen. Compositor frame/state and hide/detach lifecycle checks remain required.",
   "SidebarRowGroupTests/hoveringAnyRowHighlightsTheWholeGroup(_:)": "Native hosted subview discovery and hover pixels; groupHoverActionRules stays required.",
-  "SidebarMotionTests/nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane()": "Wall-clock native animation/pixel sampling; deterministic phase and reduced-motion controls stay required.",
+  "SidebarMotionTests/nativeMotionAndStaticNegativeControlsStayInsideTheStatusLane()": "On-screen synthetic window: live presentation-layer properties/pixels for working, input and idle pet animation, with exact static/Reduce Motion controls. No desktop capture. Deterministic attachment, unchanged-update phase retention and Reduce Motion controls stay required.",
   "SidebarLayoutRenderingTests/activeWindowFooterLeavesUsableOutlineAtShortAndNarrowSizes()": "Native footer clearance and OCR depend on venue; deterministic layout/state and exact title-oracle controls stay required.",
   "SidebarInternalTaskRenderingTests/review002DisplayedDismissControlHandlesHiddenCompletedChild(_:_:)": "Hosted accessibility press and asynchronous projection; exact dismissal-identity and retention tests stay required.",
   "SidebarBeatIndicatorTests/formDraftSurvivesAScopeChangeAndOffersNoShowAll()": "Hosted text discovery; formHasNoShowAllAndKeepsItsDraftOnScopeChange remains the deterministic behavioral guarantee."
