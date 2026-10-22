@@ -59,6 +59,14 @@ struct SidebarProcessObservationTests {
         SidebarProcessPresentation.lines(snapshot(data).processes[nodeID], now: date ?? now)
     }
 
+    @Test func portsShareOneWrappingField() {
+        let result = lines(file())
+        #expect(result.filter { $0.title == "Ports" }.map(\.value) == [
+            ":5173 (python3.12); *:3000 (python3.12); 192.168.1.20:8080 (python3.12); :9000 (node)"
+        ])
+        #expect(!result.contains { $0.title.hasPrefix("Listening") || $0.title == "More listeners" })
+    }
+
     @Test func ownedProcessesListenersAndHelpersAreLabelledWithCopyablePIDsAndEndpoints() throws {
         let result = lines(file())
         let processes = try #require(result.first)
