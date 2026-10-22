@@ -275,7 +275,8 @@ struct SidebarStateBadge: View {
             }
         }
         .foregroundStyle(needsInput ? SidebarQuestionGlow.lightBlue : visual.tone.color)
-        .frame(width: 12, height: 14)
+        .frame(height: 14)
+        .sidebarTrailingIconSlot()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
         .help(detail ?? SidebarPresentation.statusDescription(visual, needsInput: needsInput))
@@ -2501,7 +2502,9 @@ struct SidebarWorkspaceTaskEye: View {
         } label: {
             Image(systemName: visible ? "eye" : "eye.slash")
                 .font(.system(size: 11))
-                .frame(width: 24, height: 24)
+                .sidebarTrailingIconSlot()
+                // Preserve the control's hit area; only the glyph moves to the status column.
+                .frame(width: 24, height: 24, alignment: .trailing)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)

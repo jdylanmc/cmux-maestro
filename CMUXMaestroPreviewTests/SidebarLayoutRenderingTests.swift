@@ -152,7 +152,7 @@ struct SidebarLayoutRenderingTests {
                 var centers: [CGFloat] = []
                 for row in 0..<3 {
                     var columns: [Int] = []
-                    for x in (width - 52) * 2..<(width - 26) * 2 {
+                    for x in (width - 52) * 2..<(width - 24) * 2 {
                         for y in (row * 32 + 8) * 2..<(row * 32 + 24) * 2 {
                             let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
                             if max(color.redComponent, color.greenComponent, color.blueComponent) < 0.7 {
