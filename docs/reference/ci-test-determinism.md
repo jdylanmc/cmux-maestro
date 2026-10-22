@@ -100,6 +100,27 @@ Required tests separately cover compositor frame/state changes, hide/detach clea
 Reduce Motion and stat-only unchanged event-file reads. A passing offscreen probe
 does not establish the installed ExtensionKit process's CPU use.
 
+The #316 native-motion probe orders a small synthetic window without activating
+the app. It renders that window's live **presentation** layer tree into local
+PNGs and checks advancing rotation/glow/pet-frame properties. `cacheDisplay`
+of a hidden window only records model state and cannot observe Core Animation
+motion. Positive pixel changes remain confined to the status/pet lane; text
+and all Reduce Motion controls must remain exactly unchanged in every sample.
+Three fixed samples, separated by 250 ms then 370 ms after initial setup, avoid
+relying on one pair that can alias a rotation or straddle a pulse peak. Any
+pairwise lane/property difference proves motion; no elapsed time is asserted
+and no failed test is retried. Actual native scheduling remains venue-dependent.
+The idle pet uses
+a synthetic six-frame sequence through the production pet view/store.
+Required tests separately check attached animation configuration and preservation
+of phase across unchanged updates/layout, without advancing wall time.
+This explicitly on-screen, opt-in exception does not change the offscreen
+critical-text oracles in ADR 0019. It records no desktop or other application's
+content and requires no screen-recording grant. Presentation-tree rendering is
+not a WindowServer screenshot, installed sidebar acceptance, or CPU evidence.
+Direct ScreenCaptureKit capture additionally requires human-granted permission;
+its absence must not be reported as successful compositor capture.
+
 Run specific acceptance methods locally without changing global preferences:
 
 ```sh

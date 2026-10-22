@@ -299,7 +299,7 @@
     }
   },
   "CMUXMaestroPreviewTests/SidebarMotionTests.swift": {
-    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "reason": "Existing synthetic fixture synchronization/deadline statements frozen by #276. #316's explicit local-only native motion acceptance adds one third sample after 370 ms to avoid a single pair aliasing a rotation or pulse peak; all static controls stay exact, with no elapsed-time assertion or retry. See docs/reference/ci-test-determinism.md for venue limits.",
     "statements": {
       "let now = Date()": 3,
       "pause: { try await Task.sleep(for: .milliseconds(10)) })": 2,
@@ -312,7 +312,8 @@
       "private let base = Date()": 1,
       "let now = clock?.nextObservationTime() ?? Date()": 1,
       "try await Task.sleep(for: .milliseconds(40))": 1,
-      "try await Task.sleep(for: .milliseconds(250))": 1
+      "try await Task.sleep(for: .milliseconds(250))": 1,
+      "try await Task.sleep(for: .milliseconds(370))": 1
     }
   },
   "CMUXMaestroPreviewTests/SidebarMultiWindowTests.swift": {
