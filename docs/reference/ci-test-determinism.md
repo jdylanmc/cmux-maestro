@@ -175,7 +175,7 @@ portable test sources selected by the ratchet:
 | --- | --- |
 | `CopilotProcessQuiescenceTests`' two elapsed upper bounds | Replaced with exact virtual-time/state assertions. |
 | `test-delivery-proof.mjs`' four session-end elapsed comparisons | Replaced with controlled timer registration, explicit record-entry/release, timer firing and cancellation assertions. No 50 ms settling sleep. |
-| `SetupDeadlineClock`, `HoverPauseGate`, Python delivery-proof elapsed budgets | Retained: manually advanced clocks/counters and explicit continuation selection, not wall time. |
+| `SetupDeadlineClock`, `SidebarManualHoverClock`, Python delivery-proof elapsed budgets | Retained: manually advanced clocks/counters and explicit scheduled-action selection, not wall time. |
 | Guide acceptance/readiness and `GuideAcceptanceEvidence` | Retained: existing 180-second whole-case hang guard and finite monotonic producer/consumer provenance. These are native venue/lifetime limits, not a subsecond speed requirement. Exact statements have specific exceptions. |
 | Reader/envelope benchmarks, multiwindow phase records, internal-task rendering age, orchestrator status duration | Retained: printed diagnostics/attachments only; elapsed values do not decide test success. |
 | Real-process readiness/exit polling and watchdogs | Retained: event/exit hang guards, not elapsed performance assertions. Existing shorter legacy guards remain frozen; this audit does not claim all legacy timing dependencies are deterministic. |

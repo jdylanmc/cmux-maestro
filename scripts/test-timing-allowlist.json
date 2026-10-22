@@ -223,7 +223,7 @@
     }
   },
   "CMUXMaestroPreviewTests/SidebarHoverTests.swift": {
-    "reason": "Existing #276 statements remain frozen. #307 adds one nonwaiting run-loop pump and a 0.5s observation helper called twice only in inventoried opt-in mounted display-cycle acceptance: no speed assertion or CI settlement promise. The CAAnimation duration assertion checks configured playback, not elapsed time. Required compositor lifecycle tests use explicit state changes, not time. #310 duration comparisons select explicitly released continuations in HoverPauseGate, not elapsed wall time. See docs/reference/ci-test-determinism.md.",
+    "reason": "Existing #276 statements remain frozen. #307 adds one nonwaiting run-loop pump and a 0.5s observation helper called twice only in inventoried opt-in mounted display-cycle acceptance: no speed assertion or CI settlement promise. The CAAnimation duration assertion checks configured playback, not elapsed time. Required compositor lifecycle tests use explicit state changes, not time. #310 duration comparisons select explicitly elapsed actions in SidebarManualHoverClock, not elapsed wall time. See docs/reference/ci-test-determinism.md.",
     "statements": {
       "#expect(sequence.duration == 2.0 / 7 && sequence.repeatCount == .infinity)": 1,
       "_ = RunLoop.current.run(mode: .default, before: .distantPast)": 1,
