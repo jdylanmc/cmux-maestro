@@ -283,6 +283,8 @@ Notable changes are recorded using Keep a Changelog categories.
   A bounded metadata cache rechecks each file's exact identity and permissions;
   changed records still take the full verification path (#315).
 
+- Workspace visibility eyes align with the existing session status icon column,
+  including tagged rows, narrow layouts and both densities (#312).
 - Sidebar pets and status cues animate in the render server instead of continuously
   relaying frames through sidebar layout. Unchanged session event files reuse their
   projection without rereading event bytes; identity checks and freshness still run.

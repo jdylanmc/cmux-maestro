@@ -150,6 +150,11 @@ extension EnvironmentValues {
 }
 
 extension View {
+    /// Keep row glyphs on the existing status column, independent of their intrinsic width.
+    func sidebarTrailingIconSlot() -> some View {
+        frame(width: 12, alignment: .center)
+    }
+
     func sidebarRowActions(title: String, groups: [SidebarRowActionGroup]) -> some View {
         SidebarRowActions(title: title, groups: groups) { self } trailing: { EmptyView() }
     }

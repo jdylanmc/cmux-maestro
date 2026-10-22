@@ -91,6 +91,85 @@ struct SidebarLayoutRenderingTests {
         }
     }
 
+    @Test(arguments: [180, 300], [SidebarDensity.compact, .comfortable])
+    func workspaceEyeSharesUnmovedStatusColumn(width: Int, density: SidebarDensity) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let workspace = SidebarTreeFixtures().workspaceA
+        let hover = SidebarRowGroupHover()
+        let tag = SidebarResolvedTag(slug: "sample", human: true, agent: false, swatch: nil)
+        for visible in [false, true] {
+            preferences.setIdleTasksVisible(visible, in: workspace)
+            for hovered in [false, true] {
+                hover.hovered = hovered
+                let content = VStack(spacing: 0) {
+                    HStack(spacing: 5) {
+                        Text("Workspace").frame(maxWidth: .infinity, alignment: .leading)
+                        SidebarWorkspaceTaskEye(workspaceID: workspace)
+                    }
+                    .sidebarRowActions(title: "Workspace", groups: [])
+                    .frame(height: 32)
+                    ForEach([false, true], id: \.self) { tagged in
+                        SidebarAgentTitleLine(title: "Session", tags: tagged ? [tag] : []) {
+                            SidebarStateBadge(visual: SidebarPresentation.state(tagged ? .completed : .idle))
+                        }
+                        .sidebarRowActions(title: "Session", groups: [])
+                        .frame(height: 32)
+                    }
+                }
+                .environment(preferences)
+                .environment(\.sidebarDensity, density)
+                .environment(\.sidebarRowGroupHead, true)
+                .environment(\.sidebarRowGroupHover, hover)
+                .environment(\._accessibilityReduceMotion, true)
+                .frame(width: CGFloat(width))
+                .background(Color.white)
+                let frame = NSRect(x: 0, y: 0, width: width, height: 96)
+                let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.isReleasedWhenClosed = false
+                window.appearance = NSAppearance(named: .aqua)
+                let host = NSHostingView(rootView: content)
+                window.contentView = host
+                defer { window.contentView = nil; window.close() }
+                host.frame = frame
+                host.layoutSubtreeIfNeeded()
+                let bitmap = try #require(NSBitmapImageRep(
+                    bitmapDataPlanes: nil, pixelsWide: width * 2, pixelsHigh: 192,
+                    bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                    colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+                ))
+                bitmap.size = frame.size
+                host.cacheDisplay(in: host.bounds, to: bitmap)
+                let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                    .appendingPathComponent(".build/layout-validation/offscreen")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                try #require(bitmap.representation(using: .png, properties: [:])).write(to: folder.appendingPathComponent(
+                    "trailing-icons-\(width)-\(density.rawValue)-\(visible)-\(hovered).png"
+                ))
+                // Exclude the reserved actions slot. Inspect only each glyph's middle band,
+                // away from the hover background and tag chip; coordinates are native 2x pixels.
+                var centers: [CGFloat] = []
+                for row in 0..<3 {
+                    var columns: [Int] = []
+                    for x in (width - 52) * 2..<(width - 24) * 2 {
+                        for y in (row * 32 + 8) * 2..<(row * 32 + 24) * 2 {
+                            let color = try #require(bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB))
+                            if max(color.redComponent, color.greenComponent, color.blueComponent) < 0.7 {
+                                columns.append(x)
+                            }
+                        }
+                    }
+                    centers.append(CGFloat(try #require(columns.min()) + #require(columns.max()) + 1) / 4)
+                }
+                #expect(abs(centers[1] - centers[2]) <= 0.5, "Tags and state glyphs must share a column: \(centers)")
+                #expect(abs(centers[0] - centers[1]) <= 0.5, "Move the eye to the status column: \(centers)")
+                #expect(abs(centers[1] - CGFloat(width - 32)) <= 0.5, "The existing status column must not move")
+                #expect(!window.isVisible)
+            }
+        }
+    }
+
     @Test func managedRowRendersSelfSelectionAndHumanReset() throws {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let fixtures = SidebarTreeFixtures()
