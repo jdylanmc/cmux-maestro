@@ -37,11 +37,20 @@ nonisolated final class SidebarFileWatcher: @unchecked Sendable {
             },
             copyDescription: nil
         )
-        // Paths/flags are intentionally ignored: a notification only requests a fully fenced read.
+        // Paths are never read. Loss/root flags end the lease so its owner revalidates the roots.
         guard let source = FSEventStreamCreate(
-            nil, { _, context, _, _, _, _ in
+            nil, { _, context, count, _, flags, _ in
                 guard let context else { return }
-                Unmanaged<Sink>.fromOpaque(context).takeUnretainedValue().continuation.yield(())
+                let sink = Unmanaged<Sink>.fromOpaque(context).takeUnretainedValue()
+                sink.continuation.yield(())
+                let invalidated = FSEventStreamEventFlags(
+                    kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
+                    | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagEventIdsWrapped
+                    | kFSEventStreamEventFlagRootChanged | kFSEventStreamEventFlagUnmount
+                )
+                if (0..<count).contains(where: { flags[$0] & invalidated != 0 }) {
+                    sink.continuation.finish()
+                }
             },
             &context, roots.map(\.path) as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.05, FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)

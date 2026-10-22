@@ -279,6 +279,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Sidebar session and managed-agent changes wake their readers through coalesced
+  file notifications instead of waiting for the next poll. The two-second safety
+  poll and independent freshness deadlines remain; unavailable notifications
+  fall back without widening sandbox grants (#325).
+
 - Unchanged sidebar observations no longer rebuild the session tree or invalidate
   its presentation every poll. Explicit one-shot deadlines keep managed-node,
   branch-summary, Git and process freshness current even without Copilot updates;
