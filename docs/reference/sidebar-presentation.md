@@ -58,6 +58,19 @@ the Active window footer shows only a live, confirmed session (otherwise the
 CMUX title), for unmanaged and born-managed rows alike.
 Exact session identity stays in details.
 
+Title controls update their hosted label only when SwiftUI updates the content.
+Size proposals use `NSHostingController.sizeThatFits(in:)` without replacing the
+root, changing the mounted frame, or scheduling another layout. Repeated and
+alternating proposals must leave an unchanged label's layout clean.
+
+Orchestration polling retains one bounded decoded value (or decoding failure) per
+observer file. It still securely opens and reads each bounded file every two
+seconds, comparing exact bytes rather than trusting modification time alone.
+Unchanged bytes skip JSON decoding; permissions, identity, optional-file removal,
+binding validation and time-dependent freshness are not cached. The published
+named snapshot changes only when its value changes, not through an intermediate
+unnamed snapshot. There is no new timer, process scan or filesystem grant.
+
 Agent icons come from the bundled **Nerd Fonts Symbols 3.5.1** font and its
 pinned glyph-name catalog. No system font installation or uploaded images are
 required. Catalog offers **10,994 drawable names**. Intentionally empty

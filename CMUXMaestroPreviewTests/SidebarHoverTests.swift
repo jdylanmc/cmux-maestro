@@ -9,6 +9,7 @@ struct SidebarHoverTests {
         let button = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 0, width: 200, height: 24))
         button.labelContent = AnyView(Text("Unchanged title").frame(maxWidth: .infinity, alignment: .leading))
         _ = button.measure(width: 200)
+        button.layout()
         button.hosting.layoutSubtreeIfNeeded()
         button.hosting.needsLayout = false
 
@@ -16,6 +17,26 @@ struct SidebarHoverTests {
             _ = button.measure(width: 200)
             #expect(!button.hosting.needsLayout, "Measuring unchanged content must not schedule another layout")
         }
+        for width: CGFloat? in [80, 320, 0, nil, .infinity] {
+            let size = button.measure(width: width)
+            #expect(size.width.isFinite && size.height >= 24)
+            #expect(button.hosting.frame.width == 200, "Speculative proposals must not resize the mounted label")
+            #expect(!button.hosting.needsLayout)
+        }
+    }
+
+    @Test func titleMeasurementTracksContentAndWrappingWithoutChangingTheMountedFrame() {
+        let button = SidebarTitleNativeButton(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
+        button.labelContent = AnyView(Text("Short").fixedSize(horizontal: false, vertical: true))
+        let short = button.measure(width: 100)
+        button.labelContent = AnyView(
+            Text(String(repeating: "Wrapping title ", count: 12)).fixedSize(horizontal: false, vertical: true)
+        )
+        let narrow = button.measure(width: 100)
+        let wide = button.measure(width: 300)
+        #expect(narrow.width == 100 && wide.width == 300)
+        #expect(narrow.height > short.height && narrow.height > wide.height)
+        #expect(button.bounds.size == CGSize(width: 240, height: 24))
     }
 
     private func descendants(_ view: NSView) -> [NSView] {

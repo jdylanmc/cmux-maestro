@@ -270,6 +270,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Sidebar title measurement no longer schedules another layout on every size
+  proposal, avoiding continuous idle CPU use. Unchanged orchestration files reuse
+  bounded decoded values while access checks and evidence expiry still run (#307).
 - Setup process-isolation tests no longer hang in unrelated fixture teardown.
   Exit observation is asynchronous with the full 60-second wait budget; an
   independent 70-second phase watchdog preserves diagnostics for non-cooperative
