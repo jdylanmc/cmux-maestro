@@ -6,6 +6,28 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test func unchangedBindingIndexDoesNotReopenOrDecodeIdentities() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        for _ in 0..<20 { _ = try fixture.addSession(surface: UUID()) }
+        let reader = fixture.reader()
+        let first = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(first.sessions.count == 1)
+        let reads = await reader.identityReads
+        let builds = await reader.projectionBuilds
+        #expect(reads >= 21)
+        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(unchanged.sessions.first?.state == .idle)
+        #expect(await reader.identityReads == reads)
+        #expect(await reader.projectionBuilds == builds)
+
+        try fixture.writeRecord(fixture.record, atomic: true)
+        let refreshed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(refreshed.sessions.first?.state == .idle)
+        #expect(await reader.identityReads == reads + 1)
+    }
+
     @Test func unchangedEventFileDoesNotReadBytesOrRebuildProjection() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

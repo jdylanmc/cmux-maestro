@@ -75,6 +75,7 @@ actor CopilotSessionReader {
     private var managedNames = CopilotSessionNameCache()
     private(set) var eventReadBytes = 0
     private(set) var projectionBuilds = 0
+    private(set) var identityReads = 0
 
     init() {
         roots = { (try CopilotPaths.bindingDirectory(), try CopilotPaths.sessionStateRoot()) }
@@ -260,9 +261,7 @@ actor CopilotSessionReader {
         for id in bindingOrder {
             guard let cached = bindingsByID[id] else { continue }
             do {
-                let (record, stamp) = try CopilotFileAccess.readIdentity(
-                    at: index.descriptor, filename: cached.filename, owner: verifier.uid
-                )
+                let (record, stamp) = try readIdentity(at: index.descriptor, filename: cached.filename)
                 guard surfaceIDs.contains(record.surfaceID) else {
                     bindingsByID.removeValue(forKey: id)
                     recordCycleIssue(.identityChanged)
@@ -289,9 +288,7 @@ actor CopilotSessionReader {
     private func resumeWaitingBinding(_ index: BindingIndex, surfaceIDs: Set<UUID>) throws -> Int {
         guard let waiting = waitingBinding else { return 0 }
         do {
-            let (record, stamp) = try CopilotFileAccess.readIdentity(
-                at: index.descriptor, filename: waiting.filename, owner: verifier.uid
-            )
+            let (record, stamp) = try readIdentity(at: index.descriptor, filename: waiting.filename)
             if !surfaceIDs.contains(record.surfaceID) {
                 waitingBinding = nil
             } else if record.schemaVersion != 1 {
@@ -328,9 +325,7 @@ actor CopilotSessionReader {
                 // Discovery scans only Maestro's bounded, sanitized routing index.
                 // Off-surface records never reach process validation or transcript reads,
                 // and their identifiers/counts are not included in the snapshot.
-                let (record, stamp) = try CopilotFileAccess.readIdentity(
-                    at: index.descriptor, filename: name, owner: verifier.uid
-                )
+                let (record, stamp) = try readIdentity(at: index.descriptor, filename: name)
                 guard surfaceIDs.contains(record.surfaceID) else { continue }
                 guard record.schemaVersion == 1 else { recordCycleIssue(.unsupportedFormat); continue }
                 let entry = Binding(record: record, stamp: stamp, filename: name)
@@ -748,10 +743,15 @@ actor CopilotSessionReader {
         if stamp == (try CopilotFileAccess.statEntry(at: directory, name: filename)) { return true }
         // Hooks atomically refresh recordedAt without changing ownership. Re-read
         // the secure record rather than treating every inode change as a new owner.
-        let (refreshed, _) = try CopilotFileAccess.readIdentity(
-            at: directory, filename: filename, owner: verifier.uid
-        )
+        let (refreshed, _) = try readIdentity(at: directory, filename: filename)
         return Self.sameBindingIdentity(record, refreshed)
+    }
+
+    private func readIdentity(
+        at directory: Int32, filename: String
+    ) throws -> (CopilotIdentityRecord, CopilotFileStamp) {
+        identityReads += 1
+        return try CopilotFileAccess.readIdentity(at: directory, filename: filename, owner: verifier.uid)
     }
 
     private func advance(
