@@ -65,8 +65,14 @@ nonisolated struct SidebarGitChanges: Codable, Equatable, Sendable {
     }
 
     var description: String {
-        "\(files) changed \(files == 1 ? "file" : "files") · +\(insertions) / −\(deletions) lines vs HEAD. "
-            + "Includes \(untrackedFiles) untracked and \(binaryFiles) binary files; their lines and submodule contents are excluded."
+        "\(files) changed \(files == 1 ? "file" : "files") · +\(insertions) / −\(deletions) \(basisAndExclusions)"
+    }
+
+    var basisAndExclusions: String {
+        String(
+            localized: "sidebar.git.basisAndExclusions",
+            defaultValue: "tracked lines vs HEAD · Untracked: \(untrackedFiles) · Binary: \(binaryFiles) · Excludes: untracked/binary lines, submodule contents"
+        )
     }
 }
 

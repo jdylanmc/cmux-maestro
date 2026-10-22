@@ -111,6 +111,9 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var knownRunningChildren: Int { nodes.filter { $0.state == .working }.count }
     var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
     var shortID: String { String(id.uuidString.prefix(8)).lowercased() }
+    var omittedChildrenDescription: String {
+        SidebarCopilotTree.omittedChildrenDescription(count: omittedChildrenCount, uncounted: hasUncountedChildren)
+    }
     var attentionOwnerCount: Int {
         (attention.isEmpty && !attentionDegraded ? 0 : 1)
             + nodes.filter { !$0.attention.isEmpty || $0.attentionDegraded }.count
@@ -194,7 +197,10 @@ struct SidebarCopilotTree: Equatable {
     var omittedActiveChildrenCount: Int { sessions.reduce(0) { $0 + $1.omittedActiveChildrenCount } }
     var hasUncountedChildren: Bool { sessions.contains(where: \.hasUncountedChildren) }
     var omittedChildrenDescription: String {
-        hasUncountedChildren ? "At least \(omittedChildrenCount); total unknown" : "\(omittedChildrenCount)"
+        Self.omittedChildrenDescription(count: omittedChildrenCount, uncounted: hasUncountedChildren)
+    }
+    static func omittedChildrenDescription(count: Int, uncounted: Bool) -> String {
+        uncounted ? "\(count)+ · Total: Unknown" : "\(count)"
     }
     var retainedHistoryCount: Int { sessions.reduce(0) { $0 + $1.retainedHistoryCount } }
     var hiddenHistoryCount: Int { sessions.reduce(0) { $0 + $1.hiddenHistoryCount } }
@@ -225,31 +231,31 @@ struct SidebarCopilotTree: Equatable {
 
     var summary: String {
         switch availability {
-        case .waiting: return "Waiting for current-window surface metadata."
-        case .loading: return "Loading Copilot history…"
-        case .hidden: return "Copilot updates paused while the sidebar is hidden."
-        case .disconnected: return "Copilot status unavailable while CMUX is disconnected."
-        case .unavailable: return "Copilot status unavailable. No live state is inferred."
+        case .waiting: return "Surface metadata: Waiting"
+        case .loading: return "History: Loading"
+        case .hidden: return "Updates: Paused · Sidebar: Hidden"
+        case .disconnected: return "Unavailable · CMUX: Disconnected"
+        case .unavailable: return "Unavailable"
         case .ready, .partial:
             if issues.contains(.integrationNotInstalled) {
-                return "Enable Copilot integration in CMUX Maestro. Restart Copilot sessions after enabling; existing sessions without identity records cannot be attached."
+                return "Integration: Not enabled"
             }
             if issues.contains(.permissionDenied) {
-                return "Copilot access was denied. Review integration access in CMUX Maestro."
+                return "Access: Denied"
             }
             if issues.contains(.loadingHistory) {
-                return "Loading Copilot history. Known tasks are shown; missing tasks are not assumed finished."
+                return "History: Loading · Tasks: Incomplete"
             }
             if issues.contains(.noIdentityRecords) && sessions.isEmpty {
-                return "No bound Copilot sessions on these surfaces. The integration loads when a Copilot session starts or restarts."
+                return "Bound sessions: None"
             }
             if availability == .partial {
-                return "Partial Copilot data. Showing validated observations only; task totals may be incomplete."
+                return "Partial · Task totals: Incomplete"
             }
             if sessions.isEmpty {
-                return "No bound Copilot sessions on current-window surfaces."
+                return "Bound sessions: None"
             }
-            return "Copilot observations refreshed about every 2 seconds."
+            return "Refresh: ~2 seconds"
         }
     }
 

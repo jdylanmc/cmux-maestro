@@ -173,9 +173,8 @@ struct SidebarCopilotTreeTests {
         #expect(empty.hasCompleteCounts)
         #expect(!loading.hasCompleteCounts)
         #expect(loading.summary.contains("Loading"))
-        #expect(missing.summary.contains("No bound"))
-        #expect(notInstalled.summary.contains("Enable Copilot integration in CMUX Maestro"))
-        #expect(notInstalled.summary.contains("Restart"))
+        #expect(missing.summary == "Bound sessions: None")
+        #expect(notInstalled.summary == "Integration: Not enabled")
     }
 
     @Test

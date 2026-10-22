@@ -1659,7 +1659,7 @@ struct GitChangeBadge: View {
     let changes: SidebarGitChanges
 
     var body: some View {
-        Text("\(SidebarPresentation.assignedGitTitle): \(fileCount) · \(additions) / \(deletions) \(basisAndExclusions)")
+        Text("\(SidebarPresentation.assignedGitTitle): \(fileCount) · \(additions) / \(deletions) \(changes.basisAndExclusions)")
         .sidebarFont(.caption2)
         .foregroundStyle(.secondary)
         .monospacedDigit()
@@ -1668,7 +1668,7 @@ struct GitChangeBadge: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(SidebarPresentation.assignedGitChangesDescription(changes))
         .accessibilityHint(SidebarPresentation.assignedGitHelp)
-        .help(SidebarPresentation.assignedGitChangesDescription(changes) + ". " + SidebarPresentation.assignedGitHelp)
+        .help(SidebarPresentation.assignedGitChangesDescription(changes) + " · " + SidebarPresentation.assignedGitHelp)
     }
 
     private var fileCount: String {
@@ -1683,13 +1683,6 @@ struct GitChangeBadge: View {
 
     private var deletions: Text {
         Text("−\(changes.deletions)").foregroundColor(Color(nsColor: Self.deletionColor))
-    }
-
-    private var basisAndExclusions: String {
-        String(
-            localized: "sidebar.git.basisAndExclusions",
-            defaultValue: "lines vs HEAD. Includes \(changes.untrackedFiles) untracked and \(changes.binaryFiles) binary files; their lines and submodule contents are excluded."
-        )
     }
 
     // System red is too light for caption-sized text on the light sidebar background.
@@ -2315,7 +2308,7 @@ struct SurfaceRow: View {
         } ?? ""
         let kind = singleSession == nil ? surface.kind.title : "Agent"
         guard let directoryLabel else { return state + kind }
-        return "\(state)\(kind). \(SidebarSurfaceDirectory.title): \(directoryLabel). \(SidebarSurfaceDirectory.help) Git branch not verified by this source."
+        return "\(state)\(kind). \(SidebarSurfaceDirectory.title): \(directoryLabel) · \(SidebarSurfaceDirectory.help) · Git branch: Unverified"
     }
 }
 
@@ -2471,9 +2464,7 @@ private struct CopilotSessionContents: View {
             .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if session.hasUncountedChildren || session.omittedActiveChildrenCount > 0 {
-            Text(session.hasUncountedChildren
-                 ? "At least \(session.omittedChildrenCount) tasks omitted; total and active counts unknown."
-                 : "\(session.omittedActiveChildrenCount) working/blocked tasks could not fit.")
+            Text(SidebarPresentation.omittedTaskCaption(session))
                 .sidebarFont(.caption).foregroundStyle(SidebarTone.attention.color)
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }

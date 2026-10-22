@@ -58,8 +58,8 @@ struct HierarchyPathContext: Equatable {
 enum SidebarSurfaceDirectory {
     static let title = "Surface directory"
     static let parentTitle = "Parent surface directory"
-    static let help = "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
-    static let parentHelp = "Reported by CMUX for the parent surface; no report time supplied. Not an independently reported child directory."
+    static let help = "Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified"
+    static let parentHelp = "Source: CMUX parent surface · Report time: Unknown · Child directory: Unverified"
 }
 
 extension HierarchyAvailability where Value == String? {

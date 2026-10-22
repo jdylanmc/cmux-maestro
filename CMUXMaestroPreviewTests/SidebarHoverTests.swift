@@ -692,7 +692,7 @@ struct SidebarHoverTests {
         let ambiguous = try #require(SidebarHoverContent.workspace(
             fixtures.workspaceA, hierarchy: fixtures.hierarchy(duplicateSurface: true), connected: true
         ))
-        #expect(ambiguous.lines.contains(.init(title: "Shared surfaces", value: "Count unavailable; placement is ambiguous")))
+        #expect(ambiguous.lines.contains(.init(title: "Shared surfaces", value: "Unavailable · Placement: Ambiguous")))
         let moved = try #require(SidebarHoverContent.workspace(
             fixtures.workspaceA, hierarchy: fixtures.hierarchy(moved: true), connected: true
         ))

@@ -27,7 +27,7 @@ enum SidebarHoverContent {
                 let counts = summary.isEmpty ? "None" : summary.joined(separator: ", ")
                 lines.append(.init(title: "Shared surfaces", value: counts, copyableValue: counts))
             } else {
-                lines.append(.init(title: "Shared surfaces", value: "Count unavailable; placement is ambiguous"))
+                lines.append(.init(title: "Shared surfaces", value: "Unavailable · Placement: Ambiguous"))
             }
         } else {
             lines.append(.init(title: "Shared surfaces", value: "Metadata unavailable"))

@@ -181,7 +181,7 @@ struct SidebarPinnedDetailsTests {
         #expect(pinned(connected: false).lines.isEmpty)
         #expect(pinned(hierarchy(paths: false)).lines.contains(.init(
             title: "Surface directory", value: "Path unavailable",
-            help: "Reported by CMUX for this surface; no report time supplied. Not a verified agent or tool working directory."
+            help: "Source: CMUX · Report time: Unknown · Agent/tool directory: Unverified"
         )))
     }
 
@@ -362,7 +362,7 @@ struct SidebarPinnedDetailsTests {
         let staleGit = pinned(nodes: [managed(gitAt: now.addingTimeInterval(-3_600))])
         #expect(!staleGit.lines.contains { $0.title == "Branch" || $0.title == "Worktree" })
         #expect(staleGit.lines.contains { $0.title == "Git evidence" && $0.value.hasPrefix("Assigned directory: Stale") })
-        #expect(staleGit.lines.contains(.init(title: "Git changes", value: "Assigned directory: Current counts unavailable",
+        #expect(staleGit.lines.contains(.init(title: "Git changes", value: "Unavailable",
                                              help: SidebarPresentation.assignedGitHelp)))
         #expect(pinned(nodes: [managed(coordinator: true)]).lines.contains(.sessionID(fixtures.sessionID)))
     }
@@ -725,7 +725,7 @@ struct SidebarPinnedDetailsTests {
         #expect(child.surfaceID == fixtures.surfaceA)
         #expect(detail.lines.contains(.sessionID(fixtures.sessionID, isParent: true)))
         #expect(detail.lines.contains(.init(title: "Model", value: "child-model")))
-        #expect(detail.lines.contains { $0.title == "Placement" && $0.value.contains("parent session") })
+        #expect(detail.lines.contains { $0.title == "Placement" && $0.value == "Parent session" })
         #expect(before == pinned())
         #expect(inspector(child, sessions: [session(id: UUID())]) == nil)
         var duplicate = session()
