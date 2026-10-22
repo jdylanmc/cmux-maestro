@@ -559,16 +559,11 @@ struct SidebarLayoutTests {
         #expect(view.contains(".accessibilityLabel(\"\\(label): \\(displayText)\")"))
         #expect(view.contains(".help(displayText)"))
         #expect(!view.contains("withAnimation"))
-        let workingRingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 30))"
-        let askingSchedule = "TimelineView(.animation(minimumInterval: 1.0 / 20))"
-        #expect(view.components(separatedBy: workingRingSchedule).count == 2)
-        // The question-mark badge and its row tint are the only other sanctioned motion.
-        #expect(view.components(separatedBy: askingSchedule).count == 3)
-        // The focus-bar glide is the third sanctioned motion; it honors Reduce Motion.
+        // Per-frame SwiftUI timelines must not drive hierarchy layout. Native status
+        // motion, its footprint and Reduce Motion transitions are exercised in SidebarMotionTests.
+        #expect(!view.contains("TimelineView("))
         let focusBarGlide = ".animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: focusedSurface)"
-        #expect(!view.replacingOccurrences(of: workingRingSchedule, with: "")
-            .replacingOccurrences(of: askingSchedule, with: "")
-            .replacingOccurrences(of: focusBarGlide, with: "").contains(".animation("))
+        #expect(!view.replacingOccurrences(of: focusBarGlide, with: "").contains(".animation("))
         #expect(!view.contains(".phaseAnimator"))
         #expect(view.contains("@Environment(\\.accessibilityReduceMotion)"))
         #expect(SidebarBranchSummary(sessions: [], complete: false).incomplete)
