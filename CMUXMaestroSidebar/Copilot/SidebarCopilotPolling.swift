@@ -102,9 +102,7 @@ final class SidebarCopilotPolling {
         self.expiryPause = expiryPause
         self.now = now
         self.changes = changes ?? (read == nil ? {
-            await SidebarRefreshTrigger.live {
-                [try CopilotPaths.integrationRoot(), try CopilotPaths.sessionStateRoot()]
-            }
+            await SidebarRefreshTrigger.copilot()
         } : nil)
     }
 
@@ -237,6 +235,15 @@ final class SidebarCopilotPolling {
                     self.scheduleStatusExpiry()
                 }
                 self?.isReading = false
+                if let self, self.generation == token, !Task.isCancelled {
+                    let bound = self.managedSubjects.filter {
+                        capturedTopology.workspaceBySurface[$0.surfaceID] == $0.workspaceID
+                    }.compactMap(\.sessionID)
+                    let shown = (self.currentTree.sessions + self.currentTree.statusSessions).filter {
+                        capturedTopology.workspaceBySurface[$0.surfaceID] == $0.workspaceID
+                    }.map(\.id)
+                    await refresh?.updateSessions(Set(shown).union(bound))
+                }
                 // Loading alone is not progress: a torn line at EOF must use the idle delay.
                 do {
                     if hasUnreadHistory {

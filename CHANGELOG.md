@@ -280,7 +280,8 @@ Notable changes are recorded using Keep a Changelog categories.
 ### Fixed
 
 - Sidebar session and managed-agent changes wake their readers through coalesced
-  file notifications instead of waiting for the next poll. The two-second safety
+  file notifications for shown/bound sessions, not every session on the machine.
+  Binding-directory notifications are non-recursive. The two-second safety
   poll and independent freshness deadlines remain; unavailable notifications
   fall back without widening sandbox grants (#325).
 

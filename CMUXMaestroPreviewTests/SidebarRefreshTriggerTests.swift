@@ -202,7 +202,128 @@ struct SidebarRefreshTriggerTests {
         await trigger.stop()
     }
 
-    @Test func nativeWatcherSignalsNestedAppendsAndRejectsSymlinkRoots() async throws {
+    @Test func nonShownSessionLoadDoesNotWakeTheReader() async throws {
+        let fixtures = SidebarTreeFixtures()
+        let clock = CopilotReaderTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let root = URL(fileURLWithPath: "/synthetic/sessions", isDirectory: true)
+        let bindings = URL(fileURLWithPath: "/synthetic/bindings", isDirectory: true)
+        let registrations = AsyncStream<SyntheticFileLease>.makeStream()
+        let trigger = await SidebarRefreshTrigger.copilot(
+            bindings: bindings, sessionRoot: root, coalesce: {},
+            watch: {
+                let lease = SyntheticFileLease(scope: $0)
+                registrations.continuation.yield(lease)
+                return lease
+            }
+        )
+        var leases = registrations.stream.makeAsyncIterator()
+        let initial = try #require(await leases.next())
+        #expect(initial.scope.recursive.isEmpty)
+        #expect(initial.scope.directories == [bindings])
+        let reads = RefreshReadGate<CopilotSnapshot>()
+        let fallback = RefreshBarrier()
+        let poller = SidebarCopilotPolling(
+            read: { CopilotSnapshotAdapter.snapshot(try await reads.read(), workspaceBySurface: $0) },
+            pause: { try await fallback.wait() }, expiryPause: sidebarFrozenExpiry,
+            changes: { trigger }, now: { clock.now() }
+        )
+        defer {
+            poller.setVisible(false)
+            registrations.continuation.finish()
+            Task { await reads.cancel() }
+        }
+        poller.update(topology: fixtures.topology(), connected: true)
+        poller.setVisible(true)
+        await sidebarEventually { await reads.calls == 1 }
+        await reads.complete(fixtures.snapshot(sessions: [fixtures.session(now: clock.now())], now: clock.now()))
+        let shown = try #require(await leases.next())
+        await sidebarEventually { await reads.calls == 2 }
+        await reads.complete(fixtures.snapshot(sessions: [fixtures.session(now: clock.now())], now: clock.now()))
+        await sidebarEventually { await fallback.active == 1 }
+        let baseline = await reads.calls
+        let hidden = (0..<1_000).map {
+            root.appendingPathComponent(String(format: "30000000-0000-0000-0000-%012d/events.jsonl", $0))
+        }
+        try #require(!shown.emit(hidden[0]), "A non-shown session must not enter the reader's notification stream")
+        for epoch in 1...30 {
+            for path in hidden { #expect(!shown.emit(path)) }
+            #expect(await reads.calls == baseline + epoch - 1)
+            clock.advance(by: 2)
+            await fallback.release()
+            await sidebarEventually { await reads.calls == baseline + epoch }
+            await reads.complete(fixtures.snapshot(sessions: [fixtures.session(now: clock.now())], now: clock.now()))
+            await sidebarEventually { await fallback.active == 1 }
+        }
+        #expect(await reads.calls - baseline == 30)
+        print("Synthetic controlled 60s: 30000 off-scope events, 0 event-driven reads, 30 fallback reads (0.5/s). Not wall-clock CPU evidence.")
+        #expect(!shown.emit(bindings.appendingPathComponent("nested/unrelated.json")))
+        #expect(shown.emit(root.appendingPathComponent(fixtures.sessionID.uuidString.lowercased() + "/events.jsonl")))
+        await sidebarEventually { await reads.calls == baseline + 31 }
+        await reads.complete(fixtures.snapshot(
+            sessions: [fixtures.session(id: fixtures.otherSessionID, now: clock.now())], now: clock.now()
+        ))
+        let replaced = try #require(await leases.next())
+        #expect(!replaced.emit(root.appendingPathComponent(fixtures.sessionID.uuidString.lowercased() + "/events.jsonl")))
+        #expect(replaced.scope.recursive == [root.appendingPathComponent(fixtures.otherSessionID.uuidString.lowercased(), isDirectory: true)])
+        await sidebarEventually { await reads.calls == baseline + 32 }
+        poller.setVisible(false)
+        await reads.complete(fixtures.snapshot(sessions: [], now: clock.now()))
+        await sidebarEventually { !poller.isReading }
+    }
+
+    @Test func failedRegistrationRecoversOnFallbackWithoutNativeEvents() async throws {
+        let attempts = CopilotReaderTestClock(Date(timeIntervalSince1970: 0))
+        let lease = SyntheticFileLease(scope: .init(recursive: [], directories: [URL(fileURLWithPath: "/synthetic")]))
+        let trigger = SidebarRefreshTrigger(coalesce: {}, watch: {
+            attempts.advance(by: 1)
+            if attempts.now().timeIntervalSince1970 == 1 { throw CopilotFileError.missing }
+            return lease
+        })
+        let fallback = RefreshBarrier()
+        for count in 1...2 {
+            let pending = Task { try await trigger.wait { try await fallback.wait() } }
+            await sidebarEventually { await fallback.active == 1 }
+            await fallback.release()
+            try await pending.value
+            #expect(attempts.now().timeIntervalSince1970 == Double(count))
+        }
+        let pending = Task { try await trigger.wait { try await fallback.wait() } }
+        defer { pending.cancel() }
+        await sidebarEventually { await fallback.active == 1 }
+        try #require(lease.emit(URL(fileURLWithPath: "/synthetic/binding.json")))
+        try await pending.value
+        #expect(await fallback.released == 2)
+        await trigger.stop()
+    }
+
+    @Test func endedStreamReRegistersBeforeReturningToTheReader() async throws {
+        let lease = SyntheticFileLease(scope: .init(recursive: [], directories: [URL(fileURLWithPath: "/synthetic")]))
+        let attempts = CopilotReaderTestClock(Date(timeIntervalSince1970: 0))
+        let trigger = SidebarRefreshTrigger(coalesce: {}, watch: { attempts.advance(by: 1); return lease })
+        let old = AsyncStream<Void>.makeStream()
+        await trigger.subscribe(old.stream)
+        let fallback = RefreshBarrier()
+        let pending = Task { try await trigger.wait { try await fallback.wait() } }
+        defer { pending.cancel(); Task { await trigger.stop() } }
+        await sidebarEventually { await fallback.active == 1 }
+        old.continuation.finish()
+        try await pending.value
+        #expect(attempts.now().timeIntervalSince1970 == 1)
+        #expect(await fallback.released == 0)
+        let next = Task { try await trigger.wait { try await fallback.wait() } }
+        defer { next.cancel() }
+        await sidebarEventually { await fallback.active == 1 }
+        try #require(lease.emit(URL(fileURLWithPath: "/synthetic/current.json")))
+        try await next.value
+        #expect(attempts.now().timeIntervalSince1970 == 1)
+        await trigger.stop()
+    }
+}
+
+@MainActor
+struct SidebarFileWatcherAcceptanceTests {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func nativeWatcherSignalsNestedAppendsAndRejectsSymlinkRoots() async throws {
         let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/watcher-fixtures/\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -231,9 +352,22 @@ struct SidebarRefreshTriggerTests {
         let link = root.appendingPathComponent("alias")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: child)
         #expect(throws: CopilotFileError.self) { _ = try SidebarFileWatcher(roots: [link]) }
+
+        let directory = try SidebarFileWatcher(scope: .init(recursive: [], directories: [child]))
+        let replaced = RefreshCounter()
+        let bindingConsumer = Task {
+            for await _ in directory.events { await replaced.increment(); break }
+        }
+        defer { bindingConsumer.cancel() }
+        try Data("replacement\n".utf8).write(to: file, options: .atomic)
+        await sidebarEventually { await replaced.count == 1 }
+        bindingConsumer.cancel()
+        await bindingConsumer.value
+        withExtendedLifetime(directory) {}
     }
 
-    @Test func endedStreamAndMissingRootRecoverAtFallbackWithoutAnExtraTimer() async throws {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func endedStreamAndMissingRootRecoverAtFallbackWithoutAnExtraTimer() async throws {
         let parent = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/watcher-fixtures/\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
@@ -281,7 +415,8 @@ struct SidebarRefreshTriggerTests {
         await trigger.stop()
     }
 
-    @Test func nativeRootReplacementEndsOldLease() async throws {
+    @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled))
+    func nativeRootReplacementEndsOldLease() async throws {
         let parent = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent(".build/watcher-fixtures/\(UUID().uuidString)", isDirectory: true)
         let root = parent.appendingPathComponent("observed", isDirectory: true)
@@ -300,6 +435,27 @@ struct SidebarRefreshTriggerTests {
         consumer.cancel()
         await consumer.value
         withExtendedLifetime(watcher) {}
+    }
+}
+
+nonisolated private final class SyntheticFileLease: SidebarFileWatching {
+    let scope: SidebarFileWatcher.Scope
+    let events: AsyncStream<Void>
+    private let continuation: AsyncStream<Void>.Continuation
+
+    init(scope: SidebarFileWatcher.Scope) {
+        self.scope = scope
+        (events, continuation) = AsyncStream.makeStream(bufferingPolicy: .bufferingNewest(1))
+    }
+
+    deinit { continuation.finish() }
+
+    // Model the native registration boundary, not the production reader or its coalescing.
+    func emit(_ path: URL) -> Bool {
+        guard scope.recursive.contains(where: { path.path.hasPrefix($0.path + "/") })
+                || scope.directories.contains(where: { $0.path == path.deletingLastPathComponent().path }) else { return false }
+        continuation.yield(())
+        return true
     }
 }
 

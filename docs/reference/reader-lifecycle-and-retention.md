@@ -206,13 +206,19 @@ introduced.
 
 ### File-driven reader wakeups
 
-While visible and connected, each reader owns one FSEvents stream inside its
-existing read-only grants: Copilot integration (bindings, locations, appearance)
-plus session-state for the Copilot reader; the exact orchestration `observer`
-directory for the managed reader. Recursive file events include nested appends,
-new sessions and atomic replacements. Registration securely validates the roots;
+While visible and connected, the Copilot reader watches only the exact directories
+of sessions shown (including retained-status rows) or bound on its current
+topology, capped at the reader's 64-session limit. One FSEvents stream covers those
+directories; a non-recursive directory-vnode source covers atomic changes in the
+bindings directory. The whole session-state and integration roots are never watched.
+Other sessions and unmonitored integration changes use the two-second fallback.
+The managed reader watches only the exact orchestration `observer` directory.
+Recursive session events include nested appends and atomic replacements.
+Registration securely validates the roots;
 callbacks never inspect event paths or read contents. Events only request the
 existing fully fenced reader, never establish identity or freshness themselves.
+Shown/bound-set changes replace the registration and request one catch-up read
+to cover the registration gap. Events from a retired subscription are discarded.
 
 A newest-one stream and one pending-change flag bound bursts and changes during
 an in-flight read. The first notification opens a cancellable 200 ms coalescing
@@ -230,6 +236,15 @@ Failed registration is retried only on the existing read cadence, with no extra
 timer or repeated warning while unavailable. Healthy streams do not reopen
 roots on each poll. Sandbox entitlements and source read/size bounds do not change.
 
+The three native callback tests are inventoried local opt-in acceptance in
+`scripts/local-ui-acceptance.json`, enabled with
+`CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE=1 ./scripts/test.sh --focused SidebarFileWatcherAcceptanceTests`.
+OS daemon/vnode scheduling is not a deterministic required-CI dependency. Required
+tests inject event delivery into the production registration plan, including
+30,000 events under 1,000 non-shown directories over a controlled 60-second
+schedule: zero event-driven reads, 30 fallback reads (0.5/s after initial discovery).
+That is a deterministic work count, not a wall-clock throughput or CPU measurement.
+No timing allowlist exception is added or hidden by the opt-in inventory.
 Native callback and controlled-clock tests are not installed ExtensionKit proof.
 After authorized installation, measure idle CPU with
 `python3 scripts/measure-sidebar-cpu.py --pid <exact-extension-pid> --output <new-private-directory>`.
