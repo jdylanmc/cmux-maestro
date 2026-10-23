@@ -219,6 +219,10 @@ callbacks never inspect event paths or read contents. Events only request the
 existing fully fenced reader, never establish identity or freshness themselves.
 Shown/bound-set changes replace the registration and request one catch-up read
 to cover the registration gap. Events from a retired subscription are discarded.
+Ordinary binding-directory `.write` events only wake the reader: they do not
+finish the stream, re-register session roots or log watcher retirement. Only
+directory `.rename`, `.delete` or `.revoke` ends that lease. The deterministic
+registration-count test drives this same callback policy, including combined flags.
 
 A newest-one stream and one pending-change flag bound bursts and changes during
 an in-flight read. The first notification opens a cancellable 200 ms coalescing
@@ -232,6 +236,11 @@ The existing two-second fallback is slower than notification delivery and is
 not shortened. Missing, unsafe or unsupported roots log a sanitized warning and
 retain polling. Root replacement, unmount or event-loss flags end the old stream,
 request a fully fenced read, and securely re-register at the next reader wakeup.
+Missing session directories are excluded when registering, with a sanitized
+notice, while the bindings directory and healthy session watches stay active.
+Those excluded sessions use fallback reads until a later scope/lease registration;
+an unchanged healthy lease does not repeatedly attempt to open missing paths.
+Unsafe or denied roots still refuse registration rather than being treated as missing.
 Failed registration is retried only on the existing read cadence, with no extra
 timer or repeated warning while unavailable. Healthy streams do not reopen
 roots on each poll. Sandbox entitlements and source read/size bounds do not change.

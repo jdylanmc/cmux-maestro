@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Observation
 import Testing
 
@@ -380,6 +381,24 @@ struct SidebarRefreshTriggerTests {
         await reads.complete(value)
         await sidebarEventually { !poller.isReading }
     }
+
+    @Test func missingSessionRootsDoNotDiscardHealthyRootsButUnsafeRootsRefuse() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/watcher-fixtures/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let healthy = root.appendingPathComponent("healthy", isDirectory: true)
+        let missing = root.appendingPathComponent("missing", isDirectory: true)
+        try FileManager.default.createDirectory(at: healthy, withIntermediateDirectories: false)
+        let scope = SidebarFileWatcher.Scope(recursive: [missing, healthy], directories: [])
+        #expect(try scope.existingRecursiveRoots(owner: getuid()) == [healthy])
+        let unsafe = root.appendingPathComponent("unsafe", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: unsafe, withDestinationURL: healthy)
+        #expect(throws: CopilotFileError.unsafePath) {
+            try SidebarFileWatcher.Scope(recursive: [missing, healthy, unsafe], directories: [])
+                .existingRecursiveRoots(owner: getuid())
+        }
+    }
 }
 
 @MainActor
@@ -394,7 +413,8 @@ struct SidebarFileWatcherAcceptanceTests {
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
         let file = child.appendingPathComponent("events.jsonl")
         try Data("synthetic\n".utf8).write(to: file)
-        let watcher = try SidebarFileWatcher(roots: [root])
+        let missing = root.appendingPathComponent("missing", isDirectory: true)
+        let watcher = try SidebarFileWatcher(roots: [missing, root])
         let received = RefreshCounter()
         let consumer = Task {
             for await _ in watcher.events {
@@ -415,7 +435,7 @@ struct SidebarFileWatcherAcceptanceTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: child)
         #expect(throws: CopilotFileError.self) { _ = try SidebarFileWatcher(roots: [link]) }
 
-        let directory = try SidebarFileWatcher(scope: .init(recursive: [], directories: [child]))
+        let directory = try SidebarFileWatcher(scope: .init(recursive: [missing], directories: [child]))
         let replaced = RefreshCounter()
         let bindingConsumer = Task {
             for await _ in directory.events { await replaced.increment(); break }

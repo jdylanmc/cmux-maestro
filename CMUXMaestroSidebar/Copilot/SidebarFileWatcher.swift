@@ -1,6 +1,7 @@
 import CoreServices
 import Darwin
 import Foundation
+import OSLog
 
 nonisolated protocol SidebarFileWatching: Sendable {
     var events: AsyncStream<Void> { get }
@@ -16,7 +17,9 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
 
         func receive(_ flags: DispatchSource.FileSystemEvent) {
             continuation.yield(())
-            continuation.finish()
+            if !flags.intersection([.rename, .delete, .revoke]).isEmpty {
+                continuation.finish()
+            }
         }
     }
 
@@ -31,6 +34,20 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
                     .map { sessionRoot.appendingPathComponent($0.uuidString.lowercased(), isDirectory: true) },
                 directories: [bindings]
             )
+        }
+
+        func existingRecursiveRoots(owner: UInt32) throws -> [URL] {
+            var existing: [URL] = []
+            for root in recursive {
+                do {
+                    let descriptor = try CopilotFileAccess.openDirectory(root, owner: owner)
+                    close(descriptor)
+                    existing.append(root)
+                } catch CopilotFileError.missing {
+                    continue
+                }
+            }
+            return existing
         }
     }
 
@@ -53,9 +70,11 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
         guard !scope.recursive.isEmpty || !scope.directories.isEmpty,
               scope.recursive.count <= CopilotReaderLimits().maximumSessions,
               scope.directories.count <= 1 else { throw Failure.noRoots }
-        for root in scope.recursive {
-            let descriptor = try CopilotFileAccess.openDirectory(root, owner: owner)
-            close(descriptor)
+        let roots = try scope.existingRecursiveRoots(owner: owner)
+        guard !roots.isEmpty || !scope.directories.isEmpty else { throw CopilotFileError.missing }
+        if roots.count != scope.recursive.count {
+            Logger(subsystem: "com.jdylanmc.CMUXMaestroPreview", category: "file-notifications")
+                .notice("Missing session directories use safety polling; keeping available file notifications.")
         }
         let (events, continuation) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
         var directories: [any DispatchSourceFileSystemObject] = []
@@ -80,7 +99,7 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
         self.events = events
         self.continuation = continuation
         self.directories = directories
-        guard !scope.recursive.isEmpty else {
+        guard !roots.isEmpty else {
             self.source = nil
             retained = true
             return
@@ -113,7 +132,7 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
                     sink.continuation.finish()
                 }
             },
-            &context, scope.recursive.map(\.path) as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            &context, roots.map(\.path) as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             0.05, FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagWatchRoot)
         ) else { throw Failure.create }
         FSEventStreamSetDispatchQueue(source, DispatchQueue.global(qos: .utility))

@@ -279,6 +279,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Binding-file updates wake sidebar readers without rebuilding their watchers.
+  Missing session directories no longer disable healthy watches or bindings
+  notifications (#328).
+
 - Sidebar session and managed-agent changes wake their readers through coalesced
   file notifications for shown/bound sessions, not every session on the machine.
   Binding-directory notifications are non-recursive. The two-second safety
