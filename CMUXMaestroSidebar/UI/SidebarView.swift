@@ -560,6 +560,7 @@ struct SidebarView: View {
     }
 
     private var visibleWork: SidebarVisibleWork {
+        let showEnded = preferences.showEnded || preferences.historyNotice != nil || preferences.attentionNotice != nil
         var evidence = model.copilot.presentationTree
         evidence.sessions += evidence.statusSessions
         var displaced = model.visibilityPlacements.placements(
@@ -567,12 +568,13 @@ struct SidebarView: View {
         ).displaced
         displaced.formUnion(SidebarPresentation.endedManagedNodeIDs(
             managed: model.orchestration.snapshot, availability: model.orchestration.availability,
-            hierarchy: model.hierarchy, observations: model.copilot.presentationTree, now: now()
+            hierarchy: model.hierarchy, observations: model.copilot.presentationTree, now: now(),
+            history: preferences.history, showEnded: showEnded
         ))
         return SidebarVisibleWork(
             tree: model.copilot.presentationTree, managed: model.orchestration.snapshot.nodes,
             history: preferences.history,
-            showEnded: preferences.showEnded || preferences.historyNotice != nil || preferences.attentionNotice != nil,
+            showEnded: showEnded,
             now: now(), displacedNodeIDs: displaced
         )
     }

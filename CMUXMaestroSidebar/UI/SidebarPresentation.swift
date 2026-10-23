@@ -321,6 +321,16 @@ private extension SidebarCopilotSession {
         attentionDegraded || state == .blocked || attention.contains(where: { $0.kind.isBlocking })
             || nodes.contains { $0.attentionDegraded || $0.state == .blocked || $0.attention.contains(where: { $0.kind.isBlocking }) }
     }
+
+    var protectsEndedSurface: Bool {
+        hasBlockingEvidence || state == .failed || attention.contains { $0.kind == .error }
+            || !childrenComplete || treeDegraded || internalTaskCountsIncomplete
+            || hasUncountedChildren || omittedActiveChildrenCount > 0
+            || nodes.contains {
+                $0.isInternalTask || $0.state == .failed || $0.state == .working
+                    || $0.ancestryUnresolved || $0.attention.contains { $0.kind == .error }
+            }
+    }
 }
 
 extension SidebarPreferences {
@@ -594,9 +604,10 @@ enum SidebarPresentation {
 
     static func endedManagedNodeIDs(
         managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability,
-        hierarchy: HierarchySnapshot, observations: SidebarCopilotTree, now: Date
+        hierarchy: HierarchySnapshot, observations: SidebarCopilotTree, now: Date,
+        history: SidebarHistorySettings = .init(), showEnded: Bool = false
     ) -> Set<UUID> {
-        guard [.ready, .partial].contains(availability),
+        guard !showEnded, [.ready, .partial].contains(availability),
               (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt)),
               [.ready, .partial].contains(observations.availability),
               !observations.issues.contains(.permissionDenied),
@@ -606,6 +617,9 @@ enum SidebarPresentation {
         guard topology.canReadSessions else { return [] }
         let sessions = observations.sessions + observations.statusSessions
         return Set(managed.nodes.filter { node in
+            let failure = SidebarDismissedManagedOutcome(nodeID: node.id, generation: node.generation, phase: node.phase)
+            guard node.phase != "reported-blocked",
+                  !failure.isValid || (history.dismissedManaged ?? []).contains(failure) else { return false }
             guard let id = node.copilotSessionId,
                   managed.nodes.filter({ $0.id == node.id || $0.copilotSessionId == id }).count == 1,
                   topology.workspaceBySurface[node.surfaceId] == node.workspaceId,
@@ -614,7 +628,7 @@ enum SidebarPresentation {
                       return surfaces.contains { $0.id == node.surfaceId && $0.kind == .terminal }
                   }) else { return false }
             let occupants = sessions.filter { $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId }
-            guard occupants.allSatisfy({ $0.liveness == .dead }) else { return false }
+            guard occupants.allSatisfy({ $0.liveness == .dead && !$0.protectsEndedSurface }) else { return false }
             let exact = occupants.filter { $0.id == id }
             let observedEnded = exact.count == 1 && sessions.filter { $0.id == id }.count == 1
                 && SidebarCopilotTree.isFresh(exact[0].observedAt, now: now)

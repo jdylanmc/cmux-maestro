@@ -67,7 +67,10 @@ stale navigation, not a Details popover.
 With current observation access, an existing terminal reverts to its normal
 terminal row when its managed process is verified ended (controller process
 disappearance, exact dead-session observation, or generation-matched exited
-process evidence), with no live or uncertain observed occupant. Only presentation
+process evidence), with no live or uncertain observed occupant and **Show ended
+agents** off. Undismissed failures, reported blockers, blocking/error attention,
+failed/blocked or internal tasks, and incomplete child evidence prevent reversion.
+History/attention storage failures keep ended rows visible. Only presentation
 changes: retained nodes, generations, history, capacity and live descendants stay
 untouched. Missing surfaces keep the existing **Show ended agents** policy.
 

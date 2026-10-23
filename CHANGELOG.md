@@ -285,8 +285,9 @@ Notable changes are recorded using Keep a Changelog categories.
   bridge reasons instead of losing the diagnostic (#339).
 
 - Ended managed rows focus their exact retained terminal without opening an
-  unavailable Details popover. Verified ended sessions on existing terminals
-  revert to normal terminal rows; missing surfaces have no focus action (#337).
+  unavailable Details popover. Clean verified-ended sessions on existing terminals
+  revert to normal terminal rows when ended history is hidden; failures, attention
+  and retained task evidence stay visible. Missing surfaces have no focus action (#337).
 - Workspace rows reuse identity-and-freshness placement results across redraws
   instead of repeatedly copying session histories. Timestamp-only reads no
   longer redraw the outline within the same displayed minute; coherent display

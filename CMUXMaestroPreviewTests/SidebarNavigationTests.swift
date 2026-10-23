@@ -59,14 +59,15 @@ struct SidebarNavigationTests {
         let tree = SidebarCopilotTree(availability: .ready, sessions: [], issues: [], generatedAt: date)
         let hierarchy = fixtures.hierarchy()
         let ended = SidebarPresentation.endedManagedNodeIDs(
-            managed: snapshot, availability: .ready, hierarchy: hierarchy, observations: tree, now: date
+            managed: snapshot, availability: .ready, hierarchy: hierarchy, observations: tree, now: date,
+            showEnded: showEnded
         )
-        #expect(ended == [node.id])
+        #expect(ended == (showEnded ? [] : [node.id]))
         let visible = SidebarVisibleWork(
             tree: tree, managed: snapshot.nodes, history: .init(), showEnded: showEnded,
             now: date, displacedNodeIDs: ended
         )
-        #expect(visible.managed.isEmpty)
+        #expect(visible.managed == (showEnded ? [node] : []))
         #expect(visible.hiddenSurfaces.isEmpty)
         let workspace = try #require(hierarchy.workspaces.first { $0.id == node.workspaceId })
         guard case .available(let surfaces) = workspace.surfaces else {
@@ -75,16 +76,18 @@ struct SidebarNavigationTests {
         #expect(SidebarPresentation.unmanagedSurfaces(
             surfaces, workspaceID: node.workspaceId, managed: visible.managed,
             observations: visible.tree, now: date
-        ).contains { $0.id == node.surfaceId })
+        ).contains { $0.id == node.surfaceId } == !showEnded)
         #expect(snapshot.nodes == [node], "Presentation must not archive controller history")
         #expect(SidebarPresentation.endedManagedNodeIDs(
             managed: snapshot, availability: .ready, hierarchy: .empty, observations: tree, now: date
         ).isEmpty, "Missing surfaces retain the existing ended-history policy")
     }
 
-    private func endedNode(now: Date, generation: Int = 1, phase: String = "process-disappeared") -> SidebarOrchestrationNode {
+    private func endedNode(
+        now: Date, generation: Int = 1, phase: String = "process-disappeared", role: String = "coordinator"
+    ) -> SidebarOrchestrationNode {
         .init(id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil,
-              role: "coordinator", label: "Copilot session",
+              role: role, label: "Copilot session",
               workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
               generation: generation, phase: phase, availability: "unavailable",
               copilotSessionId: fixtures.sessionID, executionMode: .interactive,
@@ -132,7 +135,7 @@ struct SidebarNavigationTests {
     @Test(arguments: ["observation", "process", "wrong-generation"])
     func verifiedProcessEndReleasesRowAndRetainsLiveDescendants(_ source: String) {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let node = endedNode(now: date, phase: "turn-failed")
+        let node = endedNode(now: date, phase: "turn-running")
         let child = SidebarOrchestrationNode(
             id: UUID(), runId: node.runId, parentId: node.id, role: "worker", label: "Live child",
             workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
@@ -165,12 +168,83 @@ struct SidebarNavigationTests {
         }
         #expect(ended == [node.id])
         let visible = SidebarVisibleWork(
-            tree: tree, managed: snapshot.nodes, history: .init(), showEnded: true,
+            tree: tree, managed: snapshot.nodes, history: .init(), showEnded: false,
             now: date, displacedNodeIDs: ended
         )
         #expect(visible.managed == [child])
         #expect(visible.tree.sessions.isEmpty, "The ended observation must not reappear as an unmanaged agent")
         #expect(visible.hiddenSurfaces.isEmpty)
+    }
+
+    @Test(arguments: ["turn-failed", "startup-failed", "reported-failed", "launch-failed",
+                      "reported-blocked", "session-error", "session-failed", "permission",
+                      "failed-child", "blocked-child", "internal-task", "incomplete"])
+    func endedSurfaceKeepsProtectedOutcomesAndFocus(_ scenario: String) throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let failure = SidebarDismissedManagedOutcome(nodeID: fixtures.surfaceB, generation: 1, phase: scenario)
+        let phase = failure.isValid || scenario == "reported-blocked" ? scenario : "process-disappeared"
+        let node = endedNode(now: date, phase: phase, role: failure.isValid ? "worker" : "coordinator")
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]
+        )
+        var session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .dead, state: scenario == "session-failed" ? .failed : .unknown,
+            model: nil, observedAt: date, nodes: [], childrenComplete: scenario != "incomplete",
+            treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        if scenario == "session-error" || scenario == "permission" {
+            session.attention = [.init(
+                kind: scenario == "session-error" ? .error : .permission,
+                evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: date
+            )]
+        }
+        if ["failed-child", "blocked-child", "internal-task"].contains(scenario) {
+            session.nodes = [.init(
+                id: "protected", parentID: nil, depth: 0, kind: .subagent, name: "Protected task",
+                state: scenario == "internal-task" ? .idle : scenario == "blocked-child" ? .blocked : .failed, model: nil,
+                ancestryUnresolved: false, hasChildren: false
+            )]
+            if scenario == "internal-task" {
+                session.nodes[0].observedParent = .session(.init(providerID: "copilot", sessionID: fixtures.sessionID.uuidString))
+            }
+        }
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: date)
+        let ended = SidebarPresentation.endedManagedNodeIDs(
+            managed: snapshot, availability: .ready, hierarchy: fixtures.hierarchy(), observations: tree, now: date
+        )
+        #expect(ended.isEmpty)
+        let visible = SidebarVisibleWork(
+            tree: tree, managed: [node], history: .init(), showEnded: false, now: date, displacedNodeIDs: ended
+        )
+        #expect(visible.managed == [node])
+        if ["session-error", "permission", "failed-child", "blocked-child", "internal-task"].contains(scenario) {
+            #expect(visible.tree.sessions == [session])
+        }
+        let target = SidebarNavigationTarget.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId)
+        #expect(SidebarPresentation.focusTarget(
+            for: .managed(node), capturedPlacement: target, hierarchy: fixtures.hierarchy(), connected: true,
+            tree: tree, managed: snapshot, availability: .ready, now: date
+        ) == target)
+    }
+
+    @Test(arguments: [1, 2])
+    func onlyExactDismissedFailureMayReleaseEndedTerminal(_ dismissedGeneration: Int) {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let node = endedNode(now: date, phase: "turn-failed", role: "worker")
+        let session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .dead, state: .unknown, model: nil, observedAt: date, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: date)
+        var history = SidebarHistorySettings()
+        history.dismissedManaged = [.init(nodeID: node.id, generation: dismissedGeneration, phase: node.phase)]
+        let ended = SidebarPresentation.endedManagedNodeIDs(
+            managed: .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]),
+            availability: .ready, hierarchy: fixtures.hierarchy(), observations: tree, now: date, history: history
+        )
+        #expect(ended == (dismissedGeneration == node.generation ? [node.id] : []))
     }
 
     @Test func seenCallbackRunsOnlyAfterSuccessfulCurrentNavigation() async {
