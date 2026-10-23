@@ -292,9 +292,13 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Large session logs start from a bounded recent tail rather than replaying all
   history. Sidebar settings offers **Event tail (MiB)**, default 4, range 1–64.
-  New or replaced logs use the current value without restart; existing tails
-  stay incremental and never backfill on a setting change. Omitted child history
-  stays incomplete, and unproven current state stays unknown.
+  New or replaced logs and large gaps after paused polling use the current value
+  without restart; existing windows never backfill on a setting change. Omitted
+  child history stays incomplete, and unproven current state stays unknown.
+  Still-selected sessions keep replay protection across unrelated tab changes
+  and temporary reader outages. At the 64-session limit, admitted sessions stay;
+  additional sessions remain unavailable until a slot leaves, rather than
+  evicting observed evidence.
 
 - An unavailable session no longer hides healthy agents' current states, names,
   pets or child work. Unavailable state and verifier-unknown observations stay

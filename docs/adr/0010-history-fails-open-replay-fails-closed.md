@@ -19,14 +19,27 @@ incomplete. Recent events must establish current state, otherwise it is unknown.
 
 The existing 8 MiB aggregate and 4 MiB per-session payload budgets remain.
 Larger windows initialize across multiple polls, with a fixed captured end.
-Changing the setting affects new or replaced tails, never expands or rewinds an
-already admitted window. Unchanged files require no event-byte reads.
+Changing the setting affects subsequent new, replaced or oversized-gap reads,
+never expands or rewinds an already admitted window. If no window is in progress
+and unseen appends exceed the selected window, resume at the newest bounded tail.
+Skipped gaps invalidate projected state, not already observed replay evidence.
+Unchanged files require no event-byte reads.
 
 Observed replay evidence is still retained under the existing bounded guards;
 this is not permission to clear a live replay ledger or evict exact evidence.
 The unseen prefix has no replay or completeness guarantee. Header identity,
 process, binding and file-generation checks remain conservative. A separate
 bounded header check does not import historical state or model information.
+It must find an exact-session, supported `session.start` as the first event.
+
+Unrelated topology changes, discovery restarts and temporary verifier uncertainty
+retain the still-selected cohort's private replay guards. They never grant cached
+publication: routing, process and file evidence must pass current validation.
+Selection revocation and actual binding or file-generation changes remain
+invalidation boundaries. At the 64-session admission limit, keep admitted sessions;
+additional sessions remain unavailable with an explicit limit until a slot leaves.
+Do not rotate or evict observed tails to admit more sessions, or fast-retry a
+capacity wait.
 
 ## Clarification (2026-10-21, #269): isolate child-local doubt
 

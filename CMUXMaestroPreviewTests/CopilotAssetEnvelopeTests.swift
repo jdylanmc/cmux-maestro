@@ -407,6 +407,7 @@ struct CopilotAssetEnvelopeTests {
         defer { fixture.remove() }
         let start = UUID(), tool = UUID(), completion = UUID()
         let rows = try [
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
             interactionEvent("assistant.turn_start", id: start, turn: "0", interaction: "current"),
             interactionEvent("tool.execution_start", id: tool, parent: start, data: [
                 "toolCallId": "tool", "toolName": "view",

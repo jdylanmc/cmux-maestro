@@ -124,8 +124,8 @@ actor CopilotSessionReader {
         try Task.checkCancellation()
         let now = clock()
         if selectedSurfaces != surfaceIDs {
-            resetDiscovery()
             selectedSurfaces = surfaceIDs
+            resetDiscovery()
         }
         guard !surfaceIDs.isEmpty else {
             resetDiscovery()
@@ -368,6 +368,7 @@ actor CopilotSessionReader {
         // Continuation is productive only until EOF, not merely while a limit
         // warning exists (e.g. a changing directory or too many visible sessions).
         pendingHistory = fastDiscoveryCycle && scanned > 0 && discovery?.finished == false
+            && waitingBinding == nil
         return discoveryIncomplete
     }
 
@@ -478,7 +479,7 @@ actor CopilotSessionReader {
             publishedCohort.remove(id)
             batch.issues.append(.identityChanged)
         case .contentFree(let liveness, let issues):
-            tails.removeValue(forKey: id)
+            // Private replay evidence survives uncertainty; no cached state is published.
             sessionNames.forget(id)
             publishedCohort.insert(id)
             recordIssues(issues, for: id, batch: &batch)
@@ -664,18 +665,13 @@ actor CopilotSessionReader {
         }
         try Task.checkCancellation()
         pendingHistory = pendingHistory || (batch.madeProgress && batch.unreadHistory)
-            || (fastDiscoveryCycle && waitingBinding != nil && !publishedCohort.isEmpty)
-        // An overflow warning is not work. Finish this finite sweep before
-        // polling another one; stationary evicted prefixes must not spin fast.
-        if discovery?.finished == true && cohortFinished && cycleOverflowed { pendingHistory = false }
         finishDiscoveryCycle()
         // Each frozen prefix ends after `batch.now`, so it can hold events stamped later.
         // Stamp the snapshot after every read; otherwise those events fail validation.
         return snapshot(now: max(batch.now, clock()), observations: batch.observations, issues: issues)
     }
 
-    // Scheduling only: initial/changed index sweeps and retained-tail deltas.
-    // Rebuilding evicted prefixes of an unchanged overflow uses normal polling.
+    // Scheduling only: productive discovery and admitted-tail deltas, never capacity waits.
     func hasPendingHistory() -> Bool { pendingHistory }
 
     func retentionCounts() -> (bindings: Int, tails: Int, waiting: Int, published: Int) {
@@ -690,16 +686,19 @@ actor CopilotSessionReader {
         discoveryStamp = nil
         identityCache.removeAll()
         unseenIdentities.removeAll()
-        bindingsByID.removeAll()
-        bindingOrder.removeAll()
-        tails.removeAll()
-        sessionNames.removeAll()
+        // Discovery is not an ownership change. Current grants are revalidated
+        // before any retained session is read or published on the next pass.
+        bindingsByID = bindingsByID.filter { selectedSurfaces.contains($0.value.record.surfaceID) }
+        bindingOrder.removeAll { bindingsByID[$0] == nil }
+        let retained = Set(bindingsByID.keys)
+        tails = tails.filter { retained.contains($0.key) }
+        sessionNames.retain(only: retained)
         pendingHistory = false
         cycleChanged = false
         cycleOverflowed = false
         cycleIssues.removeAll()
         waitingBinding = nil
-        publishedCohort.removeAll()
+        publishedCohort.formIntersection(retained)
         lastDiscoveryCycle = nil
         fastDiscoveryCycle = true
     }
@@ -719,14 +718,8 @@ actor CopilotSessionReader {
     private func admit(_ entry: Binding) -> Bool {
         if bindingsByID[entry.record.sessionID] == nil {
             if bindingOrder.count == limits.maximumSessions {
-                guard let index = bindingOrder.firstIndex(where: { publishedCohort.contains($0) }) else {
-                    return false
-                }
-                let retired = bindingOrder.remove(at: index)
-                bindingsByID.removeValue(forKey: retired)
-                tails.removeValue(forKey: retired)
-                publishedCohort.remove(retired)
                 cycleOverflowed = true
+                return false
             }
             bindingOrder.append(entry.record.sessionID)
         }
@@ -838,23 +831,30 @@ actor CopilotSessionReader {
             tail.lastComplete = saved
             tail.lastCompleteAt = savedAt
         }
-        if tail.stamp == nil && before.size > Int64(tailWindowBytes) {
+        if tail.target == nil && before.size - tail.offset > Int64(tailWindowBytes) {
             tail.offset = before.size - Int64(tailWindowBytes)
             tail.historyIncomplete = true
             tail.discardingInitialLine = true
-            // Validate the bounded source header without importing old work or model state.
-            let header = try readEventBytes(file, offset: 0, count: 4096)
-            if let newline = header.firstIndex(of: 10) {
-                tail.reducer.validateSourceHeader(Data(header[..<newline]))
-            } else {
-                tail.reducer.markMalformed()
+            tail.partial.removeAll()
+            tail.droppingOversizedLine = false
+            tail.assetEnvelope = nil
+            tail.lastComplete = nil
+            tail.lastCompleteAt = nil
+            tail.reducer.omitUnseenHistory()
+            if tail.stamp == nil {
+                // Validate source identity without importing historical work or model state.
+                let header = try readEventBytes(file, offset: 0, count: 4096)
+                if let newline = header.firstIndex(of: 10) {
+                    tail.reducer.validateSourceHeader(Data(header[..<newline]))
+                } else {
+                    tail.reducer.markMalformed()
+                }
             }
         }
         var remaining = min(budget, limits.bytesPerSession)
         var lines = 0
         if tail.target == nil {
-            // Freeze a finite prefix. Appends cannot indefinitely extend the
-            // initial catch-up lease and prevent another binding's admission.
+            // Appends and preference edits cannot expand an admitted window.
             tail.target = before.size
             tail.targetAt = now
         }

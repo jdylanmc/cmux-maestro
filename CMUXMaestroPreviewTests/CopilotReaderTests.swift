@@ -249,7 +249,7 @@ nonisolated struct CopilotReaderTests {
     }
 
     @MainActor
-    @Test func unchangedOverflowCatchupPublishesFreshTreeOnNormalCadence() async throws {
+    @Test func unchangedOverflowKeepsAdmittedTreeFreshOnNormalCadence() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let other = try fixture.addSession(surface: fixture.surface)
@@ -262,9 +262,11 @@ nonisolated struct CopilotReaderTests {
             try Data().write(to: directory.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
             try bytes.write(to: directory.appendingPathComponent("events.jsonl"))
         }
-        let expected = Set(try directories.map { try #require(UUID(uuidString: $0.lastPathComponent)) })
         let clock = CopilotReaderTestClock()
         let reader = fixture.reader(limits: .init(maximumSessions: 1, linesPerSession: 1), clock: { clock.now() })
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        let expected = Set(initial.sessions.map(\.sessionID))
+        #expect(expected.count == 1)
         let topology = SidebarTopology(HierarchySnapshot(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
             workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
@@ -292,11 +294,11 @@ nonisolated struct CopilotReaderTests {
             }
             #expect(visible == expected)
         }
-        #expect(normalPolls >= rows.count)
+        #expect(normalPolls >= 2)
     }
 
     @Test(arguments: [1, 2, 64], [false, true])
-    func boundedCohortsPublishEveryMultibatchTranscriptAndStopFastRetry(capacity: Int, byteLimited: Bool) async throws {
+    func boundedCohortsFinishAdmittedTranscriptsWithoutEvictionOrFastRetry(capacity: Int, byteLimited: Bool) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         var directories = [fixture.session]
@@ -315,34 +317,35 @@ nonisolated struct CopilotReaderTests {
             linesPerSession: byteLimited ? 2048 : 1
         ))
         var published: Set<UUID> = []
+        var admitted: Set<UUID> = []
         var stopped = false
-        // One line (or roughly one line's bytes) per session per batch: enough
-        // for both finite cohorts and their discovery boundaries, not a timeout.
+        // A bounded number of line/byte batches, not a wall-clock timeout.
         let cohorts = (directories.count + capacity - 1) / capacity
         for _ in 0..<((cohorts + 1) * (rows.count + 3)) {
             let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
             #expect(snapshot.sessions.count <= capacity)
             #expect(snapshot.sessions.allSatisfy { expected.contains($0.sessionID) })
+            if admitted.isEmpty { admitted = Set(snapshot.sessions.map(\.sessionID)) }
+            #expect(Set(snapshot.sessions.map(\.sessionID)) == admitted)
             let counts = await reader.retentionCounts()
             #expect(counts.bindings <= capacity && counts.tails <= capacity && counts.waiting <= 1)
             published.formUnion(snapshot.sessions.filter { $0.state == .completed }.map(\.sessionID))
             let pending = await reader.hasPendingHistory()
-            if published == expected && !pending {
+            if published == admitted && !pending {
                 stopped = true
                 break
             }
         }
-        #expect(published == expected)
+        #expect(published == admitted && admitted.count == capacity)
         #expect(stopped)
-        // Revisit an entire unchanged sweep as well: evicted historical
-        // prefixes are not new work and must not restart the fast retry loop.
+        // Capacity waits never restart fast retries or replace the admitted cohort.
         for _ in 0..<((cohorts + 1) * (rows.count + 3)) {
             _ = try await reader.read(surfaceIDs: [fixture.surface])
             #expect(await reader.hasPendingHistory() == false)
         }
     }
 
-    @Test func growingFirstTranscriptCannotPinFiniteCatchupSlot() async throws {
+    @Test func growingFirstTranscriptCannotExtendOtherAdmittedCatchupWindow() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let other = try fixture.addSession(surface: fixture.surface)
@@ -355,7 +358,7 @@ nonisolated struct CopilotReaderTests {
             try bytes.write(to: directory.appendingPathComponent("events.jsonl"))
         }
         let clock = CopilotReaderTestClock()
-        let reader = fixture.reader(limits: .init(maximumSessions: 1, linesPerSession: 1), clock: { clock.now() })
+        let reader = fixture.reader(limits: .init(maximumSessions: 2, linesPerSession: 1), clock: { clock.now() })
         let capturedAt = clock.now()
         let initial = try await reader.read(surfaceIDs: [fixture.surface])
         let firstID = try #require(initial.sessions.first?.sessionID)
@@ -386,7 +389,7 @@ nonisolated struct CopilotReaderTests {
                 break
             }
             let counts = await reader.retentionCounts()
-            #expect(counts.tails <= 1 && counts.bindings <= 1 && counts.waiting <= 1)
+            #expect(counts.tails <= 2 && counts.bindings <= 2 && counts.waiting == 0)
         }
         #expect(sawCapturedBoundary)
         #expect(sawLater)
@@ -415,11 +418,11 @@ nonisolated struct CopilotReaderTests {
         let waitingID = try #require(all.first(where: { $0 != activeID }))
         _ = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(await reader.retentionCounts().waiting == 1)
-        var expected = all
+        var expected: Set<UUID> = [activeID]
         switch change {
         case "active-revoked", "waiting-revoked":
             let revoked = change == "active-revoked" ? activeID : waitingID
-            expected.remove(revoked)
+            if change == "active-revoked" { expected = [waitingID] }
             try fixture.writeRecord(.init(
                 sessionID: revoked, surfaceID: UUID(), launchWorkspaceID: fixture.workspace,
                 ownerPID: 7878, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
@@ -442,6 +445,7 @@ nonisolated struct CopilotReaderTests {
                 recordedAt: fixture.record.recordedAt
             ))
         case "grant-revoked":
+            expected = all
             let revoked = try await reader.read(surfaceIDs: [])
             #expect(revoked.sessions.isEmpty)
             #expect(await reader.retentionCounts().tails == 0)
@@ -456,7 +460,7 @@ nonisolated struct CopilotReaderTests {
                 _ = try await cancelled.value
                 Issue.record("Cancelled catchup published a snapshot")
             } catch is CancellationError {}
-            #expect(await reader.retentionCounts().tails == 0)
+            #expect(await reader.retentionCounts().tails == 1)
             #expect(await reader.retentionCounts().waiting == 0)
             #expect(await reader.hasPendingHistory() == false)
         }
@@ -467,9 +471,9 @@ nonisolated struct CopilotReaderTests {
             published.formUnion(snapshot.sessions.filter { $0.state == .completed }.map(\.sessionID))
             let counts = await reader.retentionCounts()
             #expect(counts.bindings <= 1 && counts.tails <= 1 && counts.waiting <= 1)
-            if published == expected { break }
+            if published.count == 1 { break }
         }
-        #expect(published == expected)
+        #expect(published.count == 1 && published.isSubset(of: expected))
         #expect(!audit.queriedPIDs.contains(7878))
     }
 
@@ -646,10 +650,12 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.hasPendingHistory() == false)
         let next = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(next.sessions.isEmpty)
-        #expect(next.issues == [.noIdentityRecords])
+        #expect(Set(next.issues) == [.identityChanged, .noIdentityRecords])
+        let settled = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(settled.sessions.isEmpty && settled.issues == [.noIdentityRecords])
     }
 
-    @Test func cappedVisibleDiscoveryRotatesAndNeverClaimsCompleteOrSpinsAtEOF() async throws {
+    @Test func cappedVisibleDiscoveryRetainsCohortWithoutClaimingCompleteOrSpinning() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         try fixture.writeEvents([copilotTestEvent("session.idle")])
@@ -672,7 +678,7 @@ nonisolated struct CopilotReaderTests {
             observed.formUnion(snapshot.sessions.map(\.sessionID))
             if await reader.hasPendingHistory() == false { reachedEOF = true }
         }
-        #expect(observed == expected)
+        #expect(observed.count == 2 && observed.isSubset(of: expected))
         #expect(reachedEOF)
     }
 
@@ -1445,9 +1451,15 @@ nonisolated struct CopilotReaderTests {
         let reader = fixture.reader()
         _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
         let initialBytes = await reader.eventReadBytes
-        try fixture.append(copilotTestEvent("assistant.message", data: [
+        let gap = try copilotTestEvent("assistant.message", data: [
             "content": String(repeating: "x", count: 2 * 1_048_576)
-        ]) + Data([10]))
+        ]) + Data([10])
+        do {
+            let handle = try FileHandle(forWritingTo: fixture.session.appendingPathComponent("events.jsonl"))
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            for _ in 0..<(hasRecentStart ? 160 : 1) { try handle.write(contentsOf: gap) }
+        }
         if hasRecentStart {
             try fixture.append(copilotTestEvent("assistant.turn_start", data: ["turnId": "recent"]) + Data([10]))
         }
