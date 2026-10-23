@@ -6,6 +6,52 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test(arguments: [SidebarDensity.compact, .comfortable], [280, 350, 460])
+    func unresolvedFragmentsRenderOneNeutralLine(_ density: SidebarDensity, _ width: Int) throws {
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let children = (0..<3).map {
+            CopilotChildWork(id: "fragment-\($0)", parentID: "unresolved-owner", kind: .unknown,
+                             name: "Unknown agent", state: .unknown, model: nil)
+        }
+        let tree = SidebarCopilotTree.project(
+            data.snapshot(sessions: [data.session(children: children, now: now)], complete: false, now: now),
+            onto: data.topology(), now: now
+        )
+        let session = try #require(tree.sessions.first)
+        func pixels<V: View>(_ content: V) throws -> Data {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 32),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            let host = NSHostingView(rootView: content
+                .environment(\.sidebarDensity, density)
+                .environment(\.sidebarContentWidth, Double(width))
+                .frame(width: CGFloat(width), height: 32, alignment: .topLeading).background(Color.white))
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            #expect(!window.isVisible)
+            #expect(buttons(host).isEmpty, "Unresolved metadata grants no navigation or lifecycle action")
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        let expected = try pixels(
+            Label("+3 unresolved", systemImage: "questionmark.circle")
+                .font(.system(density == .compact ? .caption : .subheadline).weight(.regular))
+                .foregroundStyle(.secondary).lineLimit(1).padding(.leading, 28)
+        )
+        for taskboard in [false, true] {
+            let actual = try pixels(CopilotSessionContents(
+                session: session, expanded: true, navigation: SidebarNavigation(),
+                layout: .init(), setExpanded: { _, _ in }, dismiss: { _ in }, acknowledge: { _ in },
+                selection: .constant(nil), taskboard: taskboard
+            ))
+            #expect(actual == expected, "Exactly one neutral count line, not per-fragment agent rows or a green state badge")
+        }
+    }
+
     @Test func cachedManagedInternalTaskGroupMatchesUncachedPresentation() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }

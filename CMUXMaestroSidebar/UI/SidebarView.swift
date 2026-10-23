@@ -2502,7 +2502,7 @@ private struct AttentionEvidenceIncompleteIcon: View {
     }
 }
 
-private struct CopilotSessionContents: View {
+struct CopilotSessionContents: View {
     let session: SidebarCopilotSession
     let expanded: Bool
     let navigation: SidebarNavigation
@@ -2530,6 +2530,20 @@ private struct CopilotSessionContents: View {
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if expanded {
+            if !session.unresolvedFragments.isEmpty {
+                Label(
+                    String(localized: "work.unresolved.count",
+                           defaultValue: "+\(session.unresolvedFragments.count) unresolved"),
+                    systemImage: "questionmark.circle"
+                )
+                .sidebarFont(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .help(String(localized: "work.unresolved.help",
+                             defaultValue: "Identity or ancestry unavailable"))
+                .accessibilityIdentifier("unresolved-work-\(session.id)")
+                .padding(.leading, 28 + density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
+            }
             ForEach(taskboard ? session.taskSections(layout: layout) : session.childSections(layout: layout)) { section in
                 if section.taskDisclosure != nil {
                     SidebarInternalTaskGroup(

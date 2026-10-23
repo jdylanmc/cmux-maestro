@@ -8,6 +8,50 @@ struct SidebarInternalTaskTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let event = UUID(uuidString: "13100000-0000-0000-0000-000000000001")!
 
+    @Test func unresolvedFragmentsCompactWithoutHidingProtectedEvidence() throws {
+        let fragments: [CopilotChildWork] = [
+            .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Unknown agent", state: .working, model: nil),
+            .init(id: "permission", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Agent", state: .blocked, model: nil, attention: [signal(.permission)]),
+            .init(id: "ancestor", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Agent", state: .unknown, model: nil),
+            task("nested", parent: "ancestor", state: .working),
+            task("named", state: .working)
+        ]
+        let tree = project(fragments, complete: false)
+        let session = try #require(tree.sessions.first)
+        let rows = session.childSections(layout: .init()).flatMap(\.rows)
+        #expect(!rows.contains { $0.id == "fragment" })
+        #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
+        #expect(Set(rows.map(\.id)) == ["permission", "ancestor", "nested", "named"])
+        #expect(session.nodes.count == fragments.count)
+        #expect(session.attentionOwnerCount == 1)
+        #expect(session.knownRunningChildren == 3)
+        #expect(tree.dismissibleOutcomes.isEmpty)
+        #expect(!tree.hasCompleteCounts)
+    }
+
+    @Test(arguments: [AgentWorkState.unknown, .working, .idle, .completed, .cancelled])
+    func fragmentCompactionRetainsEvidenceInBothPresentations(_ state: AgentWorkState) {
+        var fragment = SidebarCopilotNode(
+            id: "fragment", parentID: nil, depth: 0, kind: .unknown, name: "Agent",
+            state: state, model: nil, ancestryUnresolved: true, hasChildren: false
+        )
+        var session = project([]).sessions[0]
+        session.nodes = [fragment]
+        #expect(session.unresolvedFragments.count == 1)
+        #expect(session.taskboardActivity.isEmpty)
+        #expect(session.childSections(layout: .init()).isEmpty)
+        #expect(session.taskSections(layout: .init()).isEmpty)
+        #expect(session.hasShownOutline(.init()), "The owner must disclose the unresolved indicator")
+        #expect(session.nodes == [fragment])
+        fragment.attentionDegraded = true
+        session.nodes = [fragment]
+        #expect(session.unresolvedFragments.isEmpty)
+        #expect(session.taskboardActivity == [fragment])
+    }
+
     @Test(arguments: [CopilotLiveness.dead, .ambiguous, .alive], [false, true])
     func review001SurfaceSuppressionNeverAttestsAnotherSessionsContents(
         _ historicalLiveness: CopilotLiveness, _ missingManagedIdentity: Bool

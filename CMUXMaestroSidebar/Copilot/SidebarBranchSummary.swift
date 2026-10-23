@@ -104,7 +104,21 @@ struct SidebarChildSection: Identifiable {
 }
 
 extension SidebarCopilotSession {
-    var taskboardActivity: [SidebarCopilotNode] { nodes.filter { !$0.isInternalTask } }
+    /// Compact only unattributed leaves; attention and necessary ancestry keep their rows.
+    var unresolvedFragments: [SidebarCopilotNode] {
+        let parents = Set(nodes.compactMap(\.parentID))
+        return nodes.filter {
+            $0.kind == .unknown && $0.ancestryUnresolved && !parents.contains($0.id)
+                && !$0.hasChildren && !$0.historyAncestor
+                && $0.attention.isEmpty && !$0.attentionDegraded
+                && $0.state != .blocked && $0.state != .failed
+        }
+    }
+
+    var taskboardActivity: [SidebarCopilotNode] {
+        let compacted = Set(unresolvedFragments.map(\.id))
+        return nodes.filter { !$0.isInternalTask && !compacted.contains($0.id) }
+    }
 
     func taskSections(layout: SidebarLayoutSettings) -> [SidebarChildSection] {
         var layout = layout
@@ -125,7 +139,9 @@ extension SidebarCopilotSession {
     // Keep literal ancestry and provider order. A task section includes its
     // nested activity, but never another independently bound terminal/session.
     func childSections(layout: SidebarLayoutSettings, taskboard: Bool = false) -> [SidebarChildSection] {
-        let rows = taskboard ? childRows(layout: layout) : outlineChildRows(layout: layout)
+        let compacted = Set(unresolvedFragments.map(\.id))
+        let rows = (taskboard ? childRows(layout: layout) : outlineChildRows(layout: layout))
+            .filter { !compacted.contains($0.id) }
         var result: [SidebarChildSection] = []
         var index = 0
         while index < rows.count {

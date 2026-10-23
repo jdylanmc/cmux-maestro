@@ -47,6 +47,14 @@ Real terminal-backed child agents keep their real tab identities. Neither task
 visibility nor the workspace eye filters real tabs from native Hierarchy,
 inflates agent/tab counts, changes ownership or closes a session.
 
+Scoped activity whose spawn predates the bounded tail may have a known child ID
+but unknown kind and ancestry. Unattributed leaves share one neutral **+N unresolved**
+indicator under their owning session, with hover detail. Attention-bearing,
+blocked, failed and necessary ancestor rows remain individual. This is only
+presentation compaction: exact observations, counts, history, uncertainty and
+dismissal rules do not change. Later accepted spawn evidence resolves the same
+ID without adding a duplicate. No historical backfill or name-based matching.
+
 ### Other activity and session history
 
 The completed-work history controls in sidebar **Settings** are shared by

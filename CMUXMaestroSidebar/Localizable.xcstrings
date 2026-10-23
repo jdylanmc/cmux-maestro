@@ -1,6 +1,34 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "work.unresolved.count" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "غير محسوم: +%lld" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "+%lld ungeklärt" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "+%lld unresolved" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "+%lld sin resolver" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "+%lld en attente d’identification" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "+%lld 未解決" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "+%lld 미확인" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "+%lld 未确定" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "+%lld 未確認" } }
+      }
+    },
+    "work.unresolved.help" : {
+      "extractionState" : "manual",
+      "localizations" : {
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "الهوية أو التسلسل غير متاح" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Identität oder Abstammung nicht verfügbar" } },
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Identity or ancestry unavailable" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Identidad o ascendencia no disponible" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Identité ou filiation indisponible" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "識別情報または親子関係を取得できません" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "식별 정보 또는 상위 관계를 확인할 수 없음" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "身份或层级关系不可用" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "身分或階層關係無法使用" } }
+      }
+    },
     "reader.tail.size" : {
       "extractionState" : "manual",
       "localizations" : {
