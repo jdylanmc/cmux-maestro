@@ -446,9 +446,8 @@ else:
         before = self.integration_snapshot()
         installer = preview.Installer(self.home, operations=self.ops, copilot_executable=provider)
         with installer.locked():
-            with self.assertRaises(subprocess.CalledProcessError) as failure:
+            with self.assertRaisesRegex(ValueError, r"Copilot integration apply failed \(exit 95\): Bridge diagnostic withheld"):
                 installer.install(self.old)
-        self.assertEqual(failure.exception.returncode, 95)
         evidence = json.loads((self.home / "receipt-crash-state.json").read_text())
         self.assertEqual(evidence, {"phase": "applying", "afterMissing": True, "receipt": "current"})
         self.assertEqual(self.integration_snapshot(), before)
@@ -714,7 +713,7 @@ with installer.locked():
         target = self.data.parent / "plugin/skills/cmux-maestro-orchestrate/SKILL.md"
         original = target.read_bytes()
         target.write_text("concurrent foreign content")
-        with self.assertRaises(subprocess.CalledProcessError):
+        with self.assertRaisesRegex(ValueError, r"Copilot integration restore failed \(exit 1\): Bridge diagnostic withheld"):
             self.operation("recover")
         self.assertEqual(target.read_text(), "concurrent foreign content")
         self.assertEqual((self.app / "payload").read_text(), "new")
