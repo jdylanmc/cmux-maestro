@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hosted-only partition: one blocking-observer regression, then its full complement."""
+"""Required native scopes: blocking observer, real-XPC multiwindow suite, and their complement."""
 import argparse
 from collections import Counter
 from contextlib import contextmanager
@@ -24,6 +24,17 @@ sys.dont_write_bytecode = True
 TARGET = "CMUXMaestroPreviewTests"
 TEST = "CopilotSetupTests/concurrentSupervisionDoesNotOccupyCooperativeExecutor()"
 SELECTOR = TARGET + "/" + TEST
+MULTIWINDOW_SELECTOR = TARGET + "/SidebarMultiWindowTests"
+MULTIWINDOW_TESTS = {
+    MULTIWINDOW_SELECTOR + "/" + name for name in (
+        "separateScenesKeepEachWindowsOwnHierarchyActionsAndLifetime()",
+        "sharedSceneNeverShowsAnotherWindowsDataAndRecoversWhenOneWindowRemains()",
+        "secondConnectionUnpairsBeforeItsFirstSnapshot()",
+        "viewWithoutSceneShowsNoWindowData()",
+        "rebindingToADifferentConnectionDropsThePreviousConnectionsFacts()",
+        "beatLivenessIsKeptPerWindowAndPanelOpensOnlyWhereRequested()",
+    )
+}
 BENCHMARK_SELECTOR = TARGET + "/CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()"
 BENCHMARK_FLAG = "CMUX_MAESTRO_READER_BENCHMARK"
 LOCAL_UI_FLAG = "CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE"
@@ -35,7 +46,7 @@ SCHEMA = "0.1.0"
 STATUSES = ("Passed", "Failed", "Skipped", "Expected Failure")
 STRUCTURE = ("Device", "Test Plan Configuration")
 DETAILS = ("Failure Message", "Source Code Reference", "Attachment", "Expression", "Test Value", "Runtime Warning")
-DIAGNOSTIC_SCOPES = ("isolated", "remaining", "full-fallback")
+DIAGNOSTIC_SCOPES = ("isolated", "multiwindow", "remaining", "full-fallback")
 DIAGNOSTIC_EXPORT_SECONDS = 30
 DIAGNOSTIC_MAX_BYTES = 64 * 1024 * 1024
 DIAGNOSTIC_MAX_FILES = 256
@@ -275,18 +286,55 @@ def validate_isolated(summary, tests):
     return measured
 
 
-def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=True, local_ui_enabled=False):
+def validate_multiwindow(summary, tests):
     selected = cases(tests)
     measured = reconcile(summary, selected)
+    require({case.identity for case in selected} == MULTIWINDOW_TESTS
+            and all(not case.parameterized and case.executions == ((None, "Passed"),)
+                    for case in selected),
+            "Multiwindow scope must execute and pass every expected test exactly once, without skips or retries.")
+    return measured
+
+
+def verify_multiwindow_evidence(root, *, head, run_id):
+    """Recheck the native job's exact-run artifacts in ci-gate, not just its success result."""
+    require(isinstance(head, str) and re.fullmatch(r"[0-9a-f]{40}", head)
+            and isinstance(run_id, str) and run_id.isdigit(), "Missing gate run identity.")
+    receipts = list(root.glob("scopes-*/coverage.json"))
+    require(len(receipts) == 1, "Expected exactly one native coverage invocation.")
+    directory = receipts[0].parent
+    evidence = json.loads(receipts[0].read_text())
+    require(isinstance(evidence, dict), "Invalid native coverage receipt.")
+    source = evidence.get("source", {})
+    require(isinstance(source, dict) and evidence.get("runID") == run_id and source.get("status") == "available"
+            and source.get("head") == head and source.get("dirty") is False,
+            "Native coverage evidence does not match this clean run and commit.")
+    require(evidence.get("passed") is True and type(evidence.get("multiwindowExitCode")) is int
+            and evidence["multiwindowExitCode"] == 0
+            and evidence.get("multiwindowVerified") is True,
+            "Native multiwindow invocation did not pass.")
+    summary = json.loads((directory / "multiwindow-summary.json").read_text())
+    tests = json.loads((directory / "multiwindow-tests.json").read_text())
+    measured = validate_multiwindow(summary, tests)
+    require(measured == evidence.get("multiwindowCounts"), "Multiwindow coverage counts disagree.")
+    inventory = enumerated_tests(json.loads((directory / "enumeration.json").read_text()))
+    require(MULTIWINDOW_TESTS <= inventory, "Built inventory is missing required multiwindow tests.")
+    return measured
+
+
+def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=True, local_ui_enabled=False,
+                       multiwindow_excluded=False):
+    selected = cases(tests)
+    measured = reconcile(summary, selected)
+    excluded_identities = ({SELECTOR} if isolated_excluded else set()) | (
+        MULTIWINDOW_TESTS if multiwindow_excluded else set())
     if benchmark_enabled:
         benchmark = [case for case in selected if case.identity == BENCHMARK_SELECTOR]
         require(len(benchmark) == 1 and benchmark[0].status == "Passed" and not benchmark[0].parameterized
                 and benchmark[0].executions == ((None, "Passed"),),
                 "Enabled reader benchmark must be present as exactly one nonparameterized passed execution.")
-    if isolated_excluded:
-        excluded = [case.status for case in selected if case.identity == SELECTOR]
-        require(not excluded or excluded == ["Skipped"],
-                "The isolated regression ran again in the loaded scope.")
+    require(all(case.status == "Skipped" for case in selected if case.identity in excluded_identities),
+            "An isolated test ran again in the loaded scope.")
     attributed = []
     for case in selected:
         if not any(status == "Skipped" for _, status in case.executions):
@@ -295,6 +343,8 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
                 "A skipped parameter or repeated invocation cannot use a whole-test exclusion.")
         if case.identity == SELECTOR and isolated_excluded:
             reason = "verified-isolated-selector-exclusion"
+        elif case.identity in MULTIWINDOW_TESTS and multiwindow_excluded:
+            reason = "verified-multiwindow-scope-exclusion"
         elif case.identity == BENCHMARK_SELECTOR and not benchmark_enabled:
             reason = "existing-opt-in-benchmark-disabled"
         elif case.identity in LOCAL_UI_TESTS and not local_ui_enabled:
@@ -304,7 +354,7 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
         attributed.append({"identity": case.identity, "policyReason": reason,
                            "allowlistReason": INTENTIONAL_SKIPS[case.identity],
                            "reportedDetails": case.reported_details})
-    remaining = [case for case in selected if not isolated_excluded or case.identity != SELECTOR]
+    remaining = [case for case in selected if case.identity not in excluded_identities]
     require(any(status != "Skipped" for case in remaining for _, status in case.executions),
             "The remaining integrated scope has no executed tests.")
     require(measured["executionCounts"]["skippedTests"] == len(attributed), "Unattributed skipped integrated tests.")
@@ -314,6 +364,8 @@ def validate_remaining(summary, tests, *, benchmark_enabled, isolated_excluded=T
 # Every test the build may legitimately report as not run, with why. Nothing else may be absent.
 INTENTIONAL_SKIPS = {
     SELECTOR: "Runs alone in the isolated scope; skipped from the remaining scope.",
+    **{identity: "Runs in the required multiwindow scope; skipped from the remaining scope."
+       for identity in MULTIWINDOW_TESTS},
     BENCHMARK_SELECTOR: f"Opt-in reader benchmark; runs only when {BENCHMARK_FLAG}=1.",
     **LOCAL_UI_TESTS,
 }
@@ -344,9 +396,12 @@ def enumerated_tests(document):
     return set(enabled) | set(disabled)
 
 
-def validate_inventory(expected, isolated, remaining, *, isolated_excluded):
+def validate_inventory(expected, isolated, remaining, *, isolated_excluded, multiwindow=()):
     observed = Counter(case.identity for case in isolated)
-    observed.update(case.identity for case in remaining if not (isolated_excluded and case.identity == SELECTOR))
+    observed.update(case.identity for case in multiwindow)
+    excluded = ({SELECTOR} if isolated_excluded else set()) | (
+        MULTIWINDOW_TESTS if multiwindow else set())
+    observed.update(case.identity for case in remaining if case.identity not in excluded)
     missing = sorted(set(expected) - set(observed))
     unexpected = sorted(set(observed) - set(expected))
     repeated = sorted(identity for identity, count in observed.items() if count > 1)
@@ -653,6 +708,7 @@ def run(command, directory, runner=subprocess.run):
                                       "environmentValue": benchmark_flag, "enabled": benchmark_enabled}}
     evidence_path = directory / "coverage.json"
     source = diagnostic_source()
+    evidence.update(source=source, runID=os.environ.get("GITHUB_RUN_ID"))
 
     def save():
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n")
@@ -706,12 +762,42 @@ def run(command, directory, runner=subprocess.run):
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["isolatedValidationError"] = str(error)
     save()
+    multiwindow_bundle = directory / "multiwindow.xcresult"
+    multiwindow = runner([*command, "test-without-building", "-only-testing:" + MULTIWINDOW_SELECTOR,
+                          "-resultBundlePath", str(multiwindow_bundle)], check=False, env=test_environment)
+    evidence["multiwindowExitCode"] = multiwindow.returncode
+    evidence["multiwindowVerified"] = False
+    try:
+        summary, tests = read_result(multiwindow_bundle, directory, "multiwindow", runner)
+        evidence["multiwindowCounts"] = validate_multiwindow(summary, tests)
+        multiwindow_cases = cases(tests)
+        require(multiwindow.returncode == 0, "Multiwindow invocation failed.")
+        evidence["multiwindowVerified"] = True
+    except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
+        evidence["multiwindowValidationError"] = str(error)
+        evidence["blockedStage"] = "multiwindow"
+        evidence["passed"] = False
+        evidence["failureDiagnostics"] = []
+        save()
+        failed_scopes = [("multiwindow", multiwindow.returncode)]
+        if (isolated.returncode or "isolatedValidationError" in evidence or isolated_summary is None
+                or isolated_summary.get("result") != "Passed"):
+            failed_scopes.insert(0, ("isolated", isolated.returncode))
+        for name, code in failed_scopes:
+            receipt = capture_failure_diagnostics(directory, name, source, runner)
+            receipt["testExitCode"] = code
+            evidence["failureDiagnostics"].append(receipt)
+            save()
+        print(f"Required multiwindow scope failed: {error}", file=sys.stderr)
+        return 1
+    save()
     # Never exclude an unverified selector. Still run the full suite for coverage,
     # but fail this invocation even if that diagnostic fallback passes.
     scope = "remaining" if evidence["selectorVerifiedByHostedResult"] else "full-fallback"
     remaining_bundle = directory / (scope + ".xcresult")
     selection = ["-skip-testing:" + SELECTOR] if evidence["selectorVerifiedByHostedResult"] else []
     remaining = runner([*command, "test-without-building", *selection,
+                        "-skip-testing:" + MULTIWINDOW_SELECTOR,
                         "-resultBundlePath", str(remaining_bundle)], check=False, env=test_environment)
     evidence["remainingExitCode"] = remaining.returncode
     remaining_summary = None
@@ -721,14 +807,15 @@ def run(command, directory, runner=subprocess.run):
         print("Remaining hosted test tree: " + json.dumps(tests), flush=True)
         evidence["remainingCounts"] = validate_remaining(
             remaining_summary, tests, benchmark_enabled=benchmark_enabled, isolated_excluded=bool(selection),
-            local_ui_enabled=local_ui_enabled)
+            local_ui_enabled=local_ui_enabled, multiwindow_excluded=True)
         validate_original_guide_cases(tests)
     except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError) as error:
         evidence["remainingValidationError"] = str(error)
     if inventory is not None and remaining_summary is not None:
         try:
             evidence["inventoryCoverage"] = validate_inventory(
-                inventory, isolated_cases if selection else [], cases(tests), isolated_excluded=bool(selection))
+                inventory, isolated_cases if selection else [], cases(tests), isolated_excluded=bool(selection),
+                multiwindow=multiwindow_cases)
         except (ValueError, KeyError, TypeError) as error:
             evidence["inventoryError"] = str(error)
     try:
@@ -761,18 +848,19 @@ def run(command, directory, runner=subprocess.run):
     if evidence["selectorVerifiedByHostedResult"] and "remainingCounts" in evidence:
         evidence["combinedExecutedTestCount"] = (
             evidence["isolatedCounts"]["executionCounts"]["totalTestCount"]
+            + evidence["multiwindowCounts"]["executionCounts"]["totalTestCount"]
             + evidence["remainingCounts"]["executionCounts"]["totalTestCount"]
             - evidence["remainingCounts"]["executionCounts"]["skippedTests"]
         )
     save()
     print("Integrated scope counts: " + json.dumps({
-        key: evidence[key] for key in ("selectorVerifiedByHostedResult", "isolatedCounts", "remainingCounts",
+        key: evidence[key] for key in ("selectorVerifiedByHostedResult", "isolatedCounts", "multiwindowCounts", "remainingCounts",
                                        "combinedExecutedTestCount", "inventoryCoverage", "inventoryError",
                                        "passed") if key in evidence
     }), flush=True)
     print(f"Integrated test coverage: {evidence_path}", flush=True)
     if not success:
-        print("Integrated test scopes did not both pass with verified nonzero coverage; preserve both xcresults.", file=sys.stderr)
+        print("Integrated test scopes did not all pass with verified nonzero coverage; preserve their xcresults.", file=sys.stderr)
     return 0 if success else 1
 
 
@@ -816,11 +904,20 @@ def run_focused(command, directory, selectors, repeats, runner=subprocess.run):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--results-root", required=True, type=Path)
+    parser.add_argument("--results-root", type=Path)
+    parser.add_argument("--verify-multiwindow-evidence", type=Path, help="Recheck this CI run's downloaded native evidence.")
     parser.add_argument("--focused", help="Comma-separated suite/test selectors; local diagnostics only.")
     parser.add_argument("--repeat", type=int, default=1, help="Independent focused executions; stop on any failure.")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
+    if args.verify_multiwindow_evidence is not None:
+        require(not args.command and args.results_root is None and not args.focused and args.repeat == 1,
+                "Evidence verification cannot run build/test actions.")
+        measured = verify_multiwindow_evidence(
+            args.verify_multiwindow_evidence, head=os.environ.get("GITHUB_SHA"), run_id=os.environ.get("GITHUB_RUN_ID"))
+        print("Required multiwindow execution verified: " + json.dumps(measured), flush=True)
+        return 0
+    require(args.results_root is not None, "--results-root is required for test execution.")
     command = args.command[1:] if args.command[:1] == ["--"] else args.command
     validate_arguments(command)
     args.results_root.mkdir(parents=True, exist_ok=True)

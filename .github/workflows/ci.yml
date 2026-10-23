@@ -197,6 +197,15 @@ jobs:
       - name: Reject new timing-sensitive tests
         if: always()
         run: python3 scripts/test-test-timing.py && python3 scripts/check-test-timing.py
+      - name: Download required native execution evidence
+        if: always() && needs.validate-native.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: integrated-test-scope-evidence
+          path: .build/ci-gate-native-evidence
+      - name: Verify required multiwindow execution
+        if: always() && needs.validate-native.result == 'success'
+        run: python3 scripts/run-integrated-test-scopes.py --verify-multiwindow-evidence .build/ci-gate-native-evidence
       - name: Evaluate required suites
         if: always()
         env:

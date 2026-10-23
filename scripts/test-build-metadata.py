@@ -257,7 +257,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
     @staticmethod
     def reported_identities(*reports):
-        identities = {scopes.SELECTOR}
+        identities = {scopes.SELECTOR} | scopes.MULTIWINDOW_TESTS
         for _, tests in reports:
             try:
                 identities.update(case.identity for case in scopes.cases(tests))
@@ -274,7 +274,10 @@ class IntegratedTestScopeTests(unittest.TestCase):
         }]}
 
     def execute(self, isolated, remaining, *, isolated_exit=0, remaining_exit=0, benchmark_flag=None, guide_exit=0,
-                inventory=None, enumeration_exit=0, guide_environment=None, guide_exception=None):
+                inventory=None, enumeration_exit=0, guide_environment=None, guide_exception=None,
+                multiwindow=None, multiwindow_exit=0):
+        multiwindow = (self.report([(identity, "Passed") for identity in sorted(scopes.MULTIWINDOW_TESTS)])
+                       if multiwindow is None else multiwindow)
         # The default built inventory mirrors the fixture; inventory tests pass an explicit enumeration.
         inventory = (self.enumeration(self.reported_identities(isolated, remaining))
                      if inventory is None else inventory)
@@ -290,11 +293,12 @@ class IntegratedTestScopeTests(unittest.TestCase):
             self.commands.append(command)
             if command[0] == "xcodebuild":
                 self.build_environments.append(kwargs.get("env"))
-                code = (isolated_exit if any(arg.startswith("-only-testing:") for arg in command)
+                code = (multiwindow_exit if "-only-testing:" + scopes.MULTIWINDOW_SELECTOR in command
+                        else isolated_exit if any(arg.startswith("-only-testing:") for arg in command)
                         else remaining_exit if "test-without-building" in command else 0)
                 return subprocess.CompletedProcess(command, code)
             scope = Path(command[command.index("--path") + 1]).stem
-            values = isolated if scope == "isolated" else remaining
+            values = isolated if scope == "isolated" else multiwindow if scope == "multiwindow" else remaining
             return subprocess.CompletedProcess(command, 0, stdout=json.dumps(values[0 if command[4] == "summary" else 1]))
         # These fixtures isolate the existing partition/count policy, not native guide execution.
         with patch("builtins.print") as printed, patch.dict(os.environ), \
@@ -350,7 +354,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 guide_environment=expected)
         self.assertEqual(result, 0)
         self.assertTrue(evidence["passed"])
-        self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
+        self.assertEqual(sum("test-without-building" in command for command in self.commands), 3)
         for environment in self.build_environments[1:]:
             self.assertEqual({key: value for key, value in environment.items()
                               if key.startswith("TEST_RUNNER_CMUX_GUIDE_ACCEPTANCE_")},
@@ -380,7 +384,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
                                             self.report([("OtherSuite/test()", "Passed")]))
             self.assertEqual(dict(os.environ), original)
         self.assertEqual(result, 0)
-        self.assertEqual(len(self.build_environments), 3)
+        self.assertEqual(len(self.build_environments), 4)
         self.assertIsNone(self.build_environments[0])
         for environment in self.build_environments[1:]:
             self.assertIsNotNone(environment)
@@ -413,10 +417,11 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 self.assertEqual(result, 0)
                 self.assertEqual(dict(os.environ), original)
                 commands = [command for command in self.commands if command[0] == "xcodebuild"]
-                self.assertEqual(len(commands), 3)
+                self.assertEqual(len(commands), 4)
                 self.assertIn("build-for-testing", commands[0])
                 self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
-                self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
+                self.assertIn("-only-testing:" + scopes.MULTIWINDOW_SELECTOR, commands[2])
+                self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[3])
                 self.assertIsNone(self.build_environments[0])
                 for environment in self.build_environments[1:]:
                     self.assertNotIn("TEST_RUNNER_GITHUB_ACTIONS", environment)
@@ -441,10 +446,11 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(evidence["isolatedCounts"]["totalTestCount"], 1)
         self.assertEqual(evidence["remainingCounts"]["totalTestCount"], 2)
         commands = [command for command in self.commands if command[0] == "xcodebuild"]
-        self.assertEqual(len(commands), 3)
+        self.assertEqual(len(commands), 4)
         self.assertIn("build-for-testing", commands[0])
         self.assertIn("-only-testing:" + scopes.SELECTOR, commands[1])
-        self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
+        self.assertIn("-only-testing:" + scopes.MULTIWINDOW_SELECTOR, commands[2])
+        self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[3])
         self.assertFalse(any("-parallel-testing-enabled" in command for command in commands))
 
     def test_multiwindow_has_a_dedicated_required_invocation(self):
@@ -457,6 +463,101 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(len(dedicated), 1, "Real-XPC coverage must run outside the loaded complement.")
         self.assertIn("-skip-testing:" + selector, actions[-1])
         self.assertEqual(evidence["multiwindowCounts"]["executionCounts"]["passedTests"], 6)
+
+    def test_multiwindow_missing_extra_failed_or_skipped_case_stops_without_retry(self):
+        entries = [(identity, "Passed") for identity in sorted(scopes.MULTIWINDOW_TESTS)]
+        scenarios = [
+            (entries[:-1], 0), (entries + [("Other/test()", "Passed")], 0),
+            (entries + entries[:1], 0), (entries, 65),
+        ]
+        scenarios.extend(([(entries[0][0], status)] + entries[1:], 0)
+                         for status in ("Failed", "Skipped", "Expected Failure"))
+        for records, code in scenarios:
+            with self.subTest(records=records, code=code), patch.object(
+                    scopes, "capture_failure_diagnostics", return_value={"scope": "multiwindow"}):
+                result, evidence = self.execute(
+                    self.report([(scopes.TEST, "Passed")]), self.report([("Other/test()", "Passed")]),
+                    multiwindow=self.report(records), multiwindow_exit=code)
+                self.assertEqual(result, 1)
+                self.assertFalse(evidence["passed"])
+                self.assertEqual(evidence["blockedStage"], "multiwindow")
+                self.assertNotIn("remainingExitCode", evidence)
+                self.assertEqual(sum("-only-testing:" + scopes.MULTIWINDOW_SELECTOR in command
+                                     for command in self.commands), 1)
+            shutil.rmtree(self.directory / "results")
+            self.commands.clear()
+
+    def test_multiwindow_exclusions_require_verified_execution_and_cannot_repeat(self):
+        entries = [(identity, "Skipped") for identity in sorted(scopes.MULTIWINDOW_TESTS)]
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report(entries + [("Other/test()", "Passed")]))
+        self.assertEqual(result, 0)
+        self.assertEqual(evidence["inventoryCoverage"], {"expectedTests": 8, "reportedTests": 8})
+        self.assertEqual(evidence["combinedExecutedTestCount"], 8)
+        self.assertEqual({item["policyReason"] for item in evidence["remainingCounts"]["skippedTestsByIdentity"]},
+                         {"verified-multiwindow-scope-exclusion"})
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*self.report(entries + [("Other/test()", "Passed")]), benchmark_enabled=False)
+        with self.assertRaises(ValueError):
+            scopes.validate_remaining(*self.report([(entries[0][0], "Passed"), ("Other/test()", "Passed")]),
+                                      benchmark_enabled=False, multiwindow_excluded=True)
+
+    def test_gate_rechecks_exact_run_multiwindow_counts_names_and_results(self):
+        source = {"status": "available", "head": "a" * 40, "dirty": False}
+        with patch.object(scopes, "diagnostic_source", return_value=source), \
+                patch.dict(os.environ, {"GITHUB_RUN_ID": "42"}):
+            result, _ = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                     self.report([("Other/test()", "Passed")]))
+        self.assertEqual(result, 0)
+        directory = self.directory / "scopes-synthetic"
+        (self.directory / "results").rename(directory)
+
+        def verify():
+            return scopes.verify_multiwindow_evidence(self.directory, head=source["head"], run_id="42")
+
+        self.assertEqual(verify()["passedTests"], 6)
+        command = [sys.executable, str(ROOT / "scripts/run-integrated-test-scopes.py"),
+                   "--verify-multiwindow-evidence", str(self.directory)]
+        process = subprocess.run(command, capture_output=True, text=True,
+                                 env={**os.environ, "GITHUB_SHA": source["head"], "GITHUB_RUN_ID": "42"})
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("Required multiwindow execution verified", process.stdout)
+        originals = {path: path.read_text() for path in directory.glob("*.json")}
+        mutations = [
+            ("coverage.json", lambda value: value.update(runID="41")),
+            ("coverage.json", lambda value: value["source"].update(head="b" * 40)),
+            ("coverage.json", lambda value: value["source"].update(dirty=True)),
+            ("coverage.json", lambda value: value.update(passed=False)),
+            ("coverage.json", lambda value: value.update(multiwindowExitCode=65)),
+            ("coverage.json", lambda value: value.update(multiwindowExitCode=False)),
+            ("coverage.json", lambda value: value["multiwindowCounts"].update(passedTests=5)),
+            ("multiwindow-summary.json", lambda value: value.update(passedTests=5)),
+            ("multiwindow-tests.json", lambda value: value["testNodes"][0]["children"].pop()),
+            ("multiwindow-tests.json", lambda value: value["testNodes"][0]["children"][0].update(
+                nodeIdentifier="Other/test()")),
+            ("multiwindow-tests.json", lambda value: value["testNodes"][0]["children"][0].update(result="Skipped")),
+            ("enumeration.json", lambda value: value["values"][0].update(enabledTests=[
+                {"identifier": scopes.SELECTOR}])),
+        ]
+        for filename, mutate in mutations:
+            with self.subTest(filename=filename, mutation=mutate):
+                path = directory / filename
+                value = json.loads(originals[path])
+                mutate(value)
+                path.write_text(json.dumps(value))
+                with self.assertRaises(ValueError):
+                    verify()
+                path.write_text(originals[path])
+        path = directory / "multiwindow-tests.json"
+        path.unlink()
+        with self.assertRaises(OSError):
+            verify()
+        path.write_text(originals[path])
+        other = self.directory / "scopes-other"
+        other.mkdir()
+        (other / "coverage.json").write_text(originals[directory / "coverage.json"])
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            verify()
 
     def test_reported_tests_must_equal_the_built_inventory(self):
         isolated = self.report([(scopes.TEST, "Passed")])
@@ -480,17 +581,19 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 self.assertIn("inventoryError", evidence)
                 self.assertFalse(evidence["passed"])
         shutil.rmtree(self.directory / "results")
-        result, evidence = self.execute(isolated, remaining, inventory=self.enumeration({scopes.SELECTOR, first}))
+        result, evidence = self.execute(isolated, remaining, inventory=self.enumeration(
+            {scopes.SELECTOR, first} | scopes.MULTIWINDOW_TESTS))
         self.assertEqual(result, 0)
-        self.assertEqual(evidence["inventoryCoverage"], {"expectedTests": 2, "reportedTests": 2})
+        self.assertEqual(evidence["inventoryCoverage"], {"expectedTests": 8, "reportedTests": 8})
 
     def test_conditionally_compiled_out_tests_are_absent_from_inventory_and_pass(self):
         # A test excluded by #if never reaches the built product, so enumeration omits it.
         result, evidence = self.execute(
             self.report([(scopes.TEST, "Passed")]), self.report([("OtherSuite/first()", "Passed")]),
-            inventory=self.enumeration({scopes.SELECTOR, scopes.TARGET + "/OtherSuite/first()"}))
+            inventory=self.enumeration({scopes.SELECTOR, scopes.TARGET + "/OtherSuite/first()"}
+                                       | scopes.MULTIWINDOW_TESTS))
         self.assertEqual(result, 0)
-        self.assertEqual(evidence["enumeratedTests"], 2)
+        self.assertEqual(evidence["enumeratedTests"], 8)
 
     def test_inventory_comes_from_the_built_product_under_the_same_settings(self):
         result, _ = self.execute(self.report([(scopes.TEST, "Passed")]),
@@ -504,14 +607,15 @@ class IntegratedTestScopeTests(unittest.TestCase):
 
     def test_allowlisted_disabled_tests_and_skips_have_reasons(self):
         self.assertEqual(set(scopes.INTENTIONAL_SKIPS),
-                         {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST} | set(scopes.LOCAL_UI_TESTS))
+                         {scopes.SELECTOR, scopes.TARGET + "/" + BENCHMARK_TEST}
+                         | set(scopes.LOCAL_UI_TESTS) | scopes.MULTIWINDOW_TESTS)
         self.assertTrue(all(reason.strip() for reason in scopes.INTENTIONAL_SKIPS.values()))
         first = scopes.TARGET + "/OtherSuite/first()"
         benchmark = scopes.TARGET + "/" + BENCHMARK_TEST
         result, evidence = self.execute(
             self.report([(scopes.TEST, "Passed")]),
             self.report([("OtherSuite/first()", "Passed"), (BENCHMARK_TEST, "Skipped")]),
-            inventory=self.enumeration({scopes.SELECTOR, first}, {benchmark}))
+            inventory=self.enumeration({scopes.SELECTOR, first} | scopes.MULTIWINDOW_TESTS, {benchmark}))
         self.assertEqual(result, 0)
         [skip] = evidence["remainingCounts"]["skippedTestsByIdentity"]
         self.assertEqual(skip["allowlistReason"], scopes.INTENTIONAL_SKIPS[benchmark])
@@ -561,7 +665,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 self.assertEqual([call.args[1] for call in capture.call_args_list], expected)
                 self.assertEqual(result, int(bool(expected)))
                 self.assertEqual([item["scope"] for item in evidence["failureDiagnostics"]], expected)
-                self.assertEqual(sum("test-without-building" in command for command in self.commands), 2)
+                self.assertEqual(sum("test-without-building" in command for command in self.commands), 3)
             shutil.rmtree(self.directory / "results")
             self.commands.clear()
 
@@ -573,7 +677,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 self.assertEqual(result, 1)
                 self.assertFalse(evidence["selectorVerifiedByHostedResult"])
                 last = [command for command in self.commands if command[0] == "xcodebuild"][-1]
-                self.assertFalse(any(arg.startswith("-skip-testing") for arg in last))
+                self.assertNotIn("-skip-testing:" + scopes.SELECTOR, last)
+                self.assertIn("-skip-testing:" + scopes.MULTIWINDOW_SELECTOR, last)
                 self.assertTrue((self.directory / "results/full-fallback-summary.json").exists())
                 shutil.rmtree(self.directory / "results")
 
@@ -616,7 +721,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
                 self.assertEqual(counts["skippedTests"], 1 + int(excluded))
                 self.assertEqual(counts["executionCounts"]["skippedTests"], 1 + int(excluded))
                 self.assertEqual(counts["logicalCounts"]["totalTestCount"], len(entries))
-                self.assertEqual(evidence["combinedExecutedTestCount"], 2)
+                self.assertEqual(evidence["combinedExecutedTestCount"], 8)
                 attributed = {item["identity"]: item for item in counts["skippedTestsByIdentity"]}
                 benchmark = attributed[scopes.TARGET + "/" + BENCHMARK_TEST]
                 self.assertEqual(benchmark["policyReason"], "existing-opt-in-benchmark-disabled")
@@ -637,7 +742,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"][0]["identity"],
                          scopes.TARGET + "/" + BENCHMARK_TEST)
         final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
-        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+        self.assertNotIn("-skip-testing:" + scopes.SELECTOR, final)
+        self.assertIn("-skip-testing:" + scopes.MULTIWINDOW_SELECTOR, final)
 
     def test_benchmark_skip_permission_uses_exact_inherited_flag_without_setting_it(self):
         for flag in (None, "", "0", "true", "1"):
@@ -661,7 +767,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
             self.report([(BENCHMARK_TEST, "Passed"), (scopes.TEST, "Skipped"), ("OtherSuite/test()", "Passed")]),
             benchmark_flag="1")
         self.assertEqual(result, 0)
-        self.assertEqual(evidence["combinedExecutedTestCount"], 3)
+        self.assertEqual(evidence["combinedExecutedTestCount"], 9)
         self.assertEqual(evidence["remainingCounts"]["skippedTestsByIdentity"], [{
             "identity": scopes.SELECTOR, "policyReason": "verified-isolated-selector-exclusion",
             "allowlistReason": scopes.INTENTIONAL_SKIPS[scopes.SELECTOR], "reportedDetails": None}])
@@ -838,7 +944,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertFalse(evidence["passed"])
         self.assertFalse(evidence["selectorVerifiedByHostedResult"])
         final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
-        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+        self.assertNotIn("-skip-testing:" + scopes.SELECTOR, final)
+        self.assertIn("-skip-testing:" + scopes.MULTIWINDOW_SELECTOR, final)
         self.assertTrue((self.directory / "results/full-fallback-summary.json").exists())
 
     def test_review_status_distribution_must_match_the_tree(self):
@@ -857,7 +964,8 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertFalse(evidence["passed"])
         self.assertFalse(evidence["selectorVerifiedByHostedResult"])
         final = [command for command in self.commands if command[0] == "xcodebuild"][-1]
-        self.assertFalse(any(arg.startswith("-skip-testing:") for arg in final))
+        self.assertNotIn("-skip-testing:" + scopes.SELECTOR, final)
+        self.assertIn("-skip-testing:" + scopes.MULTIWINDOW_SELECTOR, final)
 
     def test_failure_counts_must_reconcile_not_just_failure_presence(self):
         remaining = self.report([("OtherSuite/one()", "Failed"), ("OtherSuite/two()", "Failed")])
@@ -889,7 +997,7 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertEqual(result, 0)
         self.assertEqual(evidence["remainingCounts"]["logicalCounts"]["totalTestCount"], 1)
         self.assertEqual(evidence["remainingCounts"]["executionCounts"]["totalTestCount"], 2)
-        self.assertEqual(evidence["combinedExecutedTestCount"], 3)
+        self.assertEqual(evidence["combinedExecutedTestCount"], 9)
         remaining[0]["devicesAndConfigurations"][0]["passedTests"] = 200
         with self.assertRaises(ValueError):
             scopes.validate_remaining(*remaining, benchmark_enabled=False)
@@ -1015,7 +1123,7 @@ class DiagnosticRetentionTests(unittest.TestCase):
                 self.assertEqual(options["timeout"], 30)
                 self.assertEqual(options["stdout"], subprocess.DEVNULL)
                 self.assertEqual(options["stderr"], subprocess.DEVNULL)
-        self.assertEqual(len(self.commands), 3, "One export per exact failed scope; no retries.")
+        self.assertEqual(len(self.commands), 4, "One export per exact failed scope; no retries.")
 
     def test_missing_bundle_invalid_scope_and_dirty_or_changed_source_never_export(self):
         (self.directory / "remaining.xcresult/Data").unlink()
@@ -1313,7 +1421,10 @@ class BuildMetadataTests(unittest.TestCase):
         """Each required artifact uploads always, once, from its producers' job, after every producer."""
         jobs = workflow_jobs(workflow)
         for name, (job, title, producers, path) in REQUIRED_ARTIFACTS.items():
-            self.assertEqual(workflow.count(f"          name: {name}\n"), 1, f"{name} has one upload step.")
+            uploads_named = [step for body in yaml_jobs(workflow).values() for step in body["steps"]
+                             if step.get("uses") == "actions/upload-artifact@v4"
+                             and step.get("with", {}).get("name") == name]
+            self.assertEqual(len(uploads_named), 1, f"{name} has one upload step.")
             steps = job_steps(jobs[job])
             uploads = [index for index, step in enumerate(steps) if f"          name: {name}\n" in step]
             self.assertEqual(len(uploads), 1, f"{name} uploads from {job}, its producers' runner.")
@@ -1370,11 +1481,20 @@ class BuildMetadataTests(unittest.TestCase):
         """#193 measured setup reuse and rejected it: every validation job starts from a clean checkout."""
         actions = re.findall(r"""^\s*(?:-\s+)?uses:\s*["']?([^\s"'#]+)""", workflow, re.MULTILINE)
         self.assertEqual(len(actions), workflow.count("uses:"), "Every uses: must be a parseable step action.")
-        self.assertEqual(set(actions), {"actions/checkout@v4", "actions/upload-artifact@v4"},
+        self.assertEqual(set(actions), {"actions/checkout@v4", "actions/upload-artifact@v4",
+                                       "actions/download-artifact@v4"},
                          "Any new action, even one without a cache such as actions/setup-python, can carry state "
                          "across runs: it needs a setup-reuse review (#193) and an update to this guard.")
+        downloads = [(job, step) for job, body in yaml_jobs(workflow).items() for step in body["steps"]
+                     if step.get("uses") == "actions/download-artifact@v4"]
+        self.assertEqual(downloads, [("ci-gate", {
+            "name": "Download required native execution evidence",
+            "if": "always() && needs.validate-native.result == 'success'",
+            "uses": "actions/download-artifact@v4",
+            "with": {"name": "integrated-test-scope-evidence", "path": ".build/ci-gate-native-evidence"},
+        })], "Only this run's evidence may be downloaded by the gate; never restore build/setup state.")
         for token in ("actions/cache", "actions/cache/", "restore-keys", "cache:", "cache-dependency-path",
-                      "download-artifact", "gh run download", "gh cache"):
+                      "gh run download", "gh cache"):
             self.assertNotIn(token, workflow, f"{token}: cross-run reuse needs #193's measured decision.")
 
     def test_ci_reuses_no_setup_state_across_runs(self):
@@ -1399,6 +1519,9 @@ class BuildMetadataTests(unittest.TestCase):
             "prior run's artifact": workflow.replace(
                 checkout, "      - uses: actions/checkout@v4\n      - uses: actions/download-artifact@v4\n"
                 "      - name: Run integrated Swift tests\n", 1),
+            "gate reads another run": workflow.replace(
+                "          path: .build/ci-gate-native-evidence\n",
+                "          path: .build/ci-gate-native-evidence\n          run-id: 1234\n", 1),
             "comment-suffixed third-party restore": workflow.replace(
                 checkout, "      - uses: actions/checkout@v4\n"
                 "      - uses: example/restore-derived-data@0123456789abcdef0123456789abcdef01234567 # v1\n"
@@ -1557,6 +1680,15 @@ class BuildMetadataTests(unittest.TestCase):
         "      - name: Reject new timing-sensitive tests\n"
         "        if: always()\n"
         "        run: python3 scripts/test-test-timing.py && python3 scripts/check-test-timing.py\n"
+        "      - name: Download required native execution evidence\n"
+        "        if: always() && needs.validate-native.result == 'success'\n"
+        "        uses: actions/download-artifact@v4\n"
+        "        with:\n"
+        "          name: integrated-test-scope-evidence\n"
+        "          path: .build/ci-gate-native-evidence\n"
+        "      - name: Verify required multiwindow execution\n"
+        "        if: always() && needs.validate-native.result == 'success'\n"
+        "        run: python3 scripts/run-integrated-test-scopes.py --verify-multiwindow-evidence .build/ci-gate-native-evidence\n"
         "      - name: Evaluate required suites\n"
         "        if: always()\n"
         "        env:\n"
@@ -1574,7 +1706,7 @@ class BuildMetadataTests(unittest.TestCase):
         self.assertTrue(validation)
         self.assertEqual(sorted(suite["job"] for suite in contract["suites"]), validation,
                          "Every validation job is a required suite; update scripts/ci-required-suites.json.")
-        # Whole block to end of file: every step runs even on cancellation, so the table always prints.
+        # The table always prints; native evidence steps require a successful producer.
         self.assertEqual(jobs[gate].rstrip("\n") + "\n", self.GATE_BLOCK.format(
             needs=", ".join([classifier, *(suite["job"] for suite in contract["suites"])])))
         self.assert_suite_selection(workflow, contract)
@@ -1604,7 +1736,7 @@ class BuildMetadataTests(unittest.TestCase):
         for phrase in ("`ci-gate`", "scripts/ci-required-suites.json", "merge signal",
                        "if-no-files-found: error", "branches/main/protection",
                        "required status check", "`enforce_admins: true`", "`strict: false`",
-                       "every gate step uses `if: always()`", "fails closed on any job it cannot parse",
+                       "gate evaluator steps use `if: always()`", "fails closed on any job it cannot parse",
                        "candidate's own", "changes to merge policy"):
             with self.subTest(phrase=phrase):
                 self.assertIn(phrase, section)
@@ -1639,8 +1771,12 @@ class BuildMetadataTests(unittest.TestCase):
                                  f"Job {job} may only use its sanctioned selection condition" + policy)
             self.assertLessEqual(set(body), allowed, f"Job {job} has keys outside the allow-list" + policy)
             for step in body["steps"]:
-                self.assertIn(step.get("if", "always()"), ("always()",),
-                              f"Step {step.get('name', step.get('uses'))} in {job} may only use if: always()" + policy)
+                native_evidence = job == gate and step.get("name") in (
+                    "Download required native execution evidence", "Verify required multiwindow execution")
+                expected_condition = ("always() && needs.validate-native.result == 'success'"
+                                      if native_evidence else "always()")
+                self.assertEqual(step.get("if", "always()"), expected_condition,
+                                 f"Step {step.get('name', step.get('uses'))} in {job} condition" + policy)
                 self.assertNotIn("timeout-minutes", step, policy)
 
     def test_ci_jobs_and_steps_use_only_allowed_keys_and_conditions(self):
