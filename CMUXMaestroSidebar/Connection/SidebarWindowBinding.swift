@@ -19,7 +19,9 @@ final class SidebarWindowBinding: ObservableObject {
 
     init(preferences: SidebarPreferences, model: SidebarConnectionModel? = nil) {
         self.preferences = preferences
-        self.model = model ?? SidebarConnectionModel()
+        self.model = model ?? SidebarConnectionModel(copilot: SidebarCopilotPolling(
+            tailWindowMiB: { preferences.eventTailWindowMiB }
+        ))
     }
 
     /// Follows `scene`; without one this view has no exact window and shows nothing.

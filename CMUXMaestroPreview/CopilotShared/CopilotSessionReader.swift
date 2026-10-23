@@ -32,6 +32,7 @@ nonisolated struct CopilotReaderLimits: Sendable {
 }
 
 actor CopilotSessionReader {
+    enum ConfigurationError: Error { case invalidTailWindow }
     private struct Binding {
         let record: CopilotIdentityRecord
         let stamp: CopilotFileStamp
@@ -51,6 +52,8 @@ actor CopilotSessionReader {
         var lastCompleteAt: Date?
         var target: Int64?
         var targetAt: Date?
+        var historyIncomplete = false
+        var discardingInitialLine = false
     }
 
     private let roots: (@Sendable () throws -> (bindings: URL, sessions: URL))
@@ -59,6 +62,7 @@ actor CopilotSessionReader {
     private let limits: CopilotReaderLimits
     private var tails: [UUID: Tail] = [:]
     private var pendingHistory = false
+    private var tailWindowBytes = CopilotTailWindow.defaultMiB * 1_048_576
     private var discovery: CopilotDirectoryStream?
     private var discoveryStamp: CopilotFileStamp?
     private var cycleChanged = false
@@ -99,7 +103,13 @@ actor CopilotSessionReader {
         self.limits = limits
     }
 
-    func read(surfaceIDs: Set<UUID>) async throws -> CopilotSnapshot {
+    func read(
+        surfaceIDs: Set<UUID>, tailWindowMiB: Int = CopilotTailWindow.defaultMiB
+    ) async throws -> CopilotSnapshot {
+        guard let window = CopilotTailWindow(mebibytes: tailWindowMiB) else {
+            throw ConfigurationError.invalidTailWindow
+        }
+        tailWindowBytes = window.bytes
         do {
             return try readBatch(surfaceIDs: surfaceIDs)
         } catch {
@@ -479,6 +489,9 @@ actor CopilotSessionReader {
             batch.observations.append(observation(record, liveness: .unknown, now: batch.now))
         case .read(let read):
             tails[id] = read.tail
+            if read.tail.historyIncomplete {
+                batch.scopedIssues[id, default: []].append(.readLimitReached)
+            }
             if read.reachedBoundary { publishedCohort.insert(id) }
             batch.madeProgress = batch.madeProgress
                 || (read.advanced && (fastDiscoveryCycle || read.previouslyPublished))
@@ -795,7 +808,7 @@ actor CopilotSessionReader {
                 throw CopilotFileError.changed
             }
             var issues = tail.reducer.issues
-            if !tail.partial.isEmpty || tail.droppingOversizedLine {
+            if !tail.partial.isEmpty || tail.droppingOversizedLine || tail.discardingInitialLine {
                 issues.append(.loadingHistory)
             } else if tail.reducer.canPublishProjection, tail.lastComplete != nil {
                 tail.lastCompleteAt = now
@@ -825,6 +838,18 @@ actor CopilotSessionReader {
             tail.lastComplete = saved
             tail.lastCompleteAt = savedAt
         }
+        if tail.stamp == nil && before.size > Int64(tailWindowBytes) {
+            tail.offset = before.size - Int64(tailWindowBytes)
+            tail.historyIncomplete = true
+            tail.discardingInitialLine = true
+            // Validate the bounded source header without importing old work or model state.
+            let header = try readEventBytes(file, offset: 0, count: 4096)
+            if let newline = header.firstIndex(of: 10) {
+                tail.reducer.validateSourceHeader(Data(header[..<newline]))
+            } else {
+                tail.reducer.markMalformed()
+            }
+        }
         var remaining = min(budget, limits.bytesPerSession)
         var lines = 0
         if tail.target == nil {
@@ -850,6 +875,15 @@ actor CopilotSessionReader {
                     return base.distance(to: UnsafeRawPointer(match))
                 }
                 let end = newline ?? chunk.count
+                if tail.discardingInitialLine {
+                    consumed = end
+                    if newline != nil {
+                        tail.discardingInitialLine = false
+                        consumed += 1
+                        lines += 1
+                    }
+                    continue
+                }
                 if !tail.droppingOversizedLine {
                     if end - consumed <= limits.maximumLineBytes - tail.partial.count {
                         tail.partial.append(chunk[consumed..<end])
@@ -902,7 +936,8 @@ actor CopilotSessionReader {
         var issues = tail.reducer.issues
         let reachedBoundary = tail.offset >= targetSize
         if reachedBoundary {
-            if tail.partial.isEmpty && !tail.droppingOversizedLine && tail.reducer.canPublishProjection {
+            if tail.partial.isEmpty && !tail.droppingOversizedLine && !tail.discardingInitialLine
+                && tail.reducer.canPublishProjection {
                 // A verified boundary can publish conservative semantic limits,
                 // but malformed data, invalid schemas and identity errors cannot.
                 tail.lastComplete = value
@@ -913,7 +948,8 @@ actor CopilotSessionReader {
             tail.target = nil
             tail.targetAt = nil
         }
-        let incomplete = tail.offset < after.size || !tail.partial.isEmpty || tail.droppingOversizedLine
+        let incomplete = tail.offset < after.size || !tail.partial.isEmpty
+            || tail.droppingOversizedLine || tail.discardingInitialLine
         if incomplete {
             issues.append(.loadingHistory)
             if tail.offset < after.size { issues.append(.readLimitReached) }

@@ -41,6 +41,7 @@ final class SidebarPreferences {
     private static let pinnedFooterHeightKey = "sidebar.pinnedFooterHeight"
     private static let agentIconStyleKey = "sidebar.agentIconStyle"
     private static let terminalIconStyleKey = "sidebar.terminalIconStyle"
+    private static let eventTailWindowKey = "sidebar.eventTailWindowMiB"
     private let defaults: UserDefaults
     private let layoutStore: SidebarLayoutStore
     var layout: SidebarLayoutSettings { layoutStore.value.settings }
@@ -65,6 +66,8 @@ final class SidebarPreferences {
     var historyNotice: String? { historyStore.value.notice }
     var attention: SidebarAttentionSettings { attentionStore.value.settings }
     var attentionNotice: String? { attentionStore.value.notice }
+    private(set) var eventTailWindowMiB = CopilotTailWindow.defaultMiB
+    private(set) var eventTailWindowNotice: String?
     var showEnded: Bool {
         didSet { defaults.set(showEnded, forKey: Self.showEndedKey) }
     }
@@ -131,6 +134,14 @@ final class SidebarPreferences {
         )
         self.agentTagsFile = agentTagsFile
         self.sessionRetained = sessionRetained
+        if let stored = defaults.object(forKey: Self.eventTailWindowKey) {
+            if let number = stored as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+               let value = stored as? Int, CopilotTailWindow.range.contains(value) {
+                eventTailWindowMiB = value
+            } else {
+                eventTailWindowNotice = Self.invalidEventTailWindow
+            }
+        }
         showEnded = defaults.bool(forKey: Self.showEndedKey)
         let storedFooter = defaults.double(forKey: Self.pinnedFooterHeightKey)
         pinnedFooterHeight = storedFooter.isFinite && storedFooter > 0 ? storedFooter : nil
@@ -166,6 +177,19 @@ final class SidebarPreferences {
     }
 
     func setDensity(_ density: SidebarDensity) { layoutStore.apply(.density(density)) }
+    func setEventTailWindowMiB(_ value: Int) {
+        guard CopilotTailWindow.range.contains(value) else {
+            eventTailWindowNotice = Self.invalidEventTailWindow
+            return
+        }
+        defaults.set(value, forKey: Self.eventTailWindowKey)
+        eventTailWindowMiB = value
+        eventTailWindowNotice = nil
+    }
+
+    private static var invalidEventTailWindow: String {
+        String(localized: "reader.tail.invalid", defaultValue: "Invalid event tail size")
+    }
     func setExpanded(_ expanded: Bool, for id: SidebarExpansionID) { layoutStore.apply(.expansion(id, expanded)) }
     func expandAll() { layoutStore.apply(.expandAll) }
     func resetLayout() { layoutStore.apply(.reset) }

@@ -1200,12 +1200,15 @@ nonisolated struct CopilotReaderTests {
     func coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
-        try fixture.writeEvents([])
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])])
         let row = try copilotTestEvent("tool.execution_partial_result", data: [
             "toolCallId": "ignored-payload", "partialOutput": String(repeating: "x", count: 524_288)
         ]) + Data([10])
         let handle = try FileHandle(forWritingTo: fixture.events)
         do {
+            try handle.seekToEnd()
             for _ in 0..<460 { try handle.write(contentsOf: row) }
             try handle.close()
         } catch {
@@ -1228,33 +1231,23 @@ nonisolated struct CopilotReaderTests {
         let reader = fixture.reader()
         let clock = ContinuousClock()
         let start = clock.now
-        var batches = 1
-        var snapshot = try await reader.read(surfaceIDs: [fixture.surface])
-        var maximumBatch = start.duration(to: clock.now)
-        #expect(snapshot.issues.contains(.loadingHistory))
-        #expect(snapshot.sessions[0].children.isEmpty)
-        while !snapshot.isComplete && batches < 128 {
-            guard await reader.hasPendingHistory() else { break }
-            try await Task.sleep(for: .milliseconds(10))
-            let batchStart = clock.now
-            snapshot = try await reader.read(surfaceIDs: [fixture.surface])
-            maximumBatch = max(maximumBatch, batchStart.duration(to: clock.now))
-            batches += 1
-        }
+        let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
         let duration = start.duration(to: clock.now).components
         let seconds = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
-        let maximumBatchMilliseconds = (
-            Double(maximumBatch.components.seconds) + Double(maximumBatch.components.attoseconds) / 1e18
-        ) * 1_000
         var usage = rusage()
         let measuredRSS = getrusage(RUSAGE_SELF, &usage) == 0 ? usage.ru_maxrss : -1
-        print("COPILOT_READER_BENCHMARK bytes=\(fileSize.int64Value) batches=\(batches) seconds=\(seconds) maximumBatchMs=\(maximumBatchMilliseconds) processPeakRSSBytes=\(measuredRSS) continuationDelayMs=10")
-        #expect(snapshot.isComplete)
+        let readBytes = await reader.eventReadBytes
+        print("COPILOT_READER_BENCHMARK bytes=\(fileSize.int64Value) readBytes=\(readBytes) batches=1 seconds=\(seconds) processPeakRSSBytes=\(measuredRSS)")
+        #expect(!snapshot.isComplete)
+        #expect(snapshot.sessions[0].sessionIssues == [.readLimitReached])
+        #expect(!snapshot.issues.contains(.loadingHistory))
         #expect(snapshot.sessions[0].state == .idle)
         #expect(snapshot.sessions[0].children.map(\.id) == ["parent", "child", "sibling"])
         #expect(snapshot.sessions[0].children.map(\.parentID) == [nil, "parent", nil])
         #expect(snapshot.sessions[0].children.map(\.state) == [.working, .cancelled, .failed])
         #expect(await reader.hasPendingHistory() == false)
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(await reader.eventReadBytes == readBytes)
     }
 
     @Test func largeLogColdStartReadsCurrentTailWithoutHistoricalCatchup() async throws {
@@ -1299,6 +1292,85 @@ nonisolated struct CopilotReaderTests {
         #expect(afterRestart.sessions.first?.state == .idle)
         #expect(await restarted.eventReadBytes <= 4_194_304 + 4096 + 256)
         #expect(await restarted.hasPendingHistory() == false)
+    }
+
+    @Test func largerTailWindowKeepsPerReadBudgetAndFinishesOnlyItsFrozenWindow() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 10 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "current"])
+        ])
+        let reader = fixture.reader()
+        let first = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 8)
+        #expect(first.sessions.first?.state == .unknown)
+        #expect(await reader.hasPendingHistory())
+        let firstBytes = await reader.eventReadBytes
+        #expect(firstBytes <= 4_194_304 + 4096 + 256)
+        // A preference change does not restart or expand an admitted window.
+        let second = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 64)
+        #expect(second.sessions.first?.state == .working)
+        #expect(second.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(await reader.eventReadBytes - firstBytes <= 4_194_304 + 512)
+        #expect(await reader.hasPendingHistory() == false)
+        let caughtUp = await reader.eventReadBytes
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes == caughtUp)
+    }
+
+    @Test func missingTailBoundaryRemainsUnknownUntilNewCompleteEvidence() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])])
+        try fixture.append(Data("""
+        {"id":"10000000-0000-0000-0000-000000000001","type":"assistant.message","data":{"content":"
+        """.utf8) + Data(repeating: 120, count: 2 * 1_048_576))
+        let reader = fixture.reader()
+        let partial = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(partial.sessions.first?.state == .unknown)
+        #expect(partial.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(await reader.hasPendingHistory() == false)
+        let bytes = await reader.eventReadBytes
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 4)
+        #expect(await reader.eventReadBytes == bytes)
+        try fixture.append(Data("\"}}\n".utf8) + copilotTestEvent("assistant.turn_start", data: [
+            "turnId": "new-evidence"
+        ]) + Data([10]))
+        let updated = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 4)
+        #expect(updated.sessions.first?.state == .working)
+        #expect(!updated.issues.contains(.malformedData))
+        #expect(updated.sessions.first?.sessionIssues == [.readLimitReached])
+    }
+
+    @Test(arguments: ["foreign", "unsupported"])
+    func boundedTailStillValidatesSourceHeader(_ failure: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: [
+                "sessionId": failure == "foreign" ? UUID().uuidString : fixture.sessionID.uuidString,
+                "version": failure == "unsupported" ? 0 : 1
+            ]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "untrusted"])
+        ])
+        let value = try await fixture.reader().read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(value.sessions.first?.state == .unknown)
+        #expect(value.issues.contains(failure == "foreign" ? .identityChanged : .unsupportedFormat))
+    }
+
+    @Test(arguments: [0, 65, Int.max])
+    func invalidTailWindowIsRejectedBeforeReading(_ value: Int) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let reader = fixture.reader()
+        await #expect(throws: CopilotSessionReader.ConfigurationError.self) {
+            _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: value)
+        }
+        #expect(await reader.eventReadBytes == 0)
     }
 
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {

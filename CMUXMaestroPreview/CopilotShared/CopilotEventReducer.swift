@@ -462,6 +462,15 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
     }
 
+    mutating func validateSourceHeader(_ line: Data) {
+        do {
+            let event = try JSONDecoder().decode(CopilotEventProjection.self, from: line)
+            if event.kind == .sessionStart { _ = admitSource(event) }
+        } catch {
+            addIssue(.malformedData)
+        }
+    }
+
     mutating func markMalformed() { addIssue(.malformedData) }
     mutating func markLimited() { addIssue(.readLimitReached) }
 

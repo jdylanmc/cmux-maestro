@@ -314,6 +314,29 @@ independent terminal. This literal #10 integration does not complete broader
 
 ### Bounded retention and discovery
 
+- Cold start and file-generation replacement start at the newest configured
+  window, not byte zero of an unbounded log. **Event tail (MiB)** in sidebar
+  settings persists in the existing human `UserDefaults` preferences: default 4,
+  integers 1–64. Invalid stored input retains a visible validation notice and
+  the default; an invalid edit is rejected without overwriting the saved value.
+  Each poll obtains the current preference, without restarting the reader.
+  An already admitted window never rewinds or backfills on growth or shrinkage.
+  Only new/replaced tails use the changed value.
+- Omitted history remains session-scoped `readLimitReached`, even after reaching
+  current EOF. No automatic backfill runs. Recent explicit lifecycle evidence
+  establishes state; missing evidence stays unknown, with incomplete child
+  history/counts. The initial cut line is discarded through its next newline,
+  including when that newline arrives later. A separate first-line source check
+  reads at most 4 KiB; a malformed, foreign, unsupported or unverifiable header
+  cannot produce current state. It does not seed model or work from the prefix.
+  Process, binding, descriptor/path and rewrite/append witnesses remain checked.
+  Payload reads keep the 8 MiB aggregate, 4 MiB per-session and 2,048-line limits;
+  larger windows initialize over multiple polls. Fixed header and 128-byte
+  prefix/anchor witnesses are separate bounded verification overhead.
+- Current EOF revalidation reads zero event bytes. Appends consume only new
+  bytes plus fixed witnesses. Already observed replay evidence is retained;
+  the unseen prefix is explicitly outside the cold-start replay guarantee.
+  See the owner-approved bounded-tail amendment in ADR 0010.
 - 256-row reducer budget retires oldest terminal **leaf**, not active,
   idle, blocked, or unknown work. Current-cycle error/abort outcomes protect their
   owners. Retained descendants, pending requests, and

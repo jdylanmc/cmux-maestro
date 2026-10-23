@@ -8,6 +8,26 @@ Rejected: silent repair, overwrite on corruption, eviction of exact evidence at 
 
 Consequence: users may see more history until reset. A false positive in the 128-KiB spill filter rejects a fresh event.
 
+## Amendment (2026-10-22): owner-approved bounded cold-start tails
+
+The sidebar does not reconstruct an entire large event log on cold start.
+The human-selected tail window defaults to 4 MiB and is bounded to 1–64 MiB.
+This intentionally changes the previous cold-start reconstruction contract:
+older, unobserved history is omitted, not admitted as complete or lazily backfilled.
+Its exact session carries `readLimitReached`; healthy siblings are not thereby
+incomplete. Recent events must establish current state, otherwise it is unknown.
+
+The existing 8 MiB aggregate and 4 MiB per-session payload budgets remain.
+Larger windows initialize across multiple polls, with a fixed captured end.
+Changing the setting affects new or replaced tails, never expands or rewinds an
+already admitted window. Unchanged files require no event-byte reads.
+
+Observed replay evidence is still retained under the existing bounded guards;
+this is not permission to clear a live replay ledger or evict exact evidence.
+The unseen prefix has no replay or completeness guarantee. Header identity,
+process, binding and file-generation checks remain conservative. A separate
+bounded header check does not import historical state or model information.
+
 ## Clarification (2026-10-21, #269): isolate child-local doubt
 
 An invalid child field or disagreement between its legacy and observed
