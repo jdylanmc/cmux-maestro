@@ -399,7 +399,9 @@ struct SidebarMotionTests {
                 #expect(item.isEnabled, "Exercise a menu captured before the surface was reused")
                 presenter.invoke(item)
             }
-            #expect(model.navigation.status == .idle && navigationCalls.isEmpty,
+            let expectedNavigationStatus: SidebarNavigationStatus = scenario.delayedIdle ? .staleTarget : .idle
+            #expect(model.navigation.status == expectedNavigationStatus)
+            #expect(navigationCalls.isEmpty,
                     "An action captured before the run was replaced does not reach the new session")
             #expect(poller.tree.sessions.first { $0.id == f.sessionID }?.attention == [currentNotice])
             #expect(!rows.contains { $0.accessibilityLabel() == "Focus Copilot session 20000000" },
@@ -452,7 +454,8 @@ struct SidebarMotionTests {
             #expect(visible.managed == [child, otherRoot])
             #expect(summary.states.first { $0.title == (state == .working ? "Working" : "Idle") }?.count == (state == .idle ? 2 : 1))
             #expect(orchestration.snapshot.nodes == [old, child, otherRoot], "Ownership, ancestry and generations are unchanged")
-            #expect(!window.isVisible && model.navigation.status == .idle)
+            #expect(!window.isVisible)
+            #expect(model.navigation.status == expectedNavigationStatus)
             #expect(preferences.attention.acknowledged.isEmpty && preferences.history == history)
             if scenario.showEnded && scenario.expanded && scenario.protectedObservation {
                 let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()

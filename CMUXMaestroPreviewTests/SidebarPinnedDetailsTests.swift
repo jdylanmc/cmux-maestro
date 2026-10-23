@@ -65,6 +65,24 @@ struct SidebarPinnedDetailsTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func missingSurfaceTitleDisablesNativePrimaryClick() throws {
+        let navigation = SidebarNavigation()
+        navigation.update(
+            topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
+            perform: { _ in Issue.record("Missing surface must not navigate") }
+        )
+        let hosting = NSHostingView(rootView: FocusButton(
+            target: .surface(workspaceID: fixtures.workspaceA, surfaceID: UUID()),
+            navigation: navigation, label: "Ended session"
+        ) { Text("Ended session") })
+        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 40)
+        hosting.layoutSubtreeIfNeeded()
+        let button = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }.first)
+        #expect(!button.isEnabled)
+        button.performClick(nil)
+        #expect(navigation.status == .idle, "Disabled native title must not invoke focus or Details")
+    }
+
     private func hierarchy(
         active: UUID? = nil, kind: HierarchySurfaceKind = .terminal,
         focused: Bool = true, duplicateFocus: Bool = false, duplicateID: Bool = false,
@@ -619,6 +637,12 @@ struct SidebarPinnedDetailsTests {
         #expect(item.target === presenter)
         if change.hasPrefix("primary-") { capturedPrimary() }
         else { #expect(NSApp.sendAction(try #require(item.action), to: presenter, from: item)) }
+        if change.hasPrefix("primary-") || change.hasPrefix("focus-") {
+            #expect(model.navigation.status == .staleTarget)
+            #expect(nativeActions.isEmpty && preferences.attention.acknowledged.isEmpty)
+            #expect((window.childWindows ?? []).isEmpty, "A stale focus action must not open Details")
+            return
+        }
         try await Task.sleep(for: .milliseconds(100))
         let inspectorWindows = window.childWindows ?? []
         let inspectorViews = inspectorWindows.compactMap(\.contentView).flatMap { [$0] + views($0) }
@@ -871,7 +895,7 @@ struct SidebarPinnedDetailsTests {
             "CMUXMaestroSidebar/UI/SidebarPresentation.swift"), encoding: .utf8)
         let projection = try #require(presentation.components(separatedBy: "static func pinnedDetails(").last?
             .components(separatedBy: "static func state(").first)
-        for forbidden in ["markSeen(", "prepareSeen(", "acknowledge(", "SidebarNavigation", "context.host", "Timer"] {
+        for forbidden in ["markSeen(", "prepareSeen(", "acknowledge(", "SidebarNavigation(", "context.host", "Timer"] {
             #expect(!projection.contains(forbidden))
         }
         let source = try String(contentsOf: root.appendingPathComponent(

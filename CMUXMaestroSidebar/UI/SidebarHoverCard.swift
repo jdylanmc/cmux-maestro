@@ -834,6 +834,7 @@ struct SidebarTitleButton<Label: View>: NSViewRepresentable {
 
     func makeNSView(context: Context) -> SidebarTitleNativeButton { SidebarTitleNativeButton() }
     func updateNSView(_ button: SidebarTitleNativeButton, context: Context) {
+        button.isEnabled = context.environment.isEnabled
         button.labelContent = AnyView(content.environment(\.self, context.environment))
         button.activate = action
         button.preview = preview
