@@ -279,6 +279,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Unattributed internal activity shares one neutral unresolved indicator instead
+  of repeated unknown-agent rows. Named tasks, attention and required ancestry
+  remain visible; bounded history and work-state evidence stay unchanged (#341).
+
 - Copilot CLI 1.0.103 no longer blocks installation on removed remote flags.
   Setup selects supported no-sync controls from runtime help, keeps older CLI
   support, and refuses unknown controls. Installer failures show only vetted

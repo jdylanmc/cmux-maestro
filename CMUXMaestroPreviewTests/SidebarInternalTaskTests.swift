@@ -23,12 +23,33 @@ struct SidebarInternalTaskTests {
         let session = try #require(tree.sessions.first)
         let rows = session.childSections(layout: .init()).flatMap(\.rows)
         #expect(!rows.contains { $0.id == "fragment" })
+        #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
         #expect(Set(rows.map(\.id)) == ["permission", "ancestor", "nested", "named"])
         #expect(session.nodes.count == fragments.count)
         #expect(session.attentionOwnerCount == 1)
         #expect(session.knownRunningChildren == 3)
         #expect(tree.dismissibleOutcomes.isEmpty)
         #expect(!tree.hasCompleteCounts)
+    }
+
+    @Test(arguments: [AgentWorkState.unknown, .working, .idle, .completed, .cancelled])
+    func fragmentCompactionRetainsEvidenceInBothPresentations(_ state: AgentWorkState) {
+        var fragment = SidebarCopilotNode(
+            id: "fragment", parentID: nil, depth: 0, kind: .unknown, name: "Agent",
+            state: state, model: nil, ancestryUnresolved: true, hasChildren: false
+        )
+        var session = project([]).sessions[0]
+        session.nodes = [fragment]
+        #expect(session.unresolvedFragments.count == 1)
+        #expect(session.taskboardActivity.isEmpty)
+        #expect(session.childSections(layout: .init()).isEmpty)
+        #expect(session.taskSections(layout: .init()).isEmpty)
+        #expect(session.hasShownOutline(.init()), "The owner must disclose the unresolved indicator")
+        #expect(session.nodes == [fragment])
+        fragment.attentionDegraded = true
+        session.nodes = [fragment]
+        #expect(session.unresolvedFragments.isEmpty)
+        #expect(session.taskboardActivity == [fragment])
     }
 
     @Test(arguments: [CopilotLiveness.dead, .ambiguous, .alive], [false, true])

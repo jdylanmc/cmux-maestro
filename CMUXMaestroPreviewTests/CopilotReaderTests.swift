@@ -45,11 +45,25 @@ nonisolated struct CopilotReaderTests {
         let session = try #require(tree.sessions.first)
         #expect(session.nodes.count == 3, "Compacting presentation must retain exact evidence")
         #expect(session.childSections(layout: .init()).flatMap(\.rows).map(\.id) == ["named-child"])
+        #expect(Set(session.unresolvedFragments.map(\.id)) == ["old-child", "another-child"])
         #expect(!tree.hasCompleteCounts)
         let bytes = await reader.eventReadBytes
         #expect(bytes <= 1_048_576 + 4096 + 256)
         _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
         #expect(await reader.eventReadBytes == bytes, "No historical backfill or auxiliary event reads")
+        try fixture.append(copilotTestEvent("tool.execution_start", data: [
+            "toolCallId": "resolved-spawn", "toolName": "task"
+        ]) + Data([10]))
+        try fixture.append(copilotTestEvent("subagent.started", agent: "old-child", data: [
+            "toolCallId": "resolved-spawn", "agentDisplayName": "Resolved task"
+        ]) + Data([10]))
+        let resolved = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        let resolvedTree = SidebarCopilotTree.project(resolved, onto: topology, now: resolved.generatedAt)
+        let updated = try #require(resolvedTree.sessions.first)
+        #expect(updated.nodes.count == 3)
+        #expect(updated.nodes.filter { $0.id == "old-child" }.map(\.name) == ["Resolved task"])
+        #expect(updated.unresolvedFragments.map(\.id) == ["another-child"])
+        #expect(Set(updated.childSections(layout: .init()).flatMap(\.rows).map(\.id)) == ["named-child", "old-child"])
     }
 
     @Test func componentValidationRejectsSeparatorsAndAllowsUnicodeNames() throws {
