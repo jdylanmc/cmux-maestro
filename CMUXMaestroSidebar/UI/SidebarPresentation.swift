@@ -282,6 +282,7 @@ struct SidebarVisibleWork {
                 return row
             }
             let protected = session.attentionDegraded || session.attention.contains(where: { $0.kind.isBlocking || $0.kind == .error })
+                || (session.liveness == .dead && (session.protectsEndedSurface || tree.availability != .ready))
                 || result.nodes.contains {
                     $0.isInternalTask || $0.state == .failed || $0.state == .blocked || $0.attentionDegraded
                         || $0.attention.contains(where: { $0.kind.isBlocking })
@@ -294,6 +295,7 @@ struct SidebarVisibleWork {
             if tree.sessions.contains(where: {
                 $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId
                     && ($0.hasBlockingEvidence || $0.attention.contains(where: { $0.kind == .error })
+                        || ($0.liveness == .dead && ($0.protectsEndedSurface || tree.availability != .ready))
                         || ($0.liveness == .alive && ($0.state == .working
                             || (node.copilotSessionId != nil && node.copilotSessionId != $0.id)))
                         || $0.nodes.contains(where: { $0.isInternalTask || ($0.kind == .subagent && !$0.state.isTerminal) }))
