@@ -6,6 +6,44 @@ struct SidebarWorkspaceCountTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test(arguments: ["historical", "duplicate", "ambiguous", "stale-snapshot", "stale-observation"])
+    func cachedPlacementsPreserveIdentityBarriers(_ variant: String) {
+        let cache = SidebarPlacementCache()
+        let observed = variantTree(variant)
+        let managed = [owner(sessionID: fixtures.otherSessionID)]
+        let expected = SidebarPresentation.sessionPlacements(
+            observed.sessions, managed: managed, observations: observed, now: now
+        )
+        let value = cache.placements(tree: observed, managed: managed, now: now)
+        let placements = value.byWorkspace[fixtures.workspaceA] ?? []
+        #expect(placements.map(\.sessionIndex) == Array(observed.sessions.indices))
+        #expect(placements.map(\.managedNodeID) == expected.map(\.managedNodeID))
+        #expect(placements.map(\.contentOwnerID) == expected.map(\.contentOwnerID))
+        #expect(value.displaced == SidebarPresentation.displacedManagedNodeIDs(managed, observations: observed, now: now))
+    }
+
+    @Test func cachedPlacementsInvalidateOnOwnershipPermissionAndTopologyChanges() {
+        let cache = SidebarPlacementCache()
+        let managed = owner(sessionID: fixtures.sessionID)
+        var observed = tree([session(fixtures.sessionID, surface: fixtures.surfaceA)])
+        #expect(cache.placements(tree: observed, managed: [managed], now: now)
+            .byWorkspace[fixtures.workspaceA]?.first?.contentOwnerID == managed.id)
+        observed.sessions = [session(fixtures.otherSessionID, surface: fixtures.surfaceA)]
+        #expect(cache.placements(tree: observed, managed: [managed], now: now).displaced == [managed.id])
+        observed.issues = [.permissionDenied]
+        #expect(cache.placements(tree: observed, managed: [managed], now: now).displaced.isEmpty)
+        observed.issues = []
+        observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceB, workspace: fixtures.workspaceB)]
+        let moved = cache.placements(tree: observed, managed: [managed], now: now)
+        #expect(moved.byWorkspace[fixtures.workspaceA] == nil)
+        #expect(moved.byWorkspace[fixtures.workspaceB]?.first?.managedNodeID == nil)
+        #expect(cache.computationCount == 4)
+        observed.sessions = [session(fixtures.sessionID, surface: fixtures.surfaceA)]
+        #expect(cache.placements(tree: observed, managed: [], now: now)
+            .byWorkspace[fixtures.workspaceA]?.first?.contentOwnerID == nil)
+        #expect(cache.computationCount == 5)
+    }
+
     @Test func collapsedWorkspaceKeepsWorkingCountWithoutDoubleCountingManagedSessions() throws {
         let root = owner(sessionID: fixtures.sessionID)
         let observed = tree([

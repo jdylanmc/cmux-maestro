@@ -314,10 +314,13 @@ final class SidebarCopilotPolling {
             // Every timestamp comes from this read, never from the display clock.
             var refreshed = projectionCache.tree
             refreshed.generatedAt = snapshot.generatedAt
-            let observations = Dictionary(grouping: snapshot.sessions, by: { UUID(uuidString: $0.identity.sessionID) })
+            let observations = Dictionary(grouping: snapshot.sessions.indices, by: {
+                UUID(uuidString: snapshot.sessions[$0].identity.sessionID)
+            })
             for index in refreshed.sessions.indices {
                 let id = refreshed.sessions[index].id
-                if let matches = observations[id], matches.count == 1, let observedAt = matches.first?.observedAt {
+                if let matches = observations[id], matches.count == 1, let sourceIndex = matches.first,
+                   let observedAt = snapshot.sessions[sourceIndex].observedAt {
                     refreshed.sessions[index].observedAt = observedAt
                 }
             }

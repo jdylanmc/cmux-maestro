@@ -1791,6 +1791,7 @@ private struct HierarchyContent: View {
     @Binding var managedSelection: SidebarOrchestrationNode?
     @Binding var selection: UnmanagedSelection?
     @State private var dragSession = SidebarReorderDragSession()
+    @Environment(\.sidebarPresentationNow) private var now
 
     private var workspaceOrder: (workspaces: [HierarchyWorkspace], context: SidebarReorderContext) {
         let list = SidebarReorderComposition.compose(
@@ -1814,12 +1815,16 @@ private struct HierarchyContent: View {
             SidebarNotice(title: "No shared workspaces", detail: "This CMUX window has no shared workspaces.")
         } else {
             let arranged = workspaceOrder
+            let placements = model.placements.placements(
+                tree: visibleWork.tree, managed: visibleWork.managed, now: now()
+            )
             ForEach(arranged.workspaces) { workspace in
                 WorkspaceRow(
                     workspace: workspace,
                     reorder: arranged.context.handle(for: workspace.id, noun: "workspace"),
                     reorderBackend: reorderBackend, dragSession: dragSession,
-                    sessions: visibleWork.tree.sessions.filter { $0.workspaceID == workspace.id },
+                    placements: placements.byWorkspace[workspace.id] ?? [],
+                    displaced: placements.displaced,
                     countsComplete: model.copilot.tree.hasCompleteCounts,
                     navigation: model.navigation, layout: layout, setExpanded: setExpanded,
                     orchestration: model.orchestration, hierarchy: model.hierarchy,
@@ -1857,15 +1862,16 @@ enum SidebarSurfaceUnit {
     @MainActor
     static func compose(
         workspaceID: UUID, surfaces: [HierarchySurface], managed: [SidebarOrchestrationNode],
-        observations: SidebarCopilotTree, now: Date, backend: any SidebarReorderBackend
+        observations: SidebarCopilotTree, now: Date, backend: any SidebarReorderBackend,
+        displacedNodeIDs: Set<UUID>? = nil
     ) -> SidebarReorderList<SidebarSurfaceUnit> {
         let inWorkspace = managed.filter { $0.workspaceId == workspaceID }
-        let displaced = SidebarPresentation.displacedManagedNodeIDs(managed, observations: observations, now: now)
+        let displaced = displacedNodeIDs
+            ?? SidebarPresentation.displacedManagedNodeIDs(managed, observations: observations, now: now)
         let roots = ManagedHierarchyContent.roots(of: managed).filter { $0.workspaceId == workspaceID && !displaced.contains($0.id) }
             .sorted(by: ManagedHierarchyContent.rootOrder)
-        let unmanaged = SidebarPresentation.unmanagedSurfaces(
-            surfaces, workspaceID: workspaceID, managed: inWorkspace, observations: observations, now: now
-        )
+        let owned = Set(inWorkspace.filter { !displaced.contains($0.id) }.map(\.surfaceId))
+        let unmanaged = surfaces.filter { !owned.contains($0.id) }
         let pinned = Dictionary(surfaces.map { ($0.id, $0.isPinned) }, uniquingKeysWith: { first, _ in first })
         return SidebarReorderComposition.compose(
             roots.map(Self.managed) + unmanaged.map(Self.surface), kind: .surfaces,
@@ -1885,7 +1891,8 @@ private struct WorkspaceRow: View {
     let reorder: SidebarReorderHandle
     let reorderBackend: any SidebarReorderBackend
     let dragSession: SidebarReorderDragSession
-    let sessions: [SidebarCopilotSession]
+    let placements: [SidebarPlacementCache.Placement]
+    let displaced: Set<UUID>
     let countsComplete: Bool
     let navigation: SidebarNavigation
     let layout: SidebarLayoutSettings
@@ -1908,9 +1915,7 @@ private struct WorkspaceRow: View {
     private var managedNodes: [SidebarOrchestrationNode] {
         displayManaged.filter { $0.workspaceId == workspace.id }
     }
-    private var sessionPlacements: [SidebarSessionPlacement] {
-        SidebarPresentation.sessionPlacements(sessions, managed: managedNodes, observations: copilotTree, now: now())
-    }
+    private var sessions: [SidebarCopilotSession] { placements.map { copilotTree.sessions[$0.sessionIndex] } }
     private var attentionSummary: SidebarWorkspaceAttention {
         SidebarPresentation.workspaceAttention(
             sessions: sessions, managed: managedNodes,
@@ -1958,7 +1963,7 @@ private struct WorkspaceRow: View {
     private func surfaceOrder(_ surfaces: [HierarchySurface]) -> (surfaces: [HierarchySurface], context: SidebarReorderContext) {
         let list = SidebarSurfaceUnit.compose(
             workspaceID: workspace.id, surfaces: surfaces, managed: displayManaged,
-            observations: copilotTree, now: now(), backend: reorderBackend
+            observations: copilotTree, now: now(), backend: reorderBackend, displacedNodeIDs: displaced
         )
         return (list.displayed.compactMap(\.surface), SidebarReorderContext(list, backend: reorderBackend, session: dragSession))
     }
@@ -1979,14 +1984,15 @@ private struct WorkspaceRow: View {
 
     /// Surfaces showing exactly one unmanaged Copilot session: Worktrees groups them as agents.
     private func unmanagedSessionSurfaces(
-        _ surfaces: [HierarchySurface], placements: [SidebarSessionPlacement]
+        _ surfaces: [HierarchySurface], placements: [SidebarPlacementCache.Placement]
     ) -> [(surface: HierarchySurface, session: SidebarCopilotSession)] {
         surfaces.compactMap { surface in
             let sessions = placements.filter {
-                $0.contentOwnerID == nil && !$0.hasNoSurfaceRow && $0.session.surfaceID == surface.id
+                $0.contentOwnerID == nil && !$0.hasNoSurfaceRow
+                    && copilotTree.sessions[$0.sessionIndex].surfaceID == surface.id
             }
-            guard sessions.count == 1, let session = sessions.first?.session else { return nil }
-            return (surface, session)
+            guard sessions.count == 1, let placement = sessions.first else { return nil }
+            return (surface, copilotTree.sessions[placement.sessionIndex])
         }
     }
 
@@ -2010,7 +2016,6 @@ private struct WorkspaceRow: View {
     }
 
     var body: some View {
-        let placements = sessionPlacements
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 5) {
                 ExpandButton(expanded: expanded, label: title, workspace: true) {
@@ -2078,8 +2083,9 @@ private struct WorkspaceRow: View {
                             workspaceID: workspace.id, surface: surface,
                             reorder: list.context.handle(for: surface.id, noun: "surface"),
                             sessions: placements.filter {
-                                $0.contentOwnerID == nil && !$0.hasNoSurfaceRow && $0.session.surfaceID == surface.id
-                            }.map(\.session),
+                                $0.contentOwnerID == nil && !$0.hasNoSurfaceRow
+                                    && copilotTree.sessions[$0.sessionIndex].surfaceID == surface.id
+                            }.map { copilotTree.sessions[$0.sessionIndex] },
                             countsComplete: countsComplete,
                             navigation: navigation, layout: layout, setExpanded: setExpanded,
                             dismiss: dismiss, acknowledge: acknowledge, selection: $selection

@@ -279,6 +279,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Workspace rows reuse identity-and-freshness placement results across redraws
+  instead of repeatedly copying session histories. Refreshed timestamps still
+  reach views, and existing freshness and history deadlines remain independent
+  (#334).
+
 - Binding-file updates wake sidebar readers without rebuilding their watchers.
   Missing session directories no longer disable healthy watches or bindings
   notifications (#328).

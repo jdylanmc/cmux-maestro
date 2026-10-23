@@ -60,6 +60,7 @@ final class SidebarPlacementCache {
             current: [.ready, .partial].contains(tree.availability) && !tree.issues.contains(.permissionDenied)
                 && tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
         )
+        guard key != input else { return snapshot }
         computationCount += 1
         var result = Snapshot()
         let identityCounts = input.sessions.reduce(into: [UUID: Int]()) { $0[$1.id, default: 0] += 1 }

@@ -866,16 +866,20 @@ enum SidebarPresentation {
               SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
         return Set(managed.filter { node in
             guard let managedSessionID = node.copilotSessionId else { return false }
-            let candidates = observations.sessions.filter {
-                $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId && $0.liveness != .dead
+            let candidates = observations.sessions.indices.filter {
+                observations.sessions[$0].workspaceID == node.workspaceId
+                    && observations.sessions[$0].surfaceID == node.surfaceId && observations.sessions[$0].liveness != .dead
             }
-            guard candidates.count == 1, let session = candidates.first, session.liveness == .alive,
-                  SidebarCopilotTree.isFresh(session.observedAt, now: now),
-                  session.observedAt <= generatedAt.addingTimeInterval(1),
-                  observations.sessions.filter({ $0.id == session.id }).count == 1 else { return false }
+            guard candidates.count == 1, let index = candidates.first,
+                  observations.sessions[index].liveness == .alive,
+                  SidebarCopilotTree.isFresh(observations.sessions[index].observedAt, now: now),
+                  observations.sessions[index].observedAt <= generatedAt.addingTimeInterval(1),
+                  observations.sessions.indices.filter({
+                      observations.sessions[$0].id == observations.sessions[index].id
+                  }).count == 1 else { return false }
             // Placement is not identity. Retain the managed branch, but do not
             // coalesce away a different verified live session on its surface.
-            return session.id != managedSessionID
+            return observations.sessions[index].id != managedSessionID
         }.map(\.id))
     }
 
@@ -899,7 +903,8 @@ enum SidebarPresentation {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
                     && $0.copilotSessionId == session.id
             }
-            let identityCount = (observations?.sessions ?? sessions).filter { $0.id == session.id }.count
+            let observed = observations?.sessions ?? sessions
+            let identityCount = observed.indices.filter { observed[$0].id == session.id }.count
             let owner = surfaceOwners.first {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
             }
