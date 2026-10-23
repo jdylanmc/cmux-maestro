@@ -1257,6 +1257,50 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.hasPendingHistory() == false)
     }
 
+    @Test func largeLogColdStartReadsCurrentTailWithoutHistoricalCatchup() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])])
+        let file = try FileHandle(forWritingTo: fixture.events)
+        try file.seekToEnd()
+        try file.write(contentsOf: Data("""
+        {"id":"10000000-0000-0000-0000-000000000001","type":"assistant.message","data":{"content":"
+        """.utf8))
+        let opaque = Data(repeating: 120, count: 1_048_576)
+        for _ in 0..<320 { try file.write(contentsOf: opaque) }
+        try file.write(contentsOf: Data("\"}}\n".utf8))
+        try file.close()
+        try fixture.append(copilotTestEvent("assistant.turn_start", data: [
+            "turnId": "current", "model": "Synthetic model"
+        ]) + Data([10]))
+        let reader = fixture.reader()
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(initial.sessions.first?.state == .working)
+        #expect(initial.sessions.first?.model == "Synthetic model")
+        #expect(initial.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(!initial.issues.contains(.readLimitReached))
+        #expect(!initial.isComplete)
+        #expect(await reader.hasPendingHistory() == false)
+        let firstBytes = await reader.eventReadBytes
+        #expect(firstBytes <= 4_194_304 + 4096 + 256)
+        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(unchanged.sessions.first?.state == .working)
+        #expect(await reader.eventReadBytes == firstBytes)
+        let appended = try copilotTestEvent("assistant.turn_end", data: ["turnId": "current"]) + Data([10])
+        try fixture.append(appended)
+        let updated = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(updated.sessions.first?.state == .idle)
+        #expect(await reader.eventReadBytes - firstBytes <= appended.count + 512)
+        #expect(await reader.hasPendingHistory() == false)
+        let restarted = fixture.reader()
+        let afterRestart = try await restarted.read(surfaceIDs: [fixture.surface])
+        #expect(afterRestart.sessions.first?.state == .idle)
+        #expect(await restarted.eventReadBytes <= 4_194_304 + 4096 + 256)
+        #expect(await restarted.hasPendingHistory() == false)
+    }
+
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {
         .init(
             schemaVersion: record.schemaVersion, sessionID: record.sessionID,
