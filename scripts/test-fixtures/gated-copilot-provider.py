@@ -73,11 +73,17 @@ while True:
             gate = home / "provider-gate.json"
             gated = gate.exists() and json.loads(gate.read_text())["install"] == count
             if gated:
-                (home / "provider-ready.json").write_text(json.dumps({
-                    "provider": os.getpid(), "providerGroup": os.getpgrp(),
-                    "bridge": os.getppid(), "bridgeGroup": os.getpgid(os.getppid()),
-                }))
                 with (home / "provider-release").open("rb", buffering=0) as release:
+                    ready = os.open(home / "provider-ready", os.O_WRONLY)
+                    try:
+                        data = json.dumps({
+                            "provider": os.getpid(), "providerGroup": os.getpgrp(),
+                            "bridge": os.getppid(), "bridgeGroup": os.getpgid(os.getppid()),
+                        }).encode()
+                        assert len(data) <= os.fpathconf(ready, "PC_PIPE_BUF")
+                        assert os.write(ready, data) == len(data)
+                    finally:
+                        os.close(ready)
                     assert release.read(1) == b"G"
             for name, data in payload.items():
                 target = cache / name

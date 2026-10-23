@@ -27,6 +27,9 @@ Notable changes are recorded using Keep a Changelog categories.
   a guard against new timing-sensitive tests. Venue-dependent native acceptance
   is explicitly opt-in; its exact exclusions and remaining behavioral coverage
   are documented in the CI test policy (#276).
+- Installer lease tests await an explicit provider readiness signal across
+  compensation, report early installer exits, and release delayed fixtures on
+  assertion failure instead of depending on a short startup budget (#345).
 - Native guide acceptance tolerates a proven base advance or retarget while
   retaining the exact candidate. Producer failures report their original cause
   instead of launching dependent validators without evidence (#276).

@@ -309,8 +309,16 @@ class LocalPreviewTests(unittest.TestCase):
         return fd
 
     def wait_for_gated_provider(self, ready, child):
-        self.wait_for(lambda: (self.home / "provider-ready.json").exists(), "gated provider")
-        return json.loads((self.home / "provider-ready.json").read_text())
+        # Compensation reaches this gate only after a complete upgrade and restore.
+        # This is the real-process hang guard, not a startup-performance assertion.
+        readable, _, _ = select.select([ready, child.stdout], [], [], 60)
+        if ready in readable:
+            return json.loads(os.read(ready, 4096))
+        if child.stdout in readable:
+            returned = self.home / "installer-return.json"
+            detail = returned.read_text() if returned.exists() else "installer exited without a result"
+            self.fail("Installer returned before gated provider: " + detail)
+        self.fail("Timed out waiting for synthetic gated provider")
 
     def test_gated_provider_readiness_survives_delayed_observer(self):
         ready = self.provider_ready_channel()
@@ -338,6 +346,20 @@ class LocalPreviewTests(unittest.TestCase):
                 patch.object(time, "monotonic", side_effect=[0, 16]):
             with self.assertRaisesRegex(AssertionError, "Timed out waiting for synthetic gated provider"):
                 self.wait_for_gated_provider(ready, SimpleNamespace(stdout=stdout))
+
+    def test_gated_provider_is_released_if_readiness_observer_fails(self):
+        observe = self.wait_for_gated_provider
+        selected = {}
+        def fail_observer(ready, child):
+            selected.update(observe(ready, child))
+            self.assertFalse((self.home / "provider-late-write.json").exists())
+            raise RuntimeError("injected readiness observer failure")
+        with patch.object(self, "wait_for_gated_provider", side_effect=fail_observer):
+            with self.assertRaisesRegex(RuntimeError, "injected readiness observer failure"):
+                self.assert_bridge_death_preserves_provider_lease(False, False)
+        self.assertTrue((self.home / "provider-late-write.json").exists())
+        self.assertTrue(self.process_gone(selected["provider"]))
+        self.assertTrue(self.process_gone(selected["bridge"]))
 
     def test_bridge_death_cannot_release_a_gated_provider_mutator(self):
         for compensation, guardian_failure in ((False, False), (True, False), (False, True), (True, True)):
@@ -373,6 +395,9 @@ class LocalPreviewTests(unittest.TestCase):
         (self.home / "provider-gate.json").write_text(json.dumps({"install": 3 if compensation else 1}))
         gate = self.home / "provider-release"
         os.mkfifo(gate, 0o600)
+        release = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, release)
+        ready = self.provider_ready_channel()
         code = """
 import importlib.util,json,os,pathlib,sys,time
 sys.dont_write_bytecode = True
@@ -406,7 +431,7 @@ else:
         blocked = False
         returned_before_release = restored_before_release = False
         try:
-            selected = self.wait_for_gated_provider(None, child)
+            selected = self.wait_for_gated_provider(ready, child)
             self.assertNotEqual(selected["bridgeGroup"], selected["providerGroup"])
             self.assertEqual(selected["bridge"], selected["bridgeGroup"])
             self.assertEqual(selected["provider"], selected["providerGroup"])
@@ -443,10 +468,8 @@ else:
                   "guardianKilled": guardian_failure, "blockedWhileProviderAlive": blocked}), flush=True)
             self.assertIsNone(unrelated.poll())
         finally:
-            if selected and not self.process_gone(selected["provider"]):
-                release = os.open(gate, os.O_WRONLY | os.O_NONBLOCK)
-                os.write(release, b"G")
-                os.close(release)
+            # Buffer release even if readiness timed out before the provider arrived.
+            os.write(release, b"G")
             stdout, stderr = child.communicate(timeout=120)
             if selected:
                 self.wait_for(lambda: self.process_gone(selected["provider"]), "provider completion")
