@@ -36,10 +36,13 @@ Unrelated topology changes, discovery restarts and temporary verifier uncertaint
 retain the still-selected cohort's private replay guards. They never grant cached
 publication: routing, process and file evidence must pass current validation.
 Selection revocation and actual binding or file-generation changes remain
-invalidation boundaries. At the 64-session admission limit, keep admitted sessions;
-additional sessions remain unavailable with an explicit limit until a slot leaves.
-Do not rotate or evict observed tails to admit more sessions, or fast-retry a
-capacity wait.
+invalidation boundaries. At the 64-session admission limit, keep admitted live or
+uncertain owners; verified-dead binding owners release their slots. Check owner
+death before admitting historical bindings, including bindings whose session
+directories no longer exist. Additional sessions wait with an explicit limit
+until owner death or a selection/binding change frees capacity. Missing files,
+permission failures and unknown probes alone do not release observed replay
+evidence. Do not rotate live/uncertain tails or fast-retry a capacity wait.
 
 ## Clarification (2026-10-21, #269): isolate child-local doubt
 

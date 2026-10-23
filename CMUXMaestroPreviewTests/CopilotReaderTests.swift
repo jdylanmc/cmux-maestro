@@ -1586,6 +1586,7 @@ nonisolated struct CopilotReaderTests {
             }
         })
         _ = try await reader.read(surfaceIDs: [fixture.surface])
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
         let live = try fixture.addSession(surface: fixture.surface)
         let liveID = try #require(UUID(uuidString: live.lastPathComponent))
         try fixture.writeRecord(.init(
@@ -1598,10 +1599,10 @@ nonisolated struct CopilotReaderTests {
         _ = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(await reader.retentionCounts().waiting == 1)
         clock.advance(by: 1)
+        if missingDirectory { try FileManager.default.removeItem(at: fixture.session) }
         let uncertain = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(uncertain.sessions.map(\.sessionID) == [fixture.sessionID])
         #expect(await reader.retentionCounts().tails == 1)
-        if missingDirectory { try FileManager.default.removeItem(at: fixture.session) }
         clock.advance(by: 1)
         let released = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(released.sessions.map(\.sessionID) == [liveID])

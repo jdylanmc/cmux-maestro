@@ -381,10 +381,15 @@ independent terminal. This literal #10 integration does not complete broader
   batches (up to 1,024 directory entries per batch, plus bounded revalidation of
   at most 64 cached identities and one staged granted binding). Historical locks
   and off-surface records cannot pin discovery to a prefix. Retain at most 64 transcript
-  tails. Admitted tails keep their slots, even after publication. Discovery
+  tails. Admitted live or uncertain owners keep their slots after publication.
+  Current routing revalidation releases a verified-dead owner's slot. Discovery
+  checks owner death before admission, without requiring a session directory;
+  historical dead bindings therefore never fill active capacity. Missing files
+  or unavailable probes alone cannot establish owner death. Discovery
   stages at most one next binding while capacity is full, with an explicit
-  limit warning. Additional sessions remain unavailable until an admitted
-  selection or binding leaves; observed replay evidence is never evicted for them.
+  limit warning. Additional sessions remain unavailable until an admitted owner
+  is verified dead or a selection/binding change frees capacity. Live/uncertain
+  replay evidence is never evicted for them.
   Only full, unchanged, non-overflowed cycle without errors can be complete.
   Check cached bindings before process/transcript access and publication.
   Discovery restarts, cancellation and unrelated topology changes retain private

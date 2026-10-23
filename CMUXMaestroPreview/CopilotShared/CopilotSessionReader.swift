@@ -287,6 +287,10 @@ actor CopilotSessionReader {
                     recordCycleIssue(.unsupportedFormat)
                     continue
                 }
+                if verifier.lookup(record.ownerPID) == .dead {
+                    bindingsByID.removeValue(forKey: id)
+                    continue
+                }
                 cache(Binding(record: record, stamp: stamp, filename: cached.filename))
             } catch {
                 try Self.rethrowCancellation(error)
@@ -307,6 +311,8 @@ actor CopilotSessionReader {
                 waitingBinding = nil
             } else if record.schemaVersion != 1 {
                 recordCycleIssue(.unsupportedFormat)
+                waitingBinding = nil
+            } else if verifier.lookup(record.ownerPID) == .dead {
                 waitingBinding = nil
             } else {
                 let entry = Binding(record: record, stamp: stamp, filename: waiting.filename)
@@ -342,6 +348,9 @@ actor CopilotSessionReader {
                 let (record, stamp) = try readIdentity(at: index.descriptor, filename: name)
                 guard surfaceIDs.contains(record.surfaceID) else { continue }
                 guard record.schemaVersion == 1 else { recordCycleIssue(.unsupportedFormat); continue }
+                // Ended bindings can outlive their session directories. Only proven
+                // owner death releases capacity; missing files or unknown probes do not.
+                guard verifier.lookup(record.ownerPID) != .dead else { continue }
                 let entry = Binding(record: record, stamp: stamp, filename: name)
                 if bindingsByID[record.sessionID] == nil {
                     guard admit(entry) else {

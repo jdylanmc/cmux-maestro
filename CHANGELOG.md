@@ -296,9 +296,10 @@ Notable changes are recorded using Keep a Changelog categories.
   without restart; existing windows never backfill on a setting change. Omitted
   child history stays incomplete, and unproven current state stays unknown.
   Still-selected sessions keep replay protection across unrelated tab changes
-  and temporary reader outages. At the 64-session limit, admitted sessions stay;
-  additional sessions remain unavailable until a slot leaves, rather than
-  evicting observed evidence.
+  and temporary reader outages. At the 64-session limit, live or uncertain owners
+  keep their slots; verified-dead owners release them, even when their session
+  directories are missing. Historical dead bindings cannot block live admission.
+  Missing files alone never evict an uncertain owner's replay evidence.
 
 - An unavailable session no longer hides healthy agents' current states, names,
   pets or child work. Unavailable state and verifier-unknown observations stay
