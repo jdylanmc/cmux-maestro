@@ -1382,7 +1382,8 @@ struct ManagedHierarchyContent: View {
         let ownership = ownedIndices == nil ? SidebarPresentation.sessionPlacements(
             copilotTree.sessions, managed: nodes, observations: copilotTree, now: evidenceDate
         ).compactMap { placement in placement.contentOwnerID.map { (owner: $0, session: placement.session) } } : []
-        let owned = Dictionary(grouping: ownership, by: \.owner).mapValues { $0.map(\.session) }
+        let owned = ownedIndices?.mapValues { indices in indices.map { copilotTree.sessions[$0] } }
+            ?? Dictionary(grouping: ownership, by: \.owner).mapValues { $0.map(\.session) }
         VStack(alignment: .leading, spacing: 12) {
             ForEach(workspaceGroups, id: \.id) { group in
                 VStack(alignment: .leading, spacing: 0) {
@@ -1397,9 +1398,7 @@ struct ManagedHierarchyContent: View {
                       let branch = rows(for: [root])
                       VStack(alignment: .leading, spacing: 0) {
                         ForEach(branch) { row in
-                        let retained = ownedIndices.map { indices in
-                            (indices[row.id] ?? []).map { copilotTree.sessions[$0] }
-                        } ?? owned[row.id] ?? []
+                        let retained = owned[row.id] ?? []
                         let expanded = layout.isExpanded(.managed(row.node.id))
                         ManagedNodeRow(
                             node: row.node, depth: row.depth,

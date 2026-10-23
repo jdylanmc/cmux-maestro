@@ -79,6 +79,21 @@ bounded append/rebuild path. Torn final lines remain incomplete without fast pol
 Pet frames and status decorations run as render-server animations, not SwiftUI
 timelines; they must not drive continuous hierarchy layout between observations.
 
+Workspace placement caches retain only ordered identity, location and freshness
+inputs, plus session indices and owner IDs. They never retain session histories.
+Raw visibility and history-filtered rows have separate caches. Worktrees,
+Sub-agents and collapsed summaries reuse the same indexed ownership evidence.
+
+Copilot's raw tree and evidence stream still publish exact observation timestamps.
+The outline observes a separate presentation key: semantic content, freshness
+classes and displayed minutes. Each immutable render snapshot carries its display
+clock; timestamp-only refreshes do not redraw it within the same displayed minute.
+Existing Copilot, history, managed-node, Git and process deadline notifications
+advance the display independently. Workspace render equality preserves local
+content and global duplicate-identity barriers. Actions revalidate current raw
+evidence using the actual clock, not a captured display clock. Hidden agent
+previews do not build card data; opening a preview reads current evidence.
+
 For installed CPU acceptance, select the exact extension PID and record the installed
 commit separately, then run this read-only local probe:
 
