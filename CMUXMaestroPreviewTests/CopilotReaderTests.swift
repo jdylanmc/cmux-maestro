@@ -6,6 +6,52 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test @MainActor func preWindowSpawnsDoNotBecomeDuplicateUnknownAgentRows() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            copilotTestEvent("tool.execution_start", data: ["toolCallId": "old-spawn", "toolName": "task"]),
+            copilotTestEvent("subagent.started", agent: "old-child", data: [
+                "toolCallId": "old-spawn", "agentDisplayName": "Earlier task"
+            ]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", agent: "old-child", data: ["turnId": "current"]),
+            copilotTestEvent("assistant.turn_start", agent: "another-child", data: ["turnId": "another"]),
+            copilotTestEvent("tool.execution_start", data: ["toolCallId": "new-spawn", "toolName": "task"]),
+            copilotTestEvent("subagent.started", agent: "named-child", data: [
+                "toolCallId": "new-spawn", "agentDisplayName": "Current task"
+            ])
+        ])
+        let reader = fixture.reader()
+        let snapshot = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        let observation = try #require(snapshot.sessions.first)
+        #expect(observation.children.filter { $0.kind == .unknown }.count == 2)
+        #expect(observation.sessionIssues == [.readLimitReached])
+        let topology = SidebarTopology(HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available([.init(
+                    id: fixture.surface, title: "Synthetic", kind: .terminal, isFocused: true,
+                    isPinned: false, unreadCount: 0, workingDirectory: .unavailable
+                )])
+            )], windowID: UUID()
+        ))
+        let tree = SidebarCopilotTree.project(snapshot, onto: topology, now: snapshot.generatedAt)
+        let session = try #require(tree.sessions.first)
+        #expect(session.nodes.count == 3, "Compacting presentation must retain exact evidence")
+        #expect(session.childSections(layout: .init()).flatMap(\.rows).map(\.id) == ["named-child"])
+        #expect(!tree.hasCompleteCounts)
+        let bytes = await reader.eventReadBytes
+        #expect(bytes <= 1_048_576 + 4096 + 256)
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes == bytes, "No historical backfill or auxiliary event reads")
+    }
+
     @Test func componentValidationRejectsSeparatorsAndAllowsUnicodeNames() throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

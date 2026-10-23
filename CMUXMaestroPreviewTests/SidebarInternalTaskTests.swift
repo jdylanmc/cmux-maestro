@@ -8,6 +8,29 @@ struct SidebarInternalTaskTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let event = UUID(uuidString: "13100000-0000-0000-0000-000000000001")!
 
+    @Test func unresolvedFragmentsCompactWithoutHidingProtectedEvidence() throws {
+        let fragments: [CopilotChildWork] = [
+            .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Unknown agent", state: .working, model: nil),
+            .init(id: "permission", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Agent", state: .blocked, model: nil, attention: [signal(.permission)]),
+            .init(id: "ancestor", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Agent", state: .unknown, model: nil),
+            task("nested", parent: "ancestor", state: .working),
+            task("named", state: .working)
+        ]
+        let tree = project(fragments, complete: false)
+        let session = try #require(tree.sessions.first)
+        let rows = session.childSections(layout: .init()).flatMap(\.rows)
+        #expect(!rows.contains { $0.id == "fragment" })
+        #expect(Set(rows.map(\.id)) == ["permission", "ancestor", "nested", "named"])
+        #expect(session.nodes.count == fragments.count)
+        #expect(session.attentionOwnerCount == 1)
+        #expect(session.knownRunningChildren == 3)
+        #expect(tree.dismissibleOutcomes.isEmpty)
+        #expect(!tree.hasCompleteCounts)
+    }
+
     @Test(arguments: [CopilotLiveness.dead, .ambiguous, .alive], [false, true])
     func review001SurfaceSuppressionNeverAttestsAnotherSessionsContents(
         _ historicalLiveness: CopilotLiveness, _ missingManagedIdentity: Bool
