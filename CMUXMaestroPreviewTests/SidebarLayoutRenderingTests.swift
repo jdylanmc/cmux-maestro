@@ -6,6 +6,143 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarLayoutRenderingTests {
+    @Test(arguments: [SidebarDensity.compact, .comfortable],
+          [(AgentWorkState.idle, AgentWorkState.idle), (.idle, .working),
+           (.idle, .blocked), (.idle, .failed), (.working, .idle), (.blocked, .idle)])
+    func collapsedManagedHistoryUsesRowStatusWithoutOrphanLine(
+        density: SidebarDensity, states: (owner: AgentWorkState, child: AgentWorkState)
+    ) async throws {
+        let childState = states.child
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let fixtures = SidebarTreeFixtures()
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        preferences.setDensity(density)
+        let node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic laboratory",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.sessionID,
+            executionMode: .interactive, iconId: "md-flask_outline", createdAt: now, updatedAt: now)
+        let session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: states.owner, model: nil, observedAt: now,
+            nodes: [.init(id: "child", parentID: nil, depth: 0, kind: .subagent,
+                          name: "Synthetic helper", state: childState, model: nil,
+                          ancestryUnresolved: false, hasChildren: false,
+                          attention: childState == .failed ? [
+                            .init(kind: .error, evidence: .init(source: "unsupported", eventID: UUID()), occurredAt: now)
+                          ] : [])],
+            childrenComplete: false, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0,
+            attention: states.owner == .blocked ? [
+                .init(kind: .answer, evidence: .init(source: "unsupported", eventID: UUID()), occurredAt: now)
+            ] : [])
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        preferences.setExpanded(false, for: .managed(node.id))
+        #expect(session.hasShownOutline(preferences.layout))
+        let finished = AsyncStream<Void>.makeStream()
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let polling = SidebarOrchestrationPolling(
+            read: { snapshot }, pause: { throw CancellationError() },
+            expiryPause: { _ in throw CancellationError() }, now: { now },
+            taskFinished: { _ in finished.continuation.yield(); finished.continuation.finish() })
+        polling.update(topology: SidebarTopology(fixtures.hierarchy()), connected: true)
+        polling.setVisible(true)
+        for await _ in finished.stream {}
+        defer { polling.setVisible(false) }
+        #expect(polling.availability == .ready)
+        #expect(SidebarPresentation.managedState(node, availability: polling.availability, now: now, tree: tree)
+                == SidebarPresentation.state(states.owner))
+        let navigation = SidebarNavigation()
+        navigation.update(topology: SidebarTopology(fixtures.hierarchy()), connected: true,
+                          workspaceAllowed: true, surfaceAllowed: true,
+                          perform: { _ in Issue.record("Synthetic rendering must not navigate") })
+        let host = NSHostingView(rootView: ManagedHierarchyContent(
+            polling: polling, hierarchy: fixtures.hierarchy(), navigation: navigation,
+            layout: preferences.layout, setExpanded: { _, _ in },
+            selectedNode: .constant(nil), dismiss: { _ in }, acknowledge: { _ in },
+            selection: .constant(nil), showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree
+        ).environment(preferences).environment(\.sidebarDensity, density)
+            .environment(\.sidebarPresentationNow, { now })
+            .environment(\._accessibilityReduceMotion, true)
+            .frame(width: 300).fixedSize(horizontal: false, vertical: true)
+            .background(Color(nsColor: .windowBackgroundColor)))
+        let frame = NSRect(x: 0, y: 0, width: 300, height: 100)
+        let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.appearance = NSAppearance(named: .darkAqua)
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.frame = frame
+        host.layoutSubtreeIfNeeded()
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/layout-validation/offscreen")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: bitmap)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: folder.appendingPathComponent(
+            "collapsed-managed-history-\(density.rawValue)-\(states.owner.rawValue)-\(childState.rawValue).png"
+        ))
+        #expect(!window.isVisible)
+        #expect(abs(host.fittingSize.height - density.agentRowHeight) <= 0.5,
+                "A collapsed managed session must not allocate a standalone summary line")
+        let title = try #require(nativeTitles(in: host).first)
+        var children = SidebarBranchSummary(nodes: session.nodes)
+        children.incomplete = true
+        let summary = SidebarPresentation.collapsed(children)
+        #expect(summary.contains("States or counts incomplete"))
+        for line in summary {
+            #expect(title.toolTip?.contains(line) == true)
+            #expect(title.accessibilityHelp()?.contains(line) == true)
+        }
+        if childState == .idle {
+            for count in ["1 known working", "1 blocked", "1 needs attention"] {
+                #expect(title.toolTip?.contains(count) == false)
+                #expect(title.accessibilityHelp()?.contains(count) == false)
+            }
+        }
+        let card = try #require(SidebarAgentHoverContent.card(
+            for: .managed(node.id, generation: node.generation), hierarchy: fixtures.hierarchy(), connected: true,
+            tree: tree, managed: .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node]),
+            availability: .ready, now: now
+        ))
+        #expect(card.lines.contains { $0.title == "Child history" && $0.value == "Incomplete" })
+
+        func statusPixels() throws -> Data {
+            let badgeCount = childState == .idle ? 2 : 3
+            let width = CGFloat(badgeCount * 12 + (badgeCount - 1) * 4 + 8)
+            let lane = NSRect(x: title.bounds.maxX - width, y: 0, width: width, height: title.bounds.height)
+            let image = try #require(title.bitmapImageRepForCachingDisplay(in: lane))
+            title.cacheDisplay(in: lane, to: image)
+            return Data(bytes: try #require(image.bitmapData), count: image.bytesPerRow * image.pixelsHigh)
+        }
+        let actualStatus = try statusPixels()
+        // Independent glyph oracle: child activity/attention and incomplete evidence must
+        // remain visible beside the unchanged own-state badge, not only in hover text.
+        title.labelContent = AnyView(SidebarAgentTitleLine(title: node.title, tags: []) {
+            HStack(spacing: 4) {
+                if childState == .blocked {
+                    SidebarStateBadge(visual: SidebarPresentation.state(.blocked))
+                } else if childState == .failed {
+                    SidebarStateBadge(visual: .init(title: "Attention", symbol: "exclamationmark.circle", tone: .attention))
+                } else if childState == .working {
+                    SidebarStateBadge(visual: SidebarPresentation.state(.working))
+                }
+                SidebarStateBadge(visual: SidebarPresentation.state(.unknown))
+            }
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            SidebarStateBadge(visual: SidebarPresentation.managedState(
+                node, availability: polling.availability, now: now, tree: tree
+            ), needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now))
+        }.environment(\.sidebarDensity, density).environment(\._accessibilityReduceMotion, true))
+        title.layoutSubtreeIfNeeded()
+        #expect(try actualStatus == statusPixels(),
+                "Collapsed child signals must render inline, including the dashed incomplete badge")
+    }
+
     @Test func collapsedWorkspacesStackWithoutExpandedContentMargins() throws {
         let fixture = try SidebarPreferenceFixture()
         let stores = SidebarStoreFixture()

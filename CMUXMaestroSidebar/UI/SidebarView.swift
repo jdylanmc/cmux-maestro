@@ -1397,6 +1397,8 @@ struct ManagedHierarchyContent: View {
                             evidenceDate: evidenceDate,
                             availability: polling.availability,
                             copilotTree: copilotTree,
+                            collapsedSummary: !expanded && !row.hasChildren && showsRetainedWork(retained)
+                                ? SidebarBranchSummary(childrenOf: retained) : nil,
                             attentionIncomplete: SidebarPresentation.attentionEvidenceIncomplete(retained),
                             navigation: navigation,
                             reorder: row.depth == 0 ? handle : nil,
@@ -1420,12 +1422,6 @@ struct ManagedHierarchyContent: View {
                                 depth: row.depth, unresolved: false, width: contentWidth
                             ))
                             .padding(.vertical, 2)
-                        }
-                        if !expanded && !row.hasChildren && showsRetainedWork(retained) {
-                            CollapsedBranchSummary(summary: SidebarBranchSummary(sessions: retained))
-                                .padding(.leading, 22 + density.indentation(
-                                    depth: row.depth, unresolved: false, width: contentWidth
-                                ))
                         }
                         ForEach(expanded || !row.hasChildren ? retained : []) { session in
                             CopilotSessionContents(
@@ -1508,6 +1504,7 @@ private struct ManagedNodeRow: View {
     let evidenceDate: Date
     let availability: SidebarOrchestrationAvailability
     let copilotTree: SidebarCopilotTree
+    var collapsedSummary: SidebarBranchSummary? = nil
     var attentionIncomplete = false
     let navigation: SidebarNavigation
     var reorder: SidebarReorderHandle? = nil
@@ -1583,6 +1580,9 @@ private struct ManagedNodeRow: View {
             ) {
                 SidebarAgentTitleLine(title: node.title, tags: tags) {
                     if attentionIncomplete { AttentionEvidenceIncompleteIcon() }
+                    if let collapsedSummary {
+                        CollapsedBranchSummary(summary: collapsedSummary, compact: true)
+                    }
                     SidebarStateBadge(visual: stateVisual,
                                       needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate),
                                       detail: metadataHelp)
@@ -1648,7 +1648,9 @@ private struct ManagedNodeRow: View {
             stateVisual, needsInput: SidebarPresentation.managedNeedsInput(node, tree: copilotTree, now: evidenceDate)
         )
         let legacy = node.role == "worker" && node.executionMode != .interactive ? "Legacy worker. " : ""
-        return "\(legacy)\(ownState). \(SidebarPresentation.managedGitMetadataHelp(node, now: evidenceDate))"
+        let summary = collapsedSummary.map(SidebarPresentation.collapsed) ?? []
+        return (["\(legacy)\(ownState)"] + summary
+                + [SidebarPresentation.managedGitMetadataHelp(node, now: evidenceDate)]).joined(separator: ". ")
     }
 }
 
