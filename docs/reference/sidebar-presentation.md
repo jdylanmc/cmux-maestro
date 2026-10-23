@@ -66,8 +66,13 @@ alternating proposals must leave an unchanged label's layout clean.
 Orchestration polling retains one bounded decoded value (or decoding failure) per
 observer file. It still securely opens and reads each bounded file every two
 seconds, comparing exact bytes rather than trusting modification time alone.
-Unchanged bytes skip JSON decoding; permissions, identity, optional-file removal,
-binding validation and time-dependent freshness are not cached. The published
+Unchanged bytes skip JSON decoding and structural resolution. Validated hierarchy
+and icon overlays are cached separately from exact process matching, so a
+process-only change does not revalidate or rebuild the hierarchy. Optional-file
+removal and malformed replacements never preserve the previous overlay.
+Clock rollback revalidates; unchanged future-dated process evidence is rematched
+when it enters the accepted clock window. Presentation freshness deadlines still
+run independently. File permissions and identity are checked on every read. The published
 named snapshot changes only when its value changes, not through an intermediate
 unnamed snapshot. There is no new timer, process scan or filesystem grant.
 
@@ -76,6 +81,8 @@ rebuilding. They still securely open the file and compare descriptor and directo
 entry stamps (identity, size, mode, owner, modification and change times); routing,
 session and process verification still run. A changed file takes the existing
 bounded append/rebuild path. Torn final lines remain incomplete without fast polling.
+This is an unchanged-event-file optimization, not a stat-only whole-reader pass:
+per-session location and appearance metadata still use secure bounded reads.
 Pet frames and status decorations run as render-server animations, not SwiftUI
 timelines; they must not drive continuous hierarchy layout between observations.
 

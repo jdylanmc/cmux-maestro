@@ -286,7 +286,9 @@ Notable changes are recorded using Keep a Changelog categories.
   newly opened agent previews use current evidence; hidden previews no longer
   build their cards on every row update. Exact history-expiry wakes reuse
   unaffected session projections and process all already-due outcomes together
-  without delaying retention deadlines (#334).
+  without delaying retention deadlines. Unchanged observer bytes reuse resolved
+  hierarchy and icons; process-only updates rematch processes without rebuilding
+  those overlays. Secure reads and clock-boundary checks remain in place (#334).
 
 - Binding-file updates wake sidebar readers without rebuilding their watchers.
   Missing session directories no longer disable healthy watches or bindings
