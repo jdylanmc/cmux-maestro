@@ -447,6 +447,17 @@ class IntegratedTestScopeTests(unittest.TestCase):
         self.assertIn("-skip-testing:" + scopes.SELECTOR, commands[2])
         self.assertFalse(any("-parallel-testing-enabled" in command for command in commands))
 
+    def test_multiwindow_has_a_dedicated_required_invocation(self):
+        result, evidence = self.execute(self.report([(scopes.TEST, "Passed")]),
+                                        self.report([("OtherSuite/test()", "Passed")]))
+        self.assertEqual(result, 0)
+        actions = [command for command in self.commands if "test-without-building" in command]
+        selector = scopes.TARGET + "/SidebarMultiWindowTests"
+        dedicated = [command for command in actions if "-only-testing:" + selector in command]
+        self.assertEqual(len(dedicated), 1, "Real-XPC coverage must run outside the loaded complement.")
+        self.assertIn("-skip-testing:" + selector, actions[-1])
+        self.assertEqual(evidence["multiwindowCounts"]["executionCounts"]["passedTests"], 6)
+
     def test_reported_tests_must_equal_the_built_inventory(self):
         isolated = self.report([(scopes.TEST, "Passed")])
         remaining = self.report([("OtherSuite/first()", "Passed")])
