@@ -1373,6 +1373,120 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.eventReadBytes == 0)
     }
 
+    @Test(arguments: ["surface-added", "bindings-unavailable", "marker-unavailable"])
+    func retainedSessionKeepsObservedReplayAcrossDiscoveryRecovery(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let start = try copilotTestEvent("assistant.turn_start", data: ["turnId": "observed"])
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            start, copilotTestEvent("assistant.turn_end", data: ["turnId": "observed"])
+        ])
+        let reader = fixture.reader()
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        for _ in 0..<3 {
+            try fixture.append(copilotTestEvent("assistant.message", data: [
+                "content": String(repeating: "x", count: 750_000)
+            ]) + Data([10]))
+            let advanced = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+            #expect(advanced.sessions.first?.state == .idle)
+        }
+        let observedBytes = await reader.eventReadBytes
+        var surfaces: Set<UUID> = [fixture.surface]
+        if change == "surface-added" {
+            surfaces.insert(UUID())
+        } else if change == "bindings-unavailable" {
+            let moved = fixture.root.appendingPathComponent("temporarily-unavailable-bindings")
+            try FileManager.default.moveItem(at: fixture.bindings, to: moved)
+            let unavailable = try await reader.read(surfaceIDs: surfaces, tailWindowMiB: 1)
+            #expect(unavailable.sessions.isEmpty && !unavailable.isComplete)
+            try FileManager.default.moveItem(at: moved, to: fixture.bindings)
+        } else {
+            let marker = fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock")
+            try FileManager.default.removeItem(at: marker)
+            let unavailable = try await reader.read(surfaceIDs: surfaces, tailWindowMiB: 1)
+            #expect(unavailable.sessions.first?.liveness == .unknown)
+            try Data().write(to: marker)
+        }
+        let recovered = try await reader.read(surfaceIDs: surfaces, tailWindowMiB: 1)
+        #expect(recovered.sessions.first?.state == .idle)
+        #expect(await reader.eventReadBytes == observedBytes)
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes == observedBytes)
+        try fixture.append(start + Data([10]))
+        let replayed = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(replayed.sessions.first?.state == .idle)
+    }
+
+    @Test func boundedTailRequiresAnExactStartHeaderBeforeSkippedHistory() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.resume"),
+            copilotTestEvent("session.start", data: ["sessionId": UUID().uuidString, "version": 1]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "untrusted"])
+        ])
+        let snapshot = try await fixture.reader().read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(snapshot.sessions.first?.state == .unknown)
+        #expect(snapshot.issues.contains(.unsupportedFormat))
+    }
+
+    @Test(arguments: [false, true])
+    func unseenAppendGapReseatsBoundedTailWithoutForgettingObservedReplay(hasRecentStart: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let oldStart = try copilotTestEvent("assistant.turn_start", data: ["turnId": "old"])
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            oldStart, copilotTestEvent("assistant.turn_end", data: ["turnId": "old"]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "unfinished-before-gap"])
+        ])
+        let reader = fixture.reader()
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        let initialBytes = await reader.eventReadBytes
+        try fixture.append(copilotTestEvent("assistant.message", data: [
+            "content": String(repeating: "x", count: 2 * 1_048_576)
+        ]) + Data([10]))
+        if hasRecentStart {
+            try fixture.append(copilotTestEvent("assistant.turn_start", data: ["turnId": "recent"]) + Data([10]))
+        }
+        let resumed = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes - initialBytes <= 1_048_576 + 512)
+        #expect(resumed.sessions.first?.state == (hasRecentStart ? .working : .unknown))
+        #expect(resumed.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(await reader.hasPendingHistory() == false)
+        try fixture.append(oldStart + Data([10]))
+        if hasRecentStart {
+            try fixture.append(copilotTestEvent("assistant.turn_end", data: ["turnId": "recent"]) + Data([10]))
+        }
+        let afterReplay = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(afterReplay.sessions.first?.state == (hasRecentStart ? .idle : .unknown))
+    }
+
+    @Test func fullSelectedCohortNeverEvictsObservedReplayToAdmitAnotherSession() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let reader = fixture.reader(limits: .init(maximumSessions: 1))
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        let otherID = try #require(UUID(uuidString: other.lastPathComponent))
+        try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: other.appendingPathComponent("events.jsonl"))
+        for _ in 0..<4 {
+            let capped = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
+            #expect(capped.sessions.map(\.sessionID) == [fixture.sessionID])
+            #expect(!capped.isComplete && capped.issues.contains(.readLimitReached))
+            #expect(await reader.hasPendingHistory() == false)
+            #expect(await reader.retentionCounts().tails == 1)
+        }
+        let released = try await reader.read(surfaceIDs: [otherSurface])
+        #expect(released.sessions.map(\.sessionID) == [otherID])
+        #expect(released.sessions.first?.state == .idle)
+    }
+
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {
         .init(
             schemaVersion: record.schemaVersion, sessionID: record.sessionID,
