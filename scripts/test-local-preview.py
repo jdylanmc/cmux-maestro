@@ -250,6 +250,26 @@ class CompiledBridgeMac(SyntheticMac):
 
 
 class LocalPreviewImportTests(unittest.TestCase):
+    def test_integration_failure_preserves_safe_bridge_reason_not_raw_output(self):
+        reason = "Provider metadata could not verify the coordinated installation."
+        for stderr, expected in (
+            (reason + "\n", reason),
+            ("\x1b[31msecret", "diagnostic withheld"),
+            ("token=synthetic-secret", "diagnostic withheld"),
+            ("x" * 4097, "diagnostic withheld"),
+            ("", "diagnostic withheld"),
+        ):
+            with self.subTest(stderr=stderr[:40]):
+                ops = preview.MacOperations()
+                ops.install_lock_fd = 123
+                with patch.object(ops, "verify_bridge"), \
+                     patch.object(ops, "main_executable", return_value=Path("/synthetic/app")), \
+                     patch.object(preview.command_worker, "run",
+                         return_value=subprocess.CompletedProcess([], 1, "", stderr)) as run:
+                    with self.assertRaisesRegex(ValueError, expected):
+                        ops.integration(Path("/synthetic/app"), "prepare", "synthetic", Path("/synthetic/destination"))
+                    self.assertFalse(run.call_args.kwargs["check"])
+
     def test_child_imports_do_not_write_source_bytecode(self):
         methods = (
             "assert_bridge_death_preserves_provider_lease",
