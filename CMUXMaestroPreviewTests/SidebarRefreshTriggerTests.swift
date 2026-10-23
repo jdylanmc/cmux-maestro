@@ -399,6 +399,54 @@ struct SidebarRefreshTriggerTests {
                 .existingRecursiveRoots(owner: getuid())
         }
     }
+
+    @Test(arguments: ["missing", "denied", "start"])
+    func failedWatcherCreationKeepsCopilotTreeReadyOnFallback(failure: String) async throws {
+        let fixtures = SidebarTreeFixtures()
+        let clock = CopilotReaderTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let trigger = await SidebarRefreshTrigger.copilot(
+            bindings: URL(fileURLWithPath: "/synthetic/bindings"),
+            sessionRoot: URL(fileURLWithPath: "/synthetic/sessions"),
+            coalesce: {}, watch: { _ in
+                switch failure {
+                case "missing": throw CopilotFileError.missing
+                case "denied": throw CopilotFileError.permissionDenied
+                default: throw SidebarFileWatcher.Failure.start
+                }
+            }
+        )
+        let reads = RefreshReadGate<CopilotSnapshot>()
+        let fallback = RefreshBarrier()
+        let poller = SidebarCopilotPolling(
+            read: { CopilotSnapshotAdapter.snapshot(try await reads.read(), workspaceBySurface: $0) },
+            pause: { try await fallback.wait() }, expiryPause: sidebarFrozenExpiry,
+            changes: { trigger }, now: { clock.now() }
+        )
+        defer { poller.setVisible(false); Task { await reads.cancel() } }
+        poller.update(topology: fixtures.topology(), connected: true)
+        poller.setVisible(true)
+        for index in 1...8 {
+            await sidebarEventually { await reads.calls == index }
+            var session = fixtures.session(state: .working, now: clock.now())
+            session.sessionName = "Synthetic live session"
+            await reads.complete(fixtures.snapshot(sessions: [session], now: clock.now()))
+            if index == 1 {
+                // The first shown-set registration requests one catch-up read, even if it fails.
+                await sidebarEventually { await reads.calls == 2 }
+            } else {
+                await sidebarEventually { await fallback.active == 1 }
+            }
+            #expect(poller.tree.availability == .ready)
+            #expect(poller.tree.sessions.first?.state == .working)
+            #expect(poller.tree.sessions.first?.sessionName == "Synthetic live session")
+            if index > 1 && index < 8 {
+                clock.advance(by: 2)
+                await fallback.release()
+            }
+        }
+        #expect(await fallback.released == 6)
+        #expect(await reads.maximumActive == 1)
+    }
 }
 
 @MainActor
