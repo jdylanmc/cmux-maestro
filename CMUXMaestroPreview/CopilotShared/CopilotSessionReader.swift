@@ -79,6 +79,42 @@ actor CopilotSessionReader {
     private(set) var eventReadBytes = 0
     private(set) var projectionBuilds = 0
     private(set) var identityReads = 0
+#if DEBUG
+    enum DiagnosticReason: String, CaseIterable {
+        case identity, stamp, owner, permission, verifier, processMarker, fence, budget, schema, surfaceMismatch
+    }
+    private var diagnosticSeen: [DiagnosticReason: Set<UUID>] = [:]
+    private var diagnosticTotals: [DiagnosticReason: Int] = [:]
+    private var diagnosticReadCount = 0
+    private var diagnosticScanned = 0
+
+    private func diagnose(_ reason: DiagnosticReason, session: UUID) {
+        if diagnosticSeen[reason, default: []].insert(session).inserted {
+            diagnosticTotals[reason, default: 0] += 1
+        }
+    }
+
+    private func diagnose(_ error: any Error, session: UUID) {
+        switch error {
+        case CopilotFileError.permissionDenied: diagnose(.permission, session: session)
+        case CopilotFileError.changed: diagnose(.stamp, session: session)
+        case CopilotFileError.tooLarge: diagnose(.budget, session: session)
+        case is DecodingError: diagnose(.schema, session: session)
+        default: diagnose(.identity, session: session)
+        }
+    }
+
+    func diagnosticSummary() -> String {
+        let matched = bindingsByID.values.filter { selectedSurfaces.contains($0.record.surfaceID) }.count
+        let reasons = DiagnosticReason.allCases.map { "\($0.rawValue):\(diagnosticTotals[$0] ?? 0)" }
+            .joined(separator: ",")
+        let result = "readerPolls=\(diagnosticReadCount) scanned=\(diagnosticScanned) boundSurfaceMatches=\(matched) rejections=\(reasons)"
+        diagnosticTotals.removeAll()
+        diagnosticReadCount = 0
+        diagnosticScanned = 0
+        return result
+    }
+#endif
 
     init() {
         roots = { (try CopilotPaths.bindingDirectory(), try CopilotPaths.sessionStateRoot()) }
@@ -110,6 +146,10 @@ actor CopilotSessionReader {
     }
 
     private func readBatch(surfaceIDs: Set<UUID>) throws -> CopilotSnapshot {
+#if DEBUG
+        diagnosticSeen.removeAll()
+        diagnosticReadCount += 1
+#endif
         pendingHistory = false
         try Task.checkCancellation()
         let now = clock()
@@ -267,11 +307,17 @@ actor CopilotSessionReader {
             do {
                 let (record, stamp) = try readIdentity(at: index.descriptor, filename: cached.filename)
                 guard surfaceIDs.contains(record.surfaceID) else {
+#if DEBUG
+                    diagnose(.surfaceMismatch, session: id)
+#endif
                     bindingsByID.removeValue(forKey: id)
                     recordCycleIssue(.identityChanged)
                     continue
                 }
                 guard record.schemaVersion == 1 else {
+#if DEBUG
+                    diagnose(.schema, session: id)
+#endif
                     bindingsByID.removeValue(forKey: id)
                     recordCycleIssue(.identityChanged)
                     recordCycleIssue(.unsupportedFormat)
@@ -279,6 +325,9 @@ actor CopilotSessionReader {
                 }
                 cache(Binding(record: record, stamp: stamp, filename: cached.filename))
             } catch {
+#if DEBUG
+                diagnose(error, session: id)
+#endif
                 try Self.rethrowCancellation(error)
                 bindingsByID.removeValue(forKey: id)
                 recordCycleIssue(error is DecodingError ? .ambiguousIdentity : Self.issue(error, missing: .identityChanged))
@@ -294,8 +343,14 @@ actor CopilotSessionReader {
         do {
             let (record, stamp) = try readIdentity(at: index.descriptor, filename: waiting.filename)
             if !surfaceIDs.contains(record.surfaceID) {
+#if DEBUG
+                diagnose(.surfaceMismatch, session: record.sessionID)
+#endif
                 waitingBinding = nil
             } else if record.schemaVersion != 1 {
+#if DEBUG
+                diagnose(.schema, session: record.sessionID)
+#endif
                 recordCycleIssue(.unsupportedFormat)
                 waitingBinding = nil
             } else {
@@ -307,6 +362,9 @@ actor CopilotSessionReader {
                 waitingBinding = entry
             }
         } catch {
+#if DEBUG
+            diagnose(error, session: waiting.record.sessionID)
+#endif
             try Self.rethrowCancellation(error)
             recordCycleIssue(Self.issue(error))
             waitingBinding = nil
@@ -321,6 +379,9 @@ actor CopilotSessionReader {
         while waitingBinding == nil && scanned < limits.maximumBindings && admitted < limits.maximumSessions,
               let name = try discovery?.next() {
             scanned += 1
+#if DEBUG
+            diagnosticScanned += 1
+#endif
             try Task.checkCancellation()
             guard name.hasSuffix(".json"),
                   let id = UUID(uuidString: String(name.dropLast(5))),
@@ -330,8 +391,18 @@ actor CopilotSessionReader {
                 // Off-surface records never reach process validation or transcript reads,
                 // and their identifiers/counts are not included in the snapshot.
                 let (record, stamp) = try readIdentity(at: index.descriptor, filename: name)
-                guard surfaceIDs.contains(record.surfaceID) else { continue }
-                guard record.schemaVersion == 1 else { recordCycleIssue(.unsupportedFormat); continue }
+                guard surfaceIDs.contains(record.surfaceID) else {
+#if DEBUG
+                    diagnose(.surfaceMismatch, session: record.sessionID)
+#endif
+                    continue
+                }
+                guard record.schemaVersion == 1 else {
+#if DEBUG
+                    diagnose(.schema, session: record.sessionID)
+#endif
+                    recordCycleIssue(.unsupportedFormat); continue
+                }
                 let entry = Binding(record: record, stamp: stamp, filename: name)
                 if bindingsByID[record.sessionID] == nil {
                     guard admit(entry) else {
@@ -343,6 +414,13 @@ actor CopilotSessionReader {
                     cache(entry)
                 }
             } catch {
+#if DEBUG
+                diagnose(error, session: id)
+                if let stamp = try? CopilotFileAccess.statEntry(at: index.descriptor, name: name),
+                   stamp.uid != verifier.uid {
+                    diagnose(.owner, session: id)
+                }
+#endif
                 try Self.rethrowCancellation(error)
                 recordCycleIssue(Self.issue(error))
             }
@@ -389,6 +467,9 @@ actor CopilotSessionReader {
         do {
             return try readVerifiedSession(entry, index: index, root: root, budget: &budget, now: now)
         } catch {
+#if DEBUG
+            diagnose(error, session: entry.record.sessionID)
+#endif
             try Self.rethrowCancellation(error)
             return .failed(Self.issue(error))
         }
@@ -402,12 +483,25 @@ actor CopilotSessionReader {
         let record = entry.record
         guard try bindingRemainsValid(
             record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
-        ) else { return .revoked }
+        ) else {
+#if DEBUG
+            diagnose(.identity, session: record.sessionID)
+#endif
+            return .revoked
+        }
         let name = record.sessionID.uuidString.lowercased()
         let session = try CopilotFileAccess.openDirectory(at: root, name: name, owner: verifier.uid)
         defer { close(session) }
         let before = try verifier.inspect(record: record, sessionDirectory: session)
         guard before.status == .alive else {
+#if DEBUG
+            diagnose(.verifier, session: record.sessionID)
+            if before.status == .changed { diagnose(.owner, session: record.sessionID) }
+            if [.unknown, .ambiguous, .dead].contains(before.status) {
+                diagnose(.processMarker, session: record.sessionID)
+            }
+            if before.status == .unsupported { diagnose(.schema, session: record.sessionID) }
+#endif
             return .contentFree(Self.liveness(before.status), Self.issues(before.status))
         }
         var read = try advanceTail(currentTail(for: record), session: session, budget: &budget, now: now)
@@ -418,11 +512,23 @@ actor CopilotSessionReader {
         let after = try verifier.verifyStable(before, record: record, sessionDirectory: session)
         guard try bindingRemainsValid(
             record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
-        ) else { return .revoked }
+        ) else {
+#if DEBUG
+            diagnose(.identity, session: record.sessionID)
+            diagnose(.fence, session: record.sessionID)
+#endif
+            return .revoked
+        }
         guard after.status == .alive,
               (try CopilotFileAccess.statFile(session)).sameFile(
                 as: try CopilotFileAccess.statEntry(at: root, name: name)
               ) else {
+#if DEBUG
+            diagnose(.fence, session: record.sessionID)
+            if after.status != .alive { diagnose(.verifier, session: record.sessionID) }
+            if before.markers != after.markers { diagnose(.processMarker, session: record.sessionID) }
+            if after.status == .alive { diagnose(.stamp, session: record.sessionID) }
+#endif
             return .contentFree(.ambiguous, after.status == .alive ? [.identityChanged] : Self.issues(after.status))
         }
         return .read(read)
@@ -444,11 +550,20 @@ actor CopilotSessionReader {
             let initialBudget = budget
             let result = try advance(&advancing, session: session, budget: &budget, now: now)
             read.issues = result.issues
+#if DEBUG
+            if result.issues.contains(.readLimitReached) { diagnose(.budget, session: tail.record.sessionID) }
+            if result.issues.contains(.unsupportedFormat) || result.issues.contains(.malformedData) {
+                diagnose(.schema, session: tail.record.sessionID)
+            }
+#endif
             read.reachedBoundary = result.reachedBoundary
             read.tail = advancing
             read.advanced = budget < initialBudget
             read.hasUnread = (advancing.stamp?.size ?? 0) > advancing.offset
         } catch {
+#if DEBUG
+            diagnose(error, session: tail.record.sessionID)
+#endif
             try Self.rethrowCancellation(error)
             read.issues.append(Self.issue(error))
             // A failed, explicitly unavailable observation must not pin
@@ -627,6 +742,9 @@ actor CopilotSessionReader {
                   (try? bindingRemainsValid(
                     entry.record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
                   )) == true else {
+#if DEBUG
+                diagnose(.fence, session: observation.sessionID)
+#endif
                 tails.removeValue(forKey: observation.sessionID)
                 bindingsByID.removeValue(forKey: observation.sessionID)
                 publishedCohort.remove(observation.sessionID)

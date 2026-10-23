@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+#if DEBUG
+import OSLog
+#endif
 
 @Observable
 @MainActor
@@ -20,6 +23,9 @@ final class SidebarCopilotPolling {
             return storedTree
         }
         set {
+#if DEBUG
+            diagnosticTransition(newValue.availability)
+#endif
             if storedTree.hasSamePresentation(as: newValue) {
                 storedTree = newValue
             } else {
@@ -73,6 +79,16 @@ final class SidebarCopilotPolling {
     private let expiryPause: ExpiryPause
     private let now: @Sendable () -> Date
     private let changes: Changes?
+#if DEBUG
+    @ObservationIgnored private var diagnosticLastLogAt: Date?
+    @ObservationIgnored private var diagnosticGeneratedAt: Date?
+    @ObservationIgnored private var diagnosticNodeDates: [Date] = []
+    @ObservationIgnored private var diagnosticPreviousState = "waiting"
+    @ObservationIgnored private var diagnosticTransitions: [String: Int] = [:]
+    @ObservationIgnored private var diagnosticPolls = 0
+    @ObservationIgnored private var diagnosticLastTransitionAt: Date?
+    private let diagnosticReader: CopilotSessionReader
+#endif
 
     init(
         reader: CopilotSessionReader = CopilotSessionReader(),
@@ -85,6 +101,9 @@ final class SidebarCopilotPolling {
         changes: Changes? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+#if DEBUG
+        diagnosticReader = reader
+#endif
         self.read = read ?? { placements in
             let source = try await reader.read(surfaceIDs: Set(placements.keys))
             return CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements)
@@ -132,6 +151,10 @@ final class SidebarCopilotPolling {
     }
 
     func updateManagedSubjects(_ snapshot: SidebarOrchestrationSnapshot) {
+#if DEBUG
+        diagnosticGeneratedAt = snapshot.generatedAt == .distantPast ? nil : snapshot.generatedAt
+        diagnosticNodeDates = snapshot.nodes.map(\.updatedAt)
+#endif
         let subjects = snapshot.nodes.map {
             ManagedSubject(nodeID: $0.id, runID: $0.runId, generation: $0.generation, role: $0.role,
                            sessionID: $0.copilotSessionId, workspaceID: $0.workspaceId, surfaceID: $0.surfaceId)
@@ -215,6 +238,9 @@ final class SidebarCopilotPolling {
                     self.managedDetails = details
                     let accepted = self.accept(snapshot, topology: capturedTopology)
                     hasUnreadHistory = accepted && !snapshot.isComplete && pending
+#if DEBUG
+                    await self.diagnose(snapshot, accepted: accepted, pending: pending)
+#endif
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     defer { self.tree = self.currentTree }
@@ -262,6 +288,77 @@ final class SidebarCopilotPolling {
             if self.generation != token { self.startIfNeeded() }
         }
     }
+
+#if DEBUG
+    private func diagnosticTransition(_ availability: SidebarCopilotAvailability) {
+        let state = String(describing: availability)
+        guard state != diagnosticPreviousState else { return }
+        diagnosticTransitions["\(diagnosticPreviousState)>\(state)", default: 0] += 1
+        diagnosticPreviousState = state
+        diagnosticLastTransitionAt = Date()
+    }
+
+    private func diagnose(_ raw: AgentSessionSnapshot, accepted: Bool, pending: Bool) async {
+        let date = Date()
+        let state = String(describing: currentTree.availability)
+        diagnosticPolls += 1
+        guard diagnosticLastLogAt.map({ date.timeIntervalSince($0) >= 2 }) ?? true else { return }
+        diagnosticLastLogAt = date
+        let tree = currentTree
+        let surfaceCount = topology.workspaceBySurface.count
+        let transitionAge = diagnosticLastTransitionAt.map { date.timeIntervalSince($0) } ?? -1
+        let subjects = managedSubjects
+        let nodeAges = diagnosticNodeDates.map { date.timeIntervalSince($0) }
+        let observerAge = diagnosticGeneratedAt.map { date.timeIntervalSince($0) } ?? -1
+        let rawAge = date.timeIntervalSince(raw.generatedAt)
+        let observed = subjects.filter { subject in
+            guard let id = subject.sessionID else { return false }
+            return tree.exactLiveSession(id: id, workspaceID: subject.workspaceID,
+                                        surfaceID: subject.surfaceID, now: date) != nil
+        }.count
+        let details = subjects.filter { subject in
+            guard let id = subject.sessionID else { return false }
+            return tree.managedDetails(id: id, now: date) != nil
+        }.count
+        let rawFresh = raw.sessions.filter {
+            $0.observedAt.map { SidebarCopilotTree.isFresh($0, now: date) } ?? false
+        }.count
+        let globalIssues = raw.globalIssues.map(\.rawValue).sorted().joined(separator: ",")
+        let issues = (raw.issues ?? []).map(\.rawValue).sorted().joined(separator: ",")
+        let transitions = diagnosticTransitions.keys.sorted().map {
+            "\($0):\(diagnosticTransitions[$0] ?? 0)"
+        }.joined(separator: ",")
+        let polls = diagnosticPolls
+        diagnosticPolls = 0
+        diagnosticTransitions.removeAll()
+        let counts = await diagnosticReader.retentionCounts()
+        let identities = await diagnosticReader.identityCacheCount()
+        let reader = await diagnosticReader.diagnosticSummary()
+        let line = [
+            "polls=\(polls)", "transitions=\(transitions)",
+            "lastTransitionAge=\(transitionAge)", "topologySurfaces=\(surfaceCount)",
+            "raw=\(raw.sessions.count)", "rawAlive=\(raw.sessions.filter { $0.liveness == .alive }.count)",
+            "rawUnknown=\(raw.sessions.filter { $0.liveness == .unknown }.count)",
+            "rawAmbiguous=\(raw.sessions.filter { $0.liveness == .ambiguous }.count)",
+            "rawFresh=\(rawFresh)", "rawAge=\(rawAge.isFinite ? rawAge : -1)",
+            "complete=\(raw.isComplete ? 1 : 0)", "accepted=\(accepted ? 1 : 0)",
+            "availability=\(state)", "sessions=\(tree.sessions.count)",
+            "retained=\(tree.statusSessions.count)", "details=\(tree.managedDetails.count)",
+            "pending=\(pending ? 1 : 0)", "bindings=\(counts.bindings)", "tails=\(counts.tails)",
+            "waiting=\(counts.waiting)", "published=\(counts.published)", "identityCache=\(identities)",
+            "observerAge=\(observerAge.isFinite ? observerAge : -1)",
+            "nodesFresh=\(nodeAges.filter { (-1...60).contains($0) }.count)",
+            "nodesStale=\(nodeAges.filter { $0 > 60 && $0 <= 300 }.count)",
+            "nodesOld=\(nodeAges.filter { $0 > 300 }.count)",
+            "nodesFuture=\(nodeAges.filter { $0 < -1 }.count)",
+            "managedObserved=\(observed)", "managedDetails=\(details)",
+            "managedUnresolved=\(subjects.count - observed - details)",
+            "globalIssues=\(globalIssues)", "issues=\(issues)", reader
+        ].joined(separator: " ")
+        Logger(subsystem: "com.jdylanmc.CMUXMaestroPreview", category: "reader-diagnostics")
+            .notice("\(line, privacy: .public)")
+    }
+#endif
 
     private func accept(_ snapshot: AgentSessionSnapshot, topology: SidebarTopology) -> Bool {
         defer { tree = currentTree }
