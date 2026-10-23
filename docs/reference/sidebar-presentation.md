@@ -71,6 +71,8 @@ process evidence), with no live or uncertain observed occupant and **Show ended
 agents** off. Undismissed failures, reported blockers, blocking/error attention,
 failed/blocked or internal tasks, and degraded or omitted child evidence prevent reversion.
 Dead-process liveness alone is not incomplete evidence.
+Global partial observations retain exact managed history, not unrelated clean
+unmanaged ended rows; those still follow **Show ended agents**.
 History/attention storage failures keep ended rows visible. Only presentation
 changes: retained nodes, generations, history, capacity and live descendants stay
 untouched. Missing surfaces keep the existing **Show ended agents** policy.
