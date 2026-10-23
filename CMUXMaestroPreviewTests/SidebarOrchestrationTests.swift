@@ -11,6 +11,112 @@ private func publicationArrived(_ stream: AsyncStream<Void>) async -> Bool {
 
 @MainActor
 struct SidebarOrchestrationTests {
+    @Test func observerResolutionReusesBaseWhenOnlyProcessesChange() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let sessionID = UUID()
+        let root = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic",
+            workspaceId: UUID(), surfaceId: UUID(), generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: sessionID, executionMode: .interactive,
+            createdAt: now, updatedAt: now
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let current = try encoder.encode(SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [root]
+        ))
+        let icons = try encoder.encode(SidebarIconOverrides(version: 1, icons: [
+            .init(nodeId: root.id, runId: root.runId, workspaceId: root.workspaceId,
+                  surfaceId: root.surfaceId, iconId: "md-robot")
+        ]))
+        func processes(at date: Date) throws -> Data {
+            try encoder.encode(SidebarProcessObservation(version: 1, observedAt: date, nodes: [
+                .init(nodeId: root.id, copilotSessionId: sessionID, generation: 1, state: "owned-current",
+                      observedAt: date, processes: [], omittedCount: 0)
+            ]))
+        }
+        var cache = SidebarOrchestrationReader.Cache()
+        let originalProcesses = try processes(at: now)
+        for index in 0..<30 {
+            let result = try SidebarOrchestrationReader.resolve(
+                current: current, icons: icons, processes: originalProcesses, cache: &cache,
+                now: now.addingTimeInterval(Double(index) * 2)
+            )
+            #expect(result.nodes.first?.iconId == "md-robot")
+            #expect(result.processes[root.id]?.observedAt == now)
+        }
+        #expect(cache.validationCount == 1 && cache.iconApplicationCount == 1 && cache.processMatchCount == 1)
+        let updated = now.addingTimeInterval(60)
+        let changed = try SidebarOrchestrationReader.resolve(
+            current: current, icons: icons, processes: processes(at: updated), cache: &cache, now: updated
+        )
+        #expect(changed.processes[root.id]?.observedAt == updated)
+        #expect(cache.validationCount == 1 && cache.iconApplicationCount == 1 && cache.processMatchCount == 2)
+        let malformed = try SidebarOrchestrationReader.resolve(
+            current: current, icons: Data("invalid".utf8), processes: Data("invalid".utf8), cache: &cache, now: updated
+        )
+        #expect(malformed.nodes.first?.iconId == nil && malformed.processes.isEmpty)
+        let removed = try SidebarOrchestrationReader.resolve(
+            current: current, icons: nil, processes: nil, cache: &cache, now: updated
+        )
+        #expect(removed.nodes.first?.iconId == nil && removed.processes.isEmpty)
+        #expect(throws: (any Error).self) {
+            try SidebarOrchestrationReader.resolve(
+                current: Data("invalid".utf8), icons: icons, processes: originalProcesses, cache: &cache, now: updated
+            )
+        }
+        let recovered = try SidebarOrchestrationReader.resolve(
+            current: current, icons: icons, processes: originalProcesses, cache: &cache, now: updated
+        )
+        #expect(recovered.nodes.first?.iconId == "md-robot" && recovered.processes[root.id] != nil)
+        let newBinding = String(decoding: current, as: UTF8.self).replacingOccurrences(of: sessionID.uuidString, with: UUID().uuidString)
+        let rebound = try SidebarOrchestrationReader.resolve(
+            current: Data(newBinding.utf8), icons: icons, processes: originalProcesses, cache: &cache, now: updated
+        )
+        #expect(rebound.processes.isEmpty, "A cached process list cannot cross a changed exact binding")
+    }
+
+    @Test func observerResolutionRechecksFutureProcessBoundaryAndClockRollback() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let sessionID = UUID()
+        let root = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic",
+            workspaceId: UUID(), surfaceId: UUID(), generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: sessionID, executionMode: .interactive,
+            createdAt: now, updatedAt: now
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let current = try encoder.encode(SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [root]
+        ))
+        let processes = try encoder.encode(SidebarProcessObservation(
+            version: 1, observedAt: now.addingTimeInterval(310), nodes: [
+                .init(nodeId: root.id, copilotSessionId: sessionID, generation: 1, state: "owned-current",
+                      observedAt: now.addingTimeInterval(320), processes: [], omittedCount: 0)
+            ]
+        ))
+        var cache = SidebarOrchestrationReader.Cache()
+        let offsets: [TimeInterval] = [0, 10, 19.5, 20, 19.5, 20]
+        for offset in offsets {
+            let date = now.addingTimeInterval(offset)
+            let result = try SidebarOrchestrationReader.resolve(
+                current: current, icons: nil, processes: processes, cache: &cache, now: date
+            )
+            var uncached = SidebarOrchestrationReader.Cache()
+            #expect(result == (try SidebarOrchestrationReader.resolve(
+                current: current, icons: nil, processes: processes, cache: &uncached, now: date
+            )))
+            #expect(result.processes.isEmpty == (offset < 20))
+        }
+        #expect(cache.validationCount == 1 && cache.processMatchCount == 4)
+        #expect(throws: CopilotFileError.unsafePath) {
+            try SidebarOrchestrationReader.resolve(
+                current: current, icons: nil, processes: processes, cache: &cache, now: now.addingTimeInterval(-301)
+            )
+        }
+    }
+
     @Test func unchangedObserverBytesDoNotDecodeAgainAndInvalidInputDoesNotReuseSuccess() throws {
         var cache = SidebarOrchestrationReader.Decoded<[Int]>()
         var decodes = 0

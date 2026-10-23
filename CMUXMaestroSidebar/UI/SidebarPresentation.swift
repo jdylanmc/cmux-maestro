@@ -243,15 +243,18 @@ struct SidebarVisibleWork {
 
     init(
         tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode],
-        history: SidebarHistorySettings, showEnded: Bool, now: Date = Date()
+        history: SidebarHistorySettings, showEnded: Bool, now: Date = Date(),
+        displacedNodeIDs: Set<UUID>? = nil
     ) {
         var tree = tree
         tree.sessions += tree.statusSessions
         // A registration that is no longer current on its surface has nothing to navigate to,
         // so it and its old observation leave no row; its descendants stay. A session on a
         // managed surface that is not that agent's own stays as evidence but gets no row.
-        let replaced = SidebarPresentation.replacedSessionIDs(tree, managed: managed, now: now)
-        let managed = SidebarPresentation.coalescingManagedNodes(managed, observations: tree, now: now)
+        let displaced = displacedNodeIDs
+            ?? SidebarPresentation.displacedManagedNodeIDs(managed, observations: tree, now: now)
+        let replaced = SidebarPresentation.replacedSessionIDs(tree, managed: managed, now: now, displacedNodeIDs: displaced)
+        let managed = managed.filter { !displaced.contains($0.id) }
         tree.sessions.removeAll { replaced.contains($0.id) }
         self.tree = tree
         self.managed = managed
@@ -351,7 +354,8 @@ enum SidebarPresentation {
     static func workspaceAttention(
         sessions: [SidebarCopilotSession], managed: [SidebarOrchestrationNode],
         availability: SidebarOrchestrationAvailability, now: Date,
-        observations: SidebarCopilotTree? = nil
+        observations: SidebarCopilotTree? = nil,
+        placements: [SidebarSessionPlacement]? = nil
     ) -> SidebarWorkspaceAttention {
         enum Owner: Hashable {
             case managed(UUID), session(UUID), child(UUID, String)
@@ -365,7 +369,7 @@ enum SidebarPresentation {
             if signals.contains(where: { $0.kind == .permission }) { approvals.insert(owner) }
             if live && state == .blocked { blocked.insert(owner) }
         }
-        for placement in sessionPlacements(sessions, managed: managed, observations: observations, now: now) {
+        for placement in placements ?? sessionPlacements(sessions, managed: managed, observations: observations, now: now) {
             let session = placement.session
             let owner = placement.contentOwnerID.map { Owner.managed($0) } ?? .session(session.id)
             include(owner, state: session.state, signals: session.attention, live: session.liveness == .alive)
@@ -866,16 +870,20 @@ enum SidebarPresentation {
               SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
         return Set(managed.filter { node in
             guard let managedSessionID = node.copilotSessionId else { return false }
-            let candidates = observations.sessions.filter {
-                $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId && $0.liveness != .dead
+            let candidates = observations.sessions.indices.filter {
+                observations.sessions[$0].workspaceID == node.workspaceId
+                    && observations.sessions[$0].surfaceID == node.surfaceId && observations.sessions[$0].liveness != .dead
             }
-            guard candidates.count == 1, let session = candidates.first, session.liveness == .alive,
-                  SidebarCopilotTree.isFresh(session.observedAt, now: now),
-                  session.observedAt <= generatedAt.addingTimeInterval(1),
-                  observations.sessions.filter({ $0.id == session.id }).count == 1 else { return false }
+            guard candidates.count == 1, let index = candidates.first,
+                  observations.sessions[index].liveness == .alive,
+                  SidebarCopilotTree.isFresh(observations.sessions[index].observedAt, now: now),
+                  observations.sessions[index].observedAt <= generatedAt.addingTimeInterval(1),
+                  observations.sessions.indices.filter({
+                      observations.sessions[$0].id == observations.sessions[index].id
+                  }).count == 1 else { return false }
             // Placement is not identity. Retain the managed branch, but do not
             // coalesce away a different verified live session on its surface.
-            return session.id != managedSessionID
+            return observations.sessions[index].id != managedSessionID
         }.map(\.id))
     }
 
@@ -899,7 +907,8 @@ enum SidebarPresentation {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
                     && $0.copilotSessionId == session.id
             }
-            let identityCount = (observations?.sessions ?? sessions).filter { $0.id == session.id }.count
+            let observed = observations?.sessions ?? sessions
+            let identityCount = observed.indices.filter { observed[$0].id == session.id }.count
             let owner = surfaceOwners.first {
                 $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
             }
@@ -911,15 +920,17 @@ enum SidebarPresentation {
 
     /// The exact observations of managed agents no longer current on their surface.
     static func replacedSessionIDs(
-        _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date
+        _ tree: SidebarCopilotTree, managed: [SidebarOrchestrationNode], now: Date,
+        displacedNodeIDs: Set<UUID>? = nil
     ) -> Set<UUID> {
-        let displaced = displacedManagedNodeIDs(managed, observations: tree, now: now)
+        let displaced = displacedNodeIDs ?? displacedManagedNodeIDs(managed, observations: tree, now: now)
         let replaced = managed.filter { displaced.contains($0.id) }
-        return Set(tree.sessions.filter { session in
+        return Set(tree.sessions.indices.filter { index in
             replaced.contains {
-                $0.copilotSessionId == session.id && $0.workspaceId == session.workspaceID && $0.surfaceId == session.surfaceID
+                $0.copilotSessionId == tree.sessions[index].id && $0.workspaceId == tree.sessions[index].workspaceID
+                    && $0.surfaceId == tree.sessions[index].surfaceID
             }
-        }.map(\.id))
+        }.map { tree.sessions[$0].id })
     }
 
     /// Sessions with no row: replaced observations, and sessions on a managed surface that are not
@@ -940,11 +951,12 @@ enum SidebarPresentation {
         countsComplete: Bool,
         now: Date,
         observations: SidebarCopilotTree? = nil,
-        scope: SidebarWorkspaceSummary.Scope = .agents
+        scope: SidebarWorkspaceSummary.Scope = .agents,
+        placements: [SidebarSessionPlacement]? = nil
     ) -> SidebarWorkspaceSummary {
         let includingInternalTasks = scope == .activity
         let managedSurfaces = Set(managed.map(\.surfaceId))
-        let placements = sessionPlacements(sessions, managed: managed, observations: observations, now: now)
+        let placements = placements ?? sessionPlacements(sessions, managed: managed, observations: observations, now: now)
         // Counting a destination is independent of attesting its session contents.
         let unmanagedSessions = placements.filter { $0.managedNodeID == nil }.map(\.session)
         let bySurface = Dictionary(grouping: sessions, by: \.surfaceID)
@@ -1018,15 +1030,17 @@ enum SidebarPresentation {
     static func collapsedActivity(
         sessions: [SidebarCopilotSession], managed: [SidebarOrchestrationNode],
         availability: SidebarOrchestrationAvailability,
-        observations: SidebarCopilotTree, now: Date
+        observations: SidebarCopilotTree, now: Date,
+        placements: [SidebarSessionPlacement]? = nil
     ) -> SidebarWorkspaceSummary.Activity? {
         // The summary checks these sessions' completeness; a window-wide count flag
         // would let an unrelated workspace's missing children decorate this header.
         workspaceSummary(
             surfaces: [], sessions: sessions, managed: managed, orchestrationAvailability: availability,
-            countsComplete: true, now: now, observations: observations, scope: .activity
+            countsComplete: true, now: now, observations: observations, scope: .activity, placements: placements
         ).collapsedActivity(attention: workspaceAttention(
-            sessions: sessions, managed: managed, availability: availability, now: now, observations: observations
+            sessions: sessions, managed: managed, availability: availability, now: now, observations: observations,
+            placements: placements
         ))
     }
 

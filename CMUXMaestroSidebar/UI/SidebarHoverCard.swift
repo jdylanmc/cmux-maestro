@@ -276,6 +276,7 @@ final class SidebarHoverPresenter {
     private weak var keyboardOrigin: NSResponder?
     private weak var parentWindow: NSWindow?
     private var data: SidebarHoverCardData?
+    private var dataProvider: (() -> SidebarHoverCardData?)?
     private var group: SidebarHoverGroup?
     private var openTask: Task<Void, Never>?
     private var closeTask: Task<Void, Never>?
@@ -307,9 +308,15 @@ final class SidebarHoverPresenter {
         self.schedule = schedule
     }
 
-    func update(anchor: NSView, data: SidebarHoverCardData?, group: SidebarHoverGroup?) {
+    func update(
+        anchor: NSView, data: SidebarHoverCardData?, group: SidebarHoverGroup?,
+        dataProvider: (() -> SidebarHoverCardData?)? = nil
+    ) {
         self.anchor = anchor
         self.group = group
+        self.dataProvider = dataProvider
+        if dataProvider != nil && state.mode == .hidden { return }
+        let data = if let dataProvider { dataProvider() } else { data }
         if self.data?.id != data?.id { dismiss(restoreFocus: false) }
         let changed = self.data != data
         self.data = data
@@ -337,7 +344,7 @@ final class SidebarHoverPresenter {
             return
         }
         if state.shouldOpen {
-            if data != nil, let window = anchor?.window { installObservers(window: window) }
+            if data != nil || dataProvider != nil, let window = anchor?.window { installObservers(window: window) }
             openTask = schedule(Self.openDelay) { [weak self] in
                 guard let self, self.state.shouldOpen else { return }
                 self.open(explicit: false)
@@ -358,7 +365,7 @@ final class SidebarHoverPresenter {
     }
 
     func enterFromKeyboard() -> Bool {
-        guard data != nil else { return false }
+        guard data != nil || dataProvider != nil else { return false }
         open(explicit: true)
         guard state.mode == .explicit else { return false }
         return panel?.focusControls() == true
@@ -384,6 +391,7 @@ final class SidebarHoverPresenter {
     }
 
     func open(explicit: Bool) {
+        if let dataProvider { data = dataProvider() }
         guard data != nil, let anchor, let window = anchor.window,
               !anchor.visibleRect.isEmpty, window.screen != nil,
               group?.claim(self, explicit: explicit) != false else { return }
@@ -540,6 +548,7 @@ final class SidebarHoverPresenter {
         dismiss(restoreFocus: false)
         anchor = nil
         data = nil
+        dataProvider = nil
     }
 }
 
@@ -570,6 +579,7 @@ private struct SidebarHoverAnchor: NSViewRepresentable {
     let presenter: SidebarHoverPresenter
     let data: SidebarHoverCardData?
     let group: SidebarHoverGroup?
+    var dataProvider: (() -> SidebarHoverCardData?)? = nil
     var tracksName = false
 
     func makeNSView(context: Context) -> SidebarHoverAnchorView {
@@ -579,13 +589,14 @@ private struct SidebarHoverAnchor: NSViewRepresentable {
     }
     func updateNSView(_ view: SidebarHoverAnchorView, context: Context) {
         view.tracksName = tracksName
-        presenter.update(anchor: view, data: data, group: group)
+        presenter.update(anchor: view, data: data, group: group, dataProvider: dataProvider)
     }
     static func dismantleNSView(_ view: SidebarHoverAnchorView, coordinator: ()) { view.presenter?.detach() }
 }
 
 struct SidebarHoverRegion<Content: View>: View {
-    let data: SidebarHoverCardData?
+    var data: SidebarHoverCardData? = nil
+    var dataProvider: (() -> SidebarHoverCardData?)? = nil
     var nameOnly = false
     @ViewBuilder let content: () -> Content
     @State private var presenter = SidebarHoverPresenter()
@@ -596,7 +607,7 @@ struct SidebarHoverRegion<Content: View>: View {
     var body: some View {
         content()
             .environment(\.sidebarPreviewInteraction, .init(
-                available: data != nil,
+                available: data != nil || dataProvider != nil,
                 focus: { presenter.keyboardFocus($0) },
                 enter: { presenter.enterFromKeyboard() },
                 origin: { presenter.rememberKeyboardOrigin($0) },
@@ -604,7 +615,9 @@ struct SidebarHoverRegion<Content: View>: View {
             ))
             .environment(\.sidebarNamePreview, nameOnly ? .init(presenter: presenter, data: data, group: group) : nil)
             .background {
-                if !nameOnly { SidebarHoverAnchor(presenter: presenter, data: data, group: group) }
+                if !nameOnly {
+                    SidebarHoverAnchor(presenter: presenter, data: data, group: group, dataProvider: dataProvider)
+                }
             }
             .onAppear { presenter.pets = pets; presenter.setCopyValue(copyValue) }
             .onHover { if !nameOnly { presenter.hoverAnchor($0) } }

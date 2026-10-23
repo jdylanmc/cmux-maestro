@@ -284,6 +284,13 @@ nonisolated enum SidebarOrchestrationReader {
         var current = Decoded<SidebarOrchestrationSnapshot>()
         var icons = Decoded<SidebarIconOverrides>()
         var processes = Decoded<SidebarProcessObservation>()
+        var base: (current: Data, icons: Data?, snapshot: SidebarOrchestrationSnapshot, validatedAt: Date)?
+        var resolved: (
+            processes: Data?, snapshot: SidebarOrchestrationSnapshot, resolvedAt: Date, revalidateAt: Date?
+        )?
+        var validationCount = 0
+        var iconApplicationCount = 0
+        var processMatchCount = 0
     }
 
     struct Decoded<Value: Decodable & Sendable> {
@@ -330,19 +337,43 @@ nonisolated enum SidebarOrchestrationReader {
     static func resolve(
         current data: Data, icons iconData: Data?, processes processData: Data?, cache: inout Cache, now: Date
     ) throws -> SidebarOrchestrationSnapshot {
-        var snapshot = try cache.current.value(for: data)
-        try validate(snapshot, now: now)
-        if let iconData, let icons = try? cache.icons.value(for: iconData),
-           let overlaid = try? icons.applying(to: snapshot) {
-            snapshot = overlaid
-        } else if iconData == nil {
-            cache.icons = .init()
+        let base: SidebarOrchestrationSnapshot
+        if let previous = cache.base, previous.current == data, previous.icons == iconData,
+           now >= previous.validatedAt {
+            // Validation has only future-time bounds; advancing time cannot invalidate this base.
+            base = previous.snapshot
+        } else {
+            cache.base = nil
+            cache.resolved = nil
+            var snapshot = try cache.current.value(for: data)
+            cache.validationCount += 1
+            try validate(snapshot, now: now)
+            if let iconData {
+                cache.iconApplicationCount += 1
+                if let icons = try? cache.icons.value(for: iconData),
+                   let overlaid = try? icons.applying(to: snapshot) { snapshot = overlaid }
+            } else {
+                cache.icons = .init()
+            }
+            base = snapshot
+            cache.base = (data, iconData, base, now)
         }
+        if let previous = cache.resolved, previous.processes == processData, now >= previous.resolvedAt,
+           previous.revalidateAt.map({ now < $0 }) ?? true { return previous.snapshot }
+        var snapshot = base
+        var revalidateAt: Date?
         if let processData, let processes = try? cache.processes.value(for: processData) {
+            cache.processMatchCount += 1
             snapshot.processes = processes.matching(snapshot: snapshot, now: now)
+            // A future-dated optional observation must become eligible even when its bytes do not change.
+            let eligibleAt = (processes.nodes.map(\.observedAt).max().map {
+                max($0, processes.observedAt)
+            } ?? processes.observedAt).addingTimeInterval(-futureTolerance)
+            if eligibleAt > now { revalidateAt = eligibleAt }
         } else if processData == nil {
             cache.processes = .init()
         }
+        cache.resolved = (processData, snapshot, now, revalidateAt)
         return snapshot
     }
 

@@ -66,8 +66,13 @@ alternating proposals must leave an unchanged label's layout clean.
 Orchestration polling retains one bounded decoded value (or decoding failure) per
 observer file. It still securely opens and reads each bounded file every two
 seconds, comparing exact bytes rather than trusting modification time alone.
-Unchanged bytes skip JSON decoding; permissions, identity, optional-file removal,
-binding validation and time-dependent freshness are not cached. The published
+Unchanged bytes skip JSON decoding and structural resolution. Validated hierarchy
+and icon overlays are cached separately from exact process matching, so a
+process-only change does not revalidate or rebuild the hierarchy. Optional-file
+removal and malformed replacements never preserve the previous overlay.
+Clock rollback revalidates; unchanged future-dated process evidence is rematched
+when it enters the accepted clock window. Presentation freshness deadlines still
+run independently. File permissions and identity are checked on every read. The published
 named snapshot changes only when its value changes, not through an intermediate
 unnamed snapshot. There is no new timer, process scan or filesystem grant.
 
@@ -76,8 +81,39 @@ rebuilding. They still securely open the file and compare descriptor and directo
 entry stamps (identity, size, mode, owner, modification and change times); routing,
 session and process verification still run. A changed file takes the existing
 bounded append/rebuild path. Torn final lines remain incomplete without fast polling.
+This is an unchanged-event-file optimization, not a stat-only whole-reader pass:
+per-session location and appearance metadata still use secure bounded reads.
+Binding discovery still checks off-surface files: an in-place reroute can leave
+the directory stamp unchanged. Path-component validation checks slash and NUL
+in one UTF-8 scan, without caching authorization or bypassing file fences.
 Pet frames and status decorations run as render-server animations, not SwiftUI
 timelines; they must not drive continuous hierarchy layout between observations.
+
+Workspace placement caches retain only ordered identity, location and freshness
+inputs, plus session indices and owner IDs. They never retain session histories.
+Raw visibility and history-filtered rows have separate caches. Worktrees,
+Sub-agents and collapsed summaries reuse the same indexed ownership evidence.
+
+Copilot's raw tree and evidence stream still publish exact observation timestamps.
+The outline observes a separate presentation key: semantic content, freshness
+classes and displayed minutes. Each immutable render snapshot carries its display
+clock; timestamp-only refreshes do not redraw it within the same displayed minute.
+Existing Copilot, history, managed-node, Git and process deadline notifications
+advance the display independently. Workspace render equality preserves local
+content and global duplicate-identity barriers. Actions revalidate current raw
+evidence using the actual clock, not a captured display clock. Hidden agent
+previews do not build card data; opening a preview reads current evidence.
+
+History expiry keeps one exact next-deadline wake-up. Each pass coalesces all
+already-due transitions and reuses unaffected session projections after global
+identity, topology and trust checks. Settings, evidence changes and per-session
+clock boundaries invalidate that reuse. An early timer wake re-arms without
+declaring an expiry. Retention is never rounded or delayed to reduce CPU.
+The local `history-expiry` log category emits aggregate wake, retention-wake,
+repeated-deadline and session-projection counts at most once per 60-second window
+with expiry activity. It contains no identity, content, path or evidence timestamp;
+there is no diagnostic polling timer. Sampled stacks alone do not establish how
+many distinct deadlines fired.
 
 For installed CPU acceptance, select the exact extension PID and record the installed
 commit separately, then run this read-only local probe:

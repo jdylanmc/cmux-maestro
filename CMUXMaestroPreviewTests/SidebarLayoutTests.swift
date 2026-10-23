@@ -7,6 +7,27 @@ import Testing
 struct SidebarLayoutTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func placementWorkIsSharedAcrossRowsAndTimestampRefreshes() throws {
+        let model = SidebarConnectionModel()
+        var tree = tree()
+        let now = try #require(tree.generatedAt)
+        let first = model.placements.placements(tree: tree, managed: [], now: now)
+        for _ in 0..<20 {
+            let value = model.placements.placements(tree: tree, managed: [], now: now)
+            #expect(value.byWorkspace == first.byWorkspace)
+        }
+        #expect(model.placements.computationCount == 1)
+        tree.generatedAt = now.addingTimeInterval(2)
+        for index in tree.sessions.indices { tree.sessions[index].observedAt = now.addingTimeInterval(2) }
+        _ = model.placements.placements(tree: tree, managed: [], now: now.addingTimeInterval(2))
+        #expect(model.placements.computationCount == 1)
+        _ = model.placements.placements(tree: tree, managed: [], now: now.addingTimeInterval(20))
+        #expect(model.placements.computationCount == 2)
+        tree.sessions.removeAll()
+        #expect(model.placements.placements(tree: tree, managed: [], now: now).byWorkspace.isEmpty)
+        #expect(model.placements.computationCount == 3)
+    }
+
     @Test(arguments: [0, 1, 2])
     func countCaptionsUseSingularOnlyForOne(_ count: Int) {
         let session = count == 1 ? "session" : "sessions"
