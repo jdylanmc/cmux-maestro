@@ -301,6 +301,44 @@ class LocalPreviewTests(unittest.TestCase):
     compiled_bridge_ready = False
     compiled_bridge_failure = None
 
+    def provider_ready_channel(self):
+        path = self.home / "provider-ready"
+        os.mkfifo(path, 0o600)
+        fd = os.open(path, os.O_RDWR | os.O_NONBLOCK)
+        self.addCleanup(os.close, fd)
+        return fd
+
+    def wait_for_gated_provider(self, ready, child):
+        self.wait_for(lambda: (self.home / "provider-ready.json").exists(), "gated provider")
+        return json.loads((self.home / "provider-ready.json").read_text())
+
+    def test_gated_provider_readiness_survives_delayed_observer(self):
+        ready = self.provider_ready_channel()
+        expected = {"provider": 41, "providerGroup": 41, "bridge": 40, "bridgeGroup": 40}
+        data = json.dumps(expected).encode()
+        os.write(ready, data)
+        (self.home / "provider-ready.json").write_bytes(data)
+        with tempfile.TemporaryFile() as stdout, \
+                patch.object(time, "monotonic", side_effect=[0, 16]):
+            # Readiness already arrived while the observer was descheduled.
+            self.assertEqual(self.wait_for_gated_provider(ready, SimpleNamespace(stdout=stdout)), expected)
+
+    def test_gated_provider_wait_reports_installer_exit(self):
+        ready = self.provider_ready_channel()
+        (self.home / "installer-return.json").write_text(json.dumps({"error": "injected pre-gate failure"}))
+        with tempfile.TemporaryFile() as stdout, \
+                patch.object(time, "monotonic", side_effect=[0, 16]):
+            with self.assertRaisesRegex(AssertionError, "Installer returned before gated provider.*injected pre-gate failure"):
+                self.wait_for_gated_provider(ready, SimpleNamespace(stdout=stdout))
+
+    def test_gated_provider_wait_fails_when_no_signal_arrives(self):
+        ready = self.provider_ready_channel()
+        with tempfile.TemporaryFile() as stdout, \
+                patch.object(select, "select", return_value=([], [], [])), \
+                patch.object(time, "monotonic", side_effect=[0, 16]):
+            with self.assertRaisesRegex(AssertionError, "Timed out waiting for synthetic gated provider"):
+                self.wait_for_gated_provider(ready, SimpleNamespace(stdout=stdout))
+
     def test_bridge_death_cannot_release_a_gated_provider_mutator(self):
         for compensation, guardian_failure in ((False, False), (True, False), (False, True), (True, True)):
             with self.subTest(compensation=compensation, guardian_failure=guardian_failure):
@@ -368,8 +406,7 @@ else:
         blocked = False
         returned_before_release = restored_before_release = False
         try:
-            self.wait_for(lambda: (self.home / "provider-ready.json").exists(), "gated provider")
-            selected = json.loads((self.home / "provider-ready.json").read_text())
+            selected = self.wait_for_gated_provider(None, child)
             self.assertNotEqual(selected["bridgeGroup"], selected["providerGroup"])
             self.assertEqual(selected["bridge"], selected["bridgeGroup"])
             self.assertEqual(selected["provider"], selected["providerGroup"])
