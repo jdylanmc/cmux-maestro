@@ -87,6 +87,8 @@ actor CopilotSessionReader {
     private var diagnosticTotals: [DiagnosticReason: Int] = [:]
     private var diagnosticReadCount = 0
     private var diagnosticScanned = 0
+    private var diagnosticBytesAtLog = 0
+    private var diagnosticBuildsAtLog = 0
 
     private func diagnose(_ reason: DiagnosticReason, session: UUID) {
         if diagnosticSeen[reason, default: []].insert(session).inserted {
@@ -108,7 +110,11 @@ actor CopilotSessionReader {
         let matched = bindingsByID.values.filter { selectedSurfaces.contains($0.record.surfaceID) }.count
         let reasons = DiagnosticReason.allCases.map { "\($0.rawValue):\(diagnosticTotals[$0] ?? 0)" }
             .joined(separator: ",")
-        let result = "readerPolls=\(diagnosticReadCount) scanned=\(diagnosticScanned) boundSurfaceMatches=\(matched) rejections=\(reasons)"
+        let bytes = eventReadBytes - diagnosticBytesAtLog
+        let builds = projectionBuilds - diagnosticBuildsAtLog
+        diagnosticBytesAtLog = eventReadBytes
+        diagnosticBuildsAtLog = projectionBuilds
+        let result = "readerPolls=\(diagnosticReadCount) scanned=\(diagnosticScanned) boundSurfaceMatches=\(matched) eventBytes=\(bytes) reducerBuilds=\(builds) rejections=\(reasons)"
         diagnosticTotals.removeAll()
         diagnosticReadCount = 0
         diagnosticScanned = 0

@@ -229,17 +229,34 @@ final class SidebarCopilotPolling {
                 self?.isReading = true
                 var hasUnreadHistory = false
                 do {
+#if DEBUG
+                    let diagnosticReadStart = Date()
+#endif
                     let snapshot = try await read(capturedTopology.workspaceBySurface)
+#if DEBUG
+                    let diagnosticReadEnd = Date()
+#endif
                     let pending = await hasPendingHistory()
                     guard let self, self.generation == token, !Task.isCancelled else { break }
                     let managed = Set(self.managedSubjects.compactMap(\.sessionID))
+#if DEBUG
+                    let diagnosticManagedStart = Date()
+#endif
                     let details = managed.isEmpty ? [:] : await readManaged(managed)
+#if DEBUG
+                    let diagnosticManagedEnd = Date()
+#endif
                     guard self.generation == token, !Task.isCancelled else { break }
                     self.managedDetails = details
                     let accepted = self.accept(snapshot, topology: capturedTopology)
                     hasUnreadHistory = accepted && !snapshot.isComplete && pending
 #if DEBUG
-                    await self.diagnose(snapshot, accepted: accepted, pending: pending)
+                    await self.diagnose(
+                        snapshot, accepted: accepted, pending: pending,
+                        readSeconds: diagnosticReadEnd.timeIntervalSince(diagnosticReadStart),
+                        managedSeconds: diagnosticManagedEnd.timeIntervalSince(diagnosticManagedStart),
+                        acceptSeconds: Date().timeIntervalSince(diagnosticManagedEnd)
+                    )
 #endif
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
@@ -298,7 +315,10 @@ final class SidebarCopilotPolling {
         diagnosticLastTransitionAt = Date()
     }
 
-    private func diagnose(_ raw: AgentSessionSnapshot, accepted: Bool, pending: Bool) async {
+    private func diagnose(
+        _ raw: AgentSessionSnapshot, accepted: Bool, pending: Bool,
+        readSeconds: TimeInterval, managedSeconds: TimeInterval, acceptSeconds: TimeInterval
+    ) async {
         let date = Date()
         let state = String(describing: currentTree.availability)
         diagnosticPolls += 1
@@ -311,6 +331,8 @@ final class SidebarCopilotPolling {
         let nodeAges = diagnosticNodeDates.map { date.timeIntervalSince($0) }
         let observerAge = diagnosticGeneratedAt.map { date.timeIntervalSince($0) } ?? -1
         let rawAge = date.timeIntervalSince(raw.generatedAt)
+        let oldestObservationAge = raw.sessions.compactMap { $0.observedAt.map { date.timeIntervalSince($0) } }
+            .filter(\.isFinite).max() ?? -1
         let observed = subjects.filter { subject in
             guard let id = subject.sessionID else { return false }
             return tree.exactLiveSession(id: id, workspaceID: subject.workspaceID,
@@ -337,6 +359,9 @@ final class SidebarCopilotPolling {
         let line = [
             "polls=\(polls)", "transitions=\(transitions)",
             "lastTransitionAge=\(transitionAge)", "topologySurfaces=\(surfaceCount)",
+            "readMs=\(readSeconds * 1000)", "managedMs=\(managedSeconds * 1000)",
+            "acceptMs=\(acceptSeconds * 1000)", "readOver8s=\(readSeconds >= 8 ? 1 : 0)",
+            "oldestObservationAge=\(oldestObservationAge)",
             "raw=\(raw.sessions.count)", "rawAlive=\(raw.sessions.filter { $0.liveness == .alive }.count)",
             "rawUnknown=\(raw.sessions.filter { $0.liveness == .unknown }.count)",
             "rawAmbiguous=\(raw.sessions.filter { $0.liveness == .ambiguous }.count)",
