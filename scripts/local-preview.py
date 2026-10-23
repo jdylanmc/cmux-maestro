@@ -604,7 +604,20 @@ class MacOperations:
         if allow_absent:
             command.append("--allow-absent")
         require(self.install_lock_fd is not None, "Integration changes require the active app install lock.")
-        result = command_worker.run(self.install_lock_fd, command, timeout=120, text=True, nested_providers=True)
+        result = command_worker.run(self.install_lock_fd, command, timeout=120, text=True,
+                                    nested_providers=True, check=False)
+        if result.returncode:
+            # Only fixed Maestro-authored reasons cross this boundary; never echo arbitrary
+            # provider output, paths, credentials or terminal control sequences.
+            diagnostic = result.stderr.strip()
+            safe_reasons = {
+                "Provider metadata could not verify the coordinated installation.",
+                "Copilot CLI remote-sync controls could not be verified. Setup refused before provider operations; choose a supported Copilot CLI.",
+                "Owned integration could not be verified. Preserve the app receipt and integration checkpoint for recovery.",
+            }
+            if diagnostic not in safe_reasons:
+                diagnostic = "Bridge diagnostic withheld; preserve the app receipt and integration checkpoint for recovery."
+            raise ValueError(f"Copilot integration {action} failed (exit {result.returncode}): {diagnostic}")
         require(not result.stderr.strip() and len(result.stdout.encode()) <= 4096, "Unexpected integration bridge output.")
         response = json.loads(result.stdout)
         require(isinstance(response, dict) and set(response) == {"schema", "action", "transaction", "unchanged", "registration", "nativePlugin"}

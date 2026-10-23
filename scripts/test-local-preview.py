@@ -250,6 +250,26 @@ class CompiledBridgeMac(SyntheticMac):
 
 
 class LocalPreviewImportTests(unittest.TestCase):
+    def test_integration_failure_preserves_safe_bridge_reason_not_raw_output(self):
+        reason = "Provider metadata could not verify the coordinated installation."
+        for stderr, expected in (
+            (reason + "\n", reason),
+            ("\x1b[31msecret", "diagnostic withheld"),
+            ("token=synthetic-secret", "diagnostic withheld"),
+            ("x" * 4097, "diagnostic withheld"),
+            ("", "diagnostic withheld"),
+        ):
+            with self.subTest(stderr=stderr[:40]):
+                ops = preview.MacOperations()
+                ops.install_lock_fd = 123
+                with patch.object(ops, "verify_bridge"), \
+                     patch.object(ops, "main_executable", return_value=Path("/synthetic/app")), \
+                     patch.object(preview.command_worker, "run",
+                         return_value=subprocess.CompletedProcess([], 1, "", stderr)) as run:
+                    with self.assertRaisesRegex(ValueError, expected):
+                        ops.integration(Path("/synthetic/app"), "prepare", "synthetic", Path("/synthetic/destination"))
+                    self.assertFalse(run.call_args.kwargs["check"])
+
     def test_child_imports_do_not_write_source_bytecode(self):
         methods = (
             "assert_bridge_death_preserves_provider_lease",
@@ -426,9 +446,8 @@ else:
         before = self.integration_snapshot()
         installer = preview.Installer(self.home, operations=self.ops, copilot_executable=provider)
         with installer.locked():
-            with self.assertRaises(subprocess.CalledProcessError) as failure:
+            with self.assertRaisesRegex(ValueError, r"Copilot integration apply failed \(exit 95\): Bridge diagnostic withheld"):
                 installer.install(self.old)
-        self.assertEqual(failure.exception.returncode, 95)
         evidence = json.loads((self.home / "receipt-crash-state.json").read_text())
         self.assertEqual(evidence, {"phase": "applying", "afterMissing": True, "receipt": "current"})
         self.assertEqual(self.integration_snapshot(), before)
@@ -694,7 +713,7 @@ with installer.locked():
         target = self.data.parent / "plugin/skills/cmux-maestro-orchestrate/SKILL.md"
         original = target.read_bytes()
         target.write_text("concurrent foreign content")
-        with self.assertRaises(subprocess.CalledProcessError):
+        with self.assertRaisesRegex(ValueError, r"Copilot integration restore failed \(exit 1\): Bridge diagnostic withheld"):
             self.operation("recover")
         self.assertEqual(target.read_text(), "concurrent foreign content")
         self.assertEqual((self.app / "payload").read_text(), "new")

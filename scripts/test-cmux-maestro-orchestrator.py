@@ -2357,6 +2357,9 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             "--connect": "00000000-0000-4000-8000-000000000001",
             "--bash-env": "on",
             "--secret-env-vars": "SYNTHETIC_SECRET",
+            "--sync-session": "off",
+            "--host-environment": "synthetic",
+            "--host-compute-id": "synthetic",
         }
         for flag, value in selectors.items():
             forms = ([flag, value], [f"{flag}={value}"]) if flag.startswith("--") else ([flag, value],)
@@ -2369,6 +2372,7 @@ class LaunchFlagPermissionsTests(unittest.TestCase):
             "--remote-export", "--no-ask-user", "--no-experimental",
             "--allow-all-mcp-server-instructions",
             "--connect", "--bash-env", "--no-remote", "--no-remote-export",
+            "--sync-session", "--host-ahp",
         ):
             with self.subTest(flag=flag):
                 self.assertFalse(parse(["copilot", "--yolo", flag]))

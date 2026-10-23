@@ -237,13 +237,20 @@ struct CopilotPluginExchangeTests {
         #expect(exchange.pluginReceipt == nil)
     }
 
-    @Test func bootstrapUsesAnIsolatedHomeAndExactSourceThenCleansIt() async throws {
+    @Test(arguments: [false, true])
+    func bootstrapUsesAnIsolatedHomeAndExactSourceThenCleansIt(modern: Bool) async throws {
         let fixture = try ObserverFixture(); defer { try? fixture.clean() }
         let capture = fixture.directory.appendingPathComponent("bootstrap-environment.json")
         let executable = fixture.directory.appendingPathComponent("bootstrap-provider")
         let script = """
         #!/usr/bin/python3
         import json, os, sys
+        modern = \(modern ? "True" : "False")
+        if "--help" in sys.argv:
+            print("  --sync-session[=<on|off>]" if modern else "  --no-remote\\n  --no-remote-export")
+            sys.exit(0)
+        assert ("--sync-session=off" in sys.argv) if modern else all(flag in sys.argv for flag in ["--no-remote", "--no-remote-export"])
+        assert not modern or not any(flag in sys.argv for flag in ["--no-remote", "--no-remote-export"])
         methods = []
         while True:
             header = sys.stdin.buffer.readline()
@@ -283,6 +290,68 @@ struct CopilotPluginExchangeTests {
         #expect(object["credentialsPresent"] as? Bool == false)
         #expect(object["methods"] as? [String] == ["status.get", "plugins.install"])
         #expect(!FileManager.default.fileExists(atPath: home))
+    }
+
+    @Test(arguments: ["legacy", "modern", "unknown", "failed-help", "prose-only", "oversized"])
+    func setupProbesRemoteControlsBeforeMetadataAndPluginOperations(capability: String) async throws {
+        let fixture = try ObserverFixture(); defer { try? fixture.clean() }
+        let executable = fixture.directory.appendingPathComponent("capability-provider")
+        let calls = fixture.directory.appendingPathComponent("calls")
+        let script = """
+        #!/usr/bin/python3
+        import json, sys
+        capability = \(String(reflecting: capability))
+        if "--help" in sys.argv:
+            assert sys.argv[1:] == ["--no-auto-update", "--help"]
+            print({"legacy": "  --no-remote\\n  --no-remote-export",
+                   "modern": "  --sync-session[=<on|off>]",
+                   "unknown": "  --remote",
+                   "failed-help": "  --sync-session[=<on|off>]",
+                   "prose-only": "Use --sync-session off instead.",
+                   "oversized": "  --sync-session[=<on|off>]\\n" + "x" * 262144}[capability])
+            sys.exit(1 if capability == "failed-help" else 0)
+        with open(\(String(reflecting: calls.path)), "a") as output:
+            output.write("invoked\\n")
+        if capability == "modern":
+            assert "--sync-session=off" in sys.argv
+            assert "--no-remote" not in sys.argv and "--no-remote-export" not in sys.argv
+        else:
+            assert capability == "legacy"
+            assert "--no-remote" in sys.argv and "--no-remote-export" in sys.argv
+        while True:
+            header = sys.stdin.buffer.readline()
+            if not header:
+                break
+            length = int(header.decode().split(": ", 1)[1])
+            assert sys.stdin.buffer.readline() == b"\\r\\n"
+            request = json.loads(sys.stdin.buffer.read(length))
+            result = {"status.get": {"version": "1.0.103", "protocolVersion": 3},
+                      "hooks.discover": {"hooks": [], "warnings": [], "errors": []},
+                      "plugins.list": {"plugins": []},
+                      "plugins.install": {"plugin": {"name": "cmux-maestro-native", "marketplace": "",
+                                          "enabled": True, "directSourceId": "synthetic-source"}}}[request["method"]]
+            body = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}).encode()
+            sys.stdout.buffer.write(("Content-Length: %s\\r\\n\\r\\n" % len(body)).encode() + body)
+            sys.stdout.buffer.flush()
+        """
+        try fixture.write(Data(script.utf8), to: executable)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
+        let runner = LocalCopilotSetupRunner()
+        let metadata = await runner.metadata(executable: executable, path: "/usr/bin:/bin")
+        let plugin = await runner.plugin(executable: executable,
+            operation: .install(source: fixture.source, expectedIdentity: nil), path: "/usr/bin:/bin")
+        if ["legacy", "modern"].contains(capability) {
+            guard case .value = metadata, case .value = plugin else {
+                Issue.record("Supported CLI must complete metadata and plugin RPCs: \(metadata), \(plugin)")
+                return
+            }
+            #expect(try String(contentsOf: calls, encoding: .utf8) == "invoked\ninvoked\n")
+        } else {
+            guard case .failed = metadata, case .failed = plugin else {
+                Issue.record("Unverified remote controls must refuse"); return
+            }
+            #expect(!FileManager.default.fileExists(atPath: calls.path))
+        }
     }
 
     private func send(_ exchange: CopilotMetadataExchange, id: Int, result: Any) throws {
