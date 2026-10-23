@@ -108,9 +108,12 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
     private var disableReadbackSent = false
     private(set) var pluginReceipt: CopilotPluginReceipt?
     private(set) var providerVersion: String?
+    private let helpOnly: Bool
+    var helpText: String? { helpOnly ? String(data: buffer, encoding: .utf8) : nil }
 
-    init(operation: CopilotPluginOperation? = nil) throws {
+    init(operation: CopilotPluginOperation? = nil, helpOnly: Bool = false) throws {
         self.operation = operation
+        self.helpOnly = helpOnly
         guard pipe(&input) == 0, pipe(&output) == 0 else {
             closeAll()
             throw CopilotFileError.io
@@ -120,6 +123,7 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
                 guard fcntl(fd, F_SETFD, FD_CLOEXEC) == 0 else { throw CopilotFileError.io }
             }
             guard fcntl(output[0], F_SETFL, O_NONBLOCK) == 0 else { throw CopilotFileError.io }
+            if helpOnly { return }
             let methods = operation == nil ? ["status.get", "hooks.discover", "plugins.list"] : ["status.get"]
             var request = Data()
             for (index, method) in methods.enumerated() {
@@ -164,13 +168,13 @@ nonisolated final class CopilotMetadataExchange: @unchecked Sendable {
                 throw CopilotFileError.io
             }
             if count == 0 {
-                guard snapshot != nil || pluginReceipt != nil else { throw CopilotFileError.io }
+                guard helpOnly || snapshot != nil || pluginReceipt != nil else { throw CopilotFileError.io }
                 break
             }
             received += count
             guard received <= Self.maximumOutput else { throw CopilotFileError.tooLarge }
             buffer.append(contentsOf: bytes.prefix(count))
-            try parse()
+            if !helpOnly { try parse() }
         }
     }
 

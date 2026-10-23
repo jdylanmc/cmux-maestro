@@ -279,6 +279,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Copilot CLI 1.0.103 no longer blocks installation on removed remote flags.
+  Setup selects supported no-sync controls from runtime help, keeps older CLI
+  support, and refuses unknown controls. Installer failures show only vetted
+  bridge reasons instead of losing the diagnostic (#339).
+
 - Workspace rows reuse identity-and-freshness placement results across redraws
   instead of repeatedly copying session histories. Timestamp-only reads no
   longer redraw the outline within the same displayed minute; coherent display

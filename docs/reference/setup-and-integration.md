@@ -92,6 +92,30 @@ CLI output.
 Setup passes `--no-auto-update`. Plugin change does not opt into upgrading
 selected CLI.
 
+Before each metadata or plugin operation, including isolated source-identity
+bootstrap, setup probes the selected runtime with `--no-auto-update --help`.
+The help probe uses the same bounded process supervisor and coordinated install
+lease; its output is capped at 256 KiB and never displayed. Package metadata is
+not runtime evidence: a CLI loader can dispatch a newer cached executable.
+Recognized legacy help uses `--no-remote --no-remote-export`. Copilot CLI
+1.0.103 help advertises `--sync-session[=<on|off>]`; setup uses
+`--sync-session=off` instead. Unknown controls refuse before any metadata or
+plugin RPC. There is no retry without privacy flags and no persistent setting change.
+
+In 1.0.103, history sync otherwise uses configured/default behavior; sync does
+not itself enable incoming control. Remote control is separate (`/remote`,
+`/environments`, explicit host/connect options). Setup runs only its private
+headless stdio metadata/plugin transport: it neither creates/resumes a session
+nor requests hosting or connection. Disabling sync is not a general network
+sandbox. This compatibility choice follows the runtime's `--help`, removed-flag
+diagnostics and [1.0.103 release notes](https://github.com/github/copilot-cli/releases/tag/v1.0.103).
+
+Interactive spawn/resume and legacy prompt launches do not pass the removed
+flags; their existing launch policy is unchanged. The native adapter reads the
+current session's model catalog rather than launching another provider.
+The coordinated installer displays only allowlisted, fixed Maestro bridge
+failure reasons; other stderr is withheld, never echoed as raw CLI output.
+
 Setup installs distinct, now **hookless `cmux-maestro-native`** plugin and
 its bundled skills, private local controller, native loader at
 `~/.copilot/extensions/maestro/extension.mjs`, and

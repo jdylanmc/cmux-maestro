@@ -2580,7 +2580,8 @@ struct CopilotObserverRegistrationTests {
         }
         try fixture.write(content, to: responses)
         func script(_ body: String) throws {
-            try fixture.write(Data("#!/bin/sh\n\(body)\n".utf8), to: server)
+            let help = "if [ \"$2\" = --help ]; then printf '  --no-remote\\n  --no-remote-export\\n'; exit 0; fi"
+            try fixture.write(Data("#!/bin/sh\n\(help)\n\(body)\n".utf8), to: server)
             try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
         }
         watchdog.begin("success")

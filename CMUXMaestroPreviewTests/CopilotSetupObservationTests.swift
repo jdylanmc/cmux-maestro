@@ -96,9 +96,9 @@ struct CopilotSetupObservationTests {
         let storage = OSAllocatedUnfairLock(initialState: CopilotSetupObservation.Snapshot())
         let observation = CopilotSetupObservation(storage: storage)
         let runner = LocalCopilotSetupRunner(observation: observation)
-        guard case .failed(.unavailable) = await runner.metadata(
+        guard case .failed(.unsupportedRemoteControls) = await runner.metadata(
             executable: URL(fileURLWithPath: "/usr/bin/true"), path: "/usr/bin:/bin") else {
-            Issue.record("Empty metadata must still fail unavailable")
+            Issue.record("Empty help must refuse before metadata")
             return
         }
         let snapshot = storage.withLock { $0 }

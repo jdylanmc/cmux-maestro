@@ -7,6 +7,10 @@ import shutil
 import sys
 import time
 
+if "--help" in sys.argv:
+    print("  --no-remote\n  --no-remote-export")
+    sys.exit(0)
+
 provider = Path(os.environ["COPILOT_HOME"])
 home = provider.parent
 isolated = home.name.startswith("cmux-maestro-source-")

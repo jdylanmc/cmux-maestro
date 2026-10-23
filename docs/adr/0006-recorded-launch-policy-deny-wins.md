@@ -97,3 +97,16 @@ events. An argv-default parent is treated as not-YOLO even if toggled on later;
 an argv-YOLO parent toggled off cannot be distinguished from its launch mode.
 Configuration/environment permissions are also not a verified snapshot.
 No persistent Copilot settings change, prompt approval, or live-session control.
+
+## Compatibility clarification (2026-10-23): CLI 1.0.103 remote controls
+
+Setup's metadata and official plugin probes select privacy flags from bounded
+runtime help: the legacy negative remote flags, or `--sync-session=off` for the
+new CLI. Unrecognized controls fail closed before RPC. These probes create no
+session and never request remote hosting or connection.
+
+This does not change managed interactive launch policy or the launch allowlist.
+`--sync-session`, `--host-environment`, `--host-compute-id` and `--host-ahp` remain
+unreviewed session/hosting selectors: their presence cannot establish inherited
+allow-all, just like the legacy remote selectors. Model catalog discovery uses
+the current native session, not a separate CLI invocation.

@@ -1245,6 +1245,8 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
             nativePluginStatus = value.plugins.first(where: { $0.name == CopilotPluginManifest.name })
                 .map { $0.enabled ? "enabled" : "disabled" } ?? "absent"
             return value
+        case .failed(.unsupportedRemoteControls):
+            throw CopilotRegistrationConflict(LocalCopilotSetupRunner.remoteControlsDiagnostic)
         case .failed:
             throw CopilotRegistrationConflict("Provider metadata could not verify the coordinated installation.")
         }
@@ -1680,7 +1682,7 @@ nonisolated final class CopilotInstallCheckpoint: @unchecked Sendable {
 }
 
 nonisolated enum CopilotProcessResult: Equatable, Sendable {
-    case exited(Int32), unavailable, timedOut, cancelled
+    case exited(Int32), unavailable, timedOut, cancelled, unsupportedRemoteControls
 }
 
 nonisolated protocol CopilotSetupProcessRunner: Sendable {
@@ -1810,6 +1812,8 @@ nonisolated struct CopilotProviderLease {
 }
 
 nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
+    static let remoteControlsDiagnostic =
+        "Copilot CLI remote-sync controls could not be verified. Setup refused before provider operations; choose a supported Copilot CLI."
     var timeout: TimeInterval = 45
     var terminationGrace: TimeInterval = 0.25
     var deadlineNow: @Sendable () -> ContinuousClock.Instant = { ContinuousClock.now }
@@ -1833,10 +1837,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         do {
             let exchange = try CopilotMetadataExchange()
             defer { exchange.closeAll() }
-            let result = await invoke(executable: executable, arguments: [
-                "--no-auto-update", "--headless", "--stdio", "--disable-builtin-mcps",
-                "--no-custom-instructions", "--no-remote", "--no-remote-export", "--log-level", "error",
-            ], path: path, providerHome: providerHome, exchange: exchange)
+            let result = await invokeMetadata(executable: executable, path: path,
+                                              providerHome: providerHome, exchange: exchange)
             guard result == .exited(0), let snapshot = exchange.snapshot else {
                 return .failed(result == .exited(0) ? .unavailable : result)
             }
@@ -1849,10 +1851,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
         do {
             let exchange = try CopilotMetadataExchange(operation: operation)
             defer { exchange.closeAll() }
-            let result = await invoke(executable: executable, arguments: [
-                "--no-auto-update", "--headless", "--stdio", "--disable-builtin-mcps",
-                "--no-custom-instructions", "--no-remote", "--no-remote-export", "--log-level", "error",
-            ], path: path, providerHome: providerHome, exchange: exchange)
+            let result = await invokeMetadata(executable: executable, path: path,
+                                              providerHome: providerHome, exchange: exchange)
             guard result == .exited(0), let receipt = exchange.pluginReceipt else {
                 return .failed(result == .exited(0) ? .unavailable : result, receipt: exchange.pluginReceipt)
             }
@@ -1874,10 +1874,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
             temporary = directory
             let exchange = try CopilotMetadataExchange(operation: .install(source: source, expectedIdentity: nil))
             defer { exchange.closeAll() }
-            let result = await invoke(executable: executable, arguments: [
-                "--no-auto-update", "--no-auto-login", "--headless", "--stdio", "--disable-builtin-mcps",
-                "--no-custom-instructions", "--no-remote", "--no-remote-export", "--log-level", "error",
-            ], path: path, providerHome: directory.appendingPathComponent(".copilot"),
+            let result = await invokeMetadata(executable: executable, path: path,
+               providerHome: directory.appendingPathComponent(".copilot"),
                exchange: exchange, isolatedHome: directory)
             cleanupConfirmed = result != .unavailable
             if result == .exited(0), let receipt = exchange.pluginReceipt, let plugin = receipt.plugin,
@@ -1892,6 +1890,39 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
             } catch { return .failed(.unavailable, retainedHome: temporary) }
         }
         return outcome
+    }
+
+    private func invokeMetadata(executable: URL, path: String, providerHome: URL?,
+                                exchange: CopilotMetadataExchange, isolatedHome: URL? = nil) async -> CopilotProcessResult {
+        do {
+            // Probe the actual runtime under the same update, home and process-lease policy.
+            // Loader package versions need not identify the executable they dispatch.
+            let help = try CopilotMetadataExchange(helpOnly: true)
+            defer { help.closeAll() }
+            let result = await invoke(executable: executable, arguments: ["--no-auto-update", "--help"],
+                path: path, providerHome: providerHome, exchange: help, isolatedHome: isolatedHome)
+            guard result == .exited(0) else { return result }
+            guard let text = help.helpText, let remoteFlags = Self.remoteFlags(help: text) else {
+                return .unsupportedRemoteControls
+            }
+            let arguments = ["--no-auto-update", "--headless", "--stdio", "--disable-builtin-mcps",
+                             "--no-custom-instructions", "--log-level", "error"]
+                + remoteFlags + (isolatedHome == nil ? [] : ["--no-auto-login"])
+            return await invoke(executable: executable, arguments: arguments, path: path,
+                providerHome: providerHome, exchange: exchange, isolatedHome: isolatedHome)
+        } catch { return .unavailable }
+    }
+
+    private static func remoteFlags(help: String) -> [String]? {
+        let options = help.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        if options.contains(where: { $0 == "--sync-session[=<on|off>]" || $0.hasPrefix("--sync-session[=<on|off>] ") }) {
+            return ["--sync-session=off"]
+        }
+        func advertises(_ flag: String) -> Bool {
+            options.contains { $0 == flag || $0.hasPrefix(flag + " ") }
+        }
+        guard advertises("--no-remote"), advertises("--no-remote-export") else { return nil }
+        return ["--no-remote", "--no-remote-export"]
     }
 
     private func invoke(executable: URL, arguments: [String], path: String, providerHome: URL?,
@@ -1973,6 +2004,8 @@ nonisolated struct LocalCopilotSetupRunner: CopilotSetupProcessRunner {
             case .exited(let status):
                 if Self.groupIsQuiescent(pid, observation: observation) {
                     Self.reap(pid, observation: observation)
+                    do { try exchange?.poll() }
+                    catch { return .unavailable }
                     return .exited(status)
                 }
             case .unavailable:
@@ -2466,6 +2499,7 @@ nonisolated struct CopilotSetup: Sendable {
         case .unavailable: .unavailable
         case .timedOut: .timedOut
         case .cancelled: .cancelled
+        case .unsupportedRemoteControls: .conflict(LocalCopilotSetupRunner.remoteControlsDiagnostic)
         }
     }
 }
