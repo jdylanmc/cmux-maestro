@@ -482,6 +482,8 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     /// A skipped gap invalidates projected state, never observed replay or source failures.
     mutating func omitUnseenHistory() {
+        retireInteractions()
+        retireRequests()
         rootState = .unknown
         rootModel = nil
         rootStartedAt = nil
