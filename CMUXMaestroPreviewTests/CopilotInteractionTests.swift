@@ -4,6 +4,37 @@ import Testing
 
 @Suite(.serialized)
 nonisolated struct CopilotInteractionTests {
+    @Test(arguments: [false, true])
+    func repeatedScopedMessageBridgesInterleavedBackgroundEnvelopes(partial: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let ids = (0..<10).map {
+            UUID(uuidString: String(format: "34310000-0000-0000-0000-%012d", $0))!
+        }
+        reducer.consume(try interactionEvent("assistant.turn_start", id: ids[0], turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", id: ids[1], parent: ids[0], turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: ids[2], parent: ids[1],
+                                             turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: ids[3], parent: ids[2], owner: "background",
+                                             turn: "0", interaction: "background"))
+        reducer.consume(try interactionEvent("tool.execution_start", id: ids[4], parent: ids[3], owner: "background",
+                                             data: ["toolCallId": "background-tool", "toolName": "bash"]))
+        if partial {
+            reducer.consume(try interactionEvent("tool.execution_partial_result", id: ids[5], parent: ids[4],
+                                                 owner: "background", data: ["toolCallId": "background-tool"]))
+        }
+        reducer.consume(try interactionEvent("session.usage_record", id: ids[6], parent: ids[partial ? 5 : 4]))
+        reducer.consume(try interactionEvent("assistant.message", id: ids[7], parent: ids[6],
+                                             turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", id: ids[8], parent: ids[7], turn: "0"))
+        let value = reducer.value()
+        #expect(value.state == .idle)
+        #expect(value.attention.map(\.kind) == [.turnFinished])
+        #expect(value.attention.last?.evidence.eventID == ids[8])
+        #expect(value.children.first { $0.id == "background" }?.state == .working)
+        #expect(value.children.first { $0.id == "background" }?.activity?.kind == .executing)
+        #expect(reducer.issues.isEmpty)
+    }
+
     @Test func sameInteractionTurnCounterRestartSettlesWithoutSessionIdle() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         reducer.consume(try interactionEvent("subagent.started", owner: "background", data: [
