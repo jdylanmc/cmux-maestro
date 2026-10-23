@@ -6,6 +6,22 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test func componentValidationRejectsSeparatorsAndAllowsUnicodeNames() throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let directory = try CopilotFileAccess.openDirectory(fixture.bindings)
+        defer { close(directory) }
+        for name in ["", ".", "..", "nested/file", "bad\u{0}name", "/\u{0301}"] {
+            #expect(throws: CopilotFileError.unsafePath) {
+                try CopilotFileAccess.statEntry(at: directory, name: name)
+            }
+        }
+        for name in ["synthetic.json", "cafe\u{0301}.json"] {
+            try Data().write(to: fixture.bindings.appendingPathComponent(name))
+            #expect(try CopilotFileAccess.statEntry(at: directory, name: name).isRegular)
+        }
+    }
+
     @Test func unchangedBindingIndexDoesNotReopenOrDecodeIdentities() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

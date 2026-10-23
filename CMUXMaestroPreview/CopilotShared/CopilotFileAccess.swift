@@ -243,7 +243,8 @@ nonisolated enum CopilotFileAccess {
     }
 
     private static func validComponent(_ value: String) -> Bool {
-        !value.isEmpty && value != "." && value != ".." && !value.contains("/")
-            && !value.utf8.contains(0)
+        // POSIX separators are bytes; avoid a Unicode substring search at every file fence.
+        !value.isEmpty && value != "." && value != ".."
+            && !value.utf8.contains { $0 == 0 || $0 == 0x2F }
     }
 }

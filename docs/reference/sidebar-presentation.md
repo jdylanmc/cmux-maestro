@@ -83,6 +83,9 @@ session and process verification still run. A changed file takes the existing
 bounded append/rebuild path. Torn final lines remain incomplete without fast polling.
 This is an unchanged-event-file optimization, not a stat-only whole-reader pass:
 per-session location and appearance metadata still use secure bounded reads.
+Binding discovery still checks off-surface files: an in-place reroute can leave
+the directory stamp unchanged. Path-component validation checks slash and NUL
+in one UTF-8 scan, without caching authorization or bypassing file fences.
 Pet frames and status decorations run as render-server animations, not SwiftUI
 timelines; they must not drive continuous hierarchy layout between observations.
 
