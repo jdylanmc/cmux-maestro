@@ -94,6 +94,17 @@ content and global duplicate-identity barriers. Actions revalidate current raw
 evidence using the actual clock, not a captured display clock. Hidden agent
 previews do not build card data; opening a preview reads current evidence.
 
+History expiry keeps one exact next-deadline wake-up. Each pass coalesces all
+already-due transitions and reuses unaffected session projections after global
+identity, topology and trust checks. Settings, evidence changes and per-session
+clock boundaries invalidate that reuse. An early timer wake re-arms without
+declaring an expiry. Retention is never rounded or delayed to reduce CPU.
+The local `history-expiry` log category emits aggregate wake, retention-wake,
+repeated-deadline and session-projection counts at most once per 60-second window
+with expiry activity. It contains no identity, content, path or evidence timestamp;
+there is no diagnostic polling timer. Sampled stacks alone do not establish how
+many distinct deadlines fired.
+
 For installed CPU acceptance, select the exact extension PID and record the installed
 commit separately, then run this read-only local probe:
 

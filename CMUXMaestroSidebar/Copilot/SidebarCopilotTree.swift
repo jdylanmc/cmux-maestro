@@ -265,7 +265,8 @@ struct SidebarCopilotTree: Equatable {
         now: Date,
         history: SidebarHistorySettings = SidebarHistorySettings(),
         attention: SidebarAttentionSettings = SidebarAttentionSettings(),
-        revealingIdleTasksIn: Set<UUID> = []
+        revealingIdleTasksIn: Set<UUID> = [],
+        sessionCache: SidebarSessionProjectionCache? = nil
     ) -> SidebarCopilotTree {
         guard topology.canReadSessions else { return .waiting }
         guard SnapshotSchemaVersion.supported.contains(snapshot.schemaVersion),
@@ -282,6 +283,8 @@ struct SidebarCopilotTree: Equatable {
             issues.append(scoped)
         }
         let globallyComplete = snapshot.isCompleteApartFromSessionIssues
+        sessionCache?.prepare(snapshot: snapshot, topology: topology, history: history, attention: attention,
+                              revealingIdleTasksIn: revealingIdleTasksIn)
         let groups = Dictionary(grouping: snapshot.sessions.filter {
             $0.identity.providerID == CopilotSnapshotAdapter.providerID
         }, by: { UUID(uuidString: $0.identity.sessionID) })
@@ -302,6 +305,12 @@ struct SidebarCopilotTree: Equatable {
                 rejected = true
                 continue
             }
+            if let cached = sessionCache?.reused(id: sessionID, snapshot: snapshot, index: sessionIndex, now: now) {
+                sessions.append(cached.session)
+                if let deadline = cached.nextExpiry { nextExpiry = min(nextExpiry ?? deadline, deadline) }
+                continue
+            }
+            var sessionExpiry: Date?
             let liveness = observation.liveness ?? .unknown
             let assessment = snapshot.assess(observation, at: "sessions[\(sessionIndex)]")
             let children = assessment.children
@@ -346,7 +355,7 @@ struct SidebarCopilotTree: Equatable {
                     if deadline <= now {
                         hidden.insert(child.id.rawValue)
                     } else {
-                        nextExpiry = min(nextExpiry ?? deadline, deadline)
+                        sessionExpiry = min(sessionExpiry ?? deadline, deadline)
                     }
                 }
             }
@@ -398,7 +407,7 @@ struct SidebarCopilotTree: Equatable {
                 || !assessment.isValid || !(observation.sessionIssues ?? []).isEmpty
             let complete = globallyComplete && trustIssues.isEmpty
                 && liveness == .alive && !degraded
-            sessions.append(SidebarCopilotSession(
+            let projected = SidebarCopilotSession(
                 iconId: observation.appearance?.iconId, iconColor: observation.appearance?.iconColor,
                 petId: observation.appearance?.petId,
                 branch: observation.location?.branch, worktree: observation.location?.worktree ?? false,
@@ -423,7 +432,10 @@ struct SidebarCopilotTree: Equatable {
                     $0.isInternalTask && (trustworthyState($0.workState, liveness: liveness) == .unknown
                         || assessment.invalidChildren.contains($0.id))
                 }
-            ))
+            )
+            sessions.append(projected)
+            if let deadline = sessionExpiry { nextExpiry = min(nextExpiry ?? deadline, deadline) }
+            sessionCache?.store(projected, nextExpiry: sessionExpiry, snapshot: snapshot, index: sessionIndex, now: now)
         }
         return SidebarCopilotTree(
             availability: globallyComplete && trustIssues.isEmpty && !rejected

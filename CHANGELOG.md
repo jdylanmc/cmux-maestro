@@ -284,7 +284,9 @@ Notable changes are recorded using Keep a Changelog categories.
   longer redraw the outline within the same displayed minute; coherent display
   snapshots retain independent freshness and history deadlines. Actions and
   newly opened agent previews use current evidence; hidden previews no longer
-  build their cards on every row update (#334).
+  build their cards on every row update. Exact history-expiry wakes reuse
+  unaffected session projections and process all already-due outcomes together
+  without delaying retention deadlines (#334).
 
 - Binding-file updates wake sidebar readers without rebuilding their watchers.
   Missing session directories no longer disable healthy watches or bindings

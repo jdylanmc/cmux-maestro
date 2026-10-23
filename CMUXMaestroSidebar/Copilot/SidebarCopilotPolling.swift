@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import OSLog
 
 @Observable
 @MainActor
@@ -46,6 +47,15 @@ final class SidebarCopilotPolling {
     private(set) var isReading = false
     @ObservationIgnored private(set) var projectionCount = 0
     @ObservationIgnored private var projectionCache: SidebarCopilotProjectionCache?
+    @ObservationIgnored private let sessionCache = SidebarSessionProjectionCache()
+    var sessionProjectionCount: Int { sessionCache.computationCount }
+    @ObservationIgnored private(set) var historyExpiryWakeCount = 0
+    @ObservationIgnored private var historyDiagnosticStart: Date?
+    @ObservationIgnored private var historyDiagnosticWakes = 0
+    @ObservationIgnored private var historyDiagnosticRetention = 0
+    @ObservationIgnored private var historyDiagnosticRepeated = 0
+    @ObservationIgnored private var historyDiagnosticBuilds = 0
+    @ObservationIgnored private var lastHistoryDeadline: Date?
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
@@ -190,6 +200,7 @@ final class SidebarCopilotPolling {
         cancelHistoryExpiry()
         snapshot = nil
         projectionCache = nil
+        sessionCache.removeAll()
         lastStatuses.removeAll()
         managedDetails = [:]
         lastGeneratedAt = nil
@@ -239,6 +250,7 @@ final class SidebarCopilotPolling {
                     self.cancelHistoryExpiry()
                     self.snapshot = nil
                     self.projectionCache = nil
+                    self.sessionCache.removeAll()
                     if Self.invalidatesStatus(error) {
                         self.lastStatuses.removeAll()
                         self.invalidatedAt = self.now()
@@ -293,6 +305,7 @@ final class SidebarCopilotPolling {
             invalidatedAt = now()
             self.snapshot = nil
             projectionCache = nil
+            sessionCache.removeAll()
             currentTree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
             cancelHistoryExpiry()
             scheduleStatusExpiry()
@@ -300,6 +313,7 @@ final class SidebarCopilotPolling {
         if snapshot.issues?.contains(.permissionDenied) == true {
             self.snapshot = nil
             projectionCache = nil
+            sessionCache.removeAll()
             expiry?.cancel()
             expiry = nil
             expiryDeadline = nil
@@ -315,6 +329,7 @@ final class SidebarCopilotPolling {
               SnapshotSchemaVersion.supported.contains(snapshot.schemaVersion) else {
             self.snapshot = nil
             projectionCache = nil
+            sessionCache.removeAll()
             currentTree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
             cancelHistoryExpiry()
             projectStatusLoss()
@@ -342,7 +357,7 @@ final class SidebarCopilotPolling {
         } else {
             projectionCount += 1
             currentTree = SidebarCopilotTree.project(snapshot, onto: topology, now: date, history: history, attention: attention,
-                                             revealingIdleTasksIn: revealingIdleTasksIn)
+                                             revealingIdleTasksIn: revealingIdleTasksIn, sessionCache: sessionCache)
             projectionCache = SidebarCopilotProjectionCache(snapshot: snapshot, tree: currentTree, now: date)
         }
         currentTree.managedDetails = managedDetails
@@ -359,7 +374,7 @@ final class SidebarCopilotPolling {
         let date = now()
         projectionCount += 1
         currentTree = SidebarCopilotTree.project(snapshot, onto: topology, now: date, history: history, attention: attention,
-                                         revealingIdleTasksIn: revealingIdleTasksIn)
+                                         revealingIdleTasksIn: revealingIdleTasksIn, sessionCache: sessionCache)
         projectionCache = SidebarCopilotProjectionCache(snapshot: snapshot, tree: currentTree, now: date)
         currentTree.managedDetails = managedDetails
         if let invalidatedAt { currentTree.sessions.removeAll { $0.observedAt <= invalidatedAt } }
@@ -469,6 +484,7 @@ final class SidebarCopilotPolling {
             if expiresEvidence {
                 self.snapshot = nil
                 self.projectionCache = nil
+                self.sessionCache.removeAll()
                 self.cancelHistoryExpiry()
                 self.currentTree = .init(availability: .unavailable, sessions: [], issues: [], generatedAt: nil)
             }
@@ -495,13 +511,39 @@ final class SidebarCopilotPolling {
         historyDeadline = deadline
         let token = historyGeneration
         let delay = deadline.timeIntervalSince(now())
+        let retentionDeadline = projectionCache?.tree.nextHistoryExpiry == deadline
         let expiryPause = expiryPause
         historyExpiry = Task { [weak self] in
             do { try await expiryPause(max(0, delay)) } catch { return }
             guard let self, self.historyGeneration == token, !Task.isCancelled else { return }
             self.historyExpiry = nil
             self.historyDeadline = nil
+            let firedAt = self.now()
+            // A timer is a wake-up request, not proof that its deadline has arrived.
+            guard firedAt >= deadline else { self.scheduleHistoryExpiry(); return }
+            self.historyExpiryWakeCount += 1
+            let previousBuildCount = self.sessionCache.computationCount
             self.reprojectHistory()
+            self.recordHistoryExpiry(deadline: deadline, retention: retentionDeadline,
+                                     builds: self.sessionCache.computationCount - previousBuildCount, now: firedAt)
         }
+    }
+
+    private func recordHistoryExpiry(deadline: Date, retention: Bool, builds: Int, now: Date) {
+        historyDiagnosticStart = historyDiagnosticStart ?? now
+        historyDiagnosticWakes += 1
+        if retention { historyDiagnosticRetention += 1 }
+        if lastHistoryDeadline == deadline { historyDiagnosticRepeated += 1 }
+        lastHistoryDeadline = deadline
+        historyDiagnosticBuilds += builds
+        guard let start = historyDiagnosticStart, now.timeIntervalSince(start) >= 60 else { return }
+        // Counts only: no session identity, content, path, or evidence timestamp enters diagnostics.
+        Logger(subsystem: "com.jdylanmc.CMUXMaestroPreview", category: "history-expiry")
+            .notice("Expiry window: seconds=\(Int(now.timeIntervalSince(start))), wakes=\(self.historyDiagnosticWakes), retention=\(self.historyDiagnosticRetention), repeatedDeadline=\(self.historyDiagnosticRepeated), sessionProjections=\(self.historyDiagnosticBuilds)")
+        historyDiagnosticStart = now
+        historyDiagnosticWakes = 0
+        historyDiagnosticRetention = 0
+        historyDiagnosticRepeated = 0
+        historyDiagnosticBuilds = 0
     }
 }
