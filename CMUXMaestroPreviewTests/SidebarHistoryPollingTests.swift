@@ -195,7 +195,13 @@ struct SidebarHistoryPollingTests {
             await sidebarEventually { await harness.reads == index }
             if index == 2 && failure == "tail" { try FileManager.default.removeItem(at: otherEvents) }
             let source = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
-            #expect(source.sessions.first { $0.sessionID == fixture.sessionID }?.observedAt != source.generatedAt)
+            let observed = try #require(source.sessions.first { $0.sessionID == fixture.sessionID })
+            #expect(observed.observedAt < source.generatedAt)
+            #expect(!source.issues.contains(.stateUnavailable))
+            if failure == "marker" || index == 2 {
+                #expect(!source.isComplete)
+                #expect(source.sessions.first { $0.sessionID == otherID }?.sessionIssues == [.stateUnavailable])
+            }
             await harness.succeed(source)
             await sidebarEventually { await harness.isPaused }
             let healthy = poller.tree.sessions.first { $0.id == fixture.sessionID }

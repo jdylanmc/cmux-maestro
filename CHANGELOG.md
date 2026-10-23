@@ -290,6 +290,10 @@ Notable changes are recorded using Keep a Changelog categories.
   hierarchy and icons; process-only updates rematch processes without rebuilding
   those overlays. Secure reads and clock-boundary checks remain in place (#334).
 
+- An unavailable session no longer hides healthy agents' current states, names,
+  pets or child work. Read failures stay scoped to their exact session; retained
+  status remains explicitly unknown rather than fresh.
+
 - Binding-file updates wake sidebar readers without rebuilding their watchers.
   Missing session directories no longer disable healthy watches or bindings
   notifications (#328).
