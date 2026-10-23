@@ -182,16 +182,17 @@ the projection. One-shot deadlines cover history expiry, future display times,
 observation freshness and status grace; no extra timer polls the projection.
 An over-limit deadline traversal disables reuse rather than ignoring evidence.
 
-Publication compares the final reconciled presentation, not intermediate trees.
-Equal output does not invalidate observation subscribers. Exact evidence times
-remain available to action-time checks; the visible minute-resolution **Observed**
-labels update when their minute changes. Event times and attention are never
-rounded. The fallback reader cadence remains two seconds; file-driven wakeups
+Publication compares the exact final reconciled tree, not intermediate trees.
+Refreshed evidence timestamps invalidate observation subscribers even when visible
+labels are unchanged: outline children retain value snapshots and may redraw
+independently against the current clock. Suppressing timestamp-only publication
+would leave those copies stale, hiding current status, session names and pets.
+Exactly equal output still avoids invalidation. The structural projection cache
+remains independent of publication. The fallback reader cadence remains two seconds; file-driven wakeups
 are coalesced separately (#325). Installed CPU/change-to-pixel acceptance remains
 a separate hosted check.
 Beats liveness, born-root naming and external tag refresh consume a separate
-bounded latest-evidence stream, not SwiftUI presentation changes. An unchanged
-render therefore cannot strand a dependent consumer with expired timestamp copies.
+bounded latest-evidence stream, independently of SwiftUI rendering.
 
 Managed presentation has its own one-shot deadline, independent of Copilot reads
 or notifications. It covers the earliest node/envelope and Git freshness boundary

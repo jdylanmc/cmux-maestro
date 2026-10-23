@@ -120,7 +120,7 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
-    @Test func unchangedPollsRefreshEvidenceWithoutProjectionOrPublication() async throws {
+    @Test func unchangedPollsRefreshPublishedEvidenceWithoutProjection() async throws {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()
         let poller = poller(clock, harness)
@@ -160,7 +160,7 @@ struct SidebarHistoryPollingTests {
             #expect(beats.indicators.state(for: fixtures.sessionID) == .lit)
         }
         #expect(poller.projectionCount == builds)
-        #expect(changes.read() == initial)
+        #expect(changes.read() == initial.addingTimeInterval(1))
         #expect(poller.tree.generatedAt == clock.read().addingTimeInterval(0.25))
         #expect(poller.tree.sessions.first?.observedAt == clock.read())
         #expect(poller.tree.exactLiveSession(

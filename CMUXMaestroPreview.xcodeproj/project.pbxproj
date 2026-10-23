@@ -109,7 +109,6 @@
 		C32100000000000000000501 /* SidebarCopilotProjectionCache.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C32100000000000000000601; };
 		C32500000000000000000501 /* SidebarFileWatcher.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C32500000000000000000601; };
 		C32500000000000000000502 /* SidebarRefreshTrigger.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C32500000000000000000602; };
-		C32100000000000000000502 /* SidebarCopilotTree+Presentation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C32100000000000000000602; };
 		C06100000000000000000502 /* SidebarCopilotTree.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000602; };
 		C06100000000000000000503 /* SidebarNavigation.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000603; };
 		C06100000000000000000504 /* SidebarCopilotHistory.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000604; };
@@ -261,7 +260,6 @@
 		C32100000000000000000601 /* SidebarCopilotProjectionCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarCopilotProjectionCache.swift; sourceTree = SOURCE_ROOT; };
 		C32500000000000000000601 /* SidebarFileWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarFileWatcher.swift; sourceTree = SOURCE_ROOT; };
 		C32500000000000000000602 /* SidebarRefreshTrigger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarRefreshTrigger.swift; sourceTree = SOURCE_ROOT; };
-		C32100000000000000000602 /* SidebarCopilotTree+Presentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CMUXMaestroSidebar/Copilot/SidebarCopilotTree+Presentation.swift"; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000602 /* SidebarCopilotTree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarCopilotTree.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000603 /* SidebarNavigation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Navigation/SidebarNavigation.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000604 /* SidebarCopilotHistory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Copilot/SidebarCopilotHistory.swift; sourceTree = SOURCE_ROOT; };
@@ -488,7 +486,6 @@
 				C32100000000000000000601 /* SidebarCopilotProjectionCache.swift */,
 				C32500000000000000000601 /* SidebarFileWatcher.swift */,
 				C32500000000000000000602 /* SidebarRefreshTrigger.swift */,
-				C32100000000000000000602 /* SidebarCopilotTree+Presentation.swift */,
 				C06100000000000000000602 /* SidebarCopilotTree.swift */,
 				C06100000000000000000603 /* SidebarNavigation.swift */,
 				C06100000000000000000604 /* SidebarCopilotHistory.swift */,
@@ -809,7 +806,6 @@
 				C32100000000000000000501,
 				C32500000000000000000501,
 				C32500000000000000000502,
-				C32100000000000000000502,
 				C06100000000000000000502,
 				C06100000000000000000503,
 				C06100000000000000000504,
