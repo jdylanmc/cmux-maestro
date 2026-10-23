@@ -149,6 +149,73 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test func tailWindowPreferenceChangesReachSubsequentReadsWithoutRestart() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let preferencesFixture = try SidebarPreferenceFixture()
+        defer { preferencesFixture.cleanup() }
+        let preferences = preferencesFixture.preferences()
+        preferences.setEventTailWindowMiB(1)
+        let rows = [
+            try copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            try copilotTestEvent("assistant.turn_start", data: ["turnId": "outside-small-window"]),
+            try copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 3 * 1_048_576)])
+        ]
+        try fixture.writeEvents(rows)
+        let siblingSurface = UUID()
+        let sibling = try fixture.addSession(surface: siblingSurface)
+        let siblingID = try #require(UUID(uuidString: sibling.lastPathComponent))
+        try Data().write(to: sibling.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: sibling.appendingPathComponent("events.jsonl"))
+        let clock = HistoryTestClock(initial)
+        let reader = fixture.reader(clock: { clock.read() })
+        let harness = HistoryPollingHarness()
+        let poller = SidebarCopilotPolling(
+            reader: reader, tailWindowMiB: { preferences.eventTailWindowMiB },
+            pause: { try await harness.pause() }, expiryPause: { try await harness.wait($0) },
+            changes: { SidebarRefreshTrigger(coalesce: {}) }, now: { clock.read() }
+        )
+        defer { poller.setVisible(false) }
+        let topology = SidebarTopology(.init(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available([fixture.surface, siblingSurface].map {
+                    .init(id: $0, title: "Synthetic", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                })
+            )], windowID: UUID()
+        ))
+        poller.update(topology: topology, connected: true)
+        poller.setVisible(true)
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.state == .unknown)
+        #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.childrenComplete == false)
+        #expect(poller.tree.sessions.first { $0.id == siblingID }?.state == .idle)
+        #expect(poller.tree.sessions.first { $0.id == siblingID }?.childrenComplete == true)
+        let smallWindowBytes = await reader.eventReadBytes
+        preferences.setEventTailWindowMiB(4)
+        await harness.nextRead()
+        await sidebarEventually { await harness.isPaused }
+        #expect(await reader.eventReadBytes == smallWindowBytes)
+        #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.state == .unknown)
+        try fixture.writeEvents(rows, atomic: true)
+        await harness.nextRead()
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.state == .working)
+        let restoredBytes = await reader.eventReadBytes
+        preferences.setEventTailWindowMiB(1)
+        await harness.nextRead()
+        await sidebarEventually { await harness.isPaused }
+        #expect(await reader.eventReadBytes == restoredBytes)
+        #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.state == .working)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test(arguments: ["marker", "tail"])
     func oneUnavailableSessionDoesNotHideHealthySibling(_ failure: String) async throws {
         let fixture = try CopilotReaderFixture()

@@ -101,6 +101,7 @@ final class SidebarCopilotPolling {
 
     init(
         reader: CopilotSessionReader = CopilotSessionReader(),
+        tailWindowMiB: @escaping @MainActor @Sendable () -> Int = { CopilotTailWindow.defaultMiB },
         read: Read? = nil,
         readManaged: ReadManaged? = nil,
         hasPendingHistory: PendingHistory? = nil,
@@ -111,7 +112,8 @@ final class SidebarCopilotPolling {
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.read = read ?? { placements in
-            let source = try await reader.read(surfaceIDs: Set(placements.keys))
+            let window = await tailWindowMiB()
+            let source = try await reader.read(surfaceIDs: Set(placements.keys), tailWindowMiB: window)
             return CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements)
         }
         self.readManaged = readManaged ?? (read == nil ? { await reader.managedSessionDetails($0) } : { _ in [:] })

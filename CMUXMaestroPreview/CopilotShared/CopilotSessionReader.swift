@@ -32,6 +32,7 @@ nonisolated struct CopilotReaderLimits: Sendable {
 }
 
 actor CopilotSessionReader {
+    enum ConfigurationError: Error { case invalidTailWindow }
     private struct Binding {
         let record: CopilotIdentityRecord
         let stamp: CopilotFileStamp
@@ -51,6 +52,8 @@ actor CopilotSessionReader {
         var lastCompleteAt: Date?
         var target: Int64?
         var targetAt: Date?
+        var historyIncomplete = false
+        var discardingInitialLine = false
     }
 
     private let roots: (@Sendable () throws -> (bindings: URL, sessions: URL))
@@ -59,12 +62,14 @@ actor CopilotSessionReader {
     private let limits: CopilotReaderLimits
     private var tails: [UUID: Tail] = [:]
     private var pendingHistory = false
+    private var tailWindowBytes = CopilotTailWindow.defaultMiB * 1_048_576
     private var discovery: CopilotDirectoryStream?
     private var discoveryStamp: CopilotFileStamp?
     private var cycleChanged = false
     private var cycleOverflowed = false
     private var cycleIssues: [CopilotIssue] = []
     private var bindingsByID: [UUID: Binding] = [:]
+    private var endedBindingsBySurface: [UUID: Binding] = [:]
     private var bindingOrder: [UUID] = []
     private var selectedSurfaces: Set<UUID> = []
     private var waitingBinding: Binding?
@@ -99,7 +104,13 @@ actor CopilotSessionReader {
         self.limits = limits
     }
 
-    func read(surfaceIDs: Set<UUID>) async throws -> CopilotSnapshot {
+    func read(
+        surfaceIDs: Set<UUID>, tailWindowMiB: Int = CopilotTailWindow.defaultMiB
+    ) async throws -> CopilotSnapshot {
+        guard let window = CopilotTailWindow(mebibytes: tailWindowMiB) else {
+            throw ConfigurationError.invalidTailWindow
+        }
+        tailWindowBytes = window.bytes
         do {
             return try readBatch(surfaceIDs: surfaceIDs)
         } catch {
@@ -114,8 +125,8 @@ actor CopilotSessionReader {
         try Task.checkCancellation()
         let now = clock()
         if selectedSurfaces != surfaceIDs {
-            resetDiscovery()
             selectedSurfaces = surfaceIDs
+            resetDiscovery()
         }
         guard !surfaceIDs.isEmpty else {
             resetDiscovery()
@@ -160,6 +171,7 @@ actor CopilotSessionReader {
             let outcome = try readSession(entry, index: index, root: root, budget: &byteBudget, now: now)
             absorb(outcome, for: entry.record, batch: &batch)
         }
+        try appendEndedObservations(index, batch: &batch)
         try decorateObservations(index, batch: &batch)
         fenceObservations(index, batch: &batch)
         return try publish(index, batch: batch)
@@ -277,6 +289,11 @@ actor CopilotSessionReader {
                     recordCycleIssue(.unsupportedFormat)
                     continue
                 }
+                if verifier.lookup(record.ownerPID) == .dead {
+                    rememberEnded(Binding(record: record, stamp: stamp, filename: cached.filename))
+                    bindingsByID.removeValue(forKey: id)
+                    continue
+                }
                 cache(Binding(record: record, stamp: stamp, filename: cached.filename))
             } catch {
                 try Self.rethrowCancellation(error)
@@ -297,6 +314,9 @@ actor CopilotSessionReader {
                 waitingBinding = nil
             } else if record.schemaVersion != 1 {
                 recordCycleIssue(.unsupportedFormat)
+                waitingBinding = nil
+            } else if verifier.lookup(record.ownerPID) == .dead {
+                rememberEnded(Binding(record: record, stamp: stamp, filename: waiting.filename))
                 waitingBinding = nil
             } else {
                 let entry = Binding(record: record, stamp: stamp, filename: waiting.filename)
@@ -332,7 +352,13 @@ actor CopilotSessionReader {
                 let (record, stamp) = try readIdentity(at: index.descriptor, filename: name)
                 guard surfaceIDs.contains(record.surfaceID) else { continue }
                 guard record.schemaVersion == 1 else { recordCycleIssue(.unsupportedFormat); continue }
+                // Ended bindings can outlive their session directories. Only proven
+                // owner death releases capacity; missing files or unknown probes do not.
                 let entry = Binding(record: record, stamp: stamp, filename: name)
+                if verifier.lookup(record.ownerPID) == .dead {
+                    rememberEnded(entry)
+                    continue
+                }
                 if bindingsByID[record.sessionID] == nil {
                     guard admit(entry) else {
                         waitingBinding = entry
@@ -358,20 +384,19 @@ actor CopilotSessionReader {
         // Continuation is productive only until EOF, not merely while a limit
         // warning exists (e.g. a changing directory or too many visible sessions).
         pendingHistory = fastDiscoveryCycle && scanned > 0 && discovery?.finished == false
+            && waitingBinding == nil
         return discoveryIncomplete
     }
 
     private func publishEmptyCohort(
         _ index: BindingIndex, discoveryIncomplete: Bool, batch: Batch
     ) throws -> CopilotSnapshot {
-        var issues = batch.issues
-        if !discoveryIncomplete { issues.append(.noIdentityRecords) }
-        if (try CopilotFileAccess.statFile(index.descriptor)) != discoveryStamp {
-            cycleChanged = true
-            issues.append(.readLimitReached)
-        }
-        finishDiscoveryCycle()
-        return snapshot(now: batch.now, observations: [], issues: issues)
+        var batch = batch
+        try appendEndedObservations(index, batch: &batch)
+        if !discoveryIncomplete && batch.observations.isEmpty { batch.issues.append(.noIdentityRecords) }
+        try decorateObservations(index, batch: &batch)
+        fenceObservations(index, batch: &batch)
+        return try publish(index, batch: batch)
     }
 
     // Move the first cached identity to the end after each batch so a large
@@ -468,7 +493,15 @@ actor CopilotSessionReader {
             publishedCohort.remove(id)
             batch.issues.append(.identityChanged)
         case .contentFree(let liveness, let issues):
-            tails.removeValue(forKey: id)
+            if liveness == .dead, let entry = bindingsByID.removeValue(forKey: id) {
+                rememberEnded(entry)
+                bindingOrder.removeAll { $0 == id }
+                tails.removeValue(forKey: id)
+                sessionNames.forget(id)
+                publishedCohort.remove(id)
+                return
+            }
+            // Private replay evidence survives uncertainty; no cached state is published.
             sessionNames.forget(id)
             publishedCohort.insert(id)
             recordIssues(issues, for: id, batch: &batch)
@@ -479,6 +512,9 @@ actor CopilotSessionReader {
             batch.observations.append(observation(record, liveness: .unknown, now: batch.now))
         case .read(let read):
             tails[id] = read.tail
+            if read.tail.historyIncomplete {
+                batch.scopedIssues[id, default: []].append(.readLimitReached)
+            }
             if read.reachedBoundary { publishedCohort.insert(id) }
             batch.madeProgress = batch.madeProgress
                 || (read.advanced && (fastDiscoveryCycle || read.previouslyPublished))
@@ -498,6 +534,75 @@ actor CopilotSessionReader {
     private func recordIssues(_ issues: [CopilotIssue], for id: UUID, batch: inout Batch) {
         batch.scopedIssues[id, default: []] += issues.filter(\.isSessionScoped)
         batch.issues += issues.filter { !$0.isSessionScoped }
+    }
+
+    private func rememberEnded(_ entry: Binding) {
+        let surface = entry.record.surfaceID
+        if let previous = endedBindingsBySurface[surface] {
+            let newer = entry.record.recordedAt > previous.record.recordedAt
+                || (entry.record.recordedAt == previous.record.recordedAt
+                    && entry.record.sessionID.uuidString > previous.record.sessionID.uuidString)
+            guard newer || entry.record.sessionID == previous.record.sessionID else { return }
+        } else if endedBindingsBySurface.count >= limits.maximumBindings {
+            recordCycleIssue(.readLimitReached)
+            return
+        }
+        endedBindingsBySurface[surface] = entry
+    }
+
+    private func appendEndedObservations(_ index: BindingIndex, batch: inout Batch) throws {
+        for (surface, cached) in endedBindingsBySurface {
+            try Task.checkCancellation()
+            let entry: Binding
+            do {
+                let (record, stamp) = try readIdentity(at: index.descriptor, filename: cached.filename)
+                guard selectedSurfaces.contains(record.surfaceID),
+                      Self.sameBindingIdentity(cached.record, record) else {
+                    endedBindingsBySurface.removeValue(forKey: surface)
+                    batch.issues.append(.identityChanged)
+                    continue
+                }
+                guard bindingsByID[record.sessionID] == nil, verifier.lookup(record.ownerPID) == .dead else {
+                    endedBindingsBySurface.removeValue(forKey: surface)
+                    continue
+                }
+                entry = Binding(record: record, stamp: stamp, filename: cached.filename)
+                endedBindingsBySurface[surface] = entry
+            } catch {
+                try Self.rethrowCancellation(error)
+                endedBindingsBySurface.removeValue(forKey: surface)
+                batch.issues.append(Self.issue(error, missing: .identityChanged))
+                continue
+            }
+            let status: CopilotIdentityStatus
+            do {
+                status = try inspectEndedOwner(entry.record, index: index)
+            } catch {
+                try Self.rethrowCancellation(error)
+                recordIssues([Self.issue(error)], for: entry.record.sessionID, batch: &batch)
+                status = .unknown
+            }
+            recordIssues(status == .alive ? [.identityChanged] : Self.issues(status),
+                         for: entry.record.sessionID, batch: &batch)
+            batch.observations.append(observation(
+                entry.record, liveness: status == .alive ? .ambiguous : Self.liveness(status), now: batch.now
+            ))
+        }
+    }
+
+    private func inspectEndedOwner(_ record: CopilotIdentityRecord, index: BindingIndex) throws -> CopilotIdentityStatus {
+        do {
+            let root = try CopilotFileAccess.openDirectory(index.directories.sessions, owner: verifier.uid)
+            defer { close(root) }
+            let session = try CopilotFileAccess.openDirectory(
+                at: root, name: record.sessionID.uuidString.lowercased(), owner: verifier.uid
+            )
+            defer { close(session) }
+            return try verifier.inspect(record: record, sessionDirectory: session).status
+        } catch CopilotFileError.missing {
+            // Owner death was proved independently; a removed directory cannot revive it.
+            return .dead
+        }
     }
 
     // A missing or invalid location only hides the branch row; it never degrades the session.
@@ -624,13 +729,19 @@ actor CopilotSessionReader {
     private func fenceObservations(_ index: BindingIndex, batch: inout Batch) {
         var fenced: [CopilotSessionObservation] = []
         for observation in batch.observations {
-            guard let entry = bindingsByID[observation.sessionID],
+            let active = bindingsByID[observation.sessionID]
+            let ended = endedBindingsBySurface[observation.surfaceID].flatMap {
+                $0.record.sessionID == observation.sessionID ? $0 : nil
+            }
+            guard let entry = active ?? ended,
+                  active != nil || verifier.lookup(entry.record.ownerPID) == .dead,
                   (try? bindingRemainsValid(
                     entry.record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
                   )) == true else {
                 tails.removeValue(forKey: observation.sessionID)
                 bindingsByID.removeValue(forKey: observation.sessionID)
                 publishedCohort.remove(observation.sessionID)
+                if ended != nil { endedBindingsBySurface.removeValue(forKey: observation.surfaceID) }
                 batch.issues.append(.identityChanged)
                 continue
             }
@@ -644,25 +755,20 @@ actor CopilotSessionReader {
             resetDiscovery()
             return snapshot(now: batch.now, observations: [], issues: [.identityChanged])
         }
-        var issues = batch.issues
+        var issues = batch.issues + cycleIssues
         if (try CopilotFileAccess.statFile(index.descriptor)) != discoveryStamp {
             cycleChanged = true
             issues.append(.readLimitReached)
         }
         try Task.checkCancellation()
         pendingHistory = pendingHistory || (batch.madeProgress && batch.unreadHistory)
-            || (fastDiscoveryCycle && waitingBinding != nil && !publishedCohort.isEmpty)
-        // An overflow warning is not work. Finish this finite sweep before
-        // polling another one; stationary evicted prefixes must not spin fast.
-        if discovery?.finished == true && cohortFinished && cycleOverflowed { pendingHistory = false }
         finishDiscoveryCycle()
         // Each frozen prefix ends after `batch.now`, so it can hold events stamped later.
         // Stamp the snapshot after every read; otherwise those events fail validation.
         return snapshot(now: max(batch.now, clock()), observations: batch.observations, issues: issues)
     }
 
-    // Scheduling only: initial/changed index sweeps and retained-tail deltas.
-    // Rebuilding evicted prefixes of an unchanged overflow uses normal polling.
+    // Scheduling only: productive discovery and admitted-tail deltas, never capacity waits.
     func hasPendingHistory() -> Bool { pendingHistory }
 
     func retentionCounts() -> (bindings: Int, tails: Int, waiting: Int, published: Int) {
@@ -670,6 +776,7 @@ actor CopilotSessionReader {
     }
 
     func identityCacheCount() -> Int { identityCache.count }
+    func endedBindingCount() -> Int { endedBindingsBySurface.count }
 
     private func resetDiscovery() {
         discovery?.closeStream()
@@ -677,16 +784,20 @@ actor CopilotSessionReader {
         discoveryStamp = nil
         identityCache.removeAll()
         unseenIdentities.removeAll()
-        bindingsByID.removeAll()
-        bindingOrder.removeAll()
-        tails.removeAll()
-        sessionNames.removeAll()
+        // Discovery is not an ownership change. Current grants are revalidated
+        // before any retained session is read or published on the next pass.
+        bindingsByID = bindingsByID.filter { selectedSurfaces.contains($0.value.record.surfaceID) }
+        endedBindingsBySurface = endedBindingsBySurface.filter { selectedSurfaces.contains($0.key) }
+        bindingOrder.removeAll { bindingsByID[$0] == nil }
+        let retained = Set(bindingsByID.keys)
+        tails = tails.filter { retained.contains($0.key) }
+        sessionNames.retain(only: retained)
         pendingHistory = false
         cycleChanged = false
         cycleOverflowed = false
         cycleIssues.removeAll()
         waitingBinding = nil
-        publishedCohort.removeAll()
+        publishedCohort.formIntersection(retained)
         lastDiscoveryCycle = nil
         fastDiscoveryCycle = true
     }
@@ -706,14 +817,8 @@ actor CopilotSessionReader {
     private func admit(_ entry: Binding) -> Bool {
         if bindingsByID[entry.record.sessionID] == nil {
             if bindingOrder.count == limits.maximumSessions {
-                guard let index = bindingOrder.firstIndex(where: { publishedCohort.contains($0) }) else {
-                    return false
-                }
-                let retired = bindingOrder.remove(at: index)
-                bindingsByID.removeValue(forKey: retired)
-                tails.removeValue(forKey: retired)
-                publishedCohort.remove(retired)
                 cycleOverflowed = true
+                return false
             }
             bindingOrder.append(entry.record.sessionID)
         }
@@ -795,7 +900,7 @@ actor CopilotSessionReader {
                 throw CopilotFileError.changed
             }
             var issues = tail.reducer.issues
-            if !tail.partial.isEmpty || tail.droppingOversizedLine {
+            if !tail.partial.isEmpty || tail.droppingOversizedLine || tail.discardingInitialLine {
                 issues.append(.loadingHistory)
             } else if tail.reducer.canPublishProjection, tail.lastComplete != nil {
                 tail.lastCompleteAt = now
@@ -825,11 +930,30 @@ actor CopilotSessionReader {
             tail.lastComplete = saved
             tail.lastCompleteAt = savedAt
         }
+        if tail.target == nil && before.size - tail.offset > Int64(tailWindowBytes) {
+            tail.offset = before.size - Int64(tailWindowBytes)
+            tail.historyIncomplete = true
+            tail.discardingInitialLine = true
+            tail.partial.removeAll()
+            tail.droppingOversizedLine = false
+            tail.assetEnvelope = nil
+            tail.lastComplete = nil
+            tail.lastCompleteAt = nil
+            tail.reducer.omitUnseenHistory()
+            if tail.stamp == nil {
+                // Validate source identity without importing historical work or model state.
+                let header = try readEventBytes(file, offset: 0, count: 4096)
+                if let newline = header.firstIndex(of: 10) {
+                    tail.reducer.validateSourceHeader(Data(header[..<newline]))
+                } else {
+                    tail.reducer.markMalformed()
+                }
+            }
+        }
         var remaining = min(budget, limits.bytesPerSession)
         var lines = 0
         if tail.target == nil {
-            // Freeze a finite prefix. Appends cannot indefinitely extend the
-            // initial catch-up lease and prevent another binding's admission.
+            // Appends and preference edits cannot expand an admitted window.
             tail.target = before.size
             tail.targetAt = now
         }
@@ -850,6 +974,15 @@ actor CopilotSessionReader {
                     return base.distance(to: UnsafeRawPointer(match))
                 }
                 let end = newline ?? chunk.count
+                if tail.discardingInitialLine {
+                    consumed = end
+                    if newline != nil {
+                        tail.discardingInitialLine = false
+                        consumed += 1
+                        lines += 1
+                    }
+                    continue
+                }
                 if !tail.droppingOversizedLine {
                     if end - consumed <= limits.maximumLineBytes - tail.partial.count {
                         tail.partial.append(chunk[consumed..<end])
@@ -902,7 +1035,8 @@ actor CopilotSessionReader {
         var issues = tail.reducer.issues
         let reachedBoundary = tail.offset >= targetSize
         if reachedBoundary {
-            if tail.partial.isEmpty && !tail.droppingOversizedLine && tail.reducer.canPublishProjection {
+            if tail.partial.isEmpty && !tail.droppingOversizedLine && !tail.discardingInitialLine
+                && tail.reducer.canPublishProjection {
                 // A verified boundary can publish conservative semantic limits,
                 // but malformed data, invalid schemas and identity errors cannot.
                 tail.lastComplete = value
@@ -913,7 +1047,8 @@ actor CopilotSessionReader {
             tail.target = nil
             tail.targetAt = nil
         }
-        let incomplete = tail.offset < after.size || !tail.partial.isEmpty || tail.droppingOversizedLine
+        let incomplete = tail.offset < after.size || !tail.partial.isEmpty
+            || tail.droppingOversizedLine || tail.discardingInitialLine
         if incomplete {
             issues.append(.loadingHistory)
             if tail.offset < after.size { issues.append(.readLimitReached) }

@@ -249,7 +249,7 @@ nonisolated struct CopilotReaderTests {
     }
 
     @MainActor
-    @Test func unchangedOverflowCatchupPublishesFreshTreeOnNormalCadence() async throws {
+    @Test func unchangedOverflowKeepsAdmittedTreeFreshOnNormalCadence() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let other = try fixture.addSession(surface: fixture.surface)
@@ -262,9 +262,11 @@ nonisolated struct CopilotReaderTests {
             try Data().write(to: directory.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
             try bytes.write(to: directory.appendingPathComponent("events.jsonl"))
         }
-        let expected = Set(try directories.map { try #require(UUID(uuidString: $0.lastPathComponent)) })
         let clock = CopilotReaderTestClock()
         let reader = fixture.reader(limits: .init(maximumSessions: 1, linesPerSession: 1), clock: { clock.now() })
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        let expected = Set(initial.sessions.map(\.sessionID))
+        #expect(expected.count == 1)
         let topology = SidebarTopology(HierarchySnapshot(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
             workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
@@ -292,11 +294,11 @@ nonisolated struct CopilotReaderTests {
             }
             #expect(visible == expected)
         }
-        #expect(normalPolls >= rows.count)
+        #expect(normalPolls >= 2)
     }
 
     @Test(arguments: [1, 2, 64], [false, true])
-    func boundedCohortsPublishEveryMultibatchTranscriptAndStopFastRetry(capacity: Int, byteLimited: Bool) async throws {
+    func boundedCohortsFinishAdmittedTranscriptsWithoutEvictionOrFastRetry(capacity: Int, byteLimited: Bool) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         var directories = [fixture.session]
@@ -315,34 +317,35 @@ nonisolated struct CopilotReaderTests {
             linesPerSession: byteLimited ? 2048 : 1
         ))
         var published: Set<UUID> = []
+        var admitted: Set<UUID> = []
         var stopped = false
-        // One line (or roughly one line's bytes) per session per batch: enough
-        // for both finite cohorts and their discovery boundaries, not a timeout.
+        // A bounded number of line/byte batches, not a wall-clock timeout.
         let cohorts = (directories.count + capacity - 1) / capacity
         for _ in 0..<((cohorts + 1) * (rows.count + 3)) {
             let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
             #expect(snapshot.sessions.count <= capacity)
             #expect(snapshot.sessions.allSatisfy { expected.contains($0.sessionID) })
+            if admitted.isEmpty { admitted = Set(snapshot.sessions.map(\.sessionID)) }
+            #expect(Set(snapshot.sessions.map(\.sessionID)) == admitted)
             let counts = await reader.retentionCounts()
             #expect(counts.bindings <= capacity && counts.tails <= capacity && counts.waiting <= 1)
             published.formUnion(snapshot.sessions.filter { $0.state == .completed }.map(\.sessionID))
             let pending = await reader.hasPendingHistory()
-            if published == expected && !pending {
+            if published == admitted && !pending {
                 stopped = true
                 break
             }
         }
-        #expect(published == expected)
+        #expect(published == admitted && admitted.count == capacity)
         #expect(stopped)
-        // Revisit an entire unchanged sweep as well: evicted historical
-        // prefixes are not new work and must not restart the fast retry loop.
+        // Capacity waits never restart fast retries or replace the admitted cohort.
         for _ in 0..<((cohorts + 1) * (rows.count + 3)) {
             _ = try await reader.read(surfaceIDs: [fixture.surface])
             #expect(await reader.hasPendingHistory() == false)
         }
     }
 
-    @Test func growingFirstTranscriptCannotPinFiniteCatchupSlot() async throws {
+    @Test func growingFirstTranscriptCannotExtendOtherAdmittedCatchupWindow() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let other = try fixture.addSession(surface: fixture.surface)
@@ -355,7 +358,7 @@ nonisolated struct CopilotReaderTests {
             try bytes.write(to: directory.appendingPathComponent("events.jsonl"))
         }
         let clock = CopilotReaderTestClock()
-        let reader = fixture.reader(limits: .init(maximumSessions: 1, linesPerSession: 1), clock: { clock.now() })
+        let reader = fixture.reader(limits: .init(maximumSessions: 2, linesPerSession: 1), clock: { clock.now() })
         let capturedAt = clock.now()
         let initial = try await reader.read(surfaceIDs: [fixture.surface])
         let firstID = try #require(initial.sessions.first?.sessionID)
@@ -386,7 +389,7 @@ nonisolated struct CopilotReaderTests {
                 break
             }
             let counts = await reader.retentionCounts()
-            #expect(counts.tails <= 1 && counts.bindings <= 1 && counts.waiting <= 1)
+            #expect(counts.tails <= 2 && counts.bindings <= 2 && counts.waiting == 0)
         }
         #expect(sawCapturedBoundary)
         #expect(sawLater)
@@ -415,11 +418,11 @@ nonisolated struct CopilotReaderTests {
         let waitingID = try #require(all.first(where: { $0 != activeID }))
         _ = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(await reader.retentionCounts().waiting == 1)
-        var expected = all
+        var expected: Set<UUID> = [activeID]
         switch change {
         case "active-revoked", "waiting-revoked":
             let revoked = change == "active-revoked" ? activeID : waitingID
-            expected.remove(revoked)
+            if change == "active-revoked" { expected = [waitingID] }
             try fixture.writeRecord(.init(
                 sessionID: revoked, surfaceID: UUID(), launchWorkspaceID: fixture.workspace,
                 ownerPID: 7878, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
@@ -442,6 +445,7 @@ nonisolated struct CopilotReaderTests {
                 recordedAt: fixture.record.recordedAt
             ))
         case "grant-revoked":
+            expected = all
             let revoked = try await reader.read(surfaceIDs: [])
             #expect(revoked.sessions.isEmpty)
             #expect(await reader.retentionCounts().tails == 0)
@@ -456,7 +460,7 @@ nonisolated struct CopilotReaderTests {
                 _ = try await cancelled.value
                 Issue.record("Cancelled catchup published a snapshot")
             } catch is CancellationError {}
-            #expect(await reader.retentionCounts().tails == 0)
+            #expect(await reader.retentionCounts().tails == 1)
             #expect(await reader.retentionCounts().waiting == 0)
             #expect(await reader.hasPendingHistory() == false)
         }
@@ -467,9 +471,9 @@ nonisolated struct CopilotReaderTests {
             published.formUnion(snapshot.sessions.filter { $0.state == .completed }.map(\.sessionID))
             let counts = await reader.retentionCounts()
             #expect(counts.bindings <= 1 && counts.tails <= 1 && counts.waiting <= 1)
-            if published == expected { break }
+            if published.count == 1 { break }
         }
-        #expect(published == expected)
+        #expect(published.count == 1 && published.isSubset(of: expected))
         #expect(!audit.queriedPIDs.contains(7878))
     }
 
@@ -646,10 +650,12 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.hasPendingHistory() == false)
         let next = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(next.sessions.isEmpty)
-        #expect(next.issues == [.noIdentityRecords])
+        #expect(Set(next.issues) == [.identityChanged, .noIdentityRecords])
+        let settled = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(settled.sessions.isEmpty && settled.issues == [.noIdentityRecords])
     }
 
-    @Test func cappedVisibleDiscoveryRotatesAndNeverClaimsCompleteOrSpinsAtEOF() async throws {
+    @Test func cappedVisibleDiscoveryRetainsCohortWithoutClaimingCompleteOrSpinning() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         try fixture.writeEvents([copilotTestEvent("session.idle")])
@@ -672,7 +678,7 @@ nonisolated struct CopilotReaderTests {
             observed.formUnion(snapshot.sessions.map(\.sessionID))
             if await reader.hasPendingHistory() == false { reachedEOF = true }
         }
-        #expect(observed == expected)
+        #expect(observed.count == 2 && observed.isSubset(of: expected))
         #expect(reachedEOF)
     }
 
@@ -1200,12 +1206,15 @@ nonisolated struct CopilotReaderTests {
     func coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
-        try fixture.writeEvents([])
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])])
         let row = try copilotTestEvent("tool.execution_partial_result", data: [
             "toolCallId": "ignored-payload", "partialOutput": String(repeating: "x", count: 524_288)
         ]) + Data([10])
         let handle = try FileHandle(forWritingTo: fixture.events)
         do {
+            try handle.seekToEnd()
             for _ in 0..<460 { try handle.write(contentsOf: row) }
             try handle.close()
         } catch {
@@ -1228,33 +1237,478 @@ nonisolated struct CopilotReaderTests {
         let reader = fixture.reader()
         let clock = ContinuousClock()
         let start = clock.now
-        var batches = 1
-        var snapshot = try await reader.read(surfaceIDs: [fixture.surface])
-        var maximumBatch = start.duration(to: clock.now)
-        #expect(snapshot.issues.contains(.loadingHistory))
-        #expect(snapshot.sessions[0].children.isEmpty)
-        while !snapshot.isComplete && batches < 128 {
-            guard await reader.hasPendingHistory() else { break }
-            try await Task.sleep(for: .milliseconds(10))
-            let batchStart = clock.now
-            snapshot = try await reader.read(surfaceIDs: [fixture.surface])
-            maximumBatch = max(maximumBatch, batchStart.duration(to: clock.now))
-            batches += 1
-        }
+        let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
         let duration = start.duration(to: clock.now).components
         let seconds = Double(duration.seconds) + Double(duration.attoseconds) / 1e18
-        let maximumBatchMilliseconds = (
-            Double(maximumBatch.components.seconds) + Double(maximumBatch.components.attoseconds) / 1e18
-        ) * 1_000
         var usage = rusage()
         let measuredRSS = getrusage(RUSAGE_SELF, &usage) == 0 ? usage.ru_maxrss : -1
-        print("COPILOT_READER_BENCHMARK bytes=\(fileSize.int64Value) batches=\(batches) seconds=\(seconds) maximumBatchMs=\(maximumBatchMilliseconds) processPeakRSSBytes=\(measuredRSS) continuationDelayMs=10")
-        #expect(snapshot.isComplete)
+        let readBytes = await reader.eventReadBytes
+        print("COPILOT_READER_BENCHMARK bytes=\(fileSize.int64Value) readBytes=\(readBytes) batches=1 seconds=\(seconds) processPeakRSSBytes=\(measuredRSS)")
+        #expect(!snapshot.isComplete)
+        #expect(snapshot.sessions[0].sessionIssues == [.readLimitReached])
+        #expect(!snapshot.issues.contains(.loadingHistory))
         #expect(snapshot.sessions[0].state == .idle)
         #expect(snapshot.sessions[0].children.map(\.id) == ["parent", "child", "sibling"])
         #expect(snapshot.sessions[0].children.map(\.parentID) == [nil, "parent", nil])
         #expect(snapshot.sessions[0].children.map(\.state) == [.working, .cancelled, .failed])
         #expect(await reader.hasPendingHistory() == false)
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(await reader.eventReadBytes == readBytes)
+    }
+
+    @Test func largeLogColdStartReadsCurrentTailWithoutHistoricalCatchup() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])])
+        let file = try FileHandle(forWritingTo: fixture.events)
+        try file.seekToEnd()
+        try file.write(contentsOf: Data("""
+        {"id":"10000000-0000-0000-0000-000000000001","type":"assistant.message","data":{"content":"
+        """.utf8))
+        let opaque = Data(repeating: 120, count: 1_048_576)
+        for _ in 0..<320 { try file.write(contentsOf: opaque) }
+        try file.write(contentsOf: Data("\"}}\n".utf8))
+        try file.close()
+        try fixture.append(copilotTestEvent("assistant.turn_start", data: [
+            "turnId": "current", "model": "Synthetic model"
+        ]) + Data([10]))
+        let reader = fixture.reader()
+        let initial = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(initial.sessions.first?.state == .working)
+        #expect(initial.sessions.first?.model == "Synthetic model")
+        #expect(initial.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(!initial.issues.contains(.readLimitReached))
+        #expect(!initial.isComplete)
+        #expect(await reader.hasPendingHistory() == false)
+        let firstBytes = await reader.eventReadBytes
+        #expect(firstBytes <= 4_194_304 + 4096 + 256)
+        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(unchanged.sessions.first?.state == .working)
+        #expect(await reader.eventReadBytes == firstBytes)
+        let appended = try copilotTestEvent("assistant.turn_end", data: ["turnId": "current"]) + Data([10])
+        try fixture.append(appended)
+        let updated = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(updated.sessions.first?.state == .idle)
+        #expect(await reader.eventReadBytes - firstBytes <= appended.count + 512)
+        #expect(await reader.hasPendingHistory() == false)
+        let restarted = fixture.reader()
+        let afterRestart = try await restarted.read(surfaceIDs: [fixture.surface])
+        #expect(afterRestart.sessions.first?.state == .idle)
+        #expect(await restarted.eventReadBytes <= 4_194_304 + 4096 + 256)
+        #expect(await restarted.hasPendingHistory() == false)
+    }
+
+    @Test func largerTailWindowKeepsPerReadBudgetAndFinishesOnlyItsFrozenWindow() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 10 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "current"])
+        ])
+        let reader = fixture.reader()
+        let first = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 8)
+        #expect(first.sessions.first?.state == .unknown)
+        #expect(await reader.hasPendingHistory())
+        let firstBytes = await reader.eventReadBytes
+        #expect(firstBytes <= 4_194_304 + 4096 + 256)
+        // A preference change does not restart or expand an admitted window.
+        let second = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 64)
+        #expect(second.sessions.first?.state == .working)
+        #expect(second.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(await reader.eventReadBytes - firstBytes <= 4_194_304 + 512)
+        #expect(await reader.hasPendingHistory() == false)
+        let caughtUp = await reader.eventReadBytes
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes == caughtUp)
+    }
+
+    @Test func missingTailBoundaryRemainsUnknownUntilNewCompleteEvidence() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])])
+        try fixture.append(Data("""
+        {"id":"10000000-0000-0000-0000-000000000001","type":"assistant.message","data":{"content":"
+        """.utf8) + Data(repeating: 120, count: 2 * 1_048_576))
+        let reader = fixture.reader()
+        let partial = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(partial.sessions.first?.state == .unknown)
+        #expect(partial.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(await reader.hasPendingHistory() == false)
+        let bytes = await reader.eventReadBytes
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 4)
+        #expect(await reader.eventReadBytes == bytes)
+        try fixture.append(Data("\"}}\n".utf8) + copilotTestEvent("assistant.turn_start", data: [
+            "turnId": "new-evidence"
+        ]) + Data([10]))
+        let updated = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 4)
+        #expect(updated.sessions.first?.state == .working)
+        #expect(!updated.issues.contains(.malformedData))
+        #expect(updated.sessions.first?.sessionIssues == [.readLimitReached])
+    }
+
+    @Test(arguments: ["foreign", "unsupported"])
+    func boundedTailStillValidatesSourceHeader(_ failure: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: [
+                "sessionId": failure == "foreign" ? UUID().uuidString : fixture.sessionID.uuidString,
+                "version": failure == "unsupported" ? 0 : 1
+            ]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "untrusted"])
+        ])
+        let value = try await fixture.reader().read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(value.sessions.first?.state == .unknown)
+        #expect(value.issues.contains(failure == "foreign" ? .identityChanged : .unsupportedFormat))
+    }
+
+    @Test(arguments: [0, 65, Int.max])
+    func invalidTailWindowIsRejectedBeforeReading(_ value: Int) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let reader = fixture.reader()
+        await #expect(throws: CopilotSessionReader.ConfigurationError.self) {
+            _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: value)
+        }
+        #expect(await reader.eventReadBytes == 0)
+    }
+
+    @Test(arguments: ["surface-added", "bindings-unavailable", "marker-unavailable"])
+    func retainedSessionKeepsObservedReplayAcrossDiscoveryRecovery(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let start = try copilotTestEvent("assistant.turn_start", data: ["turnId": "observed"])
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            start, copilotTestEvent("assistant.turn_end", data: ["turnId": "observed"])
+        ])
+        let reader = fixture.reader()
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        for _ in 0..<3 {
+            try fixture.append(copilotTestEvent("assistant.message", data: [
+                "content": String(repeating: "x", count: 750_000)
+            ]) + Data([10]))
+            let advanced = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+            #expect(advanced.sessions.first?.state == .idle)
+        }
+        let observedBytes = await reader.eventReadBytes
+        var surfaces: Set<UUID> = [fixture.surface]
+        if change == "surface-added" {
+            surfaces.insert(UUID())
+        } else if change == "bindings-unavailable" {
+            let moved = fixture.root.appendingPathComponent("temporarily-unavailable-bindings")
+            try FileManager.default.moveItem(at: fixture.bindings, to: moved)
+            let unavailable = try await reader.read(surfaceIDs: surfaces, tailWindowMiB: 1)
+            #expect(unavailable.sessions.isEmpty && !unavailable.isComplete)
+            try FileManager.default.moveItem(at: moved, to: fixture.bindings)
+        } else {
+            let marker = fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock")
+            try FileManager.default.removeItem(at: marker)
+            let unavailable = try await reader.read(surfaceIDs: surfaces, tailWindowMiB: 1)
+            #expect(unavailable.sessions.first?.liveness == .unknown)
+            try Data().write(to: marker)
+        }
+        let recovered = try await reader.read(surfaceIDs: surfaces, tailWindowMiB: 1)
+        #expect(recovered.sessions.first?.state == .idle)
+        #expect(await reader.eventReadBytes == observedBytes)
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes == observedBytes)
+        try fixture.append(start + Data([10]))
+        let replayed = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(replayed.sessions.first?.state == .idle)
+    }
+
+    @Test func boundedTailRequiresAnExactStartHeaderBeforeSkippedHistory() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.resume"),
+            copilotTestEvent("session.start", data: ["sessionId": UUID().uuidString, "version": 1]),
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "untrusted"])
+        ])
+        let snapshot = try await fixture.reader().read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(snapshot.sessions.first?.state == .unknown)
+        #expect(snapshot.issues.contains(.unsupportedFormat))
+    }
+
+    @Test(arguments: [false, true])
+    func unseenAppendGapReseatsBoundedTailWithoutForgettingObservedReplay(hasRecentStart: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let oldStart = try copilotTestEvent("assistant.turn_start", data: ["turnId": "old"])
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            oldStart, copilotTestEvent("assistant.turn_end", data: ["turnId": "old"]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "unfinished-before-gap"])
+        ])
+        let reader = fixture.reader()
+        _ = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        let initialBytes = await reader.eventReadBytes
+        let gap = try copilotTestEvent("assistant.message", data: [
+            "content": String(repeating: "x", count: 2 * 1_048_576)
+        ]) + Data([10])
+        do {
+            let handle = try FileHandle(forWritingTo: fixture.session.appendingPathComponent("events.jsonl"))
+            defer { try? handle.close() }
+            try handle.seekToEnd()
+            for _ in 0..<(hasRecentStart ? 160 : 1) { try handle.write(contentsOf: gap) }
+        }
+        if hasRecentStart {
+            try fixture.append(copilotTestEvent("assistant.turn_start", data: ["turnId": "recent"]) + Data([10]))
+        }
+        let resumed = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(await reader.eventReadBytes - initialBytes <= 1_048_576 + 512)
+        #expect(resumed.sessions.first?.state == (hasRecentStart ? .working : .unknown))
+        #expect(resumed.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(await reader.hasPendingHistory() == false)
+        try fixture.append(oldStart + Data([10]))
+        if hasRecentStart {
+            try fixture.append(copilotTestEvent("assistant.turn_end", data: ["turnId": "recent"]) + Data([10]))
+        }
+        let afterReplay = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(afterReplay.sessions.first?.state == (hasRecentStart ? .idle : .unknown))
+    }
+
+    @Test func fullSelectedCohortNeverEvictsObservedReplayToAdmitAnotherSession() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let reader = fixture.reader(limits: .init(maximumSessions: 1))
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        let otherID = try #require(UUID(uuidString: other.lastPathComponent))
+        try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: other.appendingPathComponent("events.jsonl"))
+        for _ in 0..<4 {
+            let capped = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
+            #expect(capped.sessions.map(\.sessionID) == [fixture.sessionID])
+            #expect(!capped.isComplete && capped.issues.contains(.readLimitReached))
+            #expect(await reader.hasPendingHistory() == false)
+            #expect(await reader.retentionCounts().tails == 1)
+        }
+        let released = try await reader.read(surfaceIDs: [otherSurface])
+        #expect(released.sessions.map(\.sessionID) == [otherID])
+        #expect(released.sessions.first?.state == .idle)
+    }
+
+    @Test func skippedGapRetiresObservedInteractionAndRequestIdentities() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            interactionEvent("assistant.turn_start", turn: "0", interaction: "root-A"),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "0", interaction: "child-A"),
+            interactionEvent("permission.requested", data: ["requestId": "observed-request"])
+        ])
+        let reader = fixture.reader()
+        let initial = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(initial.sessions.first?.state == .blocked)
+        for event in try [
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            interactionEvent("assistant.turn_start", turn: "0", interaction: "root-B"),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "0", interaction: "child-B")
+        ] { try fixture.append(event + Data([10])) }
+        let recent = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(recent.sessions.first?.state == .working)
+        for event in try [
+            interactionEvent("assistant.turn_start", turn: "unseen", interaction: "root-A"),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "unseen", interaction: "child-A"),
+            interactionEvent("permission.requested", data: ["requestId": "observed-request"]),
+            interactionEvent("assistant.turn_end", turn: "0", interaction: "root-B"),
+            interactionEvent("assistant.turn_end", owner: "child", turn: "0", interaction: "child-B")
+        ] { try fixture.append(event + Data([10])) }
+        let completed = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        let session = try #require(completed.sessions.first)
+        #expect(session.state == .idle)
+        #expect(session.children.first?.state == .idle)
+        #expect(session.attention?.contains { $0.kind.isBlocking } == false)
+    }
+
+    @MainActor
+    @Test(arguments: [false, true])
+    func historicalDeadBindingsCannotOccupyLiveCapacity(missingDirectories: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        let ids = [fixture.sessionID] + (0..<130).map { _ in UUID() }
+        for (index, id) in ids.enumerated() {
+            try fixture.writeRecord(.init(
+                sessionID: id, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
+                ownerPID: 7777, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+                recordedAt: fixture.record.recordedAt.addingTimeInterval(Double(index))
+            ))
+            if !missingDirectories {
+                try FileManager.default.createDirectory(
+                    at: fixture.sessions.appendingPathComponent(id.uuidString.lowercased()),
+                    withIntermediateDirectories: true
+                )
+            }
+        }
+        let reader = fixture.reader(limits: .init(maximumSessions: 2, maximumBindings: 16))
+        for _ in 0..<3 { _ = try await reader.read(surfaceIDs: [fixture.surface]) }
+        let live = try fixture.addSession(surface: fixture.surface)
+        let liveID = try #require(UUID(uuidString: live.lastPathComponent))
+        try Data().write(to: live.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: live.appendingPathComponent("events.jsonl"))
+        var admitted = false
+        var latest: CopilotSnapshot?
+        for _ in 0..<20 {
+            let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
+            latest = snapshot
+            admitted = admitted || snapshot.sessions.contains { $0.sessionID == liveID && $0.state == .idle }
+            #expect(await reader.retentionCounts().bindings <= 2)
+        }
+        #expect(admitted)
+        #expect(await reader.retentionCounts().bindings == 1)
+        #expect(await reader.retentionCounts().tails == 1)
+        #expect(await reader.hasPendingHistory() == false)
+        let snapshot = try #require(latest)
+        let ended = try #require(snapshot.sessions.first { $0.liveness == .dead })
+        #expect(ended.sessionID == ids.last)
+        #expect(ended.children.isEmpty && ended.state == .unknown)
+        #expect(snapshot.sessions.count == 2)
+        let topology = SidebarTopology(HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [
+                .init(id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                      isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                      rootPath: .unavailable, projectRootPath: .unavailable, surfaces: .available([
+                        .init(id: fixture.surface, title: "Synthetic", kind: .terminal, isFocused: true,
+                              isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                      ]))
+            ], windowID: UUID()
+        ))
+        let tree = SidebarCopilotTree.project(snapshot, onto: topology, now: snapshot.generatedAt)
+        let shown = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: true,
+                                       now: snapshot.generatedAt).tree
+        let hidden = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: false,
+                                        now: snapshot.generatedAt).tree
+        #expect(Set(shown.sessions.map(\.id)) == [ended.sessionID, liveID])
+        #expect(hidden.sessions.map(\.id) == [liveID])
+        #expect(SidebarPresentation.process(.dead).title == "Process ended")
+    }
+
+    @Test(arguments: [false, true])
+    func verifiedOwnerDeathReleasesSlotButUnknownOwnerDoesNot(missingDirectory: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let clock = CopilotReaderTestClock()
+        let owner = fixture.process
+        let successor = CopilotProcessIdentity(pid: 8888, parentPID: 1, uid: getuid(), startSeconds: 1, startMicroseconds: 0)
+        let reader = fixture.reader(limits: .init(maximumSessions: 1), lookup: { pid in
+            if pid == successor.pid { return .found(successor) }
+            guard pid == owner.pid else { return .dead }
+            switch clock.now().timeIntervalSince1970 {
+            case ..<2001: return .found(owner)
+            case ..<2002: return .unavailable
+            default: return .dead
+            }
+        })
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        let live = try fixture.addSession(surface: fixture.surface)
+        let liveID = try #require(UUID(uuidString: live.lastPathComponent))
+        try fixture.writeRecord(.init(
+            sessionID: liveID, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
+            ownerPID: successor.pid, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+            recordedAt: fixture.record.recordedAt
+        ))
+        try Data().write(to: live.appendingPathComponent("inuse.\(successor.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: live.appendingPathComponent("events.jsonl"))
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(await reader.retentionCounts().waiting == 1)
+        clock.advance(by: 1)
+        if missingDirectory { try FileManager.default.removeItem(at: fixture.session) }
+        let uncertain = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(uncertain.sessions.map(\.sessionID) == [fixture.sessionID])
+        #expect(await reader.retentionCounts().tails == 1)
+        clock.advance(by: 1)
+        let released = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(Set(released.sessions.map(\.sessionID)) == [fixture.sessionID, liveID])
+        #expect(released.sessions.first { $0.sessionID == liveID }?.state == .idle)
+        #expect(released.sessions.first { $0.sessionID == fixture.sessionID }?.liveness == .dead)
+        #expect(await reader.retentionCounts().tails == 1)
+    }
+
+    @Test(arguments: ["removed", "rerouted", "resumed", "uncertain"])
+    func endedRowsRevalidateTheirExactBindingAndOwner(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let clock = CopilotReaderTestClock()
+        let successor = CopilotProcessIdentity(pid: 8888, parentPID: 1, uid: getuid(), startSeconds: 1, startMicroseconds: 0)
+        let reader = fixture.reader(lookup: { pid in
+            if pid == successor.pid { return .found(successor) }
+            return clock.now().timeIntervalSince1970 < 2001 ? .dead : .unavailable
+        })
+        let first = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(first.sessions.first?.liveness == .dead)
+        #expect(await reader.eventReadBytes == 0)
+        switch change {
+        case "removed":
+            try FileManager.default.removeItem(at: fixture.bindings.appendingPathComponent(
+                fixture.sessionID.uuidString.lowercased() + ".json"
+            ))
+        case "uncertain":
+            clock.advance(by: 1)
+        default:
+            try fixture.writeRecord(.init(
+                sessionID: fixture.sessionID, surfaceID: change == "rerouted" ? UUID() : fixture.surface,
+                launchWorkspaceID: fixture.workspace,
+                ownerPID: change == "resumed" ? successor.pid : fixture.process.pid,
+                ownerStartSeconds: 1, ownerStartMicroseconds: 0, recordedAt: fixture.record.recordedAt
+            ), atomic: true)
+            if change == "resumed" {
+                try Data().write(to: fixture.session.appendingPathComponent("inuse.\(successor.pid).lock"))
+                try fixture.writeEvents([copilotTestEvent("session.idle")])
+            }
+        }
+        let next = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(!next.sessions.contains { $0.liveness == .dead })
+        #expect(await reader.endedBindingCount() == 0)
+        if change == "resumed" {
+            #expect(next.sessions.first?.liveness == .alive)
+            #expect(next.sessions.first?.state == .idle)
+        } else if change == "uncertain" {
+            #expect(next.sessions.first?.liveness == .ambiguous)
+            #expect(next.sessions.first?.sessionIssues?.contains(.ambiguousIdentity) == true)
+        } else {
+            #expect(next.sessions.isEmpty)
+        }
+    }
+
+    @Test func endedObservationCacheIsBoundedSeparatelyFromActiveTails() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        var surfaces: Set<UUID> = [fixture.surface]
+        for _ in 0..<8 {
+            let surface = UUID()
+            surfaces.insert(surface)
+            _ = try fixture.addSession(surface: surface)
+        }
+        let reader = fixture.reader(limits: .init(maximumSessions: 1, maximumBindings: 2), lookup: { _ in .dead })
+        for _ in 0..<10 {
+            let snapshot = try await reader.read(surfaceIDs: surfaces)
+            #expect(snapshot.sessions.count <= 2)
+            #expect(snapshot.sessions.allSatisfy { $0.liveness == .dead })
+            #expect(!snapshot.isComplete && snapshot.issues.contains(.readLimitReached))
+            #expect(await reader.endedBindingCount() <= 2)
+            #expect(await reader.retentionCounts().bindings == 0)
+            #expect(await reader.retentionCounts().tails == 0)
+            #expect(await reader.eventReadBytes == 0)
+        }
+        let revoked = try await reader.read(surfaceIDs: [])
+        #expect(revoked.sessions.isEmpty && revoked.isComplete)
+        #expect(await reader.endedBindingCount() == 0)
     }
 
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {

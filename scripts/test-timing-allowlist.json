@@ -96,9 +96,6 @@
       "let coldElapsed = coldStart.duration(to: measured.now)": 1,
       "let updateElapsed = updateStart.duration(to: measured.now)": 1,
       "let failureElapsed = failureStart.duration(to: measured.now)": 1,
-      "var maximumBatch = start.duration(to: clock.now)": 1,
-      "try await Task.sleep(for: .milliseconds(10))": 1,
-      "maximumBatch = max(maximumBatch, batchStart.duration(to: clock.now))": 1,
       "let duration = start.duration(to: clock.now).components": 1
     }
   },

@@ -70,8 +70,8 @@ nonisolated struct CopilotIdentityTests {
         defer { fixture.remove() }
         try fixture.writeEvents([copilotTestEvent("session.idle")])
         let dead = try await fixture.reader(lookup: { _ in .dead }).read(surfaceIDs: [fixture.surface])
-        #expect(dead.sessions[0].liveness == .dead)
-        #expect(dead.sessions[0].state == .unknown)
+        let ended = try #require(dead.sessions.first)
+        #expect(ended.liveness == .dead && ended.state == .unknown)
         let reused = CopilotProcessIdentity(
             pid: fixture.process.pid, parentPID: 1, uid: getuid(), startSeconds: 2, startMicroseconds: 0
         )
@@ -100,8 +100,9 @@ nonisolated struct CopilotIdentityTests {
         let stale = try await fixture.reader(lookup: { pid in
             pid == owner.pid ? .dead : .found(other)
         }).read(surfaceIDs: [fixture.surface])
-        #expect(stale.sessions[0].sessionIssues?.contains(.ambiguousIdentity) == true)
-        #expect(stale.sessions[0].liveness == .ambiguous)
+        let ambiguous = try #require(stale.sessions.first)
+        #expect(ambiguous.sessionIssues?.contains(.ambiguousIdentity) == true)
+        #expect(ambiguous.liveness == .ambiguous && ambiguous.state == .unknown)
     }
 
     @Test func processGenerationChangesDuringReadDiscardTheCandidate() async throws {

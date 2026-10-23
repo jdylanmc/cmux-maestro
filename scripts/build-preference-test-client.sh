@@ -9,6 +9,7 @@ mkdir -p "$OUTPUT"
 xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     -default-isolation MainActor -parse-as-library -enable-bare-slash-regex \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotModels.swift" \
+    "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotTailWindow.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotWorktree.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotEventReducer.swift" \

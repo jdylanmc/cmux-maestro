@@ -8,6 +8,51 @@ Rejected: silent repair, overwrite on corruption, eviction of exact evidence at 
 
 Consequence: users may see more history until reset. A false positive in the 128-KiB spill filter rejects a fresh event.
 
+## Amendment (2026-10-22): owner-approved bounded cold-start tails
+
+The sidebar does not reconstruct an entire large event log on cold start.
+The human-selected tail window defaults to 4 MiB and is bounded to 1–64 MiB.
+This intentionally changes the previous cold-start reconstruction contract:
+older, unobserved history is omitted, not admitted as complete or lazily backfilled.
+Its exact session carries `readLimitReached`; healthy siblings are not thereby
+incomplete. Recent events must establish current state, otherwise it is unknown.
+
+The existing 8 MiB aggregate and 4 MiB per-session payload budgets remain.
+Larger windows initialize across multiple polls, with a fixed captured end.
+Changing the setting affects subsequent new, replaced or oversized-gap reads,
+never expands or rewinds an already admitted window. If no window is in progress
+and unseen appends exceed the selected window, resume at the newest bounded tail.
+Skipped gaps invalidate projected state, not already observed replay evidence.
+Unchanged files require no event-byte reads.
+
+Observed replay evidence is still retained under the existing bounded guards;
+this is not permission to clear a live replay ledger or evict exact evidence.
+The unseen prefix has no replay or completeness guarantee. Header identity,
+process, binding and file-generation checks remain conservative. A separate
+bounded header check does not import historical state or model information.
+It must find an exact-session, supported `session.start` as the first event.
+
+Unrelated topology changes, discovery restarts and temporary verifier uncertainty
+retain the still-selected cohort's private replay guards. They never grant cached
+publication: routing, process and file evidence must pass current validation.
+Selection revocation and actual binding or file-generation changes remain
+invalidation boundaries. At the 64-session admission limit, keep admitted live or
+uncertain owners; verified-dead binding owners release their slots. Check owner
+death before admitting historical bindings, including bindings whose session
+directories no longer exist. Additional sessions wait with an explicit limit
+until owner death or a selection/binding change frees capacity. Missing files,
+permission failures and unknown probes alone do not release observed replay
+evidence. Do not rotate live/uncertain tails or fast-retry a capacity wait.
+
+Ended presentation is separate from active-tail capacity. Retain the newest
+verified-dead owner's binding per selected surface, at most `maximumBindings`
+records, without transcript state or replay guards. Binding time orders only
+these already-proven ended candidates; it never proves ownership or death.
+Revalidate routing and owner evidence before publishing content-free ended rows.
+Conflicting live markers remain ambiguous. Overflow remains explicit. This
+preserves ended-agent visibility without letting historical bindings pin live
+admission.
+
 ## Clarification (2026-10-21, #269): isolate child-local doubt
 
 An invalid child field or disagreement between its legacy and observed

@@ -290,6 +290,19 @@ Notable changes are recorded using Keep a Changelog categories.
   hierarchy and icons; process-only updates rematch processes without rebuilding
   those overlays. Secure reads and clock-boundary checks remain in place (#334).
 
+- Large session logs start from a bounded recent tail rather than replaying all
+  history. Sidebar settings offers **Event tail (MiB)**, default 4, range 1–64.
+  New or replaced logs and large gaps after paused polling use the current value
+  without restart; existing windows never backfill on a setting change. Omitted
+  child history stays incomplete, and unproven current state stays unknown.
+  Still-selected sessions keep replay protection across unrelated tab changes
+  and temporary reader outages. At the 64-session limit, live or uncertain owners
+  keep their slots; verified-dead owners release them, even when their session
+  directories are missing. Historical dead bindings cannot block live admission.
+  Missing files alone never evict an uncertain owner's replay evidence.
+  A separate bounded ended-row cache preserves **Show ended agents** and
+  **Process ended** without keeping transcript tails for dead owners.
+
 - An unavailable session no longer hides healthy agents' current states, names,
   pets or child work. Unavailable state and verifier-unknown observations stay
   scoped to their exact session; retained status remains explicitly unknown

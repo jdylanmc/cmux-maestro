@@ -52,6 +52,36 @@ struct SidebarPreferencesTests {
         }
     }
 
+    @Test func eventTailWindowDefaultsPersistsAndRejectsInvalidValues() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            @MainActor func make() -> SidebarPreferences {
+                SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
+            }
+            let preferences = make()
+            #expect(preferences.eventTailWindowMiB == 4)
+            for value in [1, 64, 8] {
+                preferences.setEventTailWindowMiB(value)
+                #expect(make().eventTailWindowMiB == value)
+                #expect(preferences.eventTailWindowNotice == nil)
+            }
+            for invalid in [0, 65, Int.max] {
+                preferences.setEventTailWindowMiB(invalid)
+                #expect(preferences.eventTailWindowMiB == 8)
+                #expect(make().eventTailWindowMiB == 8)
+                #expect(preferences.eventTailWindowNotice != nil)
+            }
+            let invalidStored: [Any] = [0, 65, true, 4.5, "invalid"]
+            for invalid in invalidStored {
+                defaults.set(invalid, forKey: "sidebar.eventTailWindowMiB")
+                let restored = make()
+                #expect(restored.eventTailWindowMiB == 4)
+                #expect(restored.eventTailWindowNotice != nil)
+            }
+            preferences.setEventTailWindowMiB(4)
+            #expect(make().eventTailWindowMiB == 4 && make().eventTailWindowNotice == nil)
+        }
+    }
+
     @Test
     func activeWindowFooterHeightPersistsAndResetsToAutomatic() throws {
         try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in

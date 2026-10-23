@@ -314,6 +314,33 @@ independent terminal. This literal #10 integration does not complete broader
 
 ### Bounded retention and discovery
 
+- Cold start and file-generation replacement start at the newest configured
+  window, not byte zero of an unbounded log. **Event tail (MiB)** in sidebar
+  settings persists in the existing human `UserDefaults` preferences: default 4,
+  integers 1–64. Invalid stored input retains a visible validation notice and
+  the default; an invalid edit is rejected without overwriting the saved value.
+  Each poll obtains the current preference, without restarting the reader.
+  An already admitted window never rewinds or backfills on growth or shrinkage.
+  New/replaced tails and subsequent oversized unseen gaps use the changed value.
+  When no window is in progress and unseen appended bytes exceed this bound,
+  resume at the newest bounded tail instead of replaying the whole gap. Clear
+  unproven projected state while retaining observed replay guards and faults.
+- Omitted history remains session-scoped `readLimitReached`, even after reaching
+  current EOF. No automatic backfill runs. Recent explicit lifecycle evidence
+  establishes state; missing evidence stays unknown, with incomplete child
+  history/counts. The initial cut line is discarded through its next newline,
+  including when that newline arrives later. A separate first-line source check
+  reads at most 4 KiB and requires an exact-session `session.start` as the first
+  event; a malformed, foreign, unsupported or unverifiable header
+  cannot produce current state. It does not seed model or work from the prefix.
+  Process, binding, descriptor/path and rewrite/append witnesses remain checked.
+  Payload reads keep the 8 MiB aggregate, 4 MiB per-session and 2,048-line limits;
+  larger windows initialize over multiple polls. Fixed header and 128-byte
+  prefix/anchor witnesses are separate bounded verification overhead.
+- Current EOF revalidation reads zero event bytes. Appends consume only new
+  bytes plus fixed witnesses. Already observed replay evidence is retained;
+  the unseen prefix is explicitly outside the cold-start replay guarantee.
+  See the owner-approved bounded-tail amendment in ADR 0010.
 - 256-row reducer budget retires oldest terminal **leaf**, not active,
   idle, blocked, or unknown work. Current-cycle error/abort outcomes protect their
   owners. Retained descendants, pending requests, and
@@ -354,13 +381,29 @@ independent terminal. This literal #10 integration does not complete broader
   batches (up to 1,024 directory entries per batch, plus bounded revalidation of
   at most 64 cached identities and one staged granted binding). Historical locks
   and off-surface records cannot pin discovery to a prefix. Retain at most 64 transcript
-  tails. Unfinished initial tail keeps its slot until its finite
-  captured byte boundary is verified and published (or explicitly unavailable).
-  Discovery stages at most one next binding while it waits. Finished slots then
-  rotate, keeping explicit limit warning when granted sessions exceed capacity.
+  tails. Admitted live or uncertain owners keep their slots after publication.
+  Current routing revalidation releases a verified-dead owner's slot. Discovery
+  checks owner death before admission, without requiring a session directory;
+  historical dead bindings therefore never fill active capacity. Missing files
+  or unavailable probes alone cannot establish owner death. Discovery
+  stages at most one next binding while capacity is full, with an explicit
+  limit warning. Additional sessions remain unavailable until an admitted owner
+  is verified dead or a selection/binding change frees capacity. Live/uncertain
+  replay evidence is never evicted for them.
+  Content-free ended observations use a separate cache: newest proven-dead
+  binding owner per selected surface, at most `maximumBindings` entries. Each
+  emitted row revalidates its binding and owner; missing session directories do
+  not suppress proven death, while conflicting live markers remain ambiguous.
+  This cache holds no transcript/replay state and cannot consume active slots.
+  Binding timestamps select among already verified ended candidates only.
+  It preserves **Show ended agents**, **Process ended**, Beats ended styling
+  and dead-status retention. Cache overflow reports `readLimitReached`.
   Only full, unchanged, non-overflowed cycle without errors can be complete.
   Check cached bindings before process/transcript access and publication.
-  Replaced directories, revoked surfaces, and cancellation discard cached state.
+  Discovery restarts, cancellation and unrelated topology changes retain private
+  tails for still-selected bindings, never cached publication. Revoked bindings
+  or selections discard their exact tails. Directory replacement requires current
+  routing revalidation before any process/transcript access or publication.
   EOF, errors, cancellation, and destruction close the directory stream.
 - Decoded routing metadata has a separate cache of at most 1,024 records
   (`maximumBindings`), including off-surface records already read by discovery.
@@ -393,13 +436,14 @@ independent terminal. This literal #10 integration does not complete broader
   `identityChanged` and is incomplete. Later stable read under new grant
   reconstructs that session, including when both surfaces were already granted.
   By contrast, unstable process/marker evidence with unchanged valid routing
-  binding still produces content-free ambiguous row. Timestamp-only hook
+  binding still produces content-free ambiguous row while retaining private replay
+  guards for a later fully revalidated read. Timestamp-only hook
   refreshes preserve verified row but require stable discovery cycle
   before completeness. Reader tests cover all three distinct contracts and use
   `#require` before unwrapping expected observations.
-- `hasPendingHistory` accelerates initial/changed-index catch-up and retained-tail
-  deltas. After overflow sweep finishes, revisiting evicted prefixes of the
-  unchanged index uses normal polling, not endless fast rebuild loop.
+- `hasPendingHistory` accelerates productive initial/changed-index discovery and
+  admitted-tail deltas. Waiting for session capacity uses normal polling,
+  not an endless fast retry loop.
   EOF, torn final lines, and warnings alone never request fast retry. No sandbox
   entitlement or ancestor traversal permission is broadened.
 

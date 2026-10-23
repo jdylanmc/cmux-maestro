@@ -402,11 +402,12 @@ struct CopilotAssetEnvelopeTests {
         }
     }
 
-    @Test func defaultBudgetsRecoverLargeSyntheticHistoryThroughSidebar() async throws {
+    @Test func defaultBudgetsKeepOmittedHistoryUnknownThroughSidebar() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let start = UUID(), tool = UUID(), completion = UUID()
         let rows = try [
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
             interactionEvent("assistant.turn_start", id: start, turn: "0", interaction: "current"),
             interactionEvent("tool.execution_start", id: tool, parent: start, data: [
                 "toolCallId": "tool", "toolName": "view",
@@ -421,7 +422,7 @@ struct CopilotAssetEnvelopeTests {
         let limits = CopilotReaderLimits()
         #expect(limits.maximumLineBytes == 1_048_576 && limits.bytesPerSession == 4_194_304)
         let size = rows.reduce(0) { $0 + $1.count + 1 }
-        let expectedReads = (size + limits.bytesPerSession - 1) / limits.bytesPerSession
+        let expectedReads = 1
         var reads = 0
         var snapshot: CopilotSnapshot?
         let started = ContinuousClock.now
@@ -432,15 +433,18 @@ struct CopilotAssetEnvelopeTests {
             maximumBatch = max(maximumBatch, batchStart.duration(to: .now))
             reads += 1
         } while await reader.hasPendingHistory() && reads < expectedReads + 1
-        let working = try #require(snapshot)
+        let bounded = try #require(snapshot)
         #expect(reads == expectedReads)
-        #expect(working.isComplete && working.issues.isEmpty)
-        #expect(working.sessions.first?.state == .working)
-        #expect(tree(working, fixture: fixture).sessions.first?.state == .working)
+        #expect(await reader.eventReadBytes <= limits.bytesPerSession + 4096 + 256)
+        #expect(!bounded.isComplete && bounded.issues.isEmpty)
+        #expect(bounded.sessions.first?.sessionIssues == [.readLimitReached])
+        #expect(bounded.sessions.first?.state == .unknown)
+        #expect(tree(bounded, fixture: fixture).sessions.first?.state == .unknown)
         try fixture.append(try interactionEvent("assistant.turn_end", parent: completion, turn: "0") + Data([10]))
         let idle = try await settled(reader, surface: fixture.surface)
         let projected = tree(idle, fixture: fixture)
-        #expect(idle.isComplete && projected.availability == .ready)
+        #expect(!idle.isComplete && projected.availability == .partial)
+        #expect(projected.sessions.first?.childrenComplete == false)
         #expect(projected.sessions.map(\.id) == [fixture.sessionID])
         #expect(projected.sessions.first?.surfaceID == fixture.surface)
         #expect(projected.sessions.first?.workspaceID == fixture.workspace)

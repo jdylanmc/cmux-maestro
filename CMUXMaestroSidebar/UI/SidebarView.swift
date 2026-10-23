@@ -1159,6 +1159,20 @@ struct SidebarView: View {
             }
             Divider()
             Text("Completed work history").font(.headline).id("sidebar-settings-history")
+            Stepper(value: Binding(
+                get: { preferences.eventTailWindowMiB },
+                set: { preferences.setEventTailWindowMiB($0) }
+            ), in: CopilotTailWindow.range) {
+                HStack {
+                    Text(String(localized: "reader.tail.size", defaultValue: "Event tail (MiB)"))
+                    Spacer()
+                    Text(preferences.eventTailWindowMiB, format: .number).monospacedDigit()
+                }
+            }
+            .accessibilityIdentifier("sidebar-event-tail-window")
+            if let notice = preferences.eventTailWindowNotice {
+                Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
+            }
             Toggle("Show ended agents", isOn: $preferences.showEnded)
                 .help("Show ended observations still retained by history. Never restarts an agent or opens a terminal.")
             Text("Ended agents leave the active outline automatically. Failures stay until dismissed with ×; blockers and live descendants remain visible.")

@@ -462,8 +462,46 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
     }
 
+    mutating func validateSourceHeader(_ line: Data) {
+        do {
+            let event = try JSONDecoder().decode(CopilotEventProjection.self, from: line)
+            guard event.kind == .sessionStart else {
+                unsupportedSession = true
+                addIssue(.unsupportedFormat)
+                addIssue(.ambiguousIdentity)
+                return
+            }
+            _ = admitSource(event)
+        } catch {
+            addIssue(.malformedData)
+        }
+    }
+
     mutating func markMalformed() { addIssue(.malformedData) }
     mutating func markLimited() { addIssue(.readLimitReached) }
+
+    /// A skipped gap invalidates projected state, never observed replay or source failures.
+    mutating func omitUnseenHistory() {
+        retireInteractions()
+        retireRequests()
+        rootState = .unknown
+        rootModel = nil
+        rootStartedAt = nil
+        resumedAt = nil
+        rootTurnID = nil
+        rootInteractionID = nil
+        work.removeAll()
+        order.removeAll()
+        toolOwners.removeAll()
+        toolOrder.removeAll()
+        agentForTool.removeAll()
+        pending.removeAll()
+        turns.removeAll()
+        outcomes.removeAll()
+        primaryCompletion = nil
+        lastToolActivity.removeAll()
+        ended = false
+    }
 
     var retentionCounts: (
         work: Int, owners: Int, agents: Int, requests: Int, tombstones: Int, replayWords: Int,
