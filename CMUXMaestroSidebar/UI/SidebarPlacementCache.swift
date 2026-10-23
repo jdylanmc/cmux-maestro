@@ -13,6 +13,46 @@ final class SidebarPlacementCache {
     struct Snapshot {
         var byWorkspace: [UUID: [Placement]] = [:]
         var displaced: Set<UUID> = []
+        fileprivate var surfaceOwners: [Surface: [UUID]] = [:]
+        fileprivate var exactOwners: [Identity: [UUID]] = [:]
+        fileprivate var identityCounts: [UUID: Int] = [:]
+        fileprivate var sessionIndices: [Identity: [Int]] = [:]
+
+        func ownedSessionIndices(managed: [SidebarOrchestrationNode]) -> [UUID: [Int]] {
+            let allowed = Set(managed.map(\.id))
+            var result: [UUID: [Int]] = [:]
+            for (identity, candidates) in exactOwners where identityCounts[identity.session] == 1 {
+                let exact = candidates.filter { allowed.contains($0) }
+                guard exact.count == 1, let owner = exact.first, !displaced.contains(owner) else { continue }
+                result[owner, default: []] += sessionIndices[identity] ?? []
+            }
+            return result
+        }
+
+        /// Sub-groups restrict owners, not the evidence used to attest a unique session.
+        func materialize(
+            _ sessions: [SidebarCopilotSession], managed: [SidebarOrchestrationNode]
+        ) -> [SidebarSessionPlacement] {
+            let allowed = Set(managed.map(\.id))
+            return sessions.map { session in
+                let surface = Surface(workspace: session.workspaceID, surface: session.surfaceID)
+                let exact = (exactOwners[Identity(surface: surface, session: session.id)] ?? []).filter { allowed.contains($0) }
+                let owner = surfaceOwners[surface]?.first { allowed.contains($0) }
+                let content = exact.count == 1 && identityCounts[session.id] == 1
+                    && !displaced.contains(exact[0]) ? exact[0] : nil
+                return SidebarSessionPlacement(session: session, managedNodeID: owner, contentOwnerID: content)
+            }
+        }
+    }
+
+    fileprivate struct Surface: Hashable {
+        let workspace: UUID
+        let surface: UUID
+    }
+
+    fileprivate struct Identity: Hashable {
+        let surface: Surface
+        let session: UUID
     }
 
     private struct Session: Equatable {
@@ -64,6 +104,7 @@ final class SidebarPlacementCache {
         computationCount += 1
         var result = Snapshot()
         let identityCounts = input.sessions.reduce(into: [UUID: Int]()) { $0[$1.id, default: 0] += 1 }
+        result.identityCounts = identityCounts
         if input.current {
             for node in input.managed {
                 guard let ownSession = node.session else { continue }
@@ -80,8 +121,20 @@ final class SidebarPlacementCache {
             }
         }
         let owners = input.managed.filter { !result.displaced.contains($0.id) }
+        for node in input.managed {
+            let surface = Surface(workspace: node.workspace, surface: node.surface)
+            if !result.displaced.contains(node.id) {
+                result.surfaceOwners[surface, default: []].append(node.id)
+            }
+            if let session = node.session {
+                result.exactOwners[Identity(surface: surface, session: session), default: []].append(node.id)
+            }
+        }
         for index in input.sessions.indices {
             let session = input.sessions[index]
+            result.sessionIndices[Identity(
+                surface: Surface(workspace: session.workspace, surface: session.surface), session: session.id
+            ), default: []].append(index)
             let exact = input.managed.filter {
                 $0.workspace == session.workspace && $0.surface == session.surface && $0.session == session.id
             }

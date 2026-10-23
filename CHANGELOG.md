@@ -280,9 +280,11 @@ Notable changes are recorded using Keep a Changelog categories.
 ### Fixed
 
 - Workspace rows reuse identity-and-freshness placement results across redraws
-  instead of repeatedly copying session histories. Refreshed timestamps still
-  reach views, and existing freshness and history deadlines remain independent
-  (#334).
+  instead of repeatedly copying session histories. Timestamp-only reads no
+  longer redraw the outline within the same displayed minute; coherent display
+  snapshots retain independent freshness and history deadlines. Actions and
+  newly opened agent previews use current evidence; hidden previews no longer
+  build their cards on every row update (#334).
 
 - Binding-file updates wake sidebar readers without rebuilding their watchers.
   Missing session directories no longer disable healthy watches or bindings

@@ -5,6 +5,31 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test func hiddenAgentPreviewsDoNotBuildCardsUntilOpened() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let anchor = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 30))
+        window.contentView = anchor
+        let presenter = SidebarHoverPresenter(showPanel: { _, _, _ in })
+        defer { presenter.detach(); window.contentView = nil; window.close() }
+        var builds = 0
+        var available = true
+        let provider: () -> SidebarHoverCardData? = {
+            builds += 1
+            return available ? .init(id: "synthetic", category: "Agent preview", title: "Synthetic") : nil
+        }
+        for _ in 0..<60 { presenter.update(anchor: anchor, data: nil, group: nil, dataProvider: provider) }
+        #expect(builds == 0)
+        presenter.open(explicit: false)
+        #expect(builds == 1)
+        #expect(presenter.state.mode == .hover)
+        available = false
+        presenter.update(anchor: anchor, data: nil, group: nil, dataProvider: provider)
+        #expect(builds == 2)
+        #expect(presenter.state.mode == .hidden)
+    }
+
     @Test(.enabled(if: SidebarAppKitTestScope.localAcceptanceEnabled), arguments: [false, true])
     func mountedProductionSidebarStopsRequestingLayoutWhenUnchanged(visualActivity: Bool) async throws {
         try await withProductionKeyboardSidebar(visualActivity: visualActivity, animatedPet: true) { window, host, _, _, _, _, _ in

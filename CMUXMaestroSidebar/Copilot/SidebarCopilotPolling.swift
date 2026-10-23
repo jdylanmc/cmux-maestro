@@ -13,6 +13,8 @@ final class SidebarCopilotPolling {
 
     @ObservationIgnored private var storedTree: SidebarCopilotTree = .waiting
     @ObservationIgnored private var currentTree: SidebarCopilotTree = .waiting
+    @ObservationIgnored private var presentationKey: SidebarCopilotPresentationKey?
+    @ObservationIgnored private(set) var presentationPublicationCount = 0
     @ObservationIgnored private var evidenceObservers: [UUID: AsyncStream<SidebarCopilotTree>.Continuation] = [:]
     private(set) var tree: SidebarCopilotTree {
         get {
@@ -20,14 +22,26 @@ final class SidebarCopilotPolling {
             return storedTree
         }
         set {
+            let key = SidebarCopilotPresentationKey(newValue, now: now())
+            let presentationChanged = key != presentationKey
+            presentationKey = key
             // Children retain value snapshots and re-check freshness on independent redraws.
             if storedTree == newValue {
                 storedTree = newValue
             } else {
                 withMutation(keyPath: \.tree) { storedTree = newValue }
             }
+            if presentationChanged {
+                presentationPublicationCount += 1
+                withMutation(keyPath: \.presentationTree) {}
+            }
             for observer in evidenceObservers.values { observer.yield(newValue) }
         }
+    }
+    /// Read once with a captured display clock. Raw evidence readers continue to use `tree`.
+    var presentationTree: SidebarCopilotTree {
+        access(keyPath: \.presentationTree)
+        return storedTree
     }
     private(set) var isReading = false
     @ObservationIgnored private(set) var projectionCount = 0

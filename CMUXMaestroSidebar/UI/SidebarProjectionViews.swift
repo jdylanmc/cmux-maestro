@@ -225,6 +225,7 @@ struct WorktreeProjectionContent: View {
     let workspaceID: UUID
     let members: [SidebarWorktreeMember]
     let tree: SidebarCopilotTree
+    var placementSnapshot: SidebarPlacementCache.Snapshot? = nil
     let orchestration: SidebarOrchestrationPolling
     let hierarchy: HierarchySnapshot
     let navigation: SidebarNavigation
@@ -293,7 +294,8 @@ struct WorktreeProjectionContent: View {
         }
         return SidebarPresentation.collapsedActivity(
             sessions: sessions, managed: managed, availability: orchestration.availability,
-            observations: tree, now: now()
+            observations: tree, now: now(),
+            placements: placementSnapshot?.materialize(sessions, managed: managed)
         )
     }
 
@@ -327,6 +329,7 @@ struct WorktreeProjectionContent: View {
                 setExpanded: setExpanded, selectedNode: $managedSelection, dismiss: dismiss,
                 acknowledge: acknowledge, selection: $selection, workspaceID: workspaceID,
                 showsWorkspaceHeaders: false, displayNodes: [node], copilotTree: tree,
+                placementSnapshot: placementSnapshot,
                 surfaceOrder: child ? nil : order, movesWithParent: child,
                 hasSpawnedChildren: parentIDs.contains(node.id)
             )

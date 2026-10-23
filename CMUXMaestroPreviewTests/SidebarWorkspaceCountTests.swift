@@ -6,6 +6,23 @@ struct SidebarWorkspaceCountTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func semanticChangesInvalidateOnlyTheirWorkspacePresentationKey() {
+        let first = tree([
+            session(fixtures.sessionID, surface: fixtures.surfaceA),
+            session(fixtures.otherSessionID, surface: fixtures.surfaceB, workspace: fixtures.workspaceB)
+        ])
+        var second = first
+        second.sessions[0].sessionName = "Changed session"
+        #expect(SidebarCopilotPresentationKey(first, now: now, workspaceID: fixtures.workspaceA)
+            != SidebarCopilotPresentationKey(second, now: now, workspaceID: fixtures.workspaceA))
+        #expect(SidebarCopilotPresentationKey(first, now: now, workspaceID: fixtures.workspaceB)
+            == SidebarCopilotPresentationKey(second, now: now, workspaceID: fixtures.workspaceB))
+        second.sessions.append(session(fixtures.otherSessionID, surface: fixtures.surfaceA))
+        #expect(SidebarCopilotPresentationKey(first, now: now, workspaceID: fixtures.workspaceB)
+            != SidebarCopilotPresentationKey(second, now: now, workspaceID: fixtures.workspaceB),
+            "A duplicate identity in another workspace must invalidate its affected owner")
+    }
+
     @Test(arguments: ["historical", "duplicate", "ambiguous", "stale-snapshot", "stale-observation"])
     func cachedPlacementsPreserveIdentityBarriers(_ variant: String) {
         let cache = SidebarPlacementCache()
@@ -20,6 +37,28 @@ struct SidebarWorkspaceCountTests {
         #expect(placements.map(\.managedNodeID) == expected.map(\.managedNodeID))
         #expect(placements.map(\.contentOwnerID) == expected.map(\.contentOwnerID))
         #expect(value.displaced == SidebarPresentation.displacedManagedNodeIDs(managed, observations: observed, now: now))
+    }
+
+    @Test func groupedConsumersReuseOwnershipWithoutRescanningEvidence() {
+        let cache = SidebarPlacementCache()
+        let root = owner(sessionID: fixtures.sessionID)
+        let competitor = owner(sessionID: fixtures.sessionID)
+        let observed = tree([session(fixtures.sessionID, surface: fixtures.surfaceA)])
+        for _ in 0..<30 {
+            let snapshot = cache.placements(tree: observed, managed: [root, competitor], now: now)
+            #expect(snapshot.ownedSessionIndices(managed: [root, competitor]).isEmpty)
+            // A Worktrees member restricts the displayed owners, not the identity evidence.
+            #expect(snapshot.ownedSessionIndices(managed: [root])[root.id] == [0])
+            let scoped = snapshot.materialize(observed.sessions, managed: [root])
+            #expect(scoped.first?.contentOwnerID == root.id)
+            let cached = SidebarPresentation.collapsedActivity(
+                sessions: observed.sessions, managed: [root], availability: .ready,
+                observations: observed, now: now, placements: scoped
+            )
+            #expect(cached?.count == 1)
+            #expect(cached?.visual == SidebarPresentation.state(.working))
+        }
+        #expect(cache.computationCount == 1)
     }
 
     @Test func cachedPlacementsInvalidateOnOwnershipPermissionAndTopologyChanges() {

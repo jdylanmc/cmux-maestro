@@ -148,7 +148,7 @@ private struct SidebarAgentHoverModifier: ViewModifier {
     let target: SidebarAgentHoverTarget?
     @Environment(\.sidebarAgentHoverProvider) private var provider
     func body(content: Content) -> some View {
-        SidebarHoverRegion(data: target.flatMap(provider)) { content }
+        SidebarHoverRegion(dataProvider: target.map { target in { provider(target) } }) { content }
     }
 }
 
