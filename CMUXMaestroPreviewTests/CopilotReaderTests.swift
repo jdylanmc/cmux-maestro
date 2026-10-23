@@ -1532,17 +1532,18 @@ nonisolated struct CopilotReaderTests {
         #expect(session.attention?.contains { $0.kind.isBlocking } == false)
     }
 
+    @MainActor
     @Test(arguments: [false, true])
     func historicalDeadBindingsCannotOccupyLiveCapacity(missingDirectories: Bool) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
         let ids = [fixture.sessionID] + (0..<130).map { _ in UUID() }
-        for id in ids {
+        for (index, id) in ids.enumerated() {
             try fixture.writeRecord(.init(
                 sessionID: id, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
                 ownerPID: 7777, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
-                recordedAt: fixture.record.recordedAt
+                recordedAt: fixture.record.recordedAt.addingTimeInterval(Double(index))
             ))
             if !missingDirectories {
                 try FileManager.default.createDirectory(
@@ -1558,14 +1559,42 @@ nonisolated struct CopilotReaderTests {
         try Data().write(to: live.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
         try (copilotTestEvent("session.idle") + Data([10])).write(to: live.appendingPathComponent("events.jsonl"))
         var admitted = false
+        var latest: CopilotSnapshot?
         for _ in 0..<20 {
             let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
+            latest = snapshot
             admitted = admitted || snapshot.sessions.contains { $0.sessionID == liveID && $0.state == .idle }
             #expect(await reader.retentionCounts().bindings <= 2)
         }
         #expect(admitted)
         #expect(await reader.retentionCounts().bindings == 1)
+        #expect(await reader.retentionCounts().tails == 1)
         #expect(await reader.hasPendingHistory() == false)
+        let snapshot = try #require(latest)
+        let ended = try #require(snapshot.sessions.first { $0.liveness == .dead })
+        #expect(ended.sessionID == ids.last)
+        #expect(ended.children.isEmpty && ended.state == .unknown)
+        #expect(snapshot.sessions.count == 2)
+        let topology = SidebarTopology(HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [
+                .init(id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                      isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                      rootPath: .unavailable, projectRootPath: .unavailable, surfaces: .available([
+                        .init(id: fixture.surface, title: "Synthetic", kind: .terminal, isFocused: true,
+                              isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                      ]))
+            ], windowID: UUID()
+        ))
+        let tree = SidebarCopilotTree.project(snapshot, onto: topology, now: snapshot.generatedAt)
+        let shown = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: true,
+                                       now: snapshot.generatedAt).tree
+        let hidden = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: false,
+                                        now: snapshot.generatedAt).tree
+        #expect(Set(shown.sessions.map(\.id)) == [ended.sessionID, liveID])
+        #expect(hidden.sessions.map(\.id) == [liveID])
+        #expect(SidebarPresentation.process(.dead).title == "Process ended")
     }
 
     @Test(arguments: [false, true])
@@ -1605,8 +1634,9 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.retentionCounts().tails == 1)
         clock.advance(by: 1)
         let released = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(released.sessions.map(\.sessionID) == [liveID])
-        #expect(released.sessions.first?.state == .idle)
+        #expect(Set(released.sessions.map(\.sessionID)) == [fixture.sessionID, liveID])
+        #expect(released.sessions.first { $0.sessionID == liveID }?.state == .idle)
+        #expect(released.sessions.first { $0.sessionID == fixture.sessionID }?.liveness == .dead)
         #expect(await reader.retentionCounts().tails == 1)
     }
 

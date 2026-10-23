@@ -70,7 +70,8 @@ nonisolated struct CopilotIdentityTests {
         defer { fixture.remove() }
         try fixture.writeEvents([copilotTestEvent("session.idle")])
         let dead = try await fixture.reader(lookup: { _ in .dead }).read(surfaceIDs: [fixture.surface])
-        #expect(dead.sessions.isEmpty)
+        let ended = try #require(dead.sessions.first)
+        #expect(ended.liveness == .dead && ended.state == .unknown)
         let reused = CopilotProcessIdentity(
             pid: fixture.process.pid, parentPID: 1, uid: getuid(), startSeconds: 2, startMicroseconds: 0
         )
@@ -99,8 +100,9 @@ nonisolated struct CopilotIdentityTests {
         let stale = try await fixture.reader(lookup: { pid in
             pid == owner.pid ? .dead : .found(other)
         }).read(surfaceIDs: [fixture.surface])
-        // Another live marker cannot grant admission under a verified-dead binding owner.
-        #expect(stale.sessions.isEmpty)
+        let ambiguous = try #require(stale.sessions.first)
+        #expect(ambiguous.sessionIssues?.contains(.ambiguousIdentity) == true)
+        #expect(ambiguous.liveness == .ambiguous && ambiguous.state == .unknown)
     }
 
     @Test func processGenerationChangesDuringReadDiscardTheCandidate() async throws {
