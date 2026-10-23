@@ -396,10 +396,10 @@ final class SidebarCopilotPolling {
         let groups = Dictionary(grouping: snapshot.sessions, by: { UUID(uuidString: $0.identity.sessionID) })
         if groups[nil] != nil { lastStatuses.removeAll() }
         let current = Dictionary(grouping: currentTree.sessions, by: \.surfaceID)
-        let unreadable = Set(currentTree.sessions.filter {
-            [.alive, .dead].contains($0.liveness)
-                && snapshot.issues?.contains(.stateUnavailable) == true
-                && $0.observedAt < snapshot.generatedAt
+        let unreadable = Set(currentTree.sessions.filter { session in
+            [.alive, .dead].contains(session.liveness)
+                && (snapshot.globalIssues.contains(.stateUnavailable)
+                    || groups[session.id]?.contains { $0.sessionIssues?.contains(.stateUnavailable) == true } == true)
         }.map(\.id))
         lastStatuses = lastStatuses.filter { id, saved in
             guard topology.workspaceBySurface[saved.session.surfaceID] == saved.session.workspaceID else { return false }
