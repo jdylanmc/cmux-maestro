@@ -6,6 +6,25 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func registeredCoordinatorKeepsValidatedSurfaceNavigation() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let node = SidebarOrchestrationNode(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "coordinator",
+            label: "Coordinator", workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+            generation: 0, phase: "registered", availability: "idle", createdAt: date, updatedAt: date
+        )
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [fixtures.session(now: date)], now: date),
+            onto: fixtures.topology(), now: date
+        )
+        let target = SidebarNavigationTarget.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId)
+        #expect(SidebarPresentation.focusTarget(
+            for: .managed(node), capturedPlacement: target, hierarchy: fixtures.hierarchy(), connected: true,
+            tree: tree, managed: .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]),
+            availability: .ready, now: date
+        ) == target, "Both primary click and the Focus surface action must retain registration navigation")
+    }
+
     @Test func endedManagedFocusUsesExactSurfaceWithoutDetails() async throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let node = endedNode(now: date)

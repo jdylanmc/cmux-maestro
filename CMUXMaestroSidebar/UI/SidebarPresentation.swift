@@ -578,7 +578,8 @@ enum SidebarPresentation {
                 $0.workspaceID == workspace && $0.surfaceID == surface
                     && $0.liveness == .alive && SidebarCopilotTree.isFresh($0.observedAt, now: now)
             }
-            guard current.isEmpty || (current.count == 1 && current[0].id == node.copilotSessionId
+            let sessionID = managedSession(for: node, in: tree, now: now)?.id ?? node.copilotSessionId
+            guard current.isEmpty || (current.count == 1 && current[0].id == sessionID
                 && tree.sessions.filter({ $0.id == current[0].id }).count == 1) else { return nil }
             // Navigation needs the exact retained binding and host topology, not readable agent details.
             return capturedPlacement
