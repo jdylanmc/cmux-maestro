@@ -384,8 +384,10 @@ nonisolated struct CopilotEventReducer: Sendable {
         let eventID: String
         let startedAt: Date?
         var causalTip: String
+        var envelopeTip: String
         var requiresCausalProof: Bool
         let requiresOccurrenceProof: Bool
+        var hasOccurrenceProof = false
     }
     private struct TurnOrigin: Sendable {
         let eventID: String
@@ -564,13 +566,17 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
         if kind == .toolPartialResult {
             observeToolCausality(event)
+            observeEnvelopeContinuity(event)
             return
         }
         guard targetsCurrentInvocation(event, kind: kind) else { return }
         if event.isLifecycle {
             guard admitLifecycle(event, kind: kind) else { return }
         }
-        defer { observeCausalEvent(event) }
+        defer {
+            observeCausalEvent(event)
+            observeEnvelopeContinuity(event)
+        }
         dispatch(event, kind: kind)
     }
 
@@ -838,7 +844,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
         turns[owner] = Turn(
             id: turn, interactionID: event.interactionID, eventID: event.id,
-            startedAt: event.timestamp, causalTip: event.id, requiresCausalProof: requiresCausalProof,
+            startedAt: event.timestamp, causalTip: event.id, envelopeTip: event.id,
+            requiresCausalProof: requiresCausalProof,
             requiresOccurrenceProof: requiresOccurrenceProof
         )
         lastToolActivity.removeValue(forKey: owner)
@@ -1408,11 +1415,27 @@ nonisolated struct CopilotEventReducer: Sendable {
             guard let interaction = event.interactionID, interaction == turn.interactionID,
                   event.turnID == turn.id else { return }
             // Repeated tags alone cannot distinguish an earlier occurrence.
-            guard !turn.requiresOccurrenceProof || isCausallyLinked(event, to: turn) else { return }
+            guard !turn.requiresOccurrenceProof || isCausallyLinked(event, to: turn)
+                || event.parentEventID == turn.envelopeTip else { return }
+            turns[owner]?.hasOccurrenceProof = true
         } else {
             guard isCausallyLinked(event, to: turn) else { return }
         }
         turns[owner]?.causalTip = event.id
+    }
+
+    private mutating func observeEnvelopeContinuity(_ event: CopilotEventProjection) {
+        // Continuity can anchor a tagged message, not prove ownership itself.
+        // Once owned evidence is proven, foreign envelopes may carry its tip.
+        guard let parent = event.parentEventID else { return }
+        for owner in turns.keys {
+            guard let turn = turns[owner] else { continue }
+            if turn.envelopeTip == parent { turns[owner]?.envelopeTip = event.id }
+            if turn.requiresOccurrenceProof, turn.hasOccurrenceProof,
+               owner.agentID != event.agentID, turn.causalTip == parent {
+                turns[owner]?.causalTip = event.id
+            }
+        }
     }
 
     private mutating func observeToolCausality(_ event: CopilotEventProjection) {
@@ -1424,6 +1447,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         guard let current = turns[owner], current.eventID == origin.eventID,
               turnTagsMatch(event, turnID: origin.turnID, interactionID: origin.interactionID) else { return }
         turns[owner]?.causalTip = event.id
+        turns[owner]?.hasOccurrenceProof = true
     }
     private mutating func markTurnUnknown(owner: String?) {
         if let owner {

@@ -4,8 +4,8 @@ import Testing
 
 @Suite(.serialized)
 nonisolated struct CopilotInteractionTests {
-    @Test(arguments: [false, true])
-    func repeatedScopedMessageBridgesInterleavedBackgroundEnvelopes(partial: Bool) throws {
+    @Test(arguments: [false, true], [false, true])
+    func repeatedScopedMessageBridgesInterleavedBackgroundEnvelopes(partial: Bool, afterProof: Bool) throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         let ids = (0..<10).map {
             UUID(uuidString: String(format: "34310000-0000-0000-0000-%012d", $0))!
@@ -25,13 +25,38 @@ nonisolated struct CopilotInteractionTests {
         reducer.consume(try interactionEvent("session.usage_record", id: ids[6], parent: ids[partial ? 5 : 4]))
         reducer.consume(try interactionEvent("assistant.message", id: ids[7], parent: ids[6],
                                              turn: "0", interaction: "same"))
-        reducer.consume(try interactionEvent("assistant.turn_end", id: ids[8], parent: ids[7], turn: "0"))
+        if afterProof {
+            reducer.consume(try interactionEvent("session.usage_record", id: ids[9], parent: ids[7],
+                                                 owner: "background"))
+        }
+        reducer.consume(try interactionEvent("assistant.turn_end", id: ids[8], parent: ids[afterProof ? 9 : 7],
+                                             turn: "0"))
         let value = reducer.value()
         #expect(value.state == .idle)
         #expect(value.attention.map(\.kind) == [.turnFinished])
         #expect(value.attention.last?.evidence.eventID == ids[8])
         #expect(value.children.first { $0.id == "background" }?.state == .working)
         #expect(value.children.first { $0.id == "background" }?.activity?.kind == .executing)
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test func repeatedScopedToolProofSurvivesForeignEndEnvelope() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), tool = UUID(), child = UUID(), completed = UUID(), bridge = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("tool.execution_start", id: tool, parent: current,
+                                             data: ["toolCallId": "current-tool", "toolName": "view"]))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: child, parent: tool, owner: "background",
+                                             turn: "0", interaction: "background"))
+        reducer.consume(try interactionEvent("tool.execution_complete", id: completed, parent: child,
+                                             data: ["toolCallId": "current-tool", "success": true]))
+        reducer.consume(try interactionEvent("session.usage_record", id: bridge, parent: completed, owner: "background"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: bridge, turn: "0"))
+        #expect(reducer.value().state == .idle)
+        #expect(reducer.value().attention.map(\.kind) == [.turnFinished])
+        #expect(reducer.value().children.first?.state == .working)
         #expect(reducer.issues.isEmpty)
     }
 
@@ -67,6 +92,28 @@ nonisolated struct CopilotInteractionTests {
         #expect(reducer.value().state == .working)
         #expect(reducer.value().activity?.kind == .executing)
         #expect(reducer.value().attention.isEmpty)
+    }
+
+    @Test(arguments: ["untagged", "wrong-tags", "none"])
+    func repeatedScopedContinuityAloneCannotProveAnEnd(message: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), child = UUID(), bridge = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: child, parent: current, owner: "background",
+                                             turn: "0", interaction: "background"))
+        if message != "none" {
+            reducer.consume(try interactionEvent("assistant.message", id: bridge, parent: child,
+                                                 turn: message == "wrong-tags" ? "1" : nil,
+                                                 interaction: message == "wrong-tags" ? "same" : nil))
+        }
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: message == "none" ? child : bridge,
+                                             turn: "0", interaction: "same"))
+        #expect(reducer.value().state == .unknown)
+        #expect(reducer.value().attention.isEmpty)
+        #expect(reducer.value().children.first?.state == .working)
+        #expect(reducer.issues == [.ambiguousTurn])
     }
 
     @Test(arguments: [nil, "child"] as [String?], ["end", "message", "tool"])
