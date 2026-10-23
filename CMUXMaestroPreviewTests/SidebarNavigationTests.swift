@@ -6,6 +6,72 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func endedManagedFocusUsesExactSurfaceWithoutDetails() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let node = endedNode(now: date)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]
+        )
+        let target = SidebarNavigationTarget.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [], issues: [], generatedAt: date)
+        let recorder = SidebarHostRecorder()
+        let model = responseOrderingModel()
+        model.update(context: context(recorder: recorder))
+        // Details can be unavailable while an exact terminal remains navigable.
+        let resolved = try #require(SidebarPresentation.focusTarget(
+            for: .managed(node), capturedPlacement: target, hierarchy: model.hierarchy,
+            connected: true, tree: tree, managed: snapshot, availability: .unavailable, now: date
+        ))
+        #expect(resolved == target)
+        SidebarRowAction.focus(resolved, navigation: model.navigation, prepareSeen: { _ in {} }).perform()
+        await sidebarEventually { recorder.actions.count == 1 }
+        #expect(recorder.actions == [.selectSurface(workspaceID: node.workspaceId, surfaceID: node.surfaceId)])
+        recorder.reply(0, .accepted)
+        await sidebarEventually { model.navigation.status == .selected }
+    }
+
+    @Test(arguments: [false, true])
+    func endedManagedSurfaceRevertsWithoutArchiving(showEnded: Bool) throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let node = endedNode(now: date)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]
+        )
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [], issues: [], generatedAt: date)
+        let hierarchy = fixtures.hierarchy()
+        let ended = SidebarPresentation.endedManagedNodeIDs(
+            managed: snapshot, availability: .ready, hierarchy: hierarchy, observations: tree, now: date
+        )
+        #expect(ended == [node.id])
+        let visible = SidebarVisibleWork(
+            tree: tree, managed: snapshot.nodes, history: .init(), showEnded: showEnded,
+            now: date, displacedNodeIDs: ended
+        )
+        #expect(visible.managed.isEmpty)
+        #expect(visible.hiddenSurfaces.isEmpty)
+        let workspace = try #require(hierarchy.workspaces.first { $0.id == node.workspaceId })
+        guard case .available(let surfaces) = workspace.surfaces else {
+            Issue.record("Expected synthetic surfaces"); return
+        }
+        #expect(SidebarPresentation.unmanagedSurfaces(
+            surfaces, workspaceID: node.workspaceId, managed: visible.managed,
+            observations: visible.tree, now: date
+        ).contains { $0.id == node.surfaceId })
+        #expect(snapshot.nodes == [node], "Presentation must not archive controller history")
+        #expect(SidebarPresentation.endedManagedNodeIDs(
+            managed: snapshot, availability: .ready, hierarchy: .empty, observations: tree, now: date
+        ).isEmpty, "Missing surfaces retain the existing ended-history policy")
+    }
+
+    private func endedNode(now: Date, generation: Int = 1, phase: String = "process-disappeared") -> SidebarOrchestrationNode {
+        .init(id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil,
+              role: "coordinator", label: "Copilot session",
+              workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+              generation: generation, phase: phase, availability: "unavailable",
+              copilotSessionId: fixtures.sessionID, executionMode: .interactive,
+              createdAt: now, updatedAt: now)
+    }
+
     @Test func seenCallbackRunsOnlyAfterSuccessfulCurrentNavigation() async {
         let recorder = SidebarHostRecorder()
         let probe = SidebarResponseProbe()

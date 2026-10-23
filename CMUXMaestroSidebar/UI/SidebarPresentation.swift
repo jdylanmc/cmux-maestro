@@ -558,6 +558,28 @@ enum SidebarPresentation {
         return result
     }
 
+    static func focusTarget(
+        for target: SidebarInspection.Target, capturedPlacement: SidebarNavigationTarget,
+        hierarchy: HierarchySnapshot, connected: Bool, tree: SidebarCopilotTree,
+        managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability,
+        now: Date
+    ) -> SidebarNavigationTarget? {
+        guard case .surface(let workspace, let surface) = capturedPlacement,
+              let subject = inspection(
+                for: target, hierarchy: hierarchy, connected: connected, tree: tree,
+                managed: managed, availability: availability, now: now,
+                capturedPlacement: (workspace, surface)
+              ), let surfaceID = subject.surfaceID else { return nil }
+        return .surface(workspaceID: subject.workspaceID, surfaceID: surfaceID)
+    }
+
+    static func endedManagedNodeIDs(
+        managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability,
+        hierarchy: HierarchySnapshot, observations: SidebarCopilotTree, now: Date
+    ) -> Set<UUID> {
+        []
+    }
+
     static func inspection(
         for target: SidebarInspection.Target, hierarchy: HierarchySnapshot, connected: Bool,
         tree: SidebarCopilotTree, managed: SidebarOrchestrationSnapshot,
