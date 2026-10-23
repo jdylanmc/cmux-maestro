@@ -196,12 +196,13 @@ struct SidebarNavigationTests {
 
     @Test(arguments: ["turn-failed", "startup-failed", "reported-failed", "launch-failed",
                       "reported-blocked", "session-error", "session-failed", "permission",
-                      "failed-child", "blocked-child", "internal-task", "incomplete"])
-    func endedSurfaceKeepsProtectedOutcomesAndFocus(_ scenario: String) throws {
+                      "failed-child", "blocked-child", "internal-task", "incomplete", "partial"],
+          ["worker", "coordinator"])
+    func endedSurfaceKeepsProtectedOutcomesAndFocus(_ scenario: String, role: String) throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let failure = SidebarDismissedManagedOutcome(nodeID: fixtures.surfaceB, generation: 1, phase: scenario)
         let phase = failure.isValid || scenario == "reported-blocked" ? scenario : "process-disappeared"
-        let node = endedNode(now: date, phase: phase, role: failure.isValid ? "worker" : "coordinator")
+        let node = endedNode(now: date, phase: phase, role: role)
         let snapshot = SidebarOrchestrationSnapshot(
             version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]
         )
@@ -227,7 +228,9 @@ struct SidebarNavigationTests {
                 session.nodes[0].observedParent = .session(.init(providerID: "copilot", sessionID: fixtures.sessionID.uuidString))
             }
         }
-        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: date)
+        let tree = SidebarCopilotTree(
+            availability: scenario == "partial" ? .partial : .ready, sessions: [session], issues: [], generatedAt: date
+        )
         let ended = SidebarPresentation.endedManagedNodeIDs(
             managed: snapshot, availability: .ready, hierarchy: fixtures.hierarchy(), observations: tree, now: date
         )
@@ -236,7 +239,8 @@ struct SidebarNavigationTests {
             tree: tree, managed: [node], history: .init(), showEnded: false, now: date, displacedNodeIDs: ended
         )
         #expect(visible.managed == [node])
-        if ["session-error", "permission", "failed-child", "blocked-child", "internal-task"].contains(scenario) {
+        if ["session-error", "session-failed", "permission", "failed-child", "blocked-child",
+            "internal-task", "incomplete", "partial"].contains(scenario) {
             #expect(visible.tree.sessions == [session])
         }
         let target = SidebarNavigationTarget.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId)
