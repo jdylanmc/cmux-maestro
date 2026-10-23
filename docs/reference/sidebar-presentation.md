@@ -58,6 +58,19 @@ the Active window footer shows only a live, confirmed session (otherwise the
 CMUX title), for unmanaged and born-managed rows alike.
 Exact session identity stays in details.
 
+Managed primary clicks and **Focus surface** validate the captured node, run,
+session, generation and exact CMUX placement independently of Details access.
+They never substitute another session or a moved/recreated surface. A missing
+surface disables focus; a captured action invalidated before invocation reports
+stale navigation, not a Details popover.
+
+With current observation access, an existing terminal reverts to its normal
+terminal row when its managed process is verified ended (controller process
+disappearance, exact dead-session observation, or generation-matched exited
+process evidence), with no live or uncertain observed occupant. Only presentation
+changes: retained nodes, generations, history, capacity and live descendants stay
+untouched. Missing surfaces keep the existing **Show ended agents** policy.
+
 Title controls update their hosted label only when SwiftUI updates the content.
 Size proposals use `NSHostingController.sizeThatFits(in:)` without replacing the
 root, changing the mounted frame, or scheduling another layout. Repeated and

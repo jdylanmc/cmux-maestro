@@ -117,6 +117,11 @@ final class SidebarNavigation {
         return nil
     }
 
+    func rejectStaleTarget() {
+        cancelPending()
+        status = .staleTarget
+    }
+
     func select(_ target: SidebarNavigationTarget, onSuccess: @escaping @MainActor () -> Void = {}) {
         generation &+= 1
         let token = generation

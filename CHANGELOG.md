@@ -284,6 +284,9 @@ Notable changes are recorded using Keep a Changelog categories.
   support, and refuses unknown controls. Installer failures show only vetted
   bridge reasons instead of losing the diagnostic (#339).
 
+- Ended managed rows focus their exact retained terminal without opening an
+  unavailable Details popover. Verified ended sessions on existing terminals
+  revert to normal terminal rows; missing surfaces have no focus action (#337).
 - Workspace rows reuse identity-and-freshness placement results across redraws
   instead of repeatedly copying session histories. Timestamp-only reads no
   longer redraw the outline within the same displayed minute; coherent display

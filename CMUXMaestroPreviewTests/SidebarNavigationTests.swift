@@ -72,6 +72,88 @@ struct SidebarNavigationTests {
               createdAt: now, updatedAt: now)
     }
 
+    @Test(arguments: ["live", "unknown", "ambiguous", "stale", "denied", "missing", "generation", "replacement"])
+    func endedSurfaceReversionAndFocusPreserveEvidenceBarriers(_ scenario: String) {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let captured = endedNode(now: date)
+        let current = endedNode(now: date, generation: scenario == "generation" ? 2 : 1,
+                                phase: scenario == "live" ? "turn-running" : "process-disappeared")
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: scenario == "stale" ? date.addingTimeInterval(-120) : date,
+            complete: true, omittedCount: 0, nodes: [current]
+        )
+        let liveness: AgentProcessLiveness = switch scenario {
+        case "unknown": .unknown
+        case "ambiguous": .ambiguous
+        default: .alive
+        }
+        let session = SidebarCopilotSession(
+            id: scenario == "replacement" ? fixtures.otherSessionID : fixtures.sessionID,
+            workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA, liveness: liveness,
+            state: .idle, model: nil, observedAt: date, nodes: [], childrenComplete: true,
+            treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let tree = SidebarCopilotTree(
+            availability: .ready, sessions: ["live", "unknown", "ambiguous", "replacement"].contains(scenario) ? [session] : [],
+            issues: scenario == "denied" ? [.permissionDenied] : [], generatedAt: date
+        )
+        let hierarchy = scenario == "missing" ? HierarchySnapshot.empty : fixtures.hierarchy()
+        let ended = SidebarPresentation.endedManagedNodeIDs(
+            managed: snapshot, availability: .ready, hierarchy: hierarchy, observations: tree, now: date
+        )
+        if scenario != "generation" { #expect(ended.isEmpty) }
+        let target = SidebarNavigationTarget.surface(workspaceID: captured.workspaceId, surfaceID: captured.surfaceId)
+        let resolved = SidebarPresentation.focusTarget(
+            for: .managed(captured), capturedPlacement: target, hierarchy: hierarchy, connected: true,
+            tree: tree, managed: snapshot, availability: .ready, now: date
+        )
+        #expect(resolved == (["missing", "generation", "replacement"].contains(scenario) ? nil : target))
+    }
+
+    @Test(arguments: ["observation", "process", "wrong-generation"])
+    func verifiedProcessEndReleasesRowAndRetainsLiveDescendants(_ source: String) {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let node = endedNode(now: date, phase: "turn-failed")
+        let child = SidebarOrchestrationNode(
+            id: UUID(), runId: node.runId, parentId: node.id, role: "worker", label: "Live child",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceB, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.otherSessionID,
+            executionMode: .interactive, createdAt: date, updatedAt: date
+        )
+        var snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node, child]
+        )
+        let session = SidebarCopilotSession(
+            id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .dead, state: .unknown, model: nil, observedAt: date, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        let tree = SidebarCopilotTree(
+            availability: .ready, sessions: source == "observation" ? [session] : [], issues: [], generatedAt: date
+        )
+        if source != "observation" {
+            snapshot.processes[node.id] = .init(
+                nodeId: node.id, copilotSessionId: fixtures.sessionID, generation: source == "wrong-generation" ? 2 : 1,
+                state: "exited", observedAt: date, processes: [], omittedCount: 0
+            )
+        }
+        let ended = SidebarPresentation.endedManagedNodeIDs(
+            managed: snapshot, availability: .ready, hierarchy: fixtures.hierarchy(), observations: tree, now: date
+        )
+        if source == "wrong-generation" {
+            #expect(ended.isEmpty)
+            return
+        }
+        #expect(ended == [node.id])
+        let visible = SidebarVisibleWork(
+            tree: tree, managed: snapshot.nodes, history: .init(), showEnded: true,
+            now: date, displacedNodeIDs: ended
+        )
+        #expect(visible.managed == [child])
+        #expect(visible.tree.sessions.isEmpty, "The ended observation must not reappear as an unmanaged agent")
+        #expect(visible.hiddenSurfaces.isEmpty)
+    }
+
     @Test func seenCallbackRunsOnlyAfterSuccessfulCurrentNavigation() async {
         let recorder = SidebarHostRecorder()
         let probe = SidebarResponseProbe()

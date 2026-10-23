@@ -562,9 +562,13 @@ struct SidebarView: View {
     private var visibleWork: SidebarVisibleWork {
         var evidence = model.copilot.presentationTree
         evidence.sessions += evidence.statusSessions
-        let displaced = model.visibilityPlacements.placements(
+        var displaced = model.visibilityPlacements.placements(
             tree: evidence, managed: model.orchestration.snapshot.nodes, now: now()
         ).displaced
+        displaced.formUnion(SidebarPresentation.endedManagedNodeIDs(
+            managed: model.orchestration.snapshot, availability: model.orchestration.availability,
+            hierarchy: model.hierarchy, observations: model.copilot.presentationTree, now: now()
+        ))
         return SidebarVisibleWork(
             tree: model.copilot.presentationTree, managed: model.orchestration.snapshot.nodes,
             history: preferences.history,
@@ -1025,25 +1029,20 @@ struct SidebarView: View {
     }
 
     private func focusInspection(_ target: SidebarInspection.Target, capturedPlacement: SidebarNavigationTarget) {
-        guard case .surface(let capturedWorkspaceID, let capturedSurfaceID) = capturedPlacement,
-              let subject = SidebarPresentation.inspection(
-            for: target, hierarchy: model.hierarchy, connected: connected,
+        guard let destination = SidebarPresentation.focusTarget(
+            for: target, capturedPlacement: capturedPlacement, hierarchy: model.hierarchy, connected: connected,
             tree: model.copilot.tree, managed: model.orchestration.snapshot,
-            availability: model.orchestration.availability, now: now(),
-            capturedPlacement: (capturedWorkspaceID, capturedSurfaceID)
+            availability: model.orchestration.availability, now: now()
         ) else {
-            inspector = nil
-            showingInspector = true
-            return
-        }
-        guard let surfaceID = subject.surfaceID else {
-            switch target {
-            case .managed(let node): inspectManaged(node)
-            case .unmanaged(let selection): inspect(selection)
+            if case .managed = target {
+                model.navigation.rejectStaleTarget()
+            } else {
+                inspector = nil
+                showingInspector = true
             }
             return
         }
-        SidebarRowAction.focus(.surface(workspaceID: subject.workspaceID, surfaceID: surfaceID),
+        SidebarRowAction.focus(destination,
                                navigation: model.navigation, prepareSeen: prepareSeen).perform()
     }
 
@@ -3575,6 +3574,7 @@ struct FocusButton<Content: View>: View {
             content
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .disabled(inspectOnly == nil && navigation.disabledReason(for: target) != nil)
     }
 
     private var localFocusID: String? {

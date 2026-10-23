@@ -564,8 +564,26 @@ enum SidebarPresentation {
         managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability,
         now: Date
     ) -> SidebarNavigationTarget? {
-        guard case .surface(let workspace, let surface) = capturedPlacement,
-              let subject = inspection(
+        guard case .surface(let workspace, let surface) = capturedPlacement else { return nil }
+        if case .managed(let captured) = target {
+            guard let node = currentManagedNode(captured, in: managed),
+                  node.workspaceId == workspace, node.surfaceId == surface,
+                  !displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id),
+                  let subject = inspection(
+                    for: .unmanaged(.surface(workspaceID: workspace, surfaceID: surface)),
+                    hierarchy: hierarchy, connected: connected, tree: tree, managed: managed,
+                    availability: availability, now: now
+                  ), subject.surfaceKind == .terminal || subject.surfaceKind == .agentSession else { return nil }
+            let current = tree.sessions.filter {
+                $0.workspaceID == workspace && $0.surfaceID == surface
+                    && $0.liveness == .alive && SidebarCopilotTree.isFresh($0.observedAt, now: now)
+            }
+            guard current.isEmpty || (current.count == 1 && current[0].id == node.copilotSessionId
+                && tree.sessions.filter({ $0.id == current[0].id }).count == 1) else { return nil }
+            // Navigation needs the exact retained binding and host topology, not readable agent details.
+            return capturedPlacement
+        }
+        guard let subject = inspection(
                 for: target, hierarchy: hierarchy, connected: connected, tree: tree,
                 managed: managed, availability: availability, now: now,
                 capturedPlacement: (workspace, surface)
@@ -577,7 +595,48 @@ enum SidebarPresentation {
         managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability,
         hierarchy: HierarchySnapshot, observations: SidebarCopilotTree, now: Date
     ) -> Set<UUID> {
-        []
+        guard [.ready, .partial].contains(availability),
+              (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt)),
+              [.ready, .partial].contains(observations.availability),
+              !observations.issues.contains(.permissionDenied),
+              let generatedAt = observations.generatedAt,
+              SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
+        let topology = SidebarTopology(hierarchy)
+        guard topology.canReadSessions else { return [] }
+        let sessions = observations.sessions + observations.statusSessions
+        return Set(managed.nodes.filter { node in
+            guard let id = node.copilotSessionId,
+                  managed.nodes.filter({ $0.id == node.id || $0.copilotSessionId == id }).count == 1,
+                  topology.workspaceBySurface[node.surfaceId] == node.workspaceId,
+                  hierarchy.workspaces.contains(where: { workspace in
+                      guard workspace.id == node.workspaceId, case .available(let surfaces) = workspace.surfaces else { return false }
+                      return surfaces.contains { $0.id == node.surfaceId && $0.kind == .terminal }
+                  }) else { return false }
+            let occupants = sessions.filter { $0.workspaceID == node.workspaceId && $0.surfaceID == node.surfaceId }
+            guard occupants.allSatisfy({ $0.liveness == .dead }) else { return false }
+            let exact = occupants.filter { $0.id == id }
+            let observedEnded = exact.count == 1 && sessions.filter { $0.id == id }.count == 1
+                && SidebarCopilotTree.isFresh(exact[0].observedAt, now: now)
+                && exact[0].observedAt <= generatedAt.addingTimeInterval(1)
+            let process = managed.processes[node.id]
+            let processEnded = process.map {
+                $0.nodeId == node.id && $0.copilotSessionId == id && $0.generation == node.generation
+                    && $0.state == "exited"
+                    && (-1...SidebarProcessPresentation.staleInterval).contains(now.timeIntervalSince($0.observedAt))
+            } ?? false
+            return node.phase == "process-disappeared" || observedEnded || processEnded
+        }.map(\.id))
+    }
+
+    private static func currentManagedNode(
+        _ captured: SidebarOrchestrationNode, in managed: SidebarOrchestrationSnapshot
+    ) -> SidebarOrchestrationNode? {
+        let matches = managed.nodes.filter { $0.id == captured.id }
+        guard matches.count == 1, let node = matches.first,
+              node.runId == captured.runId, node.generation == captured.generation,
+              node.copilotSessionId == captured.copilotSessionId,
+              node.workspaceId == captured.workspaceId, node.surfaceId == captured.surfaceId else { return nil }
+        return node
     }
 
     static func inspection(
@@ -596,12 +655,8 @@ enum SidebarPresentation {
         var sessionID: UUID?
         switch target {
         case .managed(let captured):
-            let matches = managed.nodes.filter { $0.id == captured.id }
             guard [.ready, .partial, .stale].contains(availability),
-                  matches.count == 1, let node = matches.first,
-                  node.runId == captured.runId, node.generation == captured.generation,
-                  node.copilotSessionId == captured.copilotSessionId,
-                  node.workspaceId == captured.workspaceId, node.surfaceId == captured.surfaceId else { return nil }
+                  let node = currentManagedNode(captured, in: managed) else { return nil }
             guard !displacedManagedNodeIDs([node], observations: tree, now: now).contains(node.id) else { return nil }
             workspaceID = node.workspaceId
             placementSurfaceID = node.surfaceId
