@@ -176,6 +176,23 @@ struct SidebarNavigationTests {
         #expect(visible.hiddenSurfaces.isEmpty)
     }
 
+    @Test func cleanDeadProductionProjectionReleasesTerminal() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let node = endedNode(now: date, phase: "turn-running")
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [fixtures.session(liveness: .dead, now: date)], now: date),
+            onto: fixtures.topology(), now: date
+        )
+        let session = try #require(tree.sessions.first)
+        #expect(session.liveness == .dead)
+        #expect(!session.childrenComplete, "Dead liveness alone prevents live child completeness")
+        #expect(!session.treeDegraded)
+        #expect(SidebarPresentation.endedManagedNodeIDs(
+            managed: .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]),
+            availability: .ready, hierarchy: fixtures.hierarchy(), observations: tree, now: date
+        ) == [node.id])
+    }
+
     @Test(arguments: ["turn-failed", "startup-failed", "reported-failed", "launch-failed",
                       "reported-blocked", "session-error", "session-failed", "permission",
                       "failed-child", "blocked-child", "internal-task", "incomplete"])
@@ -191,7 +208,7 @@ struct SidebarNavigationTests {
             id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
             liveness: .dead, state: scenario == "session-failed" ? .failed : .unknown,
             model: nil, observedAt: date, nodes: [], childrenComplete: scenario != "incomplete",
-            treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+            treeDegraded: scenario == "incomplete", omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
         if scenario == "session-error" || scenario == "permission" {
             session.attention = [.init(
