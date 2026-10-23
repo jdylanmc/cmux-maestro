@@ -11,6 +11,15 @@ nonisolated protocol SidebarFileWatching: Sendable {
 nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Sendable {
     enum Failure: Error { case noRoots, create, start }
 
+    struct DirectoryEvents: Sendable {
+        let continuation: AsyncStream<Void>.Continuation
+
+        func receive(_ flags: DispatchSource.FileSystemEvent) {
+            continuation.yield(())
+            continuation.finish()
+        }
+    }
+
     struct Scope: Equatable, Sendable {
         let recursive: [URL]
         let directories: [URL]
@@ -59,9 +68,10 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
                 fileDescriptor: descriptor, eventMask: [.write, .rename, .delete, .revoke],
                 queue: .global(qos: .utility)
             )
-            directory.setEventHandler {
-                continuation.yield(())
-                continuation.finish()
+            let delivery = DirectoryEvents(continuation: continuation)
+            directory.setEventHandler { [weak directory] in
+                guard let directory else { return }
+                delivery.receive(directory.data)
             }
             directory.setCancelHandler { close(descriptor) }
             directory.activate()

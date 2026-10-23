@@ -318,6 +318,68 @@ struct SidebarRefreshTriggerTests {
         #expect(attempts.now().timeIntervalSince1970 == 1)
         await trigger.stop()
     }
+
+    @Test(arguments: [DispatchSource.FileSystemEvent.rename, .delete, .revoke, [.write, .rename]])
+    func bindingWritesReadWithoutReRegisteringAndReplacementRecovers(
+        invalidation: DispatchSource.FileSystemEvent
+    ) async throws {
+        let fixtures = SidebarTreeFixtures()
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let registrations = CopilotReaderTestClock(Date(timeIntervalSince1970: 0))
+        let leases = AsyncStream<SyntheticDirectoryLease>.makeStream()
+        let trigger = await SidebarRefreshTrigger.copilot(
+            bindings: URL(fileURLWithPath: "/synthetic/bindings"),
+            sessionRoot: URL(fileURLWithPath: "/synthetic/sessions"),
+            coalesce: {},
+            watch: { _ in
+                registrations.advance(by: 1)
+                let lease = SyntheticDirectoryLease()
+                leases.continuation.yield(lease)
+                return lease
+            }
+        )
+        var iterator = leases.stream.makeAsyncIterator()
+        let first = try #require(await iterator.next())
+        let reads = RefreshReadGate<CopilotSnapshot>()
+        let fallback = RefreshBarrier()
+        let value = fixtures.snapshot(sessions: [], now: date)
+        let poller = SidebarCopilotPolling(
+            read: { CopilotSnapshotAdapter.snapshot(try await reads.read(), workspaceBySurface: $0) },
+            pause: { try await fallback.wait() }, expiryPause: sidebarFrozenExpiry,
+            changes: { trigger }, now: { date }
+        )
+        defer {
+            poller.setVisible(false)
+            leases.continuation.finish()
+            Task { await reads.cancel() }
+        }
+        poller.update(topology: fixtures.topology(), connected: true)
+        poller.setVisible(true)
+        await sidebarEventually { await reads.calls == 1 }
+        await reads.complete(value)
+        await sidebarEventually { await fallback.active == 1 }
+        for index in 1...30 {
+            first.delivery.receive(.write)
+            await sidebarEventually { await reads.calls == index + 1 }
+            try #require(registrations.now().timeIntervalSince1970 == 1,
+                         "Ordinary bindings writes must not rebuild native registrations")
+            await reads.complete(value)
+            await sidebarEventually { await fallback.active == 1 }
+        }
+        first.delivery.receive(invalidation)
+        await sidebarEventually { await reads.calls == 32 }
+        #expect(registrations.now().timeIntervalSince1970 == 2)
+        let replacement = try #require(await iterator.next())
+        await reads.complete(value)
+        await sidebarEventually { await fallback.active == 1 }
+        replacement.delivery.receive(.write)
+        await sidebarEventually { await reads.calls == 33 }
+        #expect(registrations.now().timeIntervalSince1970 == 2)
+        #expect(await fallback.released == 0)
+        poller.setVisible(false)
+        await reads.complete(value)
+        await sidebarEventually { !poller.isReading }
+    }
 }
 
 @MainActor
@@ -457,6 +519,19 @@ nonisolated private final class SyntheticFileLease: SidebarFileWatching {
         continuation.yield(())
         return true
     }
+}
+
+nonisolated private final class SyntheticDirectoryLease: SidebarFileWatching {
+    let events: AsyncStream<Void>
+    let delivery: SidebarFileWatcher.DirectoryEvents
+
+    init() {
+        let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        events = stream.stream
+        delivery = .init(continuation: stream.continuation)
+    }
+
+    deinit { delivery.continuation.finish() }
 }
 
 private actor RefreshCounter {
