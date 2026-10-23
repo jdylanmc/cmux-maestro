@@ -18,10 +18,11 @@ applicable: `main` always runs everything. Each `run_<job>` output must be the
 literal `true` or `false` matching the record; GitHub compares the job condition
 case-insensitively, so any other spelling is rejected here.
 
-The gate judges job results only. Each job enforces its own evidence: required
-artifacts use `if-no-files-found: error`, and the integrated harness enforces
-nonzero execution, coverage accounting and candidate/base attribution. A job
-that loses that evidence fails, and the gate then fails with it.
+This evaluator judges job results. The gate job also independently verifies
+the native job's dedicated multiwindow execution artifact with
+run-integrated-test-scopes.py. Other evidence is enforced by its producing job:
+required artifacts use `if-no-files-found: error`, and the integrated harness
+enforces nonzero execution, coverage accounting and candidate/base attribution.
 """
 import json
 import os
