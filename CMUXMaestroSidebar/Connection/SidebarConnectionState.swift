@@ -16,6 +16,7 @@ final class SidebarConnectionModel {
     let copilot: SidebarCopilotPolling
     let orchestration: SidebarOrchestrationPolling
     let navigation: SidebarNavigation
+    @ObservationIgnored let placements = SidebarPlacementCache()
     private var latestSequence: UInt64?
     private(set) var openWorkspaceAtPath: (@MainActor (String) async -> Bool)?
 
