@@ -148,7 +148,7 @@ struct SidebarNavigationTests {
         let session = SidebarCopilotSession(
             id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
             liveness: .dead, state: .unknown, model: nil, observedAt: date, nodes: [],
-            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+            childrenComplete: false, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
         let tree = SidebarCopilotTree(
             availability: .ready, sessions: source == "observation" ? [session] : [], issues: [], generatedAt: date
@@ -176,11 +176,12 @@ struct SidebarNavigationTests {
         #expect(visible.hiddenSurfaces.isEmpty)
     }
 
-    @Test func cleanDeadProductionProjectionReleasesTerminal() throws {
+    @Test(arguments: [false, true])
+    func cleanDeadProductionProjectionReleasesTerminal(complete: Bool) throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let node = endedNode(now: date, phase: "turn-running")
         let tree = SidebarCopilotTree.project(
-            fixtures.snapshot(sessions: [fixtures.session(liveness: .dead, now: date)], now: date),
+            fixtures.snapshot(sessions: [fixtures.session(liveness: .dead, now: date)], complete: complete, now: date),
             onto: fixtures.topology(), now: date
         )
         let session = try #require(tree.sessions.first)
@@ -190,7 +191,7 @@ struct SidebarNavigationTests {
         #expect(SidebarPresentation.endedManagedNodeIDs(
             managed: .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [node]),
             availability: .ready, hierarchy: fixtures.hierarchy(), observations: tree, now: date
-        ) == [node.id])
+        ) == (complete ? [node.id] : []))
     }
 
     @Test(arguments: ["turn-failed", "startup-failed", "reported-failed", "launch-failed",
@@ -207,7 +208,7 @@ struct SidebarNavigationTests {
         var session = SidebarCopilotSession(
             id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
             liveness: .dead, state: scenario == "session-failed" ? .failed : .unknown,
-            model: nil, observedAt: date, nodes: [], childrenComplete: scenario != "incomplete",
+            model: nil, observedAt: date, nodes: [], childrenComplete: false,
             treeDegraded: scenario == "incomplete", omittedChildrenCount: 0, omittedActiveChildrenCount: 0
         )
         if scenario == "session-error" || scenario == "permission" {

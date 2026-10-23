@@ -324,8 +324,8 @@ private extension SidebarCopilotSession {
 
     var protectsEndedSurface: Bool {
         hasBlockingEvidence || state == .failed || attention.contains { $0.kind == .error }
-            || !childrenComplete || treeDegraded || internalTaskCountsIncomplete
-            || hasUncountedChildren || omittedActiveChildrenCount > 0
+            || treeDegraded || internalTaskCountsIncomplete
+            || hasUncountedChildren || omittedChildrenCount > 0 || omittedActiveChildrenCount > 0
             || nodes.contains {
                 $0.isInternalTask || $0.state == .failed || $0.state == .working
                     || $0.ancestryUnresolved || $0.attention.contains { $0.kind == .error }
@@ -609,7 +609,7 @@ enum SidebarPresentation {
     ) -> Set<UUID> {
         guard !showEnded, [.ready, .partial].contains(availability),
               (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt)),
-              [.ready, .partial].contains(observations.availability),
+              observations.availability == .ready,
               !observations.issues.contains(.permissionDenied),
               let generatedAt = observations.generatedAt,
               SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }

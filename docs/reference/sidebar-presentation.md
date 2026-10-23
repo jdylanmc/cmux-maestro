@@ -64,12 +64,13 @@ They never substitute another session or a moved/recreated surface. A missing
 surface disables focus; a captured action invalidated before invocation reports
 stale navigation, not a Details popover.
 
-With current observation access, an existing terminal reverts to its normal
+With current, complete observation access, an existing terminal reverts to its normal
 terminal row when its managed process is verified ended (controller process
 disappearance, exact dead-session observation, or generation-matched exited
 process evidence), with no live or uncertain observed occupant and **Show ended
 agents** off. Undismissed failures, reported blockers, blocking/error attention,
-failed/blocked or internal tasks, and incomplete child evidence prevent reversion.
+failed/blocked or internal tasks, and degraded or omitted child evidence prevent reversion.
+Dead-process liveness alone is not incomplete evidence.
 History/attention storage failures keep ended rows visible. Only presentation
 changes: retained nodes, generations, history, capacity and live descendants stay
 untouched. Missing surfaces keep the existing **Show ended agents** policy.
