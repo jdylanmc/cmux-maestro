@@ -385,6 +385,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         let startedAt: Date?
         var causalTip: String
         var requiresCausalProof: Bool
+        let requiresOccurrenceProof: Bool
     }
     private struct TurnOrigin: Sendable {
         let eventID: String
@@ -760,6 +761,7 @@ nonisolated struct CopilotEventReducer: Sendable {
     private mutating func startTurn(_ event: CopilotEventProjection) {
         guard let turn = event.turnID else { return }
         let key = Self.turnKey(turn, owner: event.agentID, interaction: event.interactionID)
+        let repeatedScope = event.interactionID != nil && replay.match(key) == .exact
         let reusedRawTurn = replay.match(Self.rawTurnKey(turn, owner: event.agentID)) != .absent
             || (event.interactionID != nil && replay.match(Self.turnKey(turn, owner: event.agentID)) != .absent)
         guard prepareInteraction(event) else { limitLifecycle(event); return }
@@ -770,7 +772,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             admitted = startRootTurn(event, turn: turn, key: key)
         }
         guard admitted else { return }
-        openTurn(event, turn: turn, requiresCausalProof: reusedRawTurn)
+        openTurn(event, turn: turn, requiresCausalProof: reusedRawTurn, requiresOccurrenceProof: repeatedScope)
     }
 
     private mutating func startAgentTurn(
@@ -821,7 +823,10 @@ nonisolated struct CopilotEventReducer: Sendable {
         return true
     }
 
-    private mutating func openTurn(_ event: CopilotEventProjection, turn: String, requiresCausalProof: Bool) {
+    private mutating func openTurn(
+        _ event: CopilotEventProjection, turn: String,
+        requiresCausalProof: Bool, requiresOccurrenceProof: Bool
+    ) {
         let owner = Owner(agentID: event.agentID)
         if event.agentID == nil {
             rootStartedAt = event.timestamp
@@ -833,7 +838,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
         turns[owner] = Turn(
             id: turn, interactionID: event.interactionID, eventID: event.id,
-            startedAt: event.timestamp, causalTip: event.id, requiresCausalProof: requiresCausalProof
+            startedAt: event.timestamp, causalTip: event.id, requiresCausalProof: requiresCausalProof,
+            requiresOccurrenceProof: requiresOccurrenceProof
         )
         lastToolActivity.removeValue(forKey: owner)
         stopTools(owner: owner)
@@ -856,10 +862,10 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func endsActiveTurn(_ event: CopilotEventProjection, activeTurn: Turn, turn: String) -> Bool {
         guard activeTurn.id == turn else { return false }
-        if let interaction = event.interactionID {
-            return interaction == activeTurn.interactionID
-        }
-        if activeTurn.requiresCausalProof && !isCausallyLinked(event, to: activeTurn) {
+        if let interaction = event.interactionID, interaction != activeTurn.interactionID { return false }
+        let needsProof = activeTurn.requiresOccurrenceProof
+            || (event.interactionID == nil && activeTurn.requiresCausalProof)
+        if needsProof && !isCausallyLinked(event, to: activeTurn) {
             markTurnUnknown(owner: event.agentID)
             addIssue(.ambiguousTurn)
             return false
@@ -1120,7 +1126,13 @@ nonisolated struct CopilotEventReducer: Sendable {
         var uncertain = false
         for key in keys {
             switch replay.match(key) {
-            case .exact: return .exact
+            case .exact:
+                // Copilot restarts turn counters within one interaction. The
+                // fresh start event identifies that occurrence; event replay
+                // and retired interactions still refuse before dispatch.
+                if event.kind == .turnStart, key == start, let interaction = event.interactionID,
+                   interaction == currentInteraction(owner: event.agentID) { continue }
+                return .exact
             case .uncertain: uncertain = true
             case .absent: break
             }
@@ -1395,6 +1407,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         if event.kind == .assistantMessage, event.messageHasTurnMetadata {
             guard let interaction = event.interactionID, interaction == turn.interactionID,
                   event.turnID == turn.id else { return }
+            // Repeated tags alone cannot distinguish an earlier occurrence.
+            guard !turn.requiresOccurrenceProof || isCausallyLinked(event, to: turn) else { return }
         } else {
             guard isCausallyLinked(event, to: turn) else { return }
         }

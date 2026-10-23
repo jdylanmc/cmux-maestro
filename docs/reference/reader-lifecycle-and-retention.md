@@ -40,8 +40,21 @@ It is not a counter or inferred user-message epoch. Retired interaction identiti
 use existing bounded replay guard. New primary interaction does not reset
 still-running children or their pending requests.
 
+Copilot also restarts the turn counter within the same interaction. A fresh
+`assistant.turn_start` event UUID establishes a new occurrence in the current
+interaction, even if its owner/interaction/turn tuple was already seen.
+Exact event replays, retired interactions and uncertain replay-filter matches
+still refuse. Repeated tuples require occurrence-specific causal proof:
+matching interaction tags alone cannot anchor a message or end. Parent links
+must reach the current start or causal tip; tool evidence must retain that
+start's exact event UUID as its origin. No extra history or unbounded graph is
+retained. An accepted end establishes idle without a separate `session.idle`;
+trailing hook and usage-checkpoint envelopes do not reopen work. Neither idle
+nor those envelopes finish background children or outstanding tools.
+
 End with explicit interaction ID must match current accepted owner
-turn. Ends without that field keep legacy pairing when turn identity is
+turn (and needs causal proof when the entire tuple repeats).
+Ends without that field keep legacy pairing when turn identity is
 unambiguous. For reused IDs, they need current causal parent or uniquely
 matched tool completion whose start tied to current turn. Across ignored payload-bearing events, use only envelope
 IDs/parent links. Never decode prompt,

@@ -91,7 +91,7 @@ nonisolated struct CopilotInteractionTests {
         for row in rows.dropFirst(20) { try fixture.append(row + Data([10])) }
         let finished = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(finished.sessions.first?.state == .idle)
-        #expect(finished.sessions.first?.sessionIssues == (bounded ? [.readLimitReached] : []))
+        #expect(finished.sessions.first?.sessionIssues == (bounded ? [.readLimitReached] : nil))
         #expect(finished.isComplete == !bounded)
         #expect(interactionTree(finished, fixture: fixture).sessions.first?.state == .idle)
         #expect(await reader.hasPendingHistory() == false)
