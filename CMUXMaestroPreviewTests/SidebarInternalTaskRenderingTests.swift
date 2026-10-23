@@ -6,6 +6,49 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test func cachedManagedInternalTaskGroupMatchesUncachedPresentation() async throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let preferences = fixture.preferences()
+        let data = SidebarTreeFixtures()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let model = await makeModel(data, children: [data.child("working", state: .working)], now: now, managed: true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { model.copilot.tree.sessions.count == 1 }
+        let tree = model.copilot.tree
+        let nodes = model.orchestration.snapshot.nodes
+        let owner = try #require(nodes.first)
+        preferences.setExpanded(true, for: .managed(owner.id))
+        let placements = SidebarPlacementCache().placements(tree: tree, managed: nodes, now: now)
+        func render(_ snapshot: SidebarPlacementCache.Snapshot?) throws -> Data {
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 200),
+                                  styleMask: .borderless, backing: .buffered, defer: false)
+            window.isReleasedWhenClosed = false
+            window.appearance = NSAppearance(named: .aqua)
+            let host = NSHostingView(rootView: ManagedHierarchyContent(
+                polling: model.orchestration, hierarchy: model.hierarchy, navigation: model.navigation,
+                layout: preferences.layout, setExpanded: { _, _ in },
+                selectedNode: .constant(nil), dismiss: { _ in }, acknowledge: { _ in },
+                selection: .constant(nil), showsWorkspaceHeaders: false,
+                displayNodes: nodes, copilotTree: tree, placementSnapshot: snapshot
+            ).environment(preferences)
+                .environment(\.sidebarPresentationNow, { now })
+                .environment(\.sidebarFocusedSurface, .surface(workspaceID: data.workspaceA, surfaceID: data.surfaceA))
+                .environment(\._accessibilityReduceMotion, true)
+                .frame(width: 350, height: 200, alignment: .topLeading).background(Color.white))
+            window.contentView = host
+            defer { window.contentView = nil; window.close() }
+            host.layoutSubtreeIfNeeded()
+            #expect(names(host).count == 1)
+            let bitmap = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: bitmap)
+            return Data(bytes: try #require(bitmap.bitmapData), count: bitmap.bytesPerRow * bitmap.pixelsHigh)
+        }
+        let uncached = try render(nil)
+        let cached = try render(placements)
+        #expect(cached == uncached, "Cached ownership preserves the expanded internal-task group's focus bar")
+    }
+
     @Test func collapsedActivityRendersStaticWorkingRingAndCount() throws {
         func pixels<V: View>(_ content: V) throws -> Data {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 60, height: 32),
