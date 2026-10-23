@@ -94,8 +94,10 @@ nonisolated enum CopilotIssue: String, Codable, Equatable, Sendable {
     // Cosmetic issues describe optional sidecars; they never affect trust or completeness.
     var isCosmetic: Bool { self == .appearanceUnavailable }
 
-    // Identity doubt about one bound session; it must not invalidate other sessions.
-    var isSessionScoped: Bool { self == .ambiguousIdentity || self == .identityChanged }
+    // Exact-session identity or read failures must not invalidate healthy siblings.
+    var isSessionScoped: Bool {
+        self == .ambiguousIdentity || self == .identityChanged || self == .stateUnavailable
+    }
 }
 
 nonisolated struct CopilotSnapshot: Codable, Equatable, Sendable {

@@ -149,6 +149,84 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test(arguments: ["marker", "tail"])
+    func oneUnavailableSessionDoesNotHideHealthySibling(_ failure: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        let otherID = try #require(UUID(uuidString: other.lastPathComponent))
+        try fixture.writeEvents([
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "live"]),
+            copilotTestEvent("tool.execution_start", data: ["toolCallId": "work", "toolName": "task"]),
+            copilotTestEvent("subagent.started", agent: "work", data: [
+                "toolCallId": "work", "agentDisplayName": "Synthetic work"
+            ])
+        ])
+        try Data("name: Synthetic healthy session\n".utf8).write(to: fixture.session.appendingPathComponent("workspace.yaml"))
+        let appearance = fixture.bindings.appendingPathComponent("appearance-\(fixture.sessionID.uuidString.lowercased()).json")
+        try JSONEncoder().encode(CopilotSessionAppearance(sessionID: fixture.sessionID, petId: "synthetic-pet"))
+            .write(to: appearance)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: appearance.path)
+        let otherEvents = other.appendingPathComponent("events.jsonl")
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: otherEvents)
+        if failure == "tail" { try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock")) }
+        let topology = SidebarTopology(.init(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available([fixture.surface, otherSurface].map {
+                    .init(id: $0, title: "Synthetic", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                })
+            )], windowID: UUID()
+        ))
+        let clock = HistoryTestClock(initial)
+        let reader = fixture.reader(clock: { clock.advance(0.1); return clock.read() })
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        defer { poller.setVisible(false) }
+        poller.update(topology: topology, connected: true)
+        poller.setVisible(true)
+        for index in 1...2 {
+            await sidebarEventually { await harness.reads == index }
+            if index == 2 && failure == "tail" { try FileManager.default.removeItem(at: otherEvents) }
+            let source = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
+            let observed = try #require(source.sessions.first { $0.sessionID == fixture.sessionID })
+            #expect(observed.observedAt < source.generatedAt)
+            #expect(!source.issues.contains(.stateUnavailable))
+            if failure == "marker" || index == 2 {
+                #expect(!source.isComplete)
+                #expect(source.sessions.first { $0.sessionID == otherID }?.sessionIssues == [.stateUnavailable])
+            }
+            await harness.succeed(source)
+            await sidebarEventually { await harness.isPaused }
+            let healthy = poller.tree.sessions.first { $0.id == fixture.sessionID }
+            #expect(healthy?.state == .working)
+            #expect(healthy?.nodes.contains { $0.id == "work" && $0.state == .working } == true)
+            #expect(healthy?.petId == "synthetic-pet")
+            #expect(poller.tree.eligibleSessionName(
+                id: fixture.sessionID, workspaceID: fixture.workspace, surfaceID: fixture.surface, now: clock.read()
+            ) == "Synthetic healthy session")
+            if index == 2 {
+                #expect(!poller.tree.statusSessions.contains { $0.id == fixture.sessionID })
+                if failure == "tail" {
+                    #expect(poller.tree.statusSessions.first { $0.id == otherID }?.lastKnownState == .idle)
+                } else {
+                    #expect(poller.tree.sessions.first { $0.id == otherID }?.liveness == .unknown)
+                }
+            } else {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test func observedViewSnapshotStaysFreshDuringUnchangedPolling() async throws {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()

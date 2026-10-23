@@ -483,7 +483,8 @@ actor CopilotSessionReader {
             batch.madeProgress = batch.madeProgress
                 || (read.advanced && (fastDiscoveryCycle || read.previouslyPublished))
             batch.unreadHistory = batch.unreadHistory || read.hasUnread
-            batch.issues += read.issues
+            recordIssues(read.issues.filter { $0 == .stateUnavailable }, for: id, batch: &batch)
+            batch.issues += read.issues.filter { $0 != .stateUnavailable }
             var result = observation(
                 record, liveness: .alive, now: read.tail.lastCompleteAt ?? batch.now,
                 value: read.tail.lastComplete ?? CopilotReducedState()
