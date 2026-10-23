@@ -291,8 +291,9 @@ Notable changes are recorded using Keep a Changelog categories.
   those overlays. Secure reads and clock-boundary checks remain in place (#334).
 
 - An unavailable session no longer hides healthy agents' current states, names,
-  pets or child work. Read failures stay scoped to their exact session; retained
-  status remains explicitly unknown rather than fresh.
+  pets or child work. Unavailable state and verifier-unknown observations stay
+  scoped to their exact session; retained status remains explicitly unknown
+  rather than fresh. Other identity and permission failures remain global.
 
 - Binding-file updates wake sidebar readers without rebuilding their watchers.
   Missing session directories no longer disable healthy watches or bindings
