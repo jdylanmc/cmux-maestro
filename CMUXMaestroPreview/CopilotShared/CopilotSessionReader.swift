@@ -69,6 +69,7 @@ actor CopilotSessionReader {
     private var cycleOverflowed = false
     private var cycleIssues: [CopilotIssue] = []
     private var bindingsByID: [UUID: Binding] = [:]
+    private var endedBindingsBySurface: [UUID: Binding] = [:]
     private var bindingOrder: [UUID] = []
     private var selectedSurfaces: Set<UUID> = []
     private var waitingBinding: Binding?
@@ -170,6 +171,7 @@ actor CopilotSessionReader {
             let outcome = try readSession(entry, index: index, root: root, budget: &byteBudget, now: now)
             absorb(outcome, for: entry.record, batch: &batch)
         }
+        try appendEndedObservations(index, batch: &batch)
         try decorateObservations(index, batch: &batch)
         fenceObservations(index, batch: &batch)
         return try publish(index, batch: batch)
@@ -288,6 +290,7 @@ actor CopilotSessionReader {
                     continue
                 }
                 if verifier.lookup(record.ownerPID) == .dead {
+                    rememberEnded(Binding(record: record, stamp: stamp, filename: cached.filename))
                     bindingsByID.removeValue(forKey: id)
                     continue
                 }
@@ -313,6 +316,7 @@ actor CopilotSessionReader {
                 recordCycleIssue(.unsupportedFormat)
                 waitingBinding = nil
             } else if verifier.lookup(record.ownerPID) == .dead {
+                rememberEnded(Binding(record: record, stamp: stamp, filename: waiting.filename))
                 waitingBinding = nil
             } else {
                 let entry = Binding(record: record, stamp: stamp, filename: waiting.filename)
@@ -350,8 +354,11 @@ actor CopilotSessionReader {
                 guard record.schemaVersion == 1 else { recordCycleIssue(.unsupportedFormat); continue }
                 // Ended bindings can outlive their session directories. Only proven
                 // owner death releases capacity; missing files or unknown probes do not.
-                guard verifier.lookup(record.ownerPID) != .dead else { continue }
                 let entry = Binding(record: record, stamp: stamp, filename: name)
+                if verifier.lookup(record.ownerPID) == .dead {
+                    rememberEnded(entry)
+                    continue
+                }
                 if bindingsByID[record.sessionID] == nil {
                     guard admit(entry) else {
                         waitingBinding = entry
@@ -384,14 +391,12 @@ actor CopilotSessionReader {
     private func publishEmptyCohort(
         _ index: BindingIndex, discoveryIncomplete: Bool, batch: Batch
     ) throws -> CopilotSnapshot {
-        var issues = batch.issues
-        if !discoveryIncomplete { issues.append(.noIdentityRecords) }
-        if (try CopilotFileAccess.statFile(index.descriptor)) != discoveryStamp {
-            cycleChanged = true
-            issues.append(.readLimitReached)
-        }
-        finishDiscoveryCycle()
-        return snapshot(now: batch.now, observations: [], issues: issues)
+        var batch = batch
+        try appendEndedObservations(index, batch: &batch)
+        if !discoveryIncomplete && batch.observations.isEmpty { batch.issues.append(.noIdentityRecords) }
+        try decorateObservations(index, batch: &batch)
+        fenceObservations(index, batch: &batch)
+        return try publish(index, batch: batch)
     }
 
     // Move the first cached identity to the end after each batch so a large
@@ -488,6 +493,14 @@ actor CopilotSessionReader {
             publishedCohort.remove(id)
             batch.issues.append(.identityChanged)
         case .contentFree(let liveness, let issues):
+            if liveness == .dead, let entry = bindingsByID.removeValue(forKey: id) {
+                rememberEnded(entry)
+                bindingOrder.removeAll { $0 == id }
+                tails.removeValue(forKey: id)
+                sessionNames.forget(id)
+                publishedCohort.remove(id)
+                return
+            }
             // Private replay evidence survives uncertainty; no cached state is published.
             sessionNames.forget(id)
             publishedCohort.insert(id)
@@ -521,6 +534,75 @@ actor CopilotSessionReader {
     private func recordIssues(_ issues: [CopilotIssue], for id: UUID, batch: inout Batch) {
         batch.scopedIssues[id, default: []] += issues.filter(\.isSessionScoped)
         batch.issues += issues.filter { !$0.isSessionScoped }
+    }
+
+    private func rememberEnded(_ entry: Binding) {
+        let surface = entry.record.surfaceID
+        if let previous = endedBindingsBySurface[surface] {
+            let newer = entry.record.recordedAt > previous.record.recordedAt
+                || (entry.record.recordedAt == previous.record.recordedAt
+                    && entry.record.sessionID.uuidString > previous.record.sessionID.uuidString)
+            guard newer || entry.record.sessionID == previous.record.sessionID else { return }
+        } else if endedBindingsBySurface.count >= limits.maximumBindings {
+            recordCycleIssue(.readLimitReached)
+            return
+        }
+        endedBindingsBySurface[surface] = entry
+    }
+
+    private func appendEndedObservations(_ index: BindingIndex, batch: inout Batch) throws {
+        for (surface, cached) in endedBindingsBySurface {
+            try Task.checkCancellation()
+            let entry: Binding
+            do {
+                let (record, stamp) = try readIdentity(at: index.descriptor, filename: cached.filename)
+                guard selectedSurfaces.contains(record.surfaceID),
+                      Self.sameBindingIdentity(cached.record, record) else {
+                    endedBindingsBySurface.removeValue(forKey: surface)
+                    batch.issues.append(.identityChanged)
+                    continue
+                }
+                guard bindingsByID[record.sessionID] == nil, verifier.lookup(record.ownerPID) == .dead else {
+                    endedBindingsBySurface.removeValue(forKey: surface)
+                    continue
+                }
+                entry = Binding(record: record, stamp: stamp, filename: cached.filename)
+                endedBindingsBySurface[surface] = entry
+            } catch {
+                try Self.rethrowCancellation(error)
+                endedBindingsBySurface.removeValue(forKey: surface)
+                batch.issues.append(Self.issue(error, missing: .identityChanged))
+                continue
+            }
+            let status: CopilotIdentityStatus
+            do {
+                status = try inspectEndedOwner(entry.record, index: index)
+            } catch {
+                try Self.rethrowCancellation(error)
+                recordIssues([Self.issue(error)], for: entry.record.sessionID, batch: &batch)
+                status = .unknown
+            }
+            recordIssues(status == .alive ? [.identityChanged] : Self.issues(status),
+                         for: entry.record.sessionID, batch: &batch)
+            batch.observations.append(observation(
+                entry.record, liveness: status == .alive ? .ambiguous : Self.liveness(status), now: batch.now
+            ))
+        }
+    }
+
+    private func inspectEndedOwner(_ record: CopilotIdentityRecord, index: BindingIndex) throws -> CopilotIdentityStatus {
+        do {
+            let root = try CopilotFileAccess.openDirectory(index.directories.sessions, owner: verifier.uid)
+            defer { close(root) }
+            let session = try CopilotFileAccess.openDirectory(
+                at: root, name: record.sessionID.uuidString.lowercased(), owner: verifier.uid
+            )
+            defer { close(session) }
+            return try verifier.inspect(record: record, sessionDirectory: session).status
+        } catch CopilotFileError.missing {
+            // Owner death was proved independently; a removed directory cannot revive it.
+            return .dead
+        }
     }
 
     // A missing or invalid location only hides the branch row; it never degrades the session.
@@ -647,13 +729,19 @@ actor CopilotSessionReader {
     private func fenceObservations(_ index: BindingIndex, batch: inout Batch) {
         var fenced: [CopilotSessionObservation] = []
         for observation in batch.observations {
-            guard let entry = bindingsByID[observation.sessionID],
+            let active = bindingsByID[observation.sessionID]
+            let ended = endedBindingsBySurface[observation.surfaceID].flatMap {
+                $0.record.sessionID == observation.sessionID ? $0 : nil
+            }
+            guard let entry = active ?? ended,
+                  active != nil || verifier.lookup(entry.record.ownerPID) == .dead,
                   (try? bindingRemainsValid(
                     entry.record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
                   )) == true else {
                 tails.removeValue(forKey: observation.sessionID)
                 bindingsByID.removeValue(forKey: observation.sessionID)
                 publishedCohort.remove(observation.sessionID)
+                if ended != nil { endedBindingsBySurface.removeValue(forKey: observation.surfaceID) }
                 batch.issues.append(.identityChanged)
                 continue
             }
@@ -667,7 +755,7 @@ actor CopilotSessionReader {
             resetDiscovery()
             return snapshot(now: batch.now, observations: [], issues: [.identityChanged])
         }
-        var issues = batch.issues
+        var issues = batch.issues + cycleIssues
         if (try CopilotFileAccess.statFile(index.descriptor)) != discoveryStamp {
             cycleChanged = true
             issues.append(.readLimitReached)
@@ -688,6 +776,7 @@ actor CopilotSessionReader {
     }
 
     func identityCacheCount() -> Int { identityCache.count }
+    func endedBindingCount() -> Int { endedBindingsBySurface.count }
 
     private func resetDiscovery() {
         discovery?.closeStream()
@@ -698,6 +787,7 @@ actor CopilotSessionReader {
         // Discovery is not an ownership change. Current grants are revalidated
         // before any retained session is read or published on the next pass.
         bindingsByID = bindingsByID.filter { selectedSurfaces.contains($0.value.record.surfaceID) }
+        endedBindingsBySurface = endedBindingsBySurface.filter { selectedSurfaces.contains($0.key) }
         bindingOrder.removeAll { bindingsByID[$0] == nil }
         let retained = Set(bindingsByID.keys)
         tails = tails.filter { retained.contains($0.key) }

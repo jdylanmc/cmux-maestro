@@ -1640,6 +1640,76 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.retentionCounts().tails == 1)
     }
 
+    @Test(arguments: ["removed", "rerouted", "resumed", "uncertain"])
+    func endedRowsRevalidateTheirExactBindingAndOwner(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let clock = CopilotReaderTestClock()
+        let successor = CopilotProcessIdentity(pid: 8888, parentPID: 1, uid: getuid(), startSeconds: 1, startMicroseconds: 0)
+        let reader = fixture.reader(lookup: { pid in
+            if pid == successor.pid { return .found(successor) }
+            return clock.now().timeIntervalSince1970 < 2001 ? .dead : .unavailable
+        })
+        let first = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(first.sessions.first?.liveness == .dead)
+        #expect(await reader.eventReadBytes == 0)
+        switch change {
+        case "removed":
+            try FileManager.default.removeItem(at: fixture.bindings.appendingPathComponent(
+                fixture.sessionID.uuidString.lowercased() + ".json"
+            ))
+        case "uncertain":
+            clock.advance(by: 1)
+        default:
+            try fixture.writeRecord(.init(
+                sessionID: fixture.sessionID, surfaceID: change == "rerouted" ? UUID() : fixture.surface,
+                launchWorkspaceID: fixture.workspace,
+                ownerPID: change == "resumed" ? successor.pid : fixture.process.pid,
+                ownerStartSeconds: 1, ownerStartMicroseconds: 0, recordedAt: fixture.record.recordedAt
+            ), atomic: true)
+            if change == "resumed" {
+                try Data().write(to: fixture.session.appendingPathComponent("inuse.\(successor.pid).lock"))
+                try fixture.writeEvents([copilotTestEvent("session.idle")])
+            }
+        }
+        let next = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(!next.sessions.contains { $0.liveness == .dead })
+        #expect(await reader.endedBindingCount() == 0)
+        if change == "resumed" {
+            #expect(next.sessions.first?.liveness == .alive)
+            #expect(next.sessions.first?.state == .idle)
+        } else if change == "uncertain" {
+            #expect(next.sessions.first?.liveness == .unknown)
+        } else {
+            #expect(next.sessions.isEmpty)
+        }
+    }
+
+    @Test func endedObservationCacheIsBoundedSeparatelyFromActiveTails() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        var surfaces: Set<UUID> = [fixture.surface]
+        for _ in 0..<8 {
+            let surface = UUID()
+            surfaces.insert(surface)
+            _ = try fixture.addSession(surface: surface)
+        }
+        let reader = fixture.reader(limits: .init(maximumSessions: 1, maximumBindings: 2), lookup: { _ in .dead })
+        for _ in 0..<10 {
+            let snapshot = try await reader.read(surfaceIDs: surfaces)
+            #expect(snapshot.sessions.count <= 2)
+            #expect(snapshot.sessions.allSatisfy { $0.liveness == .dead })
+            #expect(!snapshot.isComplete && snapshot.issues.contains(.readLimitReached))
+            #expect(await reader.endedBindingCount() <= 2)
+            #expect(await reader.retentionCounts().bindings == 0)
+            #expect(await reader.retentionCounts().tails == 0)
+            #expect(await reader.eventReadBytes == 0)
+        }
+        let revoked = try await reader.read(surfaceIDs: [])
+        #expect(revoked.sessions.isEmpty && revoked.isComplete)
+        #expect(await reader.endedBindingCount() == 0)
+    }
+
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {
         .init(
             schemaVersion: record.schemaVersion, sessionID: record.sessionID,

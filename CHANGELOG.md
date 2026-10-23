@@ -300,6 +300,8 @@ Notable changes are recorded using Keep a Changelog categories.
   keep their slots; verified-dead owners release them, even when their session
   directories are missing. Historical dead bindings cannot block live admission.
   Missing files alone never evict an uncertain owner's replay evidence.
+  A separate bounded ended-row cache preserves **Show ended agents** and
+  **Process ended** without keeping transcript tails for dead owners.
 
 - An unavailable session no longer hides healthy agents' current states, names,
   pets or child work. Unavailable state and verifier-unknown observations stay

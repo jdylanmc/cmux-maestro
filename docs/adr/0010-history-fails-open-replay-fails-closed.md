@@ -44,6 +44,15 @@ until owner death or a selection/binding change frees capacity. Missing files,
 permission failures and unknown probes alone do not release observed replay
 evidence. Do not rotate live/uncertain tails or fast-retry a capacity wait.
 
+Ended presentation is separate from active-tail capacity. Retain the newest
+verified-dead owner's binding per selected surface, at most `maximumBindings`
+records, without transcript state or replay guards. Binding time orders only
+these already-proven ended candidates; it never proves ownership or death.
+Revalidate routing and owner evidence before publishing content-free ended rows.
+Conflicting live markers remain ambiguous. Overflow remains explicit. This
+preserves ended-agent visibility without letting historical bindings pin live
+admission.
+
 ## Clarification (2026-10-21, #269): isolate child-local doubt
 
 An invalid child field or disagreement between its legacy and observed

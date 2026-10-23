@@ -390,6 +390,14 @@ independent terminal. This literal #10 integration does not complete broader
   limit warning. Additional sessions remain unavailable until an admitted owner
   is verified dead or a selection/binding change frees capacity. Live/uncertain
   replay evidence is never evicted for them.
+  Content-free ended observations use a separate cache: newest proven-dead
+  binding owner per selected surface, at most `maximumBindings` entries. Each
+  emitted row revalidates its binding and owner; missing session directories do
+  not suppress proven death, while conflicting live markers remain ambiguous.
+  This cache holds no transcript/replay state and cannot consume active slots.
+  Binding timestamps select among already verified ended candidates only.
+  It preserves **Show ended agents**, **Process ended**, Beats ended styling
+  and dead-status retention. Cache overflow reports `readLimitReached`.
   Only full, unchanged, non-overflowed cycle without errors can be complete.
   Check cached bindings before process/transcript access and publication.
   Discovery restarts, cancellation and unrelated topology changes retain private
