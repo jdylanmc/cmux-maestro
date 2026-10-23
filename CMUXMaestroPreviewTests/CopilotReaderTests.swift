@@ -1679,7 +1679,8 @@ nonisolated struct CopilotReaderTests {
             #expect(next.sessions.first?.liveness == .alive)
             #expect(next.sessions.first?.state == .idle)
         } else if change == "uncertain" {
-            #expect(next.sessions.first?.liveness == .unknown)
+            #expect(next.sessions.first?.liveness == .ambiguous)
+            #expect(next.sessions.first?.sessionIssues?.contains(.ambiguousIdentity) == true)
         } else {
             #expect(next.sessions.isEmpty)
         }
