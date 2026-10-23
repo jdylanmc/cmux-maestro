@@ -1532,6 +1532,83 @@ nonisolated struct CopilotReaderTests {
         #expect(session.attention?.contains { $0.kind.isBlocking } == false)
     }
 
+    @Test(arguments: [false, true])
+    func historicalDeadBindingsCannotOccupyLiveCapacity(missingDirectories: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        let ids = [fixture.sessionID] + (0..<130).map { _ in UUID() }
+        for id in ids {
+            try fixture.writeRecord(.init(
+                sessionID: id, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
+                ownerPID: 7777, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+                recordedAt: fixture.record.recordedAt
+            ))
+            if !missingDirectories {
+                try FileManager.default.createDirectory(
+                    at: fixture.sessions.appendingPathComponent(id.uuidString.lowercased()),
+                    withIntermediateDirectories: true
+                )
+            }
+        }
+        let reader = fixture.reader(limits: .init(maximumSessions: 2, maximumBindings: 16))
+        for _ in 0..<3 { _ = try await reader.read(surfaceIDs: [fixture.surface]) }
+        let live = try fixture.addSession(surface: fixture.surface)
+        let liveID = try #require(UUID(uuidString: live.lastPathComponent))
+        try Data().write(to: live.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: live.appendingPathComponent("events.jsonl"))
+        var admitted = false
+        for _ in 0..<20 {
+            let snapshot = try await reader.read(surfaceIDs: [fixture.surface])
+            admitted = admitted || snapshot.sessions.contains { $0.sessionID == liveID && $0.state == .idle }
+            #expect(await reader.retentionCounts().bindings <= 2)
+        }
+        #expect(admitted)
+        #expect(await reader.retentionCounts().bindings == 1)
+        #expect(await reader.hasPendingHistory() == false)
+    }
+
+    @Test(arguments: [false, true])
+    func verifiedOwnerDeathReleasesSlotButUnknownOwnerDoesNot(missingDirectory: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let clock = CopilotReaderTestClock()
+        let owner = fixture.process
+        let successor = CopilotProcessIdentity(pid: 8888, parentPID: 1, uid: getuid(), startSeconds: 1, startMicroseconds: 0)
+        let reader = fixture.reader(limits: .init(maximumSessions: 1), lookup: { pid in
+            if pid == successor.pid { return .found(successor) }
+            guard pid == owner.pid else { return .dead }
+            switch clock.now().timeIntervalSince1970 {
+            case ..<2001: return .found(owner)
+            case ..<2002: return .unavailable
+            default: return .dead
+            }
+        })
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        let live = try fixture.addSession(surface: fixture.surface)
+        let liveID = try #require(UUID(uuidString: live.lastPathComponent))
+        try fixture.writeRecord(.init(
+            sessionID: liveID, surfaceID: fixture.surface, launchWorkspaceID: fixture.workspace,
+            ownerPID: successor.pid, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+            recordedAt: fixture.record.recordedAt
+        ))
+        try Data().write(to: live.appendingPathComponent("inuse.\(successor.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: live.appendingPathComponent("events.jsonl"))
+        _ = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(await reader.retentionCounts().waiting == 1)
+        clock.advance(by: 1)
+        let uncertain = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(uncertain.sessions.map(\.sessionID) == [fixture.sessionID])
+        #expect(await reader.retentionCounts().tails == 1)
+        if missingDirectory { try FileManager.default.removeItem(at: fixture.session) }
+        clock.advance(by: 1)
+        let released = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(released.sessions.map(\.sessionID) == [liveID])
+        #expect(released.sessions.first?.state == .idle)
+        #expect(await reader.retentionCounts().tails == 1)
+    }
+
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {
         .init(
             schemaVersion: record.schemaVersion, sessionID: record.sessionID,
