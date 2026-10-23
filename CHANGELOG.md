@@ -279,14 +279,19 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Binding-file updates wake sidebar readers without rebuilding their watchers.
+  Missing session directories no longer disable healthy watches or bindings
+  notifications (#328).
+
 - Sidebar session and managed-agent changes wake their readers through coalesced
   file notifications for shown/bound sessions, not every session on the machine.
   Binding-directory notifications are non-recursive. The two-second safety
   poll and independent freshness deadlines remain; unavailable notifications
   fall back without widening sandbox grants (#325).
 
-- Unchanged sidebar observations no longer rebuild the session tree or invalidate
-  its presentation every poll. Explicit one-shot deadlines keep managed-node,
+- Unchanged sidebar observations no longer rebuild the session tree. Refreshed
+  timestamps still reach value-based views so independent redraws retain current
+  status, session names and pets. Explicit one-shot deadlines keep managed-node,
   branch-summary, Git and process freshness current even without Copilot updates;
   history expiry, future-dated evidence and observation-loss grace still advance
   independently (#321).

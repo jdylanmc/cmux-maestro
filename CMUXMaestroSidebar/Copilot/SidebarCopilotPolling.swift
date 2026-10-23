@@ -20,7 +20,8 @@ final class SidebarCopilotPolling {
             return storedTree
         }
         set {
-            if storedTree.hasSamePresentation(as: newValue) {
+            // Children retain value snapshots and re-check freshness on independent redraws.
+            if storedTree == newValue {
                 storedTree = newValue
             } else {
                 withMutation(keyPath: \.tree) { storedTree = newValue }

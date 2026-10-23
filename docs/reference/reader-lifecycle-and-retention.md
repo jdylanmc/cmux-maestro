@@ -182,16 +182,17 @@ the projection. One-shot deadlines cover history expiry, future display times,
 observation freshness and status grace; no extra timer polls the projection.
 An over-limit deadline traversal disables reuse rather than ignoring evidence.
 
-Publication compares the final reconciled presentation, not intermediate trees.
-Equal output does not invalidate observation subscribers. Exact evidence times
-remain available to action-time checks; the visible minute-resolution **Observed**
-labels update when their minute changes. Event times and attention are never
-rounded. The fallback reader cadence remains two seconds; file-driven wakeups
+Publication compares the exact final reconciled tree, not intermediate trees.
+Refreshed evidence timestamps invalidate observation subscribers even when visible
+labels are unchanged: outline children retain value snapshots and may redraw
+independently against the current clock. Suppressing timestamp-only publication
+would leave those copies stale, hiding current status, session names and pets.
+Exactly equal output still avoids invalidation. The structural projection cache
+remains independent of publication. The fallback reader cadence remains two seconds; file-driven wakeups
 are coalesced separately (#325). Installed CPU/change-to-pixel acceptance remains
 a separate hosted check.
 Beats liveness, born-root naming and external tag refresh consume a separate
-bounded latest-evidence stream, not SwiftUI presentation changes. An unchanged
-render therefore cannot strand a dependent consumer with expired timestamp copies.
+bounded latest-evidence stream, independently of SwiftUI rendering.
 
 Managed presentation has its own one-shot deadline, independent of Copilot reads
 or notifications. It covers the earliest node/envelope and Git freshness boundary
@@ -219,6 +220,10 @@ callbacks never inspect event paths or read contents. Events only request the
 existing fully fenced reader, never establish identity or freshness themselves.
 Shown/bound-set changes replace the registration and request one catch-up read
 to cover the registration gap. Events from a retired subscription are discarded.
+Ordinary binding-directory `.write` events only wake the reader: they do not
+finish the stream, re-register session roots or log watcher retirement. Only
+directory `.rename`, `.delete` or `.revoke` ends that lease. The deterministic
+registration-count test drives this same callback policy, including combined flags.
 
 A newest-one stream and one pending-change flag bound bursts and changes during
 an in-flight read. The first notification opens a cancellable 200 ms coalescing
@@ -232,6 +237,11 @@ The existing two-second fallback is slower than notification delivery and is
 not shortened. Missing, unsafe or unsupported roots log a sanitized warning and
 retain polling. Root replacement, unmount or event-loss flags end the old stream,
 request a fully fenced read, and securely re-register at the next reader wakeup.
+Missing session directories are excluded when registering, with a sanitized
+notice, while the bindings directory and healthy session watches stay active.
+Those excluded sessions use fallback reads until a later scope/lease registration;
+an unchanged healthy lease does not repeatedly attempt to open missing paths.
+Unsafe or denied roots still refuse registration rather than being treated as missing.
 Failed registration is retried only on the existing read cadence, with no extra
 timer or repeated warning while unavailable. Healthy streams do not reopen
 roots on each poll. Sandbox entitlements and source read/size bounds do not change.

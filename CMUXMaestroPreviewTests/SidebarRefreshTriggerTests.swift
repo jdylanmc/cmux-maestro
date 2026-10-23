@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import Observation
 import Testing
 
@@ -318,6 +319,134 @@ struct SidebarRefreshTriggerTests {
         #expect(attempts.now().timeIntervalSince1970 == 1)
         await trigger.stop()
     }
+
+    @Test(arguments: [DispatchSource.FileSystemEvent.rename, .delete, .revoke, [.write, .rename]])
+    func bindingWritesReadWithoutReRegisteringAndReplacementRecovers(
+        invalidation: DispatchSource.FileSystemEvent
+    ) async throws {
+        let fixtures = SidebarTreeFixtures()
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let registrations = CopilotReaderTestClock(Date(timeIntervalSince1970: 0))
+        let leases = AsyncStream<SyntheticDirectoryLease>.makeStream()
+        let trigger = await SidebarRefreshTrigger.copilot(
+            bindings: URL(fileURLWithPath: "/synthetic/bindings"),
+            sessionRoot: URL(fileURLWithPath: "/synthetic/sessions"),
+            coalesce: {},
+            watch: { _ in
+                registrations.advance(by: 1)
+                let lease = SyntheticDirectoryLease()
+                leases.continuation.yield(lease)
+                return lease
+            }
+        )
+        var iterator = leases.stream.makeAsyncIterator()
+        let first = try #require(await iterator.next())
+        let reads = RefreshReadGate<CopilotSnapshot>()
+        let fallback = RefreshBarrier()
+        let value = fixtures.snapshot(sessions: [], now: date)
+        let poller = SidebarCopilotPolling(
+            read: { CopilotSnapshotAdapter.snapshot(try await reads.read(), workspaceBySurface: $0) },
+            pause: { try await fallback.wait() }, expiryPause: sidebarFrozenExpiry,
+            changes: { trigger }, now: { date }
+        )
+        defer {
+            poller.setVisible(false)
+            leases.continuation.finish()
+            Task { await reads.cancel() }
+        }
+        poller.update(topology: fixtures.topology(), connected: true)
+        poller.setVisible(true)
+        await sidebarEventually { await reads.calls == 1 }
+        await reads.complete(value)
+        await sidebarEventually { await fallback.active == 1 }
+        for index in 1...30 {
+            first.delivery.receive(.write)
+            await sidebarEventually { await reads.calls == index + 1 }
+            try #require(registrations.now().timeIntervalSince1970 == 1,
+                         "Ordinary bindings writes must not rebuild native registrations")
+            await reads.complete(value)
+            await sidebarEventually { await fallback.active == 1 }
+        }
+        first.delivery.receive(invalidation)
+        await sidebarEventually { await reads.calls == 32 }
+        #expect(registrations.now().timeIntervalSince1970 == 2)
+        let replacement = try #require(await iterator.next())
+        await reads.complete(value)
+        await sidebarEventually { await fallback.active == 1 }
+        replacement.delivery.receive(.write)
+        await sidebarEventually { await reads.calls == 33 }
+        #expect(registrations.now().timeIntervalSince1970 == 2)
+        #expect(await fallback.released == 0)
+        poller.setVisible(false)
+        await reads.complete(value)
+        await sidebarEventually { !poller.isReading }
+    }
+
+    @Test func missingSessionRootsDoNotDiscardHealthyRootsButUnsafeRootsRefuse() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/watcher-fixtures/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let healthy = root.appendingPathComponent("healthy", isDirectory: true)
+        let missing = root.appendingPathComponent("missing", isDirectory: true)
+        try FileManager.default.createDirectory(at: healthy, withIntermediateDirectories: false)
+        let scope = SidebarFileWatcher.Scope(recursive: [missing, healthy], directories: [])
+        #expect(try scope.existingRecursiveRoots(owner: getuid()) == [healthy])
+        let unsafe = root.appendingPathComponent("unsafe", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: unsafe, withDestinationURL: healthy)
+        #expect(throws: CopilotFileError.unsafePath) {
+            try SidebarFileWatcher.Scope(recursive: [missing, healthy, unsafe], directories: [])
+                .existingRecursiveRoots(owner: getuid())
+        }
+    }
+
+    @Test(arguments: ["missing", "denied", "start"])
+    func failedWatcherCreationKeepsCopilotTreeReadyOnFallback(failure: String) async throws {
+        let fixtures = SidebarTreeFixtures()
+        let clock = CopilotReaderTestClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let trigger = await SidebarRefreshTrigger.copilot(
+            bindings: URL(fileURLWithPath: "/synthetic/bindings"),
+            sessionRoot: URL(fileURLWithPath: "/synthetic/sessions"),
+            coalesce: {}, watch: { _ in
+                switch failure {
+                case "missing": throw CopilotFileError.missing
+                case "denied": throw CopilotFileError.permissionDenied
+                default: throw SidebarFileWatcher.Failure.start
+                }
+            }
+        )
+        let reads = RefreshReadGate<CopilotSnapshot>()
+        let fallback = RefreshBarrier()
+        let poller = SidebarCopilotPolling(
+            read: { CopilotSnapshotAdapter.snapshot(try await reads.read(), workspaceBySurface: $0) },
+            pause: { try await fallback.wait() }, expiryPause: sidebarFrozenExpiry,
+            changes: { trigger }, now: { clock.now() }
+        )
+        defer { poller.setVisible(false); Task { await reads.cancel() } }
+        poller.update(topology: fixtures.topology(), connected: true)
+        poller.setVisible(true)
+        for index in 1...8 {
+            await sidebarEventually { await reads.calls == index }
+            var session = fixtures.session(state: .working, now: clock.now())
+            session.sessionName = "Synthetic live session"
+            await reads.complete(fixtures.snapshot(sessions: [session], now: clock.now()))
+            if index == 1 {
+                // The first shown-set registration requests one catch-up read, even if it fails.
+                await sidebarEventually { await reads.calls == 2 }
+            } else {
+                await sidebarEventually { await fallback.active == 1 }
+            }
+            #expect(poller.tree.availability == .ready)
+            #expect(poller.tree.sessions.first?.state == .working)
+            #expect(poller.tree.sessions.first?.sessionName == "Synthetic live session")
+            if index > 1 && index < 8 {
+                clock.advance(by: 2)
+                await fallback.release()
+            }
+        }
+        #expect(await fallback.released == 6)
+        #expect(await reads.maximumActive == 1)
+    }
 }
 
 @MainActor
@@ -332,7 +461,8 @@ struct SidebarFileWatcherAcceptanceTests {
         try FileManager.default.createDirectory(at: child, withIntermediateDirectories: false)
         let file = child.appendingPathComponent("events.jsonl")
         try Data("synthetic\n".utf8).write(to: file)
-        let watcher = try SidebarFileWatcher(roots: [root])
+        let missing = root.appendingPathComponent("missing", isDirectory: true)
+        let watcher = try SidebarFileWatcher(roots: [missing, root])
         let received = RefreshCounter()
         let consumer = Task {
             for await _ in watcher.events {
@@ -353,7 +483,7 @@ struct SidebarFileWatcherAcceptanceTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: child)
         #expect(throws: CopilotFileError.self) { _ = try SidebarFileWatcher(roots: [link]) }
 
-        let directory = try SidebarFileWatcher(scope: .init(recursive: [], directories: [child]))
+        let directory = try SidebarFileWatcher(scope: .init(recursive: [missing], directories: [child]))
         let replaced = RefreshCounter()
         let bindingConsumer = Task {
             for await _ in directory.events { await replaced.increment(); break }
@@ -457,6 +587,19 @@ nonisolated private final class SyntheticFileLease: SidebarFileWatching {
         continuation.yield(())
         return true
     }
+}
+
+nonisolated private final class SyntheticDirectoryLease: SidebarFileWatching {
+    let events: AsyncStream<Void>
+    let delivery: SidebarFileWatcher.DirectoryEvents
+
+    init() {
+        let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        events = stream.stream
+        delivery = .init(continuation: stream.continuation)
+    }
+
+    deinit { delivery.continuation.finish() }
 }
 
 private actor RefreshCounter {

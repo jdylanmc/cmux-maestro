@@ -7,7 +7,120 @@ struct SidebarHistoryPollingTests {
     private let fixtures = SidebarTreeFixtures()
     private let initial = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test func unchangedPollsRefreshEvidenceWithoutProjectionOrPublication() async throws {
+    @Test func observedViewSnapshotStaysFreshDuringUnchangedPolling() async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        let node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: fixtures.sessionID,
+            executionMode: .interactive, createdAt: initial, updatedAt: initial
+        )
+        start(poller)
+        defer { poller.setVisible(false) }
+        var captured = SidebarCopilotTree.waiting
+        let invalidations = HistoryTestClock(initial)
+        var consumed = initial
+        for index in 1...7 {
+            await sidebarEventually { await harness.reads == index }
+            var observation = fixtures.session(state: .working, now: clock.read())
+            observation.sessionName = "Synthetic session"
+            observation.petId = "synthetic-pet"
+            await harness.succeed(fixtures.snapshot(sessions: [observation], now: clock.read()))
+            await sidebarEventually { await harness.isPaused }
+            if index == 1 || invalidations.read() != consumed {
+                consumed = invalidations.read()
+                // The outline passes an immutable tree to children that can redraw independently.
+                withObservationTracking {
+                    captured = poller.tree
+                } onChange: { invalidations.advance(1) }
+            }
+            #expect(SidebarPresentation.managedState(
+                node, availability: .ready, now: clock.read(), tree: captured
+            ).title == "Working")
+            #expect(SidebarPresentation.managedPet(node, tree: captured, now: clock.read())?.choice == "synthetic-pet")
+            #expect(captured.eligibleSessionName(
+                id: fixtures.sessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+                now: clock.read()
+            ) == "Synthetic session")
+            if index < 7 {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: [false, true])
+    func lateNamesAndPetsPublishThroughObservationAndEvidence(managedOnly: Bool) async throws {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let sessionID = fixtures.sessionID
+        let initial = initial
+        let poller = SidebarCopilotPolling(
+            read: { CopilotSnapshotAdapter.snapshot(try await harness.read(), workspaceBySurface: $0) },
+            readManaged: { _ in
+                let date = clock.read()
+                guard managedOnly, date > initial else { return [:] }
+                return [sessionID: .init(sessionName: "Synthetic renamed session", petId: "synthetic-pet",
+                                          readAt: date)]
+            },
+            pause: { try await harness.pause() }, expiryPause: { try await harness.wait($0) },
+            now: { clock.read() }
+        )
+        var node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "turn-running", availability: "busy", copilotSessionId: sessionID,
+            executionMode: .interactive, createdAt: initial, updatedAt: initial
+        )
+        node.enrollment = "born"
+        let managed = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: initial, complete: true, omittedCount: 0, nodes: [node]
+        )
+        poller.updateManagedSubjects(managed)
+        start(poller)
+        defer { poller.setVisible(false) }
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(fixtures.snapshot(
+            sessions: managedOnly ? [] : [fixtures.session(now: initial)], now: initial
+        ))
+        await sidebarEventually { await harness.isPaused }
+        let builds = poller.projectionCount
+        var evidence = poller.evidenceUpdates().makeAsyncIterator()
+        _ = await evidence.next()
+        let changes = HistoryTestClock(initial)
+        withObservationTracking { _ = poller.tree } onChange: { changes.advance(1) }
+
+        clock.advance(2)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        var session = fixtures.session(state: .working, now: clock.read())
+        session.sessionName = "Synthetic renamed session"
+        session.petId = "synthetic-pet"
+        await harness.succeed(fixtures.snapshot(
+            sessions: managedOnly ? [] : [session], now: clock.read()
+        ))
+        await sidebarEventually { await harness.isPaused }
+        #expect(changes.read() == initial.addingTimeInterval(1))
+        let delivered = try #require(await evidence.next())
+        for tree in [poller.tree, delivered] {
+            #expect(managed.namingBornRoots(from: tree, now: clock.read()).nodes.first?.title
+                == "Synthetic renamed session")
+            #expect(SidebarPresentation.managedPet(node, tree: tree, now: clock.read())?.choice == "synthetic-pet")
+            if !managedOnly {
+                #expect(SidebarPresentation.managedState(node, availability: .ready,
+                                                       now: clock.read(), tree: tree).title == "Working")
+            }
+        }
+        #expect(poller.projectionCount == builds + (managedOnly ? 0 : 1))
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test func unchangedPollsRefreshPublishedEvidenceWithoutProjection() async throws {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()
         let poller = poller(clock, harness)
@@ -47,7 +160,7 @@ struct SidebarHistoryPollingTests {
             #expect(beats.indicators.state(for: fixtures.sessionID) == .lit)
         }
         #expect(poller.projectionCount == builds)
-        #expect(changes.read() == initial)
+        #expect(changes.read() == initial.addingTimeInterval(1))
         #expect(poller.tree.generatedAt == clock.read().addingTimeInterval(0.25))
         #expect(poller.tree.sessions.first?.observedAt == clock.read())
         #expect(poller.tree.exactLiveSession(
