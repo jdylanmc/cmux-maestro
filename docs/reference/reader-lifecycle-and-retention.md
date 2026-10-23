@@ -186,8 +186,9 @@ Publication compares the final reconciled presentation, not intermediate trees.
 Equal output does not invalidate observation subscribers. Exact evidence times
 remain available to action-time checks; the visible minute-resolution **Observed**
 labels update when their minute changes. Event times and attention are never
-rounded. The reader cadence remains two seconds; file-driven responsiveness and
-installed CPU/change-to-pixel acceptance are separate follow-up work.
+rounded. The fallback reader cadence remains two seconds; file-driven wakeups
+are coalesced separately (#325). Installed CPU/change-to-pixel acceptance remains
+a separate hosted check.
 Beats liveness, born-root naming and external tag refresh consume a separate
 bounded latest-evidence stream, not SwiftUI presentation changes. An unchanged
 render therefore cannot strand a dependent consumer with expired timestamp copies.
@@ -202,6 +203,55 @@ sessions. Unchanged polls retain the deadline instead of postponing it, and a po
 that overtakes a due timer preserves its redraw. Visibility, topology, connection
 changes and read failures cancel obsolete deadlines. No periodic view timer is
 introduced.
+
+### File-driven reader wakeups
+
+While visible and connected, the Copilot reader watches only the exact directories
+of sessions shown (including retained-status rows) or bound on its current
+topology, capped at the reader's 64-session limit. One FSEvents stream covers those
+directories; a non-recursive directory-vnode source covers atomic changes in the
+bindings directory. The whole session-state and integration roots are never watched.
+Other sessions and unmonitored integration changes use the two-second fallback.
+The managed reader watches only the exact orchestration `observer` directory.
+Recursive session events include nested appends and atomic replacements.
+Registration securely validates the roots;
+callbacks never inspect event paths or read contents. Events only request the
+existing fully fenced reader, never establish identity or freshness themselves.
+Shown/bound-set changes replace the registration and request one catch-up read
+to cover the registration gap. Events from a retired subscription are discarded.
+
+A newest-one stream and one pending-change flag bound bursts and changes during
+an in-flight read. The first notification opens a cancellable 200 ms coalescing
+window, not a trailing debounce that continuous activity could postpone forever.
+No reads overlap, including during topology replacement: the obsolete worker and
+watcher unwind before a new scope starts. Visibility/connection/scope cancellation
+stops the stream, fallback wait and coalescing task; independent deadline timers
+retain their existing ownership.
+
+The existing two-second fallback is slower than notification delivery and is
+not shortened. Missing, unsafe or unsupported roots log a sanitized warning and
+retain polling. Root replacement, unmount or event-loss flags end the old stream,
+request a fully fenced read, and securely re-register at the next reader wakeup.
+Failed registration is retried only on the existing read cadence, with no extra
+timer or repeated warning while unavailable. Healthy streams do not reopen
+roots on each poll. Sandbox entitlements and source read/size bounds do not change.
+
+The three native callback tests are inventoried local opt-in acceptance in
+`scripts/local-ui-acceptance.json`, enabled with
+`CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE=1 ./scripts/test.sh --focused SidebarFileWatcherAcceptanceTests`.
+OS daemon/vnode scheduling is not a deterministic required-CI dependency. Required
+tests inject event delivery into the production registration plan, including
+30,000 events under 1,000 non-shown directories over a controlled 60-second
+schedule: zero event-driven reads, 30 fallback reads (0.5/s after initial discovery).
+That is a deterministic work count, not a wall-clock throughput or CPU measurement.
+No timing allowlist exception is added or hidden by the opt-in inventory.
+Native callback and controlled-clock tests are not installed ExtensionKit proof.
+After authorized installation, measure idle CPU with
+`python3 scripts/measure-sidebar-cpu.py --pid <exact-extension-pid> --output <new-private-directory>`.
+Compare matched workloads before/after (target <=2% idle CPU). For latency, use
+only a generic hosted fixture and record durable-change time to the first matching
+pixel/accessibility update, including sample count/distribution. The coordinator
+owns these acceptance checks; no production install is part of this change.
 
 Schema version stays 1. Optional observation fields preserve process liveness,
 observation time, appearance, child kinds/models/outcome-event identities, issues

@@ -20,7 +20,8 @@ struct SidebarOrchestrationDeadlineTests {
         )
         let poller = SidebarOrchestrationPolling(
             read: { snapshot }, pause: { try await harness.pause() },
-            expiryPause: { try await harness.wait($0) }, now: { clock.now() }
+            expiryPause: { try await harness.wait($0) },
+            changes: { SidebarRefreshTrigger(coalesce: {}) }, now: { clock.now() }
         )
         let copilot = SidebarCopilotTree(
             availability: unavailableCopilot ? .unavailable : .ready, sessions: [], issues: [], generatedAt: clock.now()
@@ -90,7 +91,8 @@ struct SidebarOrchestrationDeadlineTests {
         )
         let poller = SidebarOrchestrationPolling(
             read: { snapshot }, pause: { try await harness.pause() },
-            expiryPause: { try await harness.wait($0) }, now: { clock.now() }
+            expiryPause: { try await harness.wait($0) },
+            changes: { SidebarRefreshTrigger(coalesce: {}) }, now: { clock.now() }
         )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
@@ -141,7 +143,8 @@ struct SidebarOrchestrationDeadlineTests {
         )
         let poller = SidebarOrchestrationPolling(
             read: { snapshot }, pause: { try await harness.pause() },
-            expiryPause: { try await harness.wait($0) }, now: { clock.now() }
+            expiryPause: { try await harness.wait($0) },
+            changes: { SidebarRefreshTrigger(coalesce: {}) }, now: { clock.now() }
         )
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)

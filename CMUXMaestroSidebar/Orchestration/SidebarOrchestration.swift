@@ -506,6 +506,7 @@ final class SidebarOrchestrationPolling {
     typealias Read = @Sendable () async throws -> SidebarOrchestrationSnapshot
     typealias Pause = @Sendable () async throws -> Void
     typealias ExpiryPause = @Sendable (TimeInterval) async throws -> Void
+    typealias Changes = @Sendable () async -> SidebarRefreshTrigger
 
     private(set) var availability: SidebarOrchestrationAvailability = .waiting
     private(set) var snapshot = SidebarOrchestrationSnapshot.empty
@@ -523,6 +524,7 @@ final class SidebarOrchestrationPolling {
     private let expiryPause: ExpiryPause
     @ObservationIgnored private var presentationExpiry: Task<Void, Never>?
     @ObservationIgnored private var presentationDeadline: Date?
+    private let changes: Changes?
     // Observe quiescence without exposing cancellable task handles.
     private let taskFinished: @MainActor @Sendable (UInt64) -> Void
 
@@ -530,6 +532,7 @@ final class SidebarOrchestrationPolling {
         read: Read? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
         expiryPause: @escaping ExpiryPause = { try await Task.sleep(for: .seconds($0)) },
+        changes: Changes? = nil,
         now: @escaping @Sendable () -> Date = { Date() },
         taskFinished: @escaping @MainActor @Sendable (UInt64) -> Void = { _ in }
     ) {
@@ -540,6 +543,9 @@ final class SidebarOrchestrationPolling {
         self.pause = pause
         self.now = now
         self.expiryPause = expiryPause
+        self.changes = changes ?? (read == nil ? {
+            await SidebarRefreshTrigger.live { [try CopilotPaths.orchestrationObserverDirectory()] }
+        } : nil)
         self.taskFinished = taskFinished
     }
 
@@ -584,7 +590,6 @@ final class SidebarOrchestrationPolling {
         cancelPresentationExpiry()
         generation &+= 1
         worker?.cancel()
-        worker = nil
         snapshot = .empty
         projected = .empty
         availability = !visible ? .hidden : !connected ? .disconnected : .loading
@@ -598,8 +603,10 @@ final class SidebarOrchestrationPolling {
         let read = read
         let pause = pause
         let taskFinished = taskFinished
+        let changes = changes
         worker = Task { [weak self] in
             defer { taskFinished(token) }
+            let refresh = await changes?()
             while !Task.isCancelled {
                 do {
                     let raw = try await read()
@@ -638,10 +645,14 @@ final class SidebarOrchestrationPolling {
                     self.availability = .unavailable
                     self.cancelPresentationExpiry()
                 }
-                do { try await pause() } catch { break }
+                do {
+                    if let refresh { try await refresh.wait(fallback: pause) } else { try await pause() }
+                } catch { break }
             }
-            guard let self, self.generation == token else { return }
+            await refresh?.stop()
+            guard let self else { return }
             self.worker = nil
+            if self.generation != token { self.startIfNeeded() }
         }
     }
 

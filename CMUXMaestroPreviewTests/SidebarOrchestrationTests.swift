@@ -254,16 +254,16 @@ struct SidebarOrchestrationTests {
             topology: topology(workspace: workspace, surfaces: [current.surfaceId]),
             connected: true
         )
-        await sidebarEventually { gate.readCount == 2 }
-        try gate.resolve(2, with: .success(currentSnapshot))
-        await sidebarEventually { poll.snapshot.nodes == [current] && gate.pauseCount == 1 }
-
+        #expect(gate.readCount == 1, "Replacement waits for obsolete I/O and watcher cleanup")
         switch completion {
         case "success": try gate.resolve(1, with: .success(previousSnapshot))
         case "missing": try gate.resolve(1, with: .failure(CopilotFileError.missing))
         default: try gate.resolve(1, with: .failure(CopilotFileError.unsafePath))
         }
         await sidebarEventually { gate.finished.count == 1 }
+        await sidebarEventually { gate.readCount == 2 }
+        try gate.resolve(2, with: .success(currentSnapshot))
+        await sidebarEventually { poll.snapshot.nodes == [current] && gate.pauseCount == 1 }
         #expect(poll.snapshot.nodes == [current])
         #expect(poll.availability == .ready)
         #expect(gate.readCount == 2)

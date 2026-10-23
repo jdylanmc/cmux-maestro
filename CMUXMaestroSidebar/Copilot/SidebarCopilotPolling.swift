@@ -9,6 +9,7 @@ final class SidebarCopilotPolling {
     typealias PendingHistory = @Sendable () async -> Bool
     typealias ExpiryPause = @Sendable (TimeInterval) async throws -> Void
     typealias ReadManaged = @Sendable (Set<UUID>) async -> [UUID: CopilotManagedSessionDetails]
+    typealias Changes = @Sendable () async -> SidebarRefreshTrigger
 
     @ObservationIgnored private var storedTree: SidebarCopilotTree = .waiting
     @ObservationIgnored private var currentTree: SidebarCopilotTree = .waiting
@@ -71,6 +72,7 @@ final class SidebarCopilotPolling {
     private let catchUpPause: Pause
     private let expiryPause: ExpiryPause
     private let now: @Sendable () -> Date
+    private let changes: Changes?
 
     init(
         reader: CopilotSessionReader = CopilotSessionReader(),
@@ -80,6 +82,7 @@ final class SidebarCopilotPolling {
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
         catchUpPause: @escaping Pause = { try await Task.sleep(for: .milliseconds(10)) },
         expiryPause: @escaping ExpiryPause = { try await Task.sleep(for: .seconds($0)) },
+        changes: Changes? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.read = read ?? { placements in
@@ -98,6 +101,9 @@ final class SidebarCopilotPolling {
         self.catchUpPause = catchUpPause
         self.expiryPause = expiryPause
         self.now = now
+        self.changes = changes ?? (read == nil ? {
+            await SidebarRefreshTrigger.copilot()
+        } : nil)
     }
 
     func update(topology: SidebarTopology, connected: Bool) {
@@ -193,7 +199,9 @@ final class SidebarCopilotPolling {
         let hasPendingHistory = hasPendingHistory
         let pause = pause
         let catchUpPause = catchUpPause
+        let changes = changes
         worker = Task { [weak self] in
+            let refresh = await changes?()
             while !Task.isCancelled {
                 self?.isReading = true
                 var hasUnreadHistory = false
@@ -227,11 +235,27 @@ final class SidebarCopilotPolling {
                     self.scheduleStatusExpiry()
                 }
                 self?.isReading = false
+                if let self, self.generation == token, !Task.isCancelled {
+                    let bound = self.managedSubjects.filter {
+                        capturedTopology.workspaceBySurface[$0.surfaceID] == $0.workspaceID
+                    }.compactMap(\.sessionID)
+                    let shown = (self.currentTree.sessions + self.currentTree.statusSessions).filter {
+                        capturedTopology.workspaceBySurface[$0.surfaceID] == $0.workspaceID
+                    }.map(\.id)
+                    await refresh?.updateSessions(Set(shown).union(bound))
+                }
                 // Loading alone is not progress: a torn line at EOF must use the idle delay.
                 do {
-                    if hasUnreadHistory { try await catchUpPause() } else { try await pause() }
+                    if hasUnreadHistory {
+                        try await catchUpPause()
+                    } else if let refresh {
+                        try await refresh.wait(fallback: pause)
+                    } else {
+                        try await pause()
+                    }
                 } catch { break }
             }
+            await refresh?.stop()
             guard let self else { return }
             self.isReading = false
             self.worker = nil
