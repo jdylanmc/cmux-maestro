@@ -1499,6 +1499,39 @@ nonisolated struct CopilotReaderTests {
         #expect(released.sessions.first?.state == .idle)
     }
 
+    @Test func skippedGapRetiresObservedInteractionAndRequestIdentities() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            interactionEvent("assistant.turn_start", turn: "0", interaction: "root-A"),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "0", interaction: "child-A"),
+            interactionEvent("permission.requested", data: ["requestId": "observed-request"])
+        ])
+        let reader = fixture.reader()
+        let initial = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(initial.sessions.first?.state == .blocked)
+        for event in try [
+            copilotTestEvent("assistant.message", data: ["content": String(repeating: "x", count: 2 * 1_048_576)]),
+            interactionEvent("assistant.turn_start", turn: "0", interaction: "root-B"),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "0", interaction: "child-B")
+        ] { try fixture.append(event + Data([10])) }
+        let recent = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        #expect(recent.sessions.first?.state == .working)
+        for event in try [
+            interactionEvent("assistant.turn_start", turn: "unseen", interaction: "root-A"),
+            interactionEvent("assistant.turn_start", owner: "child", turn: "unseen", interaction: "child-A"),
+            interactionEvent("permission.requested", data: ["requestId": "observed-request"]),
+            interactionEvent("assistant.turn_end", turn: "0", interaction: "root-B"),
+            interactionEvent("assistant.turn_end", owner: "child", turn: "0", interaction: "child-B")
+        ] { try fixture.append(event + Data([10])) }
+        let completed = try await reader.read(surfaceIDs: [fixture.surface], tailWindowMiB: 1)
+        let session = try #require(completed.sessions.first)
+        #expect(session.state == .idle)
+        #expect(session.children.first?.state == .idle)
+        #expect(session.attention?.contains { $0.kind.isBlocking } == false)
+    }
+
     private func refreshed(_ record: CopilotIdentityRecord, seconds: Double) -> CopilotIdentityRecord {
         .init(
             schemaVersion: record.schemaVersion, sessionID: record.sessionID,
