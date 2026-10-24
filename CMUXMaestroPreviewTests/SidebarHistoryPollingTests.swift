@@ -318,7 +318,7 @@ struct SidebarHistoryPollingTests {
                 clock.advance(2)
                 await harness.nextRead()
             }
-            if failure != "marker" {
+            if index == 2 && failure != "marker" {
                 if failure == "symlink" { try FileManager.default.removeItem(at: otherEvents) }
                 if failure == "permission" {
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otherEvents.path)
