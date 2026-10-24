@@ -3230,15 +3230,30 @@ test("born managed: an exact end during join is buffered once until the runtime 
 });
 
 test("born managed: foreign, non-exit and hung-up early ends never record a release", async (t) => {
-  for (const kind of ["foreign", "abort", "hangup"]) {
+  for (const kind of ["foreign", "abort", "hangup", "late-hangup"]) {
     const gate = createSessionEndGate();
     const f = await bornFixture(t, { endGate: gate, onJoin: async (hooks, invocation) => {
       if (kind === "hangup") gate.hungUp = true;
       await hooks.onSessionEnd({ reason: kind === "abort" ? "abort" : "user_exit" },
         kind === "foreign" ? { sessionId: randomUUID() } : invocation);
+      if (kind === "late-hangup") gate.hungUp = true;
     } });
     assert.equal(f.calls.ended.length, 0);
   }
+});
+
+test("born managed: a buffered end reaches an installed delegate even if runtime startup fails", async (t) => {
+  const f = await bornFixture(t, {
+    onJoin: (hooks, invocation) => hooks.onSessionEnd({ reason: "user_exit" }, invocation),
+    startManagedRuntime: async ({ joinSession, endSession }) => {
+      await joinSession({ tools: [], hooks: { onSessionEnd: (_input, invocation) =>
+        endSession({ identity: { sessionId: invocation.sessionId } }) } });
+      throw new Error("synthetic listen failure");
+    },
+  });
+  assert.equal((await readiness(f)).managed.reason, "enrolled-runtime-unavailable");
+  assert.equal(f.calls.ended.length, 1);
+  assert.equal(f.calls.ended[0].request.identity.sessionId, f.own.sessionId);
 });
 
 test("born managed: outside CMUX or with launcher inputs the path is inert", async () => {

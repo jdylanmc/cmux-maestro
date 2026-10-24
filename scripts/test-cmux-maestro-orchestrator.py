@@ -2573,6 +2573,7 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         refused = lambda reason: {"outcome": "refused", "reason": reason, "at": "2026-10-19T02:13:03Z"}
         holder = {"enrollment": "born", "providerProcess": anchor, "generation": 1}
         for reason, nodes, kept in (
+                ("account-unverified", {}, False),
             ("session-started-before-install", {}, False), ("enrollment-window-passed", {}, False),
             ("session-ended", {}, False),
             ("provider-already-enrolled", {}, False),  # the pre-upgrade placeholder refusal

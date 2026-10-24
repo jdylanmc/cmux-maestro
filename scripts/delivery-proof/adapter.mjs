@@ -691,6 +691,7 @@ export const ENROLLMENT_REASONS = new Set([
 ]);
 // Unrecorded by the controller; asked once more at a later event.
 export const RETRIED_ONCE = new Set(["session-not-persisted", "enrollment-busy", "awaiting-first-prompt"]);
+const DEFERRED_TO_EVENT = new Set(["account-unverified", "provider-already-enrolled"]);
 // Plain words for maestro_readiness.
 export const ENROLLMENT_MESSAGES = {
   "enrollment-pending": "Enrolling.",
@@ -750,8 +751,7 @@ async function sessionLockPresent(sessionId) {
   }
 }
 
-// Born managed (ADR 0025): enrolls once Copilot holds the session; the controller is asked at most
-// twice per join. Managed tools refuse until then.
+// Born enrollment waits for custody; account/provider evidence can change at later session events.
 export async function startBornManaged({ joinSession, environment = process.env, signal, onListener,
   diagnostic, parentPid = process.ppid, controller = defaultController(), statusTimeoutMs = 5000, onJoined,
   endSession = recordSessionEnd, endGate = sessionEndGate, promptWaitMs = 10000,
@@ -767,6 +767,13 @@ export async function startBornManaged({ joinSession, environment = process.env,
     state = { status: "unavailable", reason: "provider-process-unverified" };
   }
   const delegates = {};
+  let bufferedEnd = false;
+  let endSeen = false;
+  const flushEnd = async () => {
+    if (!bufferedEnd || !delegates.onSessionEnd) return;
+    bufferedEnd = false;
+    await delegates.onSessionEnd({ reason: "user_exit" }, { sessionId });
+  };
   let session;
   let runtime;
   // Latched: only the next join's enrollment restores authority.
@@ -830,17 +837,23 @@ export async function startBornManaged({ joinSession, environment = process.env,
   // One attempt: the session's own account, the controller's decision, then this runtime.
   const attempt = async () => {
     controllerCalls++;
-    // An unverified account reaches the controller as null, so its refusal is recorded.
+    // An unverified account reaches the controller as null; it cannot admit the session.
     let account = { login: null, host: null };
+    let statusTimer;
     try {
       const auth = await Promise.race([session.rpc.gitHubAuth.getStatus(),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), statusTimeoutMs).unref?.())]);
+        new Promise((_, reject) => {
+          statusTimer = setTimeout(() => reject(new Error("timeout")), statusTimeoutMs);
+          statusTimer.unref?.();
+        })]);
       requireCondition(auth?.isAuthenticated === true && typeof auth.login === "string" &&
         /^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(auth.login) &&
         ["github.com", "https://github.com"].includes(auth.host));
       account = { login: auth.login, host: auth.host };
     } catch {
       signal?.throwIfAborted();
+    } finally {
+      clearTimeout(statusTimer);
     }
     let enrolled;
     try {
@@ -857,7 +870,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
       // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
       const reason = account.login === null ? "account-unverified"
         : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed";
-      state = { status: RETRIED_ONCE.has(reason) && controllerCalls < 2 ? "pending" : "unavailable", reason,
+      state = { status: DEFERRED_TO_EVENT.has(reason) || RETRIED_ONCE.has(reason) && controllerCalls < 2
+        ? "pending" : "unavailable", reason,
         ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };
       return undefined;
     }
@@ -881,6 +895,9 @@ export async function startBornManaged({ joinSession, environment = process.env,
       // The controller enrolled this session; only this extension's runtime failed to start.
       state = { status: "unavailable", reason: "enrolled-runtime-unavailable" };
       return undefined;
+    } finally {
+      // Flushing inside runtime join would deadlock its observation barrier.
+      await flushEnd();
     }
   };
   let inFlight = null;
@@ -896,9 +913,9 @@ export async function startBornManaged({ joinSession, environment = process.env,
     })().finally(() => { inFlight = null; });
     return inFlight;
   };
-  // Hook input is never read; a bounded wait lets this turn use the tools.
-  const onEvent = async () => {
-    if (state.status !== "pending") return undefined;
+  // Hook content is never read; a bounded wait lets this exact session's turn use the tools.
+  const onEvent = async (_input, invocation) => {
+    if (invocation?.sessionId !== sessionId || state.status !== "pending") return undefined;
     let timer;
     await Promise.race([advance().catch(() => {}),
       new Promise(resolve => { timer = setTimeout(resolve, promptWaitMs); })]);
@@ -910,7 +927,16 @@ export async function startBornManaged({ joinSession, environment = process.env,
   // SessionEnd reaches the runtime's observer once enrollment installed it, even if the runtime
   // then failed. A resumed session's sessionStart fires only after its first prompt.
   session = await joinSession({ tools, hooks: {
-    onSessionEnd: async (input, invocation) => delegates.onSessionEnd?.(input, invocation),
+    onSessionEnd: async (input, invocation) => {
+      if (endGate.hungUp || input?.reason !== "user_exit" || invocation?.sessionId !== sessionId) {
+        return delegates.onSessionEnd?.(input, invocation);
+      }
+      if (endSeen) return undefined;
+      endSeen = true;
+      // Keep one bit, not hook content; join may await this callback.
+      bufferedEnd = true;
+      return flushEnd();
+    },
     onUserPromptSubmitted: onEvent, onSessionStart: onEvent, onPostToolUse: onEvent, onAgentStop: onEvent,
   } });
   signal?.throwIfAborted();

@@ -43,3 +43,32 @@ Owner decision: every Copilot session in a CMUX tab, with production Maestro ins
 - **Plain readiness.** `maestro_readiness` adds a plain-language `message` for each reason.
 
 The identity checks are unchanged: exact workspace, surface and terminal TTY; the session's own account; no other live custody of the session; capacity. Enrollment of a CMUX session by its own extension is not adoption.
+
+## Amendment (2026-10-24, #348): defer incomplete enrollment evidence to session events
+
+An unavailable account observation is not a final refusal. The session remains
+unmanaged with `account-unverified`; each later exact-session prompt, start,
+post-tool or agent-stop hook may observe its own account again and ask the
+controller once. Previously recorded account-unverified refusals are
+reconsidered, not converted to enrollments. Account mismatch and every other
+definitive refusal remain final. There is no account fallback.
+
+`provider-already-enrolled` also remains pending in the extension. A later hook
+may ask again, but the controller repeats the refusal until no node holds that
+exact provider. An in-process replacement still requires the earlier born
+root's recorded, exact-generation session end; absent custody or extension
+termination is not an end. Every admission check runs again. Concurrent events
+share one attempt; no timer or daemon retries enrollment. The two-call limit
+for the other unrecorded refusal reasons remains unchanged.
+
+The extension retains at most one exact `user_exit` callback received before
+its runtime observer is installed. It stores only a pending bit and forwards
+the joined session's exact identity after runtime startup settles, including
+failure after observer installation. It never waits for startup inside the
+join callback, retains hook content, or records an end after a hangup.
+
+This amends the earlier one-decision and retry limits only for these incomplete
+observations. Deterministic synthetic controller/extension scenarios establish
+the repaired ordering cases. Actual interactive `/resume` callback ordering
+is still unverified; if the provider delivers no authoritative end, enrollment
+continues to refuse. No existing session is probed, reloaded or controlled.
