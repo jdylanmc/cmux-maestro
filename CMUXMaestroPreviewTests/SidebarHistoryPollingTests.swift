@@ -361,6 +361,69 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test(arguments: ["shared", "session"])
+    func endedOnlyPermissionFailuresKeepTheirBoundary(_ boundary: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        let otherID = try #require(UUID(uuidString: other.lastPathComponent))
+        let topology = SidebarTopology(.init(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available([fixture.surface, otherSurface].map {
+                    .init(id: $0, title: "Synthetic", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                })
+            )], windowID: UUID()
+        ))
+        let clock = HistoryTestClock(initial)
+        let reader = fixture.reader(lookup: { _ in .dead }, clock: { clock.read() })
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        defer { poller.setVisible(false) }
+        poller.update(topology: topology, connected: true)
+        poller.setVisible(true)
+        let denied = boundary == "shared" ? fixture.sessions : other
+        for index in 1...3 {
+            await sidebarEventually { await harness.reads == index }
+            if index == 2 {
+                try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: denied.path)
+            } else if index == 3 {
+                try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: denied.path)
+            }
+            let source = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
+            await harness.succeed(source)
+            await sidebarEventually { await harness.isPaused }
+            if index == 2 {
+                if boundary == "shared" {
+                    #expect(source.issues.contains(.permissionDenied))
+                    #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
+                } else {
+                    #expect(!source.issues.contains(.permissionDenied))
+                    #expect(source.sessions.first { $0.sessionID == otherID }?.sessionIssues?.contains(.permissionDenied) == true)
+                    #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.liveness == .dead)
+                    #expect(poller.tree.sessions.first { $0.id == otherID }?.state == .unknown)
+                    #expect(poller.tree.statusSessions.isEmpty)
+                }
+            } else {
+                #expect(source.isComplete && poller.tree.sessions.count == 2)
+                #expect(poller.tree.sessions.allSatisfy { $0.liveness == .dead })
+                #expect(poller.tree.statusSessions.isEmpty)
+            }
+            if index < 3 {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test func observedViewSnapshotStaysFreshDuringUnchangedPolling() async throws {
         let clock = HistoryTestClock(initial)
         let harness = HistoryPollingHarness()
