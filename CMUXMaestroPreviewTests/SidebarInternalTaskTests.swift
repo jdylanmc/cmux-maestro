@@ -149,6 +149,32 @@ struct SidebarInternalTaskTests {
         #expect(session.attentionOwnerCount == 1)
     }
 
+    @Test(arguments: ["idle", "dismissed", "expired", "invocation"])
+    func hiddenDescendantsDoNotPreventFragmentCompaction(_ scenario: String) throws {
+        let descendant: CopilotChildWork
+        var history = SidebarHistorySettings(retention: .never)
+        switch scenario {
+        case "idle": descendant = task("nested", parent: "fragment", state: .idle)
+        case "dismissed":
+            descendant = task("nested", parent: "fragment", state: .completed)
+            history.dismissed = [key("nested")]
+        default:
+            descendant = .init(
+                id: "nested", parentID: "fragment", kind: scenario == "invocation" ? .shell : .skill,
+                name: "Activity", state: .completed, model: nil,
+                terminalEvent: .init(id: event, timestamp: now.addingTimeInterval(-60))
+            )
+            if scenario == "expired" { history = .init(retention: .fifteenSeconds) }
+        }
+        let session = try #require(project([
+            .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Unknown agent", state: .idle, model: nil),
+            descendant
+        ], history: history, complete: false).sessions.first)
+        #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
+        #expect(session.childSections(layout: .init()).isEmpty)
+    }
+
     @Test(arguments: [CopilotWorkState.working, .blocked, .failed, .completed])
     func visibleProtectedDescendantRetainsCompletedAncestry(_ state: CopilotWorkState) throws {
         let session = try #require(project([
@@ -241,8 +267,10 @@ struct SidebarInternalTaskTests {
         ]
         let tree = project(children, history: preferences.history)
         let visible = SidebarVisibleWork(tree: tree, managed: [], history: preferences.history, showEnded: false, now: now)
+        var layout = SidebarLayoutSettings()
+        try layout.setIdleTasksVisible(true, in: fixtures.workspaceA)
         for taskboard in [false, true] {
-            let section = try #require(visible.tree.sessions[0].childSections(layout: .init(), taskboard: taskboard).first)
+            let section = try #require(visible.tree.sessions[0].childSections(layout: layout, taskboard: taskboard).first)
             let offered = try #require(section.rows[0].node.dismissibleOutcome(sessionID: fixtures.sessionID))
             #expect(offered == key("result"))
             #expect(tree.sessions[0].nodes[0].hasChildren == (kind != .shell))

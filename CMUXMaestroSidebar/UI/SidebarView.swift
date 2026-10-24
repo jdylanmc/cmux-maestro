@@ -2523,10 +2523,11 @@ struct CopilotSessionContents: View {
                 .padding(.leading, density.indentation(depth: ownerDepth, unresolved: false, width: contentWidth))
         }
         if expanded {
-            if !session.unresolvedFragments.isEmpty {
+            let fragments = session.unresolvedFragments(layout: layout, taskboard: taskboard)
+            if !fragments.isEmpty {
                 Label(
                     String(localized: "work.unresolved.count",
-                           defaultValue: "+\(session.unresolvedFragments.count) unresolved"),
+                           defaultValue: "+\(fragments.count) unresolved"),
                     systemImage: "questionmark.circle"
                 )
                 .sidebarFont(.caption)
@@ -2603,7 +2604,7 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
 
     // No group header or chevron: the owning row's disclosure already collapses these tasks.
     var body: some View {
-        let rows = section.rows.filter(showsRow)
+        let rows = section.rows
         if section.taskDisclosure != nil, rows.contains(where: { $0.node.isInternalTask }) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(rows) { row in
@@ -2625,14 +2626,8 @@ struct SidebarInternalTaskGroup<Activity: View>: View {
         }
     }
 
-    // Finished tasks stay out of the way until the workspace eye is on.
-    private func showsRow(_ row: SidebarChildRow) -> Bool {
-        !(row.node.isInternalTask && row.node.state == .completed)
-            || layout.revealingIdleTasksIn.contains(session.workspaceID)
-    }
-
     private func followingDepth(_ row: SidebarChildRow) -> Int? {
-        let rows = section.rows.filter(showsRow)
+        let rows = section.rows
         guard let index = rows.firstIndex(where: { $0.id == row.id }), index + 1 < rows.count else { return nil }
         return rows[index + 1].node.depth
     }
