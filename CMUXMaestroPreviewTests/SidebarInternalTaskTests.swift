@@ -175,6 +175,32 @@ struct SidebarInternalTaskTests {
         #expect(session.childSections(layout: .init()).isEmpty)
     }
 
+    @Test(arguments: [false, true], [false, true])
+    func compactedChildCannotRestoreHiddenCompletedAncestry(_ reveal: Bool, _ outerFragment: Bool) throws {
+        var children: [CopilotChildWork] = []
+        if outerFragment {
+            children.append(.init(id: "outer", parentID: "unresolved-owner", kind: .unknown,
+                                  name: "Unknown agent", state: .idle, model: nil))
+        }
+        children += [
+            task("context", parent: outerFragment ? "outer" : "unresolved-owner", state: .completed),
+            .init(id: "fragment", parentID: "context", kind: .unknown,
+                  name: "Unknown agent", state: .idle, model: nil)
+        ]
+        let session = try #require(project(children, complete: false).sessions.first)
+        let evidence = session.nodes
+        var layout = SidebarLayoutSettings()
+        try layout.setIdleTasksVisible(reveal, in: session.workspaceID)
+        for taskboard in [false, true] {
+            let rows = session.childSections(layout: layout, taskboard: taskboard).flatMap(\.rows)
+            #expect(rows.map(\.id) == (reveal ? (outerFragment ? ["outer", "context"] : ["context"]) : []))
+            if reveal { #expect(rows.last?.node.hasChildren == false) }
+            #expect(session.unresolvedFragments(layout: layout, taskboard: taskboard).map(\.id)
+                    == (outerFragment && !reveal ? ["outer", "fragment"] : ["fragment"]))
+        }
+        #expect(session.nodes == evidence)
+    }
+
     @Test(arguments: [CopilotWorkState.working, .blocked, .failed, .completed])
     func visibleProtectedDescendantRetainsCompletedAncestry(_ state: CopilotWorkState) throws {
         let session = try #require(project([
