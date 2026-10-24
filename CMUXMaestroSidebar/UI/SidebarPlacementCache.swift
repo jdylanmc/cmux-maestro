@@ -63,7 +63,7 @@ final class SidebarPlacementCache {
         let dead: Bool
         let fresh: Bool
         let withinEnvelope: Bool
-        let bindingProcess: AgentSessionSnapshotItem.BindingProcess?
+        let bindingProcess: AgentBindingProcess?
         let canYieldUnknown: Bool
         let statusOnly: Bool
     }

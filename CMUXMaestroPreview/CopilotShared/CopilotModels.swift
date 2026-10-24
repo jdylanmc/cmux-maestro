@@ -55,7 +55,7 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     var currentWorktree: AgentSessionWorktree? = nil
     var sessionName: String? = nil
     var sessionIssues: [CopilotIssue]? = nil
-    var bindingProcess: AgentSessionSnapshotItem.BindingProcess? = nil
+    var bindingProcess: AgentBindingProcess? = nil
     let sessionID: UUID
     let surfaceID: UUID
     let launchWorkspaceID: UUID

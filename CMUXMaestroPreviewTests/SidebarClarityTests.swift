@@ -15,7 +15,7 @@ struct SidebarClarityTests {
         "degraded-attention", "status-only", "failed-root"
     ])
     func unknownRootReplacementRequiresExactUnprotectedProcess(_ scenario: String) {
-        let process = AgentSessionSnapshotItem.BindingProcess(pid: 42, startSeconds: 100, startMicroseconds: 7)
+        let process = AgentBindingProcess(pid: 42, startSeconds: 100, startMicroseconds: 7)
         func root(phase: String = "turn-running") -> SidebarOrchestrationNode {
             .init(id: fixtures.otherSessionID, runId: fixtures.sessionID, parentId: nil,
                   role: "coordinator", label: "Copilot session", workspaceId: fixtures.workspaceA,

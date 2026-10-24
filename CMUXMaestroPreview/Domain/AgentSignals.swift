@@ -1,5 +1,14 @@
 import Foundation
 
+/// Recorded binding identity for local presentation, not liveness or authority.
+nonisolated struct AgentBindingProcess: Equatable, Sendable {
+    let pid: Int32
+    let startSeconds: UInt64
+    let startMicroseconds: UInt64
+
+    var isValid: Bool { pid > 0 && startSeconds > 0 && startMicroseconds < 1_000_000 }
+}
+
 nonisolated enum AgentActivityKind: String, Codable, Equatable, Sendable {
     case unknown
     case planning

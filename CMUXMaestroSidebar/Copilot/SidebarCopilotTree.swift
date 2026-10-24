@@ -83,7 +83,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var currentWorktree: AgentSessionWorktree? = nil
     /// Copilot's own session name (ADR 0022); nil when unavailable.
     var sessionName: String? = nil
-    var bindingProcess: AgentSessionSnapshotItem.BindingProcess? = nil
+    var bindingProcess: AgentBindingProcess? = nil
     let id: UUID
     let workspaceID: UUID
     let surfaceID: UUID
