@@ -7,6 +7,24 @@ struct SidebarHistoryPollingTests {
     private let fixtures = SidebarTreeFixtures()
     private let initial = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test func sessionChangesReuseUnchangedChildAssessments() {
+        let cache = SidebarSessionProjectionCache()
+        let topology = fixtures.topology()
+        let children = (0..<100).map { fixtures.child("active-\($0)", state: .working) }
+        for index in 0...30 {
+            let date = initial.addingTimeInterval(Double(index * 2))
+            var source = fixtures.session(state: .working, children: children, now: date)
+            source.sessionName = "Synthetic \(index)"
+            let snapshot = CopilotSnapshotAdapter.snapshot(
+                fixtures.snapshot(sessions: [source], now: date), workspaceBySurface: topology.workspaceBySurface
+            )
+            let actual = SidebarCopilotTree.project(snapshot, onto: topology, now: date, sessionCache: cache)
+            #expect(actual == SidebarCopilotTree.project(snapshot, onto: topology, now: date))
+        }
+        #expect(cache.computationCount == 31, "Session changes legitimately miss temporal projection reuse")
+        #expect(cache.childAssessmentCount == 1, "Unchanged children need no repeated structural assessment")
+    }
+
     @Test func sessionProjectionReusePreservesGlobalBarriers() {
         let cache = SidebarSessionProjectionCache()
         let topology = fixtures.topology()
@@ -62,6 +80,7 @@ struct SidebarHistoryPollingTests {
             return paused && timers == 2
         }
         #expect(poller.sessionProjectionCount == 2)
+        #expect(poller.childAssessmentCount == 2)
         // Early timer delivery must re-arm without projecting or declaring an expiry.
         let registered = await harness.delays.count
         await harness.fire(delay: 0.25)
@@ -78,6 +97,7 @@ struct SidebarHistoryPollingTests {
                 poller.tree.sessions.first { $0.id == fixtures.sessionID }?.nodes.count == count - expired
             }
             #expect(poller.sessionProjectionCount == 2 + expired / batchSize)
+            #expect(poller.childAssessmentCount == 2, "Expiry reprojects time, not unchanged child structure")
             #expect(poller.historyExpiryWakeCount == expired / batchSize)
             #expect(poller.tree.sessions.first { $0.id == fixtures.otherSessionID }?.nodes.count == 100)
             await sidebarEventually { await harness.activeTimers == (expired == count ? 1 : 2) }
