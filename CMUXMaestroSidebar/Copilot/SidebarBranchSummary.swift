@@ -110,11 +110,13 @@ extension SidebarCopilotSession {
 
     func unresolvedFragments(layout: SidebarLayoutSettings, taskboard: Bool = false) -> [SidebarCopilotNode] {
         let shown = shownNodes(layout: layout, taskboard: taskboard)
-        let compacted = compactedFragmentIDs(in: shown)
+        let compacted = compactedFragmentIDs(in: shown, layout: layout)
         return shown.filter { compacted.contains($0.id) }
     }
 
-    private func compactedFragmentIDs(in shown: [SidebarCopilotNode]) -> Set<String> {
+    private func compactedFragmentIDs(
+        in shown: [SidebarCopilotNode], layout: SidebarLayoutSettings
+    ) -> Set<String> {
         var protectedParents: Set<String> = []
         var compacted: Set<String> = []
         // Nodes are in preorder. A compacted fragment cannot protect another fragment.
@@ -123,22 +125,28 @@ extension SidebarCopilotSession {
                 && !node.historyAncestor && node.attention.isEmpty && !node.attentionDegraded
                 && node.state != .blocked && node.state != .failed {
                 compacted.insert(node.id)
-            } else if let parent = node.parentID {
-                protectedParents.insert(parent)
+                continue
             }
+            if !protectedParents.contains(node.id), !showsTask(node, layout: layout) { continue }
+            if let parent = node.parentID { protectedParents.insert(parent) }
         }
         return compacted
     }
 
     /// Apply the workspace eye before disclosure and compaction, retaining real child context.
     private func shownNodes(layout: SidebarLayoutSettings, taskboard: Bool) -> [SidebarCopilotNode] {
-        let candidates = taskboard ? nodes : outlineNodes
+        shownNodes(taskboard ? nodes : outlineNodes, layout: layout)
+    }
+
+    private func showsTask(_ node: SidebarCopilotNode, layout: SidebarLayoutSettings) -> Bool {
+        layout.revealingIdleTasksIn.contains(workspaceID)
+            || !(node.isInternalTask && node.state == .completed)
+            || !node.attention.isEmpty || node.attentionDegraded
+    }
+
+    private func shownNodes(_ candidates: [SidebarCopilotNode], layout: SidebarLayoutSettings) -> [SidebarCopilotNode] {
         let byID = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
-        let reveal = layout.revealingIdleTasksIn.contains(workspaceID)
-        var retained = Set(candidates.filter {
-            reveal || !($0.isInternalTask && $0.state == .completed)
-                || !$0.attention.isEmpty || $0.attentionDegraded
-        }.map(\.id))
+        var retained = Set(candidates.filter { showsTask($0, layout: layout) }.map(\.id))
         for node in candidates where retained.contains(node.id) {
             var parent = node.parentID
             while let id = parent, let ancestor = byID[id], retained.insert(id).inserted {
@@ -173,8 +181,9 @@ extension SidebarCopilotSession {
     // nested activity, but never another independently bound terminal/session.
     func childSections(layout: SidebarLayoutSettings, taskboard: Bool = false) -> [SidebarChildSection] {
         let shown = shownNodes(layout: layout, taskboard: taskboard)
-        let compacted = compactedFragmentIDs(in: shown)
-        let rows = childRows(layout: layout, shown: shown.filter { !compacted.contains($0.id) })
+        let compacted = compactedFragmentIDs(in: shown, layout: layout)
+        let retained = shownNodes(shown.filter { !compacted.contains($0.id) }, layout: layout)
+        let rows = childRows(layout: layout, shown: retained)
         var result: [SidebarChildSection] = []
         var index = 0
         while index < rows.count {

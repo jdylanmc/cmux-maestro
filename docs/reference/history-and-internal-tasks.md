@@ -59,6 +59,8 @@ before saved expansion is applied. A completed internal task hidden by the
 workspace eye cannot keep an empty ancestor expandable. Revealing that task
 restores its ancestor row. Visible protected descendants retain their entire
 ancestor chain, including completed internal-task context.
+Compacted fragments do not restore hidden completed-task context or protect its
+ancestors; empty context is pruned after compaction.
 
 ### Other activity and session history
 
