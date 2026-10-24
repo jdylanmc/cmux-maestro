@@ -866,8 +866,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
     } catch (error) {
       signal?.throwIfAborted();
       // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
-      const reason = account.login === null ? "account-unverified"
-        : ENROLLMENT_REASONS.has(error?.reason) ? error.reason : "enrollment-failed";
+      const reason = ENROLLMENT_REASONS.has(error?.reason) ? error.reason
+        : account.login === null ? "account-unverified" : "enrollment-failed";
       state = { status: DEFERRED_TO_EVENT.has(reason) || RETRIED_ONCE.has(reason) && controllerCalls < 2
         ? "pending" : "unavailable", reason,
         ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };

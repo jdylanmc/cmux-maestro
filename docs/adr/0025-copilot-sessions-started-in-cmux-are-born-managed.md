@@ -70,6 +70,12 @@ The existing bounded shutdown gate is armed before join, so termination cannot
 discard a buffered callback merely because the runtime has not started yet.
 Definitive refusal or initialization failure settles the wait when no observer
 can be installed.
+An unresolved pending enrollment can therefore use the existing two-second
+shutdown budget even if no observer ultimately installs. Event-driven
+reconsideration also retains the existing bounded hook wait and controller
+timeout costs while evidence remains incomplete. These are bounded waits, not
+scheduled retries. A known definitive controller refusal takes precedence over
+an unavailable account observation and stops further attempts.
 
 This amends the earlier one-decision and retry limits only for these incomplete
 observations. Deterministic synthetic controller/extension scenarios establish
