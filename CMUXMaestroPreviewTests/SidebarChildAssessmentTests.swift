@@ -71,6 +71,54 @@ struct SidebarChildAssessmentTests {
         #expect(cache.childAssessmentCount == 1)
     }
 
+    @Test func sessionThenLegacyThenFlatErrorPrecedenceIsPreserved() {
+        let cache = SidebarSessionProjectionCache()
+        let legacy = child("parent")
+        let flat = child("detail")
+        let mixed = snapshot(legacy: [legacy], flat: .init(items: [flat]), stateDetail: .idle)
+        #expect(cache.assessment(snapshot: mixed, index: 0).firstError as? AgentSessionSnapshotValidationError
+            == .incompatibleStateDetail(path: "sessions[0].stateDetail"))
+        let childErrors = snapshot(legacy: [legacy], flat: .init(items: [flat]))
+        #expect(cache.assessment(snapshot: childErrors, index: 0).firstError as? AgentSessionSnapshotValidationError
+            == .invalidHierarchyReference(path: "sessions[0].childWork[0].parent", reference: String(describing: legacy.parent)))
+        let flatError = snapshot(legacy: [], flat: .init(items: [flat]))
+        #expect(cache.assessment(snapshot: flatError, index: 0).firstError as? AgentSessionSnapshotValidationError
+            == .incompatibleStateDetail(path: "sessions[0].childWorkObservation.items[0].stateDetail"))
+    }
+
+    @Test(arguments: [Double.nan, .infinity, -.infinity])
+    func nonfiniteEnvelopesNeverReuseOrRetainAssessments(_ value: Double) {
+        let cache = SidebarSessionProjectionCache()
+        _ = cache.assessment(snapshot: snapshot(legacy: [], flat: nil), index: 0)
+        let invalid = snapshot(legacy: [], flat: nil, generatedAt: Date(timeIntervalSince1970: value))
+        for expected in 2...3 {
+            _ = cache.assessment(snapshot: invalid, index: 0)
+            #expect(cache.childAssessmentCount == expected)
+            #expect(cache.retainedChildAssessmentCount == 0)
+        }
+    }
+
+    @Test(arguments: ["history", "attention", "reveal"])
+    func presentationContextChangesInvalidateAssessments(_ change: String) {
+        let cache = SidebarSessionProjectionCache()
+        let fixtures = SidebarTreeFixtures()
+        let source = snapshot(legacy: [], flat: nil)
+        cache.prepare(snapshot: source, topology: fixtures.topology(), history: .init(),
+                      attention: .init(), revealingIdleTasksIn: [])
+        _ = cache.assessment(snapshot: source, index: 0)
+        let acknowledged = SidebarAcknowledgedOutcome(
+            sessionID: fixtures.sessionID, ownerID: nil, evidence: .init(source: "synthetic", eventID: UUID())
+        )
+        cache.prepare(
+            snapshot: source, topology: fixtures.topology(),
+            history: .init(retention: change == "history" ? .never : .fifteenSeconds),
+            attention: .init(acknowledged: change == "attention" ? [acknowledged] : []),
+            revealingIdleTasksIn: change == "reveal" ? [fixtures.sessionID] : []
+        )
+        _ = cache.assessment(snapshot: source, index: 0)
+        #expect(cache.childAssessmentCount == 2)
+    }
+
     @Test func retainedAssessmentsAreBoundedPrunedAndCleared() {
         let cache = SidebarSessionProjectionCache()
         let empty = AgentSessionSnapshot(generatedAt: date, workspaces: [], sessions: [])
