@@ -900,7 +900,8 @@ struct SidebarLayoutRenderingTests {
     @Test(arguments: [NSScroller.Style.overlay, .legacy])
     func nativeEightLevelOutlineRetainsMinimumTitleWidthAt280(style: NSScroller.Style) async throws {
         let fixtures = SidebarTreeFixtures()
-        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
+        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true,
+                              now: Date(timeIntervalSince1970: 1_800_000_000))
         let fixture = try SidebarPreferenceFixture()
         // An enabled Beat puts the trailing Beat icon on the session row; the deep title keeps its width.
         let stores = SidebarStoreFixture()
@@ -1897,9 +1898,9 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeModel(
-        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false, deep: Bool = false
+        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil,
+        shellActivity: Bool = false, deep: Bool = false, now: Date = Date()
     ) -> SidebarConnectionModel {
-        let now = Date()
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
         let childLabel = "Synthetic child verifying long metadata without losing running or blocked status"
         var children: [CopilotChildWork] = [
