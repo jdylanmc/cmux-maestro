@@ -559,6 +559,9 @@ actor CopilotSessionReader {
             }
             batch.observations.append(result)
         }
+        // Unavailability cannot downgrade retained source faults, even when a local
+        // failure has the same issue value. Only rebuilding or retiring the tail clears them.
+        batch.issues += tails[id]?.reducer.issues ?? []
     }
 
     private func recordIssues(_ issues: [CopilotIssue], for id: UUID, batch: inout Batch) {

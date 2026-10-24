@@ -491,6 +491,11 @@ independent terminal. This literal #10 integration does not complete broader
   One shared publication check validates that witness after all those phases.
   Unchanged-file stat fast paths still emit the session's invalidated-projection
   issue; skipping an open never restores publication rights.
+  Retained reducer source faults remain global through later tail, marker or
+  session-directory unavailability, even if a local failure has the same issue
+  value. Under ADR 0002, losing access cannot repair a proven foreign owner.
+  Only a verified file-generation rebuild or identity-bound tail retirement
+  clears that retained evidence; a local refusal does neither.
   The same error at a shared
   boundary is not downgraded because a session was being read.
   Projected diagnostics may aggregate session permission failures, but names,
