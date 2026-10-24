@@ -2797,6 +2797,57 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         node = self.h.state()["nodes"][later["nodeId"]]
         self.assertEqual(node["copilotAccount"], {"login": "human-account", "host": "github.com"})
 
+    def test_full_attempt_table_reconsiders_only_an_existing_key(self):
+        for resume in (False, True):
+            for existing_key in (True, False):
+                with self.subTest(resume=resume, existing_key=existing_key):
+                    self.h.change_state(lambda state: state.update(enrollmentAttempts={}))
+                    previous = self.enroll() if resume else None
+                    if previous is not None:
+                        self.assertTrue(previous["ok"], previous)
+                    verified = (
+                        "import importlib.util, uuid\n"
+                        f"spec = importlib.util.spec_from_file_location('controller', {str(CONTROLLER)!r})\n"
+                        "controller = importlib.util.module_from_spec(spec)\n"
+                        "spec.loader.exec_module(controller)\n"
+                        "anchor = {'pid': os.getpid(), 'start': controller.process_start(os.getpid())}\n"
+                        "key = controller.attempt_key(env['SESSION_ID'], anchor)\n"
+                        "refusal = {'outcome': 'refused', 'reason': 'surface-owned',"
+                        " 'at': '2026-10-24T00:00:00Z'}\n"
+                        f"attempts = {{controller.attempt_key(str(uuid.uuid4()), anchor): dict(refusal)"
+                        f" for _ in range(controller.MAX_HOST_NODES - {int(existing_key)})}}\n"
+                        + ("attempts[key] = {**refusal, 'reason': 'account-unverified'}\n"
+                           if existing_key else "") +
+                        "controller.mutate(controller.default_root(),"
+                        " lambda state: state.update(enrollmentAttempts=attempts))\n"
+                        "request = {'workspaceId': env['CMUX_WORKSPACE_ID'],"
+                        " 'surfaceId': env['CMUX_SURFACE_ID'], 'sessionId': env['SESSION_ID'],"
+                        " 'pid': os.getpid(), 'login': 'human-account', 'host': 'github.com'}\n"
+                        "result = subprocess.run([sys.executable, driver, 'native-enroll'],"
+                        " input=json.dumps(request), env=env, capture_output=True, text=True, timeout=15)\n")
+                    options = ({"surface": previous["surface"], "session": previous["session"]}
+                               if previous is not None else {})
+                    first, later = self.enroll(login=None, host=None, env={"FAKE_THEN": verified}, **options)
+                    self.refused(first, "account-unverified")
+                    attempts = self.h.state()["enrollmentAttempts"]
+                    self.assertEqual(len(attempts), CONTROLLER_API["MAX_HOST_NODES"])
+                    current = [record for key, record in attempts.items()
+                               if key.startswith(first["session"] + ":")]
+                    if existing_key:
+                        self.assertTrue(later["ok"], later)
+                        self.assertEqual([(record["outcome"], record["nodeId"]) for record in current],
+                                         [("enrolled", later["nodeId"])])
+                        self.assertEqual(later["generation"], 2 if resume else 1)
+                        if previous is not None:
+                            self.assertEqual(later["nodeId"], previous["nodeId"])
+                    else:
+                        self.refused(later, "capacity-unavailable")
+                        self.assertEqual(current, [])
+                    for key, record in attempts.items():
+                        if not key.startswith(first["session"] + ":"):
+                            self.assertEqual(record, {"outcome": "refused", "reason": "surface-owned",
+                                                      "at": "2026-10-24T00:00:00Z"})
+
     def test_replacement_refused_before_exact_end_enrolls_after_the_end(self):
         old, new = str(uuid.uuid4()), str(uuid.uuid4())
         after = self.END_PREVIOUS_SESSION.replace("results[-1]", "results[0]") + (
