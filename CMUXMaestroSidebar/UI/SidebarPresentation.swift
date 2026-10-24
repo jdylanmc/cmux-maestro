@@ -581,6 +581,26 @@ enum SidebarPresentation {
         now: Date
     ) -> SidebarNavigationTarget? {
         guard case .surface(let workspace, let surface) = capturedPlacement else { return nil }
+        if case .unmanaged(.child(let sessionID, let childID)) = target {
+            let matches = tree.sessions.filter { $0.id == sessionID }
+            guard matches.count == 1, let session = matches.first,
+                  tree.isCurrent(session, now: now), !tree.issues.contains(.permissionDenied),
+                  !session.statusOnly, [.alive, .dead].contains(session.liveness),
+                  session.workspaceID == workspace, session.surfaceID == surface,
+                  session.nodes.filter({ $0.id == childID }).count == 1,
+                  !replacedSessionIDs(tree, managed: managed.nodes, now: now).contains(sessionID),
+                  !tree.sessions.contains(where: {
+                      $0.id != sessionID && $0.workspaceID == workspace && $0.surfaceID == surface
+                          && $0.liveness != .dead
+                  }),
+                  let subject = inspection(
+                    for: .unmanaged(.surface(workspaceID: workspace, surfaceID: surface)),
+                    hierarchy: hierarchy, connected: connected, tree: tree, managed: managed,
+                    availability: availability, now: now
+                  ), [.terminal, .agentSession].contains(subject.surfaceKind) else { return nil }
+            // A suppressed session heading does not invalidate its exact child's parent terminal.
+            return capturedPlacement
+        }
         if case .managed(let captured) = target {
             guard let node = currentManagedNode(captured, in: managed),
                   node.workspaceId == workspace, node.surfaceId == surface,

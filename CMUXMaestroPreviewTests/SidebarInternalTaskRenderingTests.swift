@@ -6,14 +6,22 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
-    @Test func unavailableParentFocusIsNotAButton() throws {
+    @Test(arguments: [false, true])
+    func unavailableParentFocusIsNotAButton(_ connected: Bool) throws {
+        let data = SidebarTreeFixtures()
+        let navigation = SidebarNavigation()
+        navigation.update(topology: data.topology(), connected: connected,
+                          workspaceAllowed: true, surfaceAllowed: true, perform: { _ in })
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 40),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: FocusButton(
-            target: .surface(workspaceID: UUID(), surfaceID: UUID()),
-            navigation: SidebarNavigation(), label: "Open parent chat for Unknown agent"
-        ) { Text("Unknown agent") }.frame(width: 350, height: 40))
+            target: .surface(workspaceID: data.workspaceA, surfaceID: data.surfaceA),
+            navigation: navigation, label: "Open parent chat for Unknown agent",
+            inspection: .unmanaged(.child(sessionID: data.sessionID, childID: "fragment"))
+        ) { Text("Unknown agent") }
+            .environment(\.sidebarFocusInspection, { _, _ in nil })
+            .frame(width: 350, height: 40))
         window.contentView = host
         defer { window.contentView = nil; window.close() }
         host.layoutSubtreeIfNeeded()

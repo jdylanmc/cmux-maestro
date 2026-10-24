@@ -7,3 +7,7 @@ Why: one session can run dozens of sub-agents. Tabs would inflate agent counts a
 Rejected: a tab per task, attaching orphans to the nearest chat.
 
 Consequence: tasks need their own ancestry, counting, and retention rules.
+
+Tool invocations are not internal tasks. Their accepted completions, including
+non-zero shell outcomes, create no persistent failed/attention rows. Genuine
+sub-agent failures retain the rule above (ADR 0010, 2026-10-23 amendment).

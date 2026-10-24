@@ -57,6 +57,13 @@ ID without adding a duplicate. No historical backfill or name-based matching.
 
 ### Other activity and session history
 
+Tool invocation completion is not an agent failure. Successful and failed shell
+invocations leave the published child rows when their exact completion is
+accepted; other tools likewise create no failure attention on their owner.
+They require no manual dismissal and are not restored by **Show ended agents**.
+Private bounded replay evidence remains. Agent errors, genuine sub-agent
+failures and independent permission/answer requests retain their protections.
+
 The completed-work history controls in sidebar **Settings** are shared by
 **Hierarchy** and **Taskboard**. The default active outline hides finished/cancelled
 non-task activity and confirmed ended process observations. Native surface rows
@@ -66,7 +73,7 @@ This only filters the sidebar. Terminals, sessions and controller ownership are
 never closed, stopped or archived.
 
 **Show ended agents** reveals observations still retained by history.
-Failed rows remain until explicit dismissal with their **×** control. Focusing
+Failed agent rows remain until explicit dismissal with their **×** control. Focusing
 or inspecting them only marks nonblocking notices read. Questions, permissions,
 uncertain attention and live descendants protect rows from dismissal. Legacy
 automatic "viewed failure" markers no longer hide rows.

@@ -30,15 +30,27 @@ struct SidebarNavigationTests {
         let recorder = SidebarHostRecorder()
         let model = responseOrderingModel()
         model.update(context: context(recorder: recorder))
-        let resolved = try #require(SidebarPresentation.focusTarget(
+        var currentTree = tree
+        var seen = 0
+        let action = SidebarRowAction.focus(
+            target, navigation: model.navigation, prepareSeen: { _ in { seen += 1 } },
+            subject: subject, revalidate: { subject, target in
+                SidebarPresentation.focusTarget(
+                    for: subject, capturedPlacement: target, hierarchy: model.hierarchy, connected: true,
+                    tree: currentTree, managed: managed, availability: .ready, now: date
+                )
+            }
+        )
+        #expect(SidebarPresentation.focusTarget(
             for: subject, capturedPlacement: target, hierarchy: model.hierarchy, connected: true,
             tree: tree, managed: managed, availability: .ready, now: date
-        ))
-        SidebarRowAction.focus(resolved, navigation: model.navigation, prepareSeen: { _ in {} }).perform()
+        ) == target)
+        action.perform()
         await sidebarEventually { recorder.actions.count == 1 }
         #expect(recorder.actions == [.selectSurface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)])
         recorder.reply(0, .accepted)
         await sidebarEventually { model.navigation.status == .selected }
+        #expect(seen == 1)
         #expect(SidebarPresentation.focusTarget(
             for: subject, capturedPlacement: target, hierarchy: .empty, connected: true,
             tree: tree, managed: managed, availability: .ready, now: date
@@ -53,6 +65,11 @@ struct SidebarNavigationTests {
             for: subject, capturedPlacement: target, hierarchy: model.hierarchy, connected: true,
             tree: replacedTree, managed: managed, availability: .ready, now: date
         ) == nil, "A foreign coalesced owner cannot lend its surface to a child")
+        currentTree = replacedTree
+        action.perform()
+        #expect(model.navigation.status == .staleTarget)
+        #expect(recorder.actions.count == 1)
+        #expect(seen == 1, "Stale navigation cannot acknowledge any scope")
     }
 
     @Test func registeredCoordinatorKeepsValidatedSurfaceNavigation() throws {

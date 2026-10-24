@@ -21,7 +21,7 @@ private struct SidebarDismissManagedKey: EnvironmentKey {
 }
 
 private struct SidebarFocusInspectionKey: EnvironmentKey {
-    static let defaultValue: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? = nil
+    static let defaultValue: ((SidebarInspection.Target, SidebarNavigationTarget) -> SidebarNavigationTarget?)? = nil
 }
 
 private struct SidebarAgentIconStyleKey: EnvironmentKey {
@@ -46,7 +46,7 @@ extension EnvironmentValues {
         set { self[SidebarPresentationNowKey.self] = newValue }
     }
 
-    var sidebarFocusInspection: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? {
+    var sidebarFocusInspection: ((SidebarInspection.Target, SidebarNavigationTarget) -> SidebarNavigationTarget?)? {
         get { self[SidebarFocusInspectionKey.self] }
         set { self[SidebarFocusInspectionKey.self] = newValue }
     }
@@ -1030,22 +1030,14 @@ struct SidebarView: View {
         prepareSeen(.surface(workspaceID: node.workspaceId, surfaceID: node.surfaceId))()
     }
 
-    private func focusInspection(_ target: SidebarInspection.Target, capturedPlacement: SidebarNavigationTarget) {
-        guard let destination = SidebarPresentation.focusTarget(
+    private func focusInspection(
+        _ target: SidebarInspection.Target, capturedPlacement: SidebarNavigationTarget
+    ) -> SidebarNavigationTarget? {
+        SidebarPresentation.focusTarget(
             for: target, capturedPlacement: capturedPlacement, hierarchy: model.hierarchy, connected: connected,
             tree: model.copilot.tree, managed: model.orchestration.snapshot,
             availability: model.orchestration.availability, now: now()
-        ) else {
-            if case .managed = target {
-                model.navigation.rejectStaleTarget()
-            } else {
-                inspector = nil
-                showingInspector = true
-            }
-            return
-        }
-        SidebarRowAction.focus(destination,
-                               navigation: model.navigation, prepareSeen: prepareSeen).perform()
+        )
     }
 
     private func inspect(_ selection: UnmanagedSelection) {
@@ -2819,7 +2811,10 @@ private struct CopilotWorkRow: View {
             || node.dismissibleFailure(sessionID: session.id) != nil
     }
     private var actions: [SidebarRowActionGroup] {
-        var items: [SidebarRowAction] = parentFocusUnavailable ? [] : [
+        let target = SidebarNavigationTarget.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID)
+        let subject = SidebarInspection.Target.unmanaged(.child(sessionID: session.id, childID: node.id))
+        let canFocus = !parentFocusUnavailable && (focusInspection.map { $0(subject, target) != nil } ?? true)
+        var items: [SidebarRowAction] = !canFocus ? [] : [
             .focus(.surface(workspaceID: session.workspaceID, surfaceID: session.surfaceID),
                    navigation: navigation, prepareSeen: prepareSeen, parentChat: true,
                    subject: .unmanaged(.child(sessionID: session.id, childID: node.id)), revalidate: focusInspection)
@@ -3585,12 +3580,18 @@ struct FocusButton<Content: View>: View {
     }
 
     var body: some View {
-        SidebarTitleButton(label: label, hint: (inspectOnly == nil ? navigation.disabledReason(for: target) : nil) ?? detail ?? label,
-                           value: detail ?? "", localFocusID: localFocusID, action: focus) {
-            content
+        Group {
+            if inspectOnly != nil || (navigation.disabledReason(for: target) == nil
+                && (inspection.map { subject in focusInspection.map { $0(subject, target) != nil } ?? true } ?? true)) {
+                SidebarTitleButton(label: label, hint: detail ?? label,
+                                   value: detail ?? "", localFocusID: localFocusID, action: focus) {
+                    content
+                }
+            } else {
+                content
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .disabled(inspectOnly == nil && navigation.disabledReason(for: target) != nil)
     }
 
     private var localFocusID: String? {
@@ -3607,7 +3608,7 @@ extension SidebarRowAction {
         _ target: SidebarNavigationTarget, navigation: SidebarNavigation,
         prepareSeen: @escaping (SidebarSeenTarget) -> () -> Void, parentChat: Bool = false,
         subject: SidebarInspection.Target? = nil,
-        revalidate: ((SidebarInspection.Target, SidebarNavigationTarget) -> Void)? = nil
+        revalidate: ((SidebarInspection.Target, SidebarNavigationTarget) -> SidebarNavigationTarget?)? = nil
     ) -> Self {
         let title: String
         switch target {
@@ -3615,12 +3616,21 @@ extension SidebarRowAction {
         case .surface: title = parentChat ? "Open parent chat" : "Focus surface"
         }
         return .init(title: title, unavailable: navigation.disabledReason(for: target)) {
-            if let subject, let revalidate { revalidate(subject, target); return }
-            switch target {
-            case .workspace: navigation.select(target)
+            let destination: SidebarNavigationTarget
+            if let subject, let revalidate {
+                guard let current = revalidate(subject, target) else {
+                    navigation.rejectStaleTarget()
+                    return
+                }
+                destination = current
+            } else {
+                destination = target
+            }
+            switch destination {
+            case .workspace: navigation.select(destination)
             case .surface(let workspaceID, let surfaceID):
                 let success = prepareSeen(.surface(workspaceID: workspaceID, surfaceID: surfaceID))
-                navigation.select(target, onSuccess: { success() })
+                navigation.select(destination, onSuccess: { success() })
             }
         }
     }

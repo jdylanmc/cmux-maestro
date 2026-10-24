@@ -8,6 +8,22 @@ Rejected: silent repair, overwrite on corruption, eviction of exact evidence at 
 
 Consequence: users may see more history until reset. A false positive in the 128-KiB spill filter rejects a fresh event.
 
+## Amendment (2026-10-23): tool invocation outcomes are not agent failures
+
+An accepted `tool.execution_complete`, successful or not, is ordinary tool work.
+It creates no persistent error/attention outcome on the invocation or its owning
+agent. Ended shell invocations leave the published child projection; private
+bounded lifecycle evidence and replay guards remain. Running invocations keep
+their existing presentation. This exclusion is independent of history settings,
+expiry and manual dismissal, and does not infer that a background process exited.
+
+Agent-level failures, genuine sub-agent failures, blocked states, permission and
+answer requests, uncertain attention and necessary ancestry remain protected.
+Only an exact accepted invocation completion ends that invocation. Unknown,
+unmatched or contradictory completion evidence cannot hide active work.
+An unresolved agent left without protected descendants uses the existing
+unresolved-fragment compaction; it is not assigned invented ancestry.
+
 ## Amendment (2026-10-22): owner-approved bounded cold-start tails
 
 The sidebar does not reconstruct an entire large event log on cold start.
