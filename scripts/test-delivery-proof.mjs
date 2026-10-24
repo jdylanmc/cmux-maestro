@@ -3229,6 +3229,37 @@ test("born managed: an exact end during join is buffered once until the runtime 
   } });
 });
 
+test("born managed: shutdown during join waits for the buffered exact end", async (t) => {
+  const clock = controlledEndGate();
+  let drained = false;
+  let draining;
+  const f = await bornFixture(t, { endGate: clock.gate, onJoin: async (hooks, invocation) => {
+    await hooks.onSessionEnd({ reason: "user_exit" }, invocation);
+    draining = clock.gate.drain(2000).then(() => { drained = true; });
+    await Promise.resolve();
+    assert.equal(drained, false);
+  } });
+  await draining;
+  assert.equal(f.calls.ended.length, 1);
+  assert.equal(drained, true);
+  assert.deepEqual(clock.timers.map(timer => timer.ms), [2000]);
+  assert.deepEqual(clock.cancelled, clock.timers);
+});
+
+test("born managed: definitive refusal settles a join-time shutdown wait", async (t) => {
+  const clock = controlledEndGate();
+  let draining;
+  const f = await bornFixture(t, { endGate: clock.gate,
+    onJoin: () => { draining = clock.gate.drain(2000); },
+    enroll: async () => { throw Object.assign(new Error("capacity"), { reason: "capacity-unavailable" }); },
+  });
+  await draining;
+  assert.equal((await readiness(f)).managed.reason, "capacity-unavailable");
+  assert.equal(f.calls.ended.length, 0);
+  assert.equal(clock.timers.length, 1);
+  assert.deepEqual(clock.cancelled, clock.timers);
+});
+
 test("born managed: foreign, non-exit and hung-up early ends never record a release", async (t) => {
   for (const kind of ["foreign", "abort", "hangup", "late-hangup"]) {
     const gate = createSessionEndGate();
