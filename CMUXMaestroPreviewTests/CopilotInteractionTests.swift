@@ -42,6 +42,30 @@ nonisolated struct CopilotInteractionTests {
         #expect(reducer.value().children.isEmpty)
     }
 
+    @Test(arguments: [false, true], ["matching", "wrong-turn", "wrong-interaction"])
+    func unownedCompletionChecksCurrentOwnerTags(afterProof: Bool, tags: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), message = UUID(), completion = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", owner: "background", turn: "0", interaction: "B"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        let proof = try interactionEvent("assistant.message", id: message,
+                                         parent: afterProof ? current : completion, turn: "0", interaction: "same")
+        let unowned = try interactionEvent("tool.execution_complete", id: completion,
+                                           parent: afterProof ? message : current, owner: "background",
+                                           turn: tags == "wrong-turn" ? "1" : "0",
+                                           interaction: tags == "wrong-interaction" ? "A" : "B",
+                                           data: ["toolCallId": "unowned", "success": true])
+        for row in afterProof ? [proof, unowned] : [unowned, proof] { reducer.consume(row) }
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: afterProof ? completion : message, turn: "0"))
+        #expect(reducer.value().state == (tags == "matching" ? .idle : .unknown))
+        #expect(reducer.value().attention.map(\.kind) == (tags == "matching" ? [.turnFinished] : []))
+        #expect(reducer.value().children.first?.state == .working)
+        #expect(reducer.retentionCounts.owners == 0)
+        #expect(reducer.issues == (tags == "matching" ? [] : [.ambiguousTurn]))
+    }
+
     @Test(arguments: ["none", "untagged", "wrong-tags", "replay", "replay-spilled", "replay-other-kind", "same-owner"])
     func unownedCompletionCannotManufactureOccurrenceProof(control: String) throws {
         var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: control == "replay-spilled" ? 4 : 65_536)
