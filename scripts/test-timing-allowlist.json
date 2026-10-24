@@ -276,10 +276,11 @@
     }
   },
   "CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift": {
-    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
+    "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276. #351 moves one makeModel wall-clock read to its injectable default argument; the deep-width fixture injects a fixed instant and rendering shares the observation clock. No new clock or wait. See docs/reference/ci-test-determinism.md for remaining venue limits.",
     "statements": {
       "try await Task.sleep(for: .milliseconds(20))": 5,
-      "let now = Date()": 4,
+      "let now = Date()": 3,
+      "shellActivity: Bool = false, deep: Bool = false, now: Date = Date()": 1,
       "pause: { try await Task.sleep(for: .seconds(60)) },": 3,
       "pause: { try await Task.sleep(for: .seconds(60)) }": 3,
       "try await Task.sleep(for: .seconds(SidebarCopilotTree.maximumAge + 0.1))": 1,

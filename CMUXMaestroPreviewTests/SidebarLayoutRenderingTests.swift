@@ -1999,6 +1999,13 @@ struct SidebarLayoutRenderingTests {
             model.copilot.updateManagedSubjects(model.orchestration.snapshot)
         }
         model.setVisible(true)
+        let renderNow: Date
+        if expectedSessions == 0 {
+            renderNow = Date(timeIntervalSince1970: 1_800_000_000)
+        } else {
+            await sidebarEventually { model.copilot.tree.sessions.count == expectedSessions }
+            renderNow = try #require(model.copilot.tree.generatedAt)
+        }
         let frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -2006,7 +2013,10 @@ struct SidebarLayoutRenderingTests {
         let evidence = AppearanceEvidence()
         // The public contrast getter is read-only; this SDK-exposed backing key is test-only.
         // A high-contrast NSAppearance alone does not update SwiftUI's contrast environment.
-        let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores)
+        // Layout fixtures freeze observation, presentation and action time together.
+        let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores,
+                                                      actionNow: { renderNow })
+            .environment(\.sidebarPresentationNow, { renderNow })
             .modifier(FocusViewport(budget: focusViewportBudget, frameSize: frame.size))
             .background(AppearanceProbe(evidence: evidence).frame(width: 0, height: 0))
             .environment(\._colorSchemeContrast, appearance.contrast)
