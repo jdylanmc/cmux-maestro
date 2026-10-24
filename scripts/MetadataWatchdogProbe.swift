@@ -14,11 +14,14 @@ struct MetadataWatchdogProbe {
                "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
                "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
                "sampling-complete-output", "sampling-complete-no-output", "sampling-forced-backstop",
+               "sampling-spawn-failure",
                "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held"]
             .contains(mode) else { exit(2) }
         let directory = URL(fileURLWithPath: CommandLine.arguments[2])
         var sampler = URL(fileURLWithPath: "/usr/bin/sample")
-        if mode.hasPrefix("sampler-") || mode.hasPrefix("owned-") || mode.hasPrefix("diagnostic-") || mode.hasPrefix("sampling-") {
+        if mode == "sampling-spawn-failure" {
+            sampler = directory.appendingPathComponent("missing-sampler")
+        } else if mode.hasPrefix("sampler-") || mode.hasPrefix("owned-") || mode.hasPrefix("diagnostic-") || mode.hasPrefix("sampling-") {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             sampler = directory.appendingPathComponent("stuck-sampler")
             let pidFile = CopilotPluginManifest.shellQuoted(directory.appendingPathComponent("sampler.pid").path)

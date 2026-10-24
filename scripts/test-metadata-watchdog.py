@@ -13,6 +13,7 @@ MODES = ("complete", "stalled-clock", "polling-clock", "sampler-timeout",
          "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
          "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
          "sampling-complete-output", "sampling-complete-no-output", "sampling-forced-backstop",
+         "sampling-spawn-failure",
          "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held")
 
 
@@ -110,6 +111,11 @@ def main():
             if outcome == "diagnostic-incomplete":
                 require(not mode.startswith("sampling-complete-"), report)
                 print(f"Metadata watchdog {mode}: diagnostic-incomplete; core and cleanup still required.", flush=True)
+            elif mode == "sampling-spawn-failure":
+                require(report.get("samplerStarted") is False and "samplerPID" not in report, report)
+                require(report["sampleStatus"].startswith("failed:"), report)
+                require(report.get("sample") is None and report.get("sampleReadError") is None, report)
+                require(not (case / "sample.txt").exists(), report)
             elif mode.startswith("sampling-"):
                 require(outcome == "complete" and report["sampleStatus"] == "exit-17", report)
                 if mode == "sampling-complete-output":

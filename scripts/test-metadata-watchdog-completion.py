@@ -35,13 +35,38 @@ class DiagnosticCompletionTests(unittest.TestCase):
             (root / "stall.json.sb-interrupted").write_text("partial")
             with self.assertRaisesRegex(RuntimeError, "temporary"):
                 watchdog.diagnostic_outcome({
-                    "diagnosticOutcome": "diagnostic-incomplete", "samplerReaped": True}, root)
+                    "diagnosticOutcome": "diagnostic-incomplete", "samplerReaped": True,
+                    "samplerStarted": True, "samplerPID": 4242}, root)
 
     def test_completed_and_clean_incomplete_outcomes_are_distinct(self):
         with tempfile.TemporaryDirectory() as directory:
             for outcome in ("complete", "diagnostic-incomplete"):
                 self.assertEqual(watchdog.diagnostic_outcome({
-                    "diagnosticOutcome": outcome, "samplerReaped": True}, Path(directory)), outcome)
+                    "diagnosticOutcome": outcome, "samplerReaped": True,
+                    "samplerStarted": True, "samplerPID": 4242}, Path(directory)), outcome)
+
+    def test_spawn_failure_is_explicitly_never_started(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(watchdog.diagnostic_outcome({
+                "diagnosticOutcome": "complete", "samplerStarted": False, "samplerReaped": True,
+                "sampleStatus": "failed: system(2)"}, Path(directory)), "complete")
+
+    def test_missing_or_contradictory_sampler_identity_fails(self):
+        cases = (
+            {},
+            {"samplerStarted": True},
+            {"samplerStarted": True, "samplerPID": 0},
+            {"samplerStarted": False, "samplerPID": 4242, "sampleStatus": "failed: system(2)"},
+            {"samplerStarted": False, "sampleStatus": "exit-0"},
+            {"samplerStarted": False, "sampleStatus": "failed: system(2)",
+             "diagnosticOutcome": "diagnostic-incomplete"},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for fields in cases:
+                with self.subTest(fields=fields), self.assertRaisesRegex(RuntimeError, "Sampler"):
+                    watchdog.diagnostic_outcome({
+                        "diagnosticOutcome": "complete", "samplerReaped": True, **fields},
+                        Path(directory))
 
 
 if __name__ == "__main__":
