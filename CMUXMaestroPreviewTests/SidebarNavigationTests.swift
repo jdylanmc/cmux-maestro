@@ -8,7 +8,11 @@ struct SidebarNavigationTests {
 
     @Test func unknownChildOfManagedSessionFocusesExactParent() async throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let owner = endedNode(now: date, phase: "registered")
+        let owner = SidebarOrchestrationNode(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "coordinator",
+            label: "Coordinator", workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+            generation: 1, phase: "registered", availability: "idle", createdAt: date, updatedAt: date
+        )
         let managed = SidebarOrchestrationSnapshot(
             version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [owner]
         )
