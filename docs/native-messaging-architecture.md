@@ -227,17 +227,31 @@ Readiness adds a plain-language `message` for each reason.
 The loader calls the controller only once Copilot holds the session: its
 `inuse.<PID>.lock` exists, which happens at the first prompt. Until then readiness
 reports `awaiting-first-prompt`. The `onUserPromptSubmitted`, `onSessionStart`,
-`onPostToolUse` and `onAgentStop` hooks re-check, without reading their input.
+`onPostToolUse` and `onAgentStop` hooks re-check only for the exact joined session,
+without reading their content.
 `awaiting-first-prompt`, `session-not-persisted` (Copilot's never-saved `--resume`
 startup placeholder) and `enrollment-busy` are not recorded; the loader asks the
-controller at most twice per join. Every other decision is recorded per session
-and Copilot process and repeated on reload. Enrollments are serialized on the host
+controller again after the first such refusal; the second is final for the
+join, even when the reasons differ. Account/provider deferrals neither consume
+nor reset this shared budget. `account-unverified` stays
+pending and unrecorded; later exact-session hooks observe the account again.
+Previously recorded account-unverified refusals are reconsidered. A provider
+conflict stays pending too, but its recorded refusal permits enrollment only
+after no node holds that exact provider. Missing custody never releases a node.
+Each later event permits one attempt; concurrent events share it. There is no
+timer-driven enrollment or account fallback. Other decisions are recorded per
+session and Copilot process and repeated on reload. Enrollments are serialized on the host
 (20-second wait, inside the loader's 60-second call limit).
 While managed, the loader asks the controller's private `native-custody` command
 before readiness, identity, peers, send, spawn, close and each inbound peer
 message; the controller re-checks spawn and close itself. A second live holder of
 the session latches `session-custody-lost` until the next join.
 Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
+One exact user-exit callback can be buffered during join until the managed
+observer is installed and runtime startup settles. Only a pending bit is held;
+the controller receives the original node/session/generation identity, never
+hook content. Hangup and forged-session checks remain in place. Actual CLI
+callback ordering during interactive `/resume` remains unverified (#348).
 
 The readiness-only branch below now applies only when launcher inputs are
 incomplete.

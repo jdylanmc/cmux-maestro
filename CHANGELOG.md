@@ -289,6 +289,10 @@ Notable changes are recorded using Keep a Changelog categories.
 - Hidden finished internal tasks no longer leave empty expandable **Unknown
   agent** rows. Unprotected fragments join **+N unresolved**; the workspace eye
   restores their tasks, while protected descendants keep their ancestry (#353).
+- Born-managed enrollment can reconsider an unavailable account or an earlier
+  provider holder at later session events. Exact session-end callbacks received
+  during extension join are retained until the managed observer is installed
+  (#348). Actual interactive `/resume` callback ordering remains unverified.
 - Unattributed internal activity shares one neutral unresolved indicator instead
   of repeated unknown-agent rows. Named tasks, attention and required ancestry
   remain visible; bounded history and work-state evidence stay unchanged (#341).

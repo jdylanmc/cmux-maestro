@@ -2996,8 +2996,8 @@ def born_enrollment_request():
         require_current_surface(workspace, surface)
     except OrchestrationError as error:
         raise EnrollmentRefused("cmux-identity-unverified") from error
-    # An unverified account still reaches the controller (login and host null) so that refusal
-    # is recorded for this provider and a later reload cannot enroll.
+    # An unverified account still reaches the controller (login and host null), but no final
+    # decision is made until this exact session can report its own account.
     login = request["login"]
     if login is not None:
         try:
@@ -3192,7 +3192,9 @@ def born_generation(state, session):
 
 
 # Refusals an earlier controller recorded that this one no longer makes (#261).
-RETIRED_REFUSALS = {"session-started-before-install", "enrollment-window-passed", "session-ended"}
+RETIRED_REFUSALS = {
+    "session-started-before-install", "enrollment-window-passed", "session-ended", "account-unverified",
+}
 
 
 def recorded_decision(state, key, anchor):
@@ -3378,7 +3380,7 @@ def command_native_enroll(root, cmux):
 def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anchor, login,
                          key, receipt, settled):
     if login is None:
-        raise EnrollmentRefused("account-unverified")
+        raise EnrollmentRefused("account-unverified", final=False)
     try:
         messaging = messaging_configuration(root)
     except OrchestrationError as error:
@@ -3448,7 +3450,7 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         except OrchestrationError as error:
             raise EnrollmentRefused("capacity-unavailable") from error
         prune_attempts(state)
-        if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
+        if key not in state["enrollmentAttempts"] and len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
             raise EnrollmentRefused("capacity-unavailable")
         # Decide the generation under the lock, after any archive above moved the floor.
         generation = born_generation(state, session)
@@ -3556,7 +3558,7 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
     no other live owner of the session's lock, rechecked inside the lock.
     """
     if login is None:
-        raise EnrollmentRefused("account-unverified")
+        raise EnrollmentRefused("account-unverified", final=False)
     try:
         messaging = messaging_configuration(root)
     except OrchestrationError as error:
@@ -3630,7 +3632,7 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
             raise EnrollmentRefused("session-live-or-uncertain")
         require_resumable(current, state)  # includes the lock rescan at the commit boundary
         prune_attempts(state)
-        if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
+        if key not in state["enrollmentAttempts"] and len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
             raise EnrollmentRefused("capacity-unavailable")
         if current["phase"] == "resource-retired":
             # A retired root no longer holds a workspace slot; reviving it takes one.

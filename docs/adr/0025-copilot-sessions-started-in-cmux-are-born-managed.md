@@ -43,3 +43,48 @@ Owner decision: every Copilot session in a CMUX tab, with production Maestro ins
 - **Plain readiness.** `maestro_readiness` adds a plain-language `message` for each reason.
 
 The identity checks are unchanged: exact workspace, surface and terminal TTY; the session's own account; no other live custody of the session; capacity. Enrollment of a CMUX session by its own extension is not adoption.
+
+## Amendment (2026-10-24, #348): defer incomplete enrollment evidence to session events
+
+An unavailable account observation is not a final refusal. The session remains
+unmanaged with `account-unverified`; each later exact-session prompt, start,
+post-tool or agent-stop hook may observe its own account again and ask the
+controller once. Previously recorded account-unverified refusals are
+reconsidered, not converted to enrollments. Account mismatch and every other
+definitive refusal remain final. There is no account fallback.
+
+Reconsideration replaces that exact attempt key, even when the attempt table
+is full. New keys still require space; no other live provider's evidence is
+evicted. This applies to both a new born root and a resumed born root.
+
+`provider-already-enrolled` also remains pending in the extension. A later hook
+may ask again, but the controller repeats the refusal until no node holds that
+exact provider. An in-process replacement still requires the earlier born
+root's recorded, exact-generation session end; absent custody or extension
+termination is not an end. Every admission check runs again. Concurrent events
+share one attempt; no timer or daemon retries enrollment. The second refusal
+among `awaiting-first-prompt`, `session-not-persisted` and `enrollment-busy`
+remains final for the join. Account/provider deferrals neither consume nor
+reset that shared retry budget.
+
+The extension retains at most one exact `user_exit` callback received before
+its runtime observer is installed. It stores only a pending bit and forwards
+the joined session's exact identity after runtime startup settles, including
+failure after observer installation. It never waits for startup inside the
+join callback, retains hook content, or records an end after a hangup.
+The existing bounded shutdown gate is armed before join, so termination cannot
+discard a buffered callback merely because the runtime has not started yet.
+Definitive refusal or initialization failure settles the wait when no observer
+can be installed.
+An unresolved pending enrollment can therefore use the existing two-second
+shutdown budget even if no observer ultimately installs. Event-driven
+reconsideration also retains the existing bounded hook wait and controller
+timeout costs while evidence remains incomplete. These are bounded waits, not
+scheduled retries. A known definitive controller refusal takes precedence over
+an unavailable account observation and stops further attempts.
+
+This amends the earlier one-decision and retry limits only for these incomplete
+observations. Deterministic synthetic controller/extension scenarios establish
+the repaired ordering cases. Actual interactive `/resume` callback ordering
+is still unverified; if the provider delivers no authoritative end, enrollment
+continues to refuse. No existing session is probed, reloaded or controlled.
