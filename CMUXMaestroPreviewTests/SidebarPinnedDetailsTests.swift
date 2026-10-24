@@ -499,23 +499,10 @@ struct SidebarPinnedDetailsTests {
         try await settle(hosting)
         if change.hasSuffix("primary") { capturedPrimary() }
         else { presenter.invoke(item) }
-        try await Task.sleep(for: .milliseconds(100))
         print("R123 captured \(subject)/\(change): hostActions=\(nativeActions.count), acknowledgements=\(preferences.attention.acknowledged.count)")
-        #expect(nativeActions.isEmpty && model.navigation.status == .idle)
+        #expect(nativeActions.isEmpty && model.navigation.status == .staleTarget)
         #expect(preferences.attention.acknowledged.isEmpty && polling.tree.attentionOwnerCount == 2)
-        let panels = window.childWindows ?? []
-        let panel = try #require(panels.count == 1 ? panels.first?.contentView : nil)
-        try await settle(panel)
-        let bitmap = try capture(panel)
-        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/layout-validation/offscreen")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let destination = folder.appendingPathComponent("retained123-placement-\(subject)-\(change).png")
-        let warning = try await unavailableInspectorPixels(
-            in: bitmap, dark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            inset: (panel.bounds.width - 300) / 2, opaque: false, destination: destination
-        )
-        #expect(warning, "Stale placement must surface the existing explicit unavailable inspector")
+        #expect(window.childWindows?.isEmpty != false, "Stale focus reports the navigation footer, not a Details panel")
 
         let freshRow = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }
             .first { $0.accessibilityLabel() == label })

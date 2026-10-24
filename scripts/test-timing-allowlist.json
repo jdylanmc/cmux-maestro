@@ -371,7 +371,7 @@
       "pause: { try await Task.sleep(for: .milliseconds(10)) })": 1,
       ".init(version: 1, generatedAt: Date(), complete: true, omittedCount: 0, nodes: [])": 1,
       "}, pause: { try await Task.sleep(for: .seconds(60)) })": 1,
-      "try await Task.sleep(for: .milliseconds(100))": 2,
+      "try await Task.sleep(for: .milliseconds(100))": 1,
       "let date = Date()": 1,
       "read: { await source.managed }, pause: { try await Task.sleep(for: .seconds(60)) }": 1,
       "read: neutralRead { _ in await source.observed }, pause: { try await Task.sleep(for: .seconds(60)) },": 1,
