@@ -296,7 +296,11 @@ struct SidebarHistoryPollingTests {
                 default: break
                 }
             }
+            let opensBeforeRead = await reader.eventFileOpens
             let source = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
+            if index == 3 && ["rotation", "shrink", "rewrite"].contains(failure) {
+                #expect(await reader.eventFileOpens == opensBeforeRead)
+            }
             let observed = try #require(source.sessions.first { $0.sessionID == fixture.sessionID })
             #expect(observed.observedAt < source.generatedAt)
             #expect(!source.issues.contains(.stateUnavailable))

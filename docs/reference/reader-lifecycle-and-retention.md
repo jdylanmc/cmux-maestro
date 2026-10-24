@@ -486,6 +486,11 @@ independent terminal. This literal #10 integration does not complete broader
   batch escapes, including when a tail failed or only ended observations exist.
   An ended-only missing root must remain absent; recreation or refusal before
   publication invalidates that batch rather than fabricating confirmed death.
+  Both live and ended-only cohorts retain the original root descriptor or
+  absence witness through decoration and the final binding/owner fence.
+  One shared publication check validates that witness after all those phases.
+  Unchanged-file stat fast paths still emit the session's invalidated-projection
+  issue; skipping an open never restores publication rights.
   The same error at a shared
   boundary is not downgraded because a session was being read.
   Projected diagnostics may aggregate session permission failures, but names,

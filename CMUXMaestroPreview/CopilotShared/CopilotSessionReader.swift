@@ -159,33 +159,39 @@ actor CopilotSessionReader {
             resetDiscovery()
             return snapshot(now: now, observations: [], issues: [.identityChanged])
         }
-        if records.isEmpty {
-            return try publishEmptyCohort(index, discoveryIncomplete: discoveryIncomplete, batch: batch)
+        let root: SessionRoot?
+        if records.isEmpty && endedBindingsBySurface.isEmpty {
+            root = nil
+        } else {
+            do {
+                root = SessionRoot(descriptor: try CopilotFileAccess.openDirectory(
+                    index.directories.sessions, owner: verifier.uid
+                ))
+            } catch CopilotFileError.missing where records.isEmpty {
+                root = SessionRoot(descriptor: nil)
+            } catch {
+                try Self.rethrowCancellation(error)
+                batch.issues.append(Self.issue(error))
+                return snapshot(now: now, observations: [], issues: batch.issues)
+            }
         }
-        let root: Int32
-        do {
-            root = try CopilotFileAccess.openDirectory(index.directories.sessions, owner: verifier.uid)
-        } catch {
-            try Self.rethrowCancellation(error)
-            batch.issues.append(Self.issue(error))
-            return snapshot(now: now, observations: [], issues: batch.issues)
-        }
-        defer { close(root) }
+        defer { if let descriptor = root?.descriptor { close(descriptor) } }
         rotateBindingOrder()
         var byteBudget = limits.bytesPerRead
-        for entry in records {
-            try Task.checkCancellation()
-            let outcome = try readSession(entry, index: index, root: root, budget: &byteBudget, now: now)
-            absorb(outcome, for: entry.record, batch: &batch)
+        if let descriptor = root?.descriptor {
+            for entry in records {
+                try Task.checkCancellation()
+                let outcome = try readSession(entry, index: index, root: descriptor, budget: &byteBudget, now: now)
+                absorb(outcome, for: entry.record, batch: &batch)
+            }
         }
-        try appendEndedObservations(index, batch: &batch)
+        try appendEndedObservations(index, root: root?.descriptor, batch: &batch)
+        if records.isEmpty && !discoveryIncomplete && batch.observations.isEmpty {
+            batch.issues.append(.noIdentityRecords)
+        }
         try decorateObservations(index, batch: &batch)
         fenceObservations(index, batch: &batch)
-        guard (try? directoryRemainsValid(root, at: index.directories.sessions)) == true else {
-            resetDiscovery()
-            return snapshot(now: now, observations: [], issues: [.identityChanged])
-        }
-        return try publish(index, batch: batch)
+        return try publish(index, sessionRoot: root, batch: batch)
     }
 
     // MARK: Batch phases
@@ -193,6 +199,11 @@ actor CopilotSessionReader {
     private struct BindingIndex {
         let directories: (bindings: URL, sessions: URL)
         let descriptor: Int32
+    }
+
+    /// Nil descriptor records verified absence for an ended-only cohort, not an uninspected root.
+    private struct SessionRoot {
+        let descriptor: Int32?
     }
 
     private enum BindingIndexOpening {
@@ -400,17 +411,6 @@ actor CopilotSessionReader {
         return discoveryIncomplete
     }
 
-    private func publishEmptyCohort(
-        _ index: BindingIndex, discoveryIncomplete: Bool, batch: Batch
-    ) throws -> CopilotSnapshot {
-        var batch = batch
-        try appendEndedObservations(index, batch: &batch)
-        if !discoveryIncomplete && batch.observations.isEmpty { batch.issues.append(.noIdentityRecords) }
-        try decorateObservations(index, batch: &batch)
-        fenceObservations(index, batch: &batch)
-        return try publish(index, batch: batch)
-    }
-
     // Move the first cached identity to the end after each batch so a large
     // transcript cannot monopolize the shared byte budget.
     private func rotateBindingOrder() {
@@ -589,19 +589,7 @@ actor CopilotSessionReader {
         endedBindingsBySurface[surface] = entry
     }
 
-    private func appendEndedObservations(_ index: BindingIndex, batch: inout Batch) throws {
-        guard !endedBindingsBySurface.isEmpty else { return }
-        let root: Int32?
-        do {
-            root = try CopilotFileAccess.openDirectory(index.directories.sessions, owner: verifier.uid)
-        } catch CopilotFileError.missing {
-            root = nil
-        } catch {
-            try Self.rethrowCancellation(error)
-            batch.issues.append(Self.issue(error))
-            return
-        }
-        defer { if let root { close(root) } }
+    private func appendEndedObservations(_ index: BindingIndex, root: Int32?, batch: inout Batch) throws {
         for (surface, cached) in endedBindingsBySurface {
             try Task.checkCancellation()
             let entry: Binding
@@ -639,10 +627,6 @@ actor CopilotSessionReader {
             batch.observations.append(observation(
                 entry.record, liveness: status == .alive ? .ambiguous : Self.liveness(status), now: batch.now
             ))
-        }
-        if (try? directoryRemainsValid(root, at: index.directories.sessions)) != true {
-            batch.observations.removeAll()
-            batch.issues.append(.identityChanged)
         }
     }
 
@@ -805,7 +789,7 @@ actor CopilotSessionReader {
         batch.observations = fenced
     }
 
-    private func publish(_ index: BindingIndex, batch: Batch) throws -> CopilotSnapshot {
+    private func publish(_ index: BindingIndex, sessionRoot: SessionRoot?, batch: Batch) throws -> CopilotSnapshot {
         guard (try? directoryRemainsValid(index.descriptor, at: index.directories.bindings)) == true else {
             resetDiscovery()
             return snapshot(now: batch.now, observations: [], issues: [.identityChanged])
@@ -816,6 +800,11 @@ actor CopilotSessionReader {
             issues.append(.readLimitReached)
         }
         try Task.checkCancellation()
+        if let sessionRoot,
+           (try? directoryRemainsValid(sessionRoot.descriptor, at: index.directories.sessions)) != true {
+            resetDiscovery()
+            return snapshot(now: batch.now, observations: [], issues: [.identityChanged])
+        }
         pendingHistory = pendingHistory || (batch.madeProgress && batch.unreadHistory)
         finishDiscoveryCycle()
         // Each frozen prefix ends after `batch.now`, so it can hold events stamped later.
