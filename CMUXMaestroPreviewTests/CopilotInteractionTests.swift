@@ -42,18 +42,24 @@ nonisolated struct CopilotInteractionTests {
         #expect(reducer.value().children.isEmpty)
     }
 
-    @Test(arguments: ["none", "untagged", "wrong-tags", "replay", "same-owner"])
+    @Test(arguments: ["none", "untagged", "wrong-tags", "replay", "replay-spilled", "replay-other-kind", "same-owner"])
     func unownedCompletionCannotManufactureOccurrenceProof(control: String) throws {
-        var reducer = CopilotEventReducer(sessionID: UUID())
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: control == "replay-spilled" ? 4 : 65_536)
         let old = UUID(), current = UUID(), message = UUID(), completion = UUID()
         let unowned = try interactionEvent("tool.execution_complete", id: completion,
                                            parent: control == "none" ? current : message,
                                            owner: control == "same-owner" ? nil : "background",
                                            data: ["toolCallId": "unowned", "success": true])
-        if control == "replay" { reducer.consume(unowned) }
+        if control == "replay" || control == "replay-spilled" { reducer.consume(unowned) }
+        if control == "replay-other-kind" {
+            reducer.consume(try interactionEvent("session.model_change", id: completion, data: ["newModel": "synthetic"]))
+        }
         reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
         reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
         reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        if control == "replay-spilled" {
+            reducer.consume(try interactionEvent("session.model_change", data: ["newModel": "synthetic"]))
+        }
         if control != "none" {
             reducer.consume(try interactionEvent("assistant.message", id: message, parent: current,
                                                  turn: control == "untagged" ? nil : "0",
@@ -66,7 +72,8 @@ nonisolated struct CopilotInteractionTests {
         #expect(reducer.value().attention.isEmpty)
         #expect(reducer.retentionCounts.owners == 0)
         #expect(reducer.value().children.isEmpty)
-        #expect(reducer.issues == [.ambiguousTurn])
+        #expect(reducer.issues.contains(.ambiguousTurn))
+        #expect(reducer.issues.contains(.readLimitReached) == (control == "replay-spilled"))
     }
 
     @Test(arguments: [false, true], [false, true])

@@ -606,6 +606,16 @@ nonisolated struct CopilotEventReducer: Sendable {
             guard let invocation = toolOwners[tool] else {
                 // Missing ownership cannot mutate another current invocation.
                 remember("tool:\(tool)")
+                let eventMatch = seenLifecycleEvents.match(event.id)
+                guard eventMatch != .exact else { return false }
+                guard eventMatch == .absent, !replayExhausted,
+                      seenLifecycleEvents.remember(event.id) else {
+                    addIssue(.readLimitReached)
+                    return false
+                }
+                // An unseen start leaves no completion authority, but its fresh
+                // envelope can still bridge the session-wide parent chain.
+                observeEnvelopeContinuity(event)
                 return false
             }
             guard invocation.agentID == event.agentID, !invocation.completed else { return false }

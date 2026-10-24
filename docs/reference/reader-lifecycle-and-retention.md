@@ -89,6 +89,10 @@ may advance the single tip. It does not change work state or manufacture an
 outcome. Non-tool envelope bridges keep bounded current-parent behavior.
 Cross-owner continuity does not assign a foreign tool to the primary turn;
 it only carries already-proven occurrence evidence along the shared chain.
+An unowned tool completion (for example, its start predates the bounded tail)
+may advance envelope continuity only after passing the lifecycle event replay
+guard. It never creates ownership or applies completion effects. Exact replays,
+uncertain replay matches and exhausted admission cannot bridge the chain.
 
 Missing/gapped causal evidence for reused nil-interaction end yields
 `ambiguousTurn` and unknown primary state, not fabricated completion. Pending
