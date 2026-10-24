@@ -365,6 +365,81 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
+    @Test(arguments: ["permission", "symlink"])
+    func unreadableForeignHeaderKeepsSiblingsRejectedUntilVerifiedReset(_ failure: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: other.appendingPathComponent("events.jsonl"))
+        try fixture.writeEvents([copilotTestEvent("assistant.turn_start", data: ["turnId": "live"])])
+        let topology = SidebarTopology(.init(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                isSelected: .available(false), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available([fixture.surface, otherSurface].map {
+                    .init(id: $0, title: "Synthetic", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                })
+            )], windowID: UUID()
+        ))
+        let clock = HistoryTestClock(initial)
+        let reader = fixture.reader(clock: { clock.read() })
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        defer { poller.setVisible(false) }
+        poller.update(topology: topology, connected: true)
+        poller.setVisible(true)
+        for index in 1...5 {
+            await sidebarEventually { await harness.reads == index }
+            if index == 2 {
+                try fixture.writeEvents([copilotTestEvent("session.start", data: [
+                    "sessionId": UUID().uuidString, "version": 1
+                ])], atomic: true)
+            }
+            if index == 3 {
+                if failure == "permission" {
+                    try #require(chmod(fixture.events.path, 0o000) == 0)
+                } else {
+                    try FileManager.default.removeItem(at: fixture.events)
+                    try FileManager.default.createSymbolicLink(
+                        at: fixture.events, withDestinationURL: other.appendingPathComponent("events.jsonl")
+                    )
+                }
+            }
+            if index == 5 {
+                if failure == "permission" {
+                    try #require(chmod(fixture.events.path, 0o600) == 0)
+                } else {
+                    try FileManager.default.removeItem(at: fixture.events)
+                }
+                try fixture.writeEvents([
+                    copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+                    copilotTestEvent("session.idle")
+                ], atomic: true)
+            }
+            await harness.succeed(try await reader.read(surfaceIDs: [fixture.surface, otherSurface]))
+            await sidebarEventually { await harness.isPaused }
+            if (2...4).contains(index) {
+                #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
+                #expect(poller.tree.issues.contains(.identityChanged))
+            } else {
+                #expect(poller.tree.sessions.count == 2 && poller.tree.statusSessions.isEmpty)
+                #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.state == (index == 1 ? .working : .idle))
+            }
+            if index < 5 {
+                clock.advance(2)
+                await harness.nextRead()
+            }
+        }
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
     @Test(arguments: ["shared", "session"])
     func endedOnlyPermissionFailuresKeepTheirBoundary(_ boundary: String) async throws {
         let fixture = try CopilotReaderFixture()

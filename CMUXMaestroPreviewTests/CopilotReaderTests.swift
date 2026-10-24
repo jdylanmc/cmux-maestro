@@ -1294,7 +1294,8 @@ nonisolated struct CopilotReaderTests {
         #expect(!current.isComplete)
     }
 
-    @Test func replacementWithForeignSessionHeaderRemainsGlobal() async throws {
+    @Test(arguments: ["permissions", "symlink", "changed", "missing", "marker", "session-directory"])
+    func replacementWithForeignSessionHeaderRemainsGlobal(_ failure: String) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         let otherSurface = UUID()
@@ -1302,7 +1303,14 @@ nonisolated struct CopilotReaderTests {
         try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
         try (copilotTestEvent("session.idle") + Data([10])).write(to: other.appendingPathComponent("events.jsonl"))
         try fixture.writeEvents([copilotTestEvent("session.idle")])
-        let reader = fixture.reader()
+        let failRead = fixture.root.appendingPathComponent("fail-next-event-read")
+        let reader = fixture.reader(eventRead: { descriptor, offset, count in
+            if FileManager.default.fileExists(atPath: failRead.path) {
+                try FileManager.default.removeItem(at: failRead)
+                throw CopilotFileError.changed
+            }
+            return try CopilotFileAccess.read(descriptor, offset: offset, count: count)
+        })
         let surfaces: Set<UUID> = [fixture.surface, otherSurface]
         #expect(try await reader.read(surfaceIDs: surfaces).sessions.count == 2)
         try fixture.writeEvents([copilotTestEvent("session.start", data: [
@@ -1312,6 +1320,47 @@ nonisolated struct CopilotReaderTests {
         #expect(refused.issues.contains(.identityChanged))
         #expect(refused.sessions.first { $0.sessionID == fixture.sessionID }?.state == .unknown)
         #expect(!refused.isComplete)
+        let marker = fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock")
+        switch failure {
+        case "permissions":
+            try #require(chmod(fixture.events.path, 0o000) == 0)
+        case "symlink":
+            try FileManager.default.removeItem(at: fixture.events)
+            try FileManager.default.createSymbolicLink(
+                at: fixture.events, withDestinationURL: other.appendingPathComponent("events.jsonl")
+            )
+        case "changed":
+            try fixture.append(Data([32]))
+            try Data().write(to: failRead)
+        case "marker":
+            try FileManager.default.removeItem(at: marker)
+        case "session-directory":
+            try #require(chmod(fixture.session.path, 0o000) == 0)
+        default:
+            try FileManager.default.removeItem(at: fixture.events)
+        }
+        for _ in 0..<2 {
+            let unreadable = try await reader.read(surfaceIDs: surfaces)
+            #expect(unreadable.issues.contains(.identityChanged))
+            #expect(!unreadable.isComplete)
+            let adapted = CopilotSnapshotAdapter.snapshot(
+                unreadable, workspaceBySurface: [fixture.surface: fixture.workspace, otherSurface: fixture.workspace]
+            )
+            #expect(adapted.globalIssues.contains(.identityChanged))
+            #expect(await reader.retentionCounts().tails == 2)
+        }
+        if failure == "changed" { #expect(!FileManager.default.fileExists(atPath: failRead.path)) }
+        if failure == "permissions" { try #require(chmod(fixture.events.path, 0o600) == 0) }
+        if failure == "session-directory" { try #require(chmod(fixture.session.path, 0o700) == 0) }
+        if failure == "symlink" { try FileManager.default.removeItem(at: fixture.events) }
+        if failure == "marker" { try Data().write(to: marker) }
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            copilotTestEvent("session.idle")
+        ], atomic: true)
+        let recovered = try await reader.read(surfaceIDs: surfaces)
+        #expect(recovered.isComplete && recovered.sessions.count == 2)
+        #expect(recovered.sessions.first { $0.sessionID == fixture.sessionID }?.state == .idle)
     }
 
     @Test(arguments: ["replace", "symlink", "permission"])
