@@ -4,6 +4,71 @@ import Testing
 
 @Suite(.serialized)
 nonisolated struct CopilotInteractionTests {
+    @MainActor @Test(arguments: [false, true])
+    func boundedTailUnownedCompletionPreservesEnvelopeContinuity(afterProof: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let old = UUID(), current = UUID(), message = UUID(), completion = UUID(), end = UUID()
+        let rows = try [
+            interactionEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            interactionEvent("tool.execution_start", owner: "background",
+                             data: ["toolCallId": "outside-tail", "toolName": "bash"]),
+            interactionEvent("assistant.message", data: ["content": String(repeating: "x", count: 17 * 1_048_576)]),
+            interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"),
+            interactionEvent("assistant.turn_end", parent: old, turn: "0"),
+            interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same")
+        ]
+        let proof = try interactionEvent("assistant.message", id: message,
+                                         parent: afterProof ? current : completion, turn: "0", interaction: "same")
+        let unowned = try interactionEvent("tool.execution_complete", id: completion,
+                                           parent: afterProof ? message : current, owner: "background",
+                                           data: ["toolCallId": "outside-tail", "success": false])
+        let tail = (afterProof ? [proof, unowned] : [unowned, proof]) + [
+            try interactionEvent("assistant.turn_end", id: end, parent: afterProof ? completion : message, turn: "0")
+        ]
+        try fixture.writeEvents(rows + tail)
+        let snapshot = try await fixture.reader().read(surfaceIDs: [fixture.surface])
+        let session = try #require(snapshot.sessions.first)
+        #expect(session.state == .idle)
+        #expect(session.attention?.map(\.kind) == [.turnFinished])
+        #expect(session.attention?.last?.evidence.eventID == end)
+        #expect(session.sessionIssues == [.readLimitReached])
+        #expect(session.children.isEmpty)
+
+        var reducer = CopilotEventReducer(sessionID: fixture.sessionID)
+        for row in rows.suffix(3) + tail { reducer.consume(row) }
+        #expect(reducer.value().state == .idle)
+        #expect(reducer.retentionCounts.owners == 0)
+        #expect(reducer.value().children.isEmpty)
+    }
+
+    @Test(arguments: ["none", "untagged", "wrong-tags", "replay", "same-owner"])
+    func unownedCompletionCannotManufactureOccurrenceProof(control: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), message = UUID(), completion = UUID()
+        let unowned = try interactionEvent("tool.execution_complete", id: completion,
+                                           parent: control == "none" ? current : message,
+                                           owner: control == "same-owner" ? nil : "background",
+                                           data: ["toolCallId": "unowned", "success": true])
+        if control == "replay" { reducer.consume(unowned) }
+        reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        if control != "none" {
+            reducer.consume(try interactionEvent("assistant.message", id: message, parent: current,
+                                                 turn: control == "untagged" ? nil : "0",
+                                                 interaction: control == "untagged" ? nil :
+                                                    (control == "wrong-tags" ? "other" : "same")))
+        }
+        reducer.consume(unowned)
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: completion, turn: "0", interaction: "same"))
+        #expect(reducer.value().state == .unknown)
+        #expect(reducer.value().attention.isEmpty)
+        #expect(reducer.retentionCounts.owners == 0)
+        #expect(reducer.value().children.isEmpty)
+        #expect(reducer.issues == [.ambiguousTurn])
+    }
+
     @Test(arguments: [false, true], [false, true])
     func repeatedScopedMessageBridgesInterleavedBackgroundEnvelopes(partial: Bool, afterProof: Bool) throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
