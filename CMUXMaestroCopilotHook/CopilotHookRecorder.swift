@@ -123,13 +123,7 @@ nonisolated struct CopilotHookRecorder {
     }
 
     func bind(payload: Data, environment: [String: String]) -> HookOutcome {
-        let outcome = record(payload: payload, environment: environment, intent: .bind)
-        if outcome == .recorded {
-            CopilotBindingRetirement(
-                integrationRoot: integrationRoot, sessionStateRoot: sessionStateRoot, process: process
-            ).run()
-        }
-        return outcome
+        record(payload: payload, environment: environment, intent: .bind)
     }
 
     func setAppearance(
@@ -152,7 +146,7 @@ nonisolated struct CopilotHookRecorder {
             return diagnose(.invalidInput)
         }
         do {
-            return try withProvenOwnership(request, intent: intent) { ownership in
+            let outcome = try withProvenOwnership(request, intent: intent) { ownership in
                 switch intent {
                 case .prove:
                     return .recorded
@@ -162,6 +156,13 @@ nonisolated struct CopilotHookRecorder {
                     return try commitBinding(ownership)
                 }
             }
+            if case .bind = intent, outcome == .recorded,
+               request.object["toolName"] == nil, request.object["tool_name"] == nil {
+                CopilotBindingRetirement(
+                    integrationRoot: integrationRoot, sessionStateRoot: sessionStateRoot, process: process
+                ).run()
+            }
+            return outcome
         } catch {
             return diagnose(.unavailable)
         }
@@ -242,7 +243,9 @@ nonisolated struct CopilotHookRecorder {
         guard lock >= 0 else { return diagnose(.unavailable) }
         defer { close(lock) }
         _ = try HookFiles.metadata(lock)
-        guard bindingLock(lock, LOCK_EX | LOCK_NB) == 0 else { return diagnose(.unavailable) }
+        // Binding publication must outlive retirement contention; Copilot bounds the hook process.
+        let lockMode: Int32 = intent.requiresExistingBinding ? LOCK_EX | LOCK_NB : LOCK_EX
+        guard bindingLock(lock, lockMode) == 0 else { return diagnose(.unavailable) }
         defer { flock(lock, LOCK_UN) }
 
         if let refusal = existingBindingRefusal(
@@ -423,6 +426,16 @@ nonisolated struct CopilotHookRecorder {
                                        name: "hook-status.json", directory: directory)
         }
         return outcome
+    }
+
+    func diagnoseRetirementFailure() {
+        // If even the retirement status cannot be published, retain provenance in the fallback.
+        if let directory = try? HookFiles.privateDirectory(integrationRoot) {
+            defer { close(directory) }
+            try? HookFiles.atomicWrite(
+                Data("{\"status\":\"unavailable\",\"source\":\"bindingRetirement\"}\n".utf8),
+                name: "hook-status.json", directory: directory)
+        }
     }
 }
 

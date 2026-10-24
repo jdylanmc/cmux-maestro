@@ -195,16 +195,57 @@ struct CopilotHookTests: Sendable {
 
         let status = root.appendingPathComponent("integration/binding-retirement-status.json")
         let first = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: status)) as? [String: Any])
-        #expect(first["examined"] as? Int == 64)
-        #expect(first["retired"] as? Int == 63)
+        #expect(first["examined"] as? Int == 16)
+        #expect(first["retired"] as? Int == 2)
         let last = root.appendingPathComponent("integration/bindings/00000000-0000-4000-8000-000000000070.json")
         #expect(FileManager.default.fileExists(atPath: last.path))
         #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
         let second = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: status)) as? [String: Any])
-        #expect(second["examined"] as? Int == 7)
-        #expect(second["retired"] as? Int == 5)
+        #expect(second["examined"] as? Int == 16)
+        #expect(second["retired"] as? Int == 2)
         #expect(FileManager.default.fileExists(atPath: last.path))
         #expect(try binding(root).ownerPID == 101)
+    }
+
+    @Test func retirementParentSyncFailurePreservesBinding() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        _ = try historicalBinding(root, number: 2, pid: 202)
+        let fd = try HookFiles.privateDirectory(root.appendingPathComponent("integration"))
+        defer { close(fd) }
+        let parent = try CMUXMaestroPreview.CopilotFileAccess.statFile(fd)
+        var retirement = CopilotBindingRetirement(
+            integrationRoot: root.appendingPathComponent("integration"),
+            sessionStateRoot: root.appendingPathComponent("state"), process: { lookup($0) })
+        retirement.syncDirectory = { directory in
+            guard let stamp = try? CMUXMaestroPreview.CopilotFileAccess.statFile(directory),
+                  !stamp.sameFile(as: parent) else { return -1 }
+            return fsync(directory)
+        }
+        retirement.run()
+        #expect(FileManager.default.fileExists(atPath: older.path))
+        retirement.syncDirectory = { fsync($0) }
+        retirement.run()
+        #expect(!FileManager.default.fileExists(atPath: older.path))
+    }
+
+    @Test func postToolHookDoesNotRunRetirement() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        _ = try historicalBinding(root, number: 2, pid: 202)
+        let toolPayload = try JSONSerialization.data(withJSONObject: [
+            "sessionId": session.uuidString, "toolName": "view",
+        ])
+        #expect(recorder(root).bind(payload: toolPayload, environment: environment) == .recorded)
+        #expect(FileManager.default.fileExists(atPath: older.path))
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        #expect(!FileManager.default.fileExists(atPath: older.path))
     }
 
     @Test func retirementDirectoryOverflowDoesNoCandidateWork() throws {

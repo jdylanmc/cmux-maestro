@@ -610,6 +610,10 @@ actor CopilotSessionReader {
                 }
                 entry = Binding(record: record, stamp: stamp, filename: cached.filename)
                 endedBindingsBySurface[surface] = entry
+            } catch CopilotFileError.missing {
+                // A retired content-free ended binding is not a live identity failure.
+                endedBindingsBySurface.removeValue(forKey: surface)
+                continue
             } catch {
                 try Self.rethrowCancellation(error)
                 endedBindingsBySurface.removeValue(forKey: surface)

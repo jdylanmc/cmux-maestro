@@ -5,11 +5,13 @@ import Foundation
 /// Opportunistic storage maintenance, never a reader or lifecycle authority.
 nonisolated struct CopilotBindingRetirement {
     static let maximumEntries = 4096
-    static let maximumCandidates = 64
+    static let maximumCandidates = 16
+    static let maximumRetirements = 2
 
     let integrationRoot: URL
     let sessionStateRoot: URL
     let process: @Sendable (Int32) -> CopilotProcessLookup
+    var syncDirectory: @Sendable (Int32) -> Int32 = { fsync($0) }
 
     private struct Candidate {
         let name: String
@@ -49,7 +51,7 @@ nonisolated struct CopilotBindingRetirement {
             let recorder = CopilotHookRecorder(
                 integrationRoot: integrationRoot, sessionStateRoot: sessionStateRoot,
                 processID: getpid(), process: process)
-            recorder.diagnose(.unavailable)
+            recorder.diagnoseRetirementFailure()
         }
     }
 
@@ -91,9 +93,12 @@ nonisolated struct CopilotBindingRetirement {
         let groups = Dictionary(grouping: candidates) {
             Surface(workspace: $0.record.launchWorkspaceID, surface: $0.record.surfaceID)
         }
+        var attempts = 0
         for group in groups.values {
             guard let survivor = group.max(by: { $0.record.recordedAt < $1.record.recordedAt }) else { continue }
             for candidate in group where candidate.record.recordedAt < survivor.record.recordedAt {
+                guard attempts < Self.maximumRetirements else { report.status = "limited"; break }
+                attempts += 1
                 do {
                     if try retire(candidate, keeping: survivor, root: root, bindings: bindings) {
                         report.retired += 1
@@ -146,6 +151,7 @@ nonisolated struct CopilotBindingRetirement {
               try isDead(candidate), try isDead(survivor) else { return false }
         let archive = try HookFiles.privateDirectory(integrationRoot.appendingPathComponent("retired-bindings"))
         defer { close(archive) }
+        guard syncDirectory(root) == 0 else { throw HookFiles.Failure.unavailable }
         try preserve(candidate.record, archive: archive)
 
         let currentRoot = try CopilotFileAccess.openDirectory(integrationRoot, owner: getuid())
@@ -159,7 +165,7 @@ nonisolated struct CopilotBindingRetirement {
               try CopilotFileAccess.statFile(archive).sameFile(as: CopilotFileAccess.statFile(currentArchive)),
               try isDead(candidate), try isDead(survivor),
               try unchanged(candidate, bindings: bindings), try unchanged(survivor, bindings: bindings) else { return false }
-        guard unlinkat(bindings, candidate.name, 0) == 0, fsync(bindings) == 0 else {
+        guard unlinkat(bindings, candidate.name, 0) == 0, syncDirectory(bindings) == 0 else {
             throw HookFiles.Failure.unavailable
         }
         return true
@@ -179,12 +185,12 @@ nonisolated struct CopilotBindingRetirement {
                 at: archive, filename: name, owner: getuid(), maximum: 16_384, permissions: 0o600)
             guard existing == data,
                   try stamp == CopilotFileAccess.statEntry(at: archive, name: name),
-                  fsync(existingFD) == 0, fsync(archive) == 0 else { throw Failure.changed }
+                  fsync(existingFD) == 0, syncDirectory(archive) == 0 else { throw Failure.changed }
             return
         }
         defer { close(fd) }
         let written = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-        guard written == data.count, fsync(fd) == 0, fsync(archive) == 0 else {
+        guard written == data.count, fsync(fd) == 0, syncDirectory(archive) == 0 else {
             throw HookFiles.Failure.unavailable
         }
     }
