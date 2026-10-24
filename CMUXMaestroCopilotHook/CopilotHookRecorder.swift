@@ -92,6 +92,7 @@ nonisolated struct CopilotHookRecorder {
     let sessionStateRoot: URL
     let processID: Int32
     let process: @Sendable (Int32) -> CopilotProcessLookup
+    var bindingLock: @Sendable (Int32, Int32) -> Int32 = { flock($0, $1) }
 
     static func canonicalUUID(_ value: String?) -> UUID? {
         guard let value, value.count == 36, let id = UUID(uuidString: value),
@@ -241,7 +242,7 @@ nonisolated struct CopilotHookRecorder {
         guard lock >= 0 else { return diagnose(.unavailable) }
         defer { close(lock) }
         _ = try HookFiles.metadata(lock)
-        guard flock(lock, LOCK_EX | LOCK_NB) == 0 else { return diagnose(.unavailable) }
+        guard bindingLock(lock, LOCK_EX | LOCK_NB) == 0 else { return diagnose(.unavailable) }
         defer { flock(lock, LOCK_UN) }
 
         if let refusal = existingBindingRefusal(

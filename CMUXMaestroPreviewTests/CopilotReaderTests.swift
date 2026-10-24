@@ -2139,6 +2139,7 @@ nonisolated struct CopilotReaderTests {
             #expect(next.sessions.first?.sessionIssues?.contains(.ambiguousIdentity) == true)
         } else {
             #expect(next.sessions.isEmpty)
+            if change == "removed" { #expect(!next.issues.contains(.identityChanged)) }
         }
     }
 

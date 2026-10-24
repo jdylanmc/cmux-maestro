@@ -26,8 +26,10 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feat
 
 python3 - "$OUTPUT" <<'PY'
 import json
+import fcntl
 import os
 from pathlib import Path
+import select
 import shutil
 import subprocess
 import sys
@@ -63,6 +65,64 @@ try:
     assert record["sessionID"].lower() == session
     assert abs(record["recordedAt"] - 1000.002) < 0.001
     assert binding.stat().st_mode & 0o777 == 0o600
+    # Model a retirement holding this exact session lock while a resume hook arrives.
+    lock_path = binding.parent / ("." + session + ".lock")
+    with lock_path.open("r+b") as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        ready_read, ready_write = os.pipe()
+        child = subprocess.Popen(
+            [str(output / "synthetic-hook"), *args], cwd=foreign,
+            env={**environment, "MAESTRO_TEST_LOCK_READY_FD": str(ready_write)},
+            pass_fds=(ready_write,), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        os.close(ready_write)
+        try:
+            child.stdin.write(json.dumps({"sessionId": session}).encode())
+            child.stdin.close()
+            child.stdin = None
+            assert select.select([ready_read], [], [], 15)[0], "hook never encountered the held lock"
+            assert os.read(ready_read, 1) == b"\x01", "hook exited before lock contention"
+            # Retirement removes only the old record while holding the same permanent lock.
+            binding.unlink()
+            fcntl.flock(lease, fcntl.LOCK_UN)
+            stdout, stderr = child.communicate(timeout=15)
+            assert child.returncode == 0 and not stdout and not stderr
+            assert binding.exists(), "resume lost its binding write to retirement"
+        finally:
+            os.close(ready_read)
+            fcntl.flock(lease, fcntl.LOCK_UN)
+            if child.poll() is None:
+                child.terminate()
+                child.communicate(timeout=15)
+
+    # The host may end a blocked hook at its timeout; kernel locks must remain usable.
+    with lock_path.open("r+b") as lease:
+        fcntl.flock(lease, fcntl.LOCK_EX)
+        ready_read, ready_write = os.pipe()
+        child = subprocess.Popen(
+            [str(output / "synthetic-hook"), *args], cwd=foreign,
+            env={**environment, "MAESTRO_TEST_LOCK_READY_FD": str(ready_write)},
+            pass_fds=(ready_write,), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        )
+        os.close(ready_write)
+        try:
+            child.stdin.write(json.dumps({"sessionId": session}).encode())
+            child.stdin.close()
+            child.stdin = None
+            assert select.select([ready_read], [], [], 15)[0], "hook never encountered the held lock"
+            assert os.read(ready_read, 1) == b"\x01"
+            # Explicit host deadline event: no sleeps or elapsed-time oracle.
+            child.terminate()
+            child.communicate(timeout=15)
+            assert child.returncode != 0, "blocked hook must be interruptible"
+        finally:
+            os.close(ready_read)
+            fcntl.flock(lease, fcntl.LOCK_UN)
+            if child.poll() is None:
+                child.terminate()
+                child.communicate(timeout=15)
+    invoke("synthetic-hook", args, json.dumps({"sessionId": session}).encode())
+    assert binding.exists() and lock_path.exists()
     # A session launched outside Git follows a file it actually touches.
     repository = fixture / "project"
     (repository / ".git/objects").mkdir(parents=True)
