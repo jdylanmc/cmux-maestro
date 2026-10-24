@@ -5,6 +5,73 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test(arguments: ["surface", "session", "status"], [false, true])
+    func hiddenSurfaceRowDoesNotResolveAgentPreview(kind: String, connected: Bool) throws {
+        let fixture = SidebarTreeFixtures()
+        let preferenceFixture = try SidebarPreferenceFixture()
+        let stores = SidebarStoreFixture()
+        defer { preferenceFixture.cleanup(); stores.cleanup() }
+        let preferences = preferenceFixture.preferences()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        var tree = SidebarCopilotTree.project(
+            fixture.snapshot(sessions: [fixture.session(now: date)], now: date),
+            onto: fixture.topology(), now: date
+        )
+        let session = try #require(tree.sessions.first)
+        if kind != "session" { tree.sessions = [] }
+        if kind == "status" { tree.statusSessions = [SidebarCopilotTree.statusOnly(session, retainingStatus: true)] }
+        let visible = SidebarVisibleWork(tree: tree, managed: [], history: .init(), showEnded: true, now: date)
+        let context = SidebarReorderContext.empty(
+            backend: LocalSidebarReorderBackend(store: preferences), session: SidebarReorderDragSession()
+        )
+        let navigation = SidebarNavigation()
+        navigation.update(topology: fixture.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
+                          perform: { _ in Issue.record("Preview availability must not navigate") })
+        var builds = 0
+        let provider: (SidebarAgentHoverTarget) -> SidebarHoverCardData? = { target in
+            builds += 1
+            return SidebarAgentHoverContent.card(
+                for: target, hierarchy: fixture.hierarchy(), connected: connected, tree: tree,
+                managed: .empty, availability: .ready, now: date
+            )
+        }
+        let row = SurfaceRow(
+            workspaceID: fixture.workspaceA,
+            surface: .init(id: fixture.surfaceA, title: "Synthetic", kind: .terminal, isFocused: false,
+                           isPinned: false, unreadCount: 0, workingDirectory: .available("/synthetic")),
+            reorder: context.handle(for: fixture.surfaceA, noun: "surface"),
+            sessions: visible.tree.sessions, countsComplete: true, navigation: navigation, layout: .init(),
+            setExpanded: { _, _ in }, dismiss: { _ in }, acknowledge: { _ in }, selection: .constant(nil)
+        )
+        let host = NSHostingView(rootView: row.environment(preferences)
+            .environment(\.sidebarPetStore, stores.pets)
+            .environment(\.sidebarHoverConnected, connected)
+            .environment(\.sidebarAgentHoverProvider, provider))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer {
+            for anchor in descendants(host).compactMap({ $0 as? SidebarHoverAnchorView }) {
+                anchor.presenter?.detach()
+            }
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(!descendants(host).compactMap { $0 as? SidebarHoverAnchorView }.isEmpty)
+        let title = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }.first)
+        let menus = descendants(host).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
+        let menu = try #require(menus.first)
+        let available = connected && kind != "status"
+        #expect(title.preview.available == available)
+        #expect(title.accessibilityHelp()?.contains("Tab enters preview controls") == available)
+        #expect(menu.menu().items.contains { $0.title == "Preview details" } == available)
+        #expect(builds == 0)
+        #expect((provider(.session(fixture.sessionID)) != nil) == (connected && kind == "session"))
+        #expect(!window.isVisible)
+    }
+
     @Test func hiddenAgentPreviewsDoNotBuildCardsUntilOpened() throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
                               styleMask: .borderless, backing: .buffered, defer: false)

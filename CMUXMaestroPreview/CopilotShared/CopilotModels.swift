@@ -63,7 +63,7 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     let state: CopilotWorkState
     let model: String?
     let children: [CopilotChildWork]
-    let observedAt: Date
+    var observedAt: Date
     let attention: [AgentAttention]?
     let activity: AgentActivity?
 

@@ -8,8 +8,17 @@ nonisolated enum CopilotSnapshotAdapter {
     static func snapshot(
         _ source: CopilotSnapshot, workspaceBySurface: [UUID: UUID]
     ) -> AgentSessionSnapshot {
+        AgentSessionSnapshot(
+            generatedAt: source.generatedAt, workspaces: workspaces(workspaceBySurface),
+            sessions: source.sessions.map { session($0, workspaceBySurface: workspaceBySurface) },
+            issues: source.issues.map { .init(rawValue: $0.rawValue) },
+            completeness: .known(source.isComplete)
+        )
+    }
+
+    static func workspaces(_ workspaceBySurface: [UUID: UUID]) -> [CMUXWorkspaceSnapshot] {
         let placements = Dictionary(grouping: workspaceBySurface, by: \.value)
-        let workspaces = placements.keys.sorted { $0.uuidString < $1.uuidString }.map { workspaceID in
+        return placements.keys.sorted { $0.uuidString < $1.uuidString }.map { workspaceID in
             let id = WorkspaceID(workspaceID.uuidString)
             return CMUXWorkspaceSnapshot(
                 id: id, title: .unknown(),
@@ -19,45 +28,43 @@ nonisolated enum CopilotSnapshotAdapter {
                 }
             )
         }
-        return AgentSessionSnapshot(
-            generatedAt: source.generatedAt, workspaces: workspaces,
-            sessions: source.sessions.map { observation in
-                let identity = ProviderSessionIdentity(providerID: providerID, sessionID: observation.sessionID.uuidString)
-                let launch = AgentSessionBinding(
-                    workspaceID: WorkspaceID(observation.launchWorkspaceID.uuidString),
-                    surfaceID: SurfaceID(observation.surfaceID.uuidString)
-                )
-                let binding: AgentSessionBindingObservation
-                if let workspace = workspaceBySurface[observation.surfaceID] {
-                    binding = .bound(.init(workspaceID: WorkspaceID(workspace.uuidString), surfaceID: launch.surfaceID))
-                } else {
-                    binding = .unknown(detail: "Observed surface is not in the supplied current topology")
-                }
-                let children = observation.children.map { child($0, session: identity) }
-                let legacy = legacyHierarchy(children, session: identity)
-                var item = AgentSessionSnapshotItem(
-                    identity: identity, binding: binding,
-                    title: observation.sessionName.map { .known($0) } ?? .unknown(),
-                    state: state(observation.state),
-                    activity: observation.activity.map { .known($0) } ?? .unknown(),
-                    model: model(observation.model), paths: .unknown(), timing: .unknown(),
-                    childWork: legacy.roots,
-                    stateDetail: detail(observation.state), liveness: liveness(observation.liveness),
-                    observedAt: observation.observedAt, launchBinding: launch,
-                    appearance: observation.iconId == nil && observation.iconColor == nil && observation.petId == nil ? nil
-                        : .init(iconId: observation.iconId, iconColor: observation.iconColor, petId: observation.petId),
-                    attention: observation.attention,
-                    childWorkObservation: .init(items: children, legacyProjectionIsLossless: legacy.count == children.count),
-                    location: observation.branch.map { .init(branch: $0, worktree: observation.worktree ?? false) }
-                )
-                item.sessionIssues = observation.sessionIssues?.map { .init(rawValue: $0.rawValue) }
-                item.currentWorktree = observation.currentWorktree
-                item.bindingProcess = observation.bindingProcess
-                return item
-            },
-            issues: source.issues.map { .init(rawValue: $0.rawValue) },
-            completeness: .known(source.isComplete)
+    }
+
+    static func session(
+        _ observation: CopilotSessionObservation, workspaceBySurface: [UUID: UUID]
+    ) -> AgentSessionSnapshotItem {
+        let identity = ProviderSessionIdentity(providerID: providerID, sessionID: observation.sessionID.uuidString)
+        let launch = AgentSessionBinding(
+            workspaceID: WorkspaceID(observation.launchWorkspaceID.uuidString),
+            surfaceID: SurfaceID(observation.surfaceID.uuidString)
         )
+        let binding: AgentSessionBindingObservation
+        if let workspace = workspaceBySurface[observation.surfaceID] {
+            binding = .bound(.init(workspaceID: WorkspaceID(workspace.uuidString), surfaceID: launch.surfaceID))
+        } else {
+            binding = .unknown(detail: "Observed surface is not in the supplied current topology")
+        }
+        let children = observation.children.map { child($0, session: identity) }
+        let legacy = legacyHierarchy(children, session: identity)
+        var item = AgentSessionSnapshotItem(
+            identity: identity, binding: binding,
+            title: observation.sessionName.map { .known($0) } ?? .unknown(),
+            state: state(observation.state),
+            activity: observation.activity.map { .known($0) } ?? .unknown(),
+            model: model(observation.model), paths: .unknown(), timing: .unknown(),
+            childWork: legacy.roots,
+            stateDetail: detail(observation.state), liveness: liveness(observation.liveness),
+            observedAt: observation.observedAt, launchBinding: launch,
+            appearance: observation.iconId == nil && observation.iconColor == nil && observation.petId == nil ? nil
+                : .init(iconId: observation.iconId, iconColor: observation.iconColor, petId: observation.petId),
+            attention: observation.attention,
+            childWorkObservation: .init(items: children, legacyProjectionIsLossless: legacy.count == children.count),
+            location: observation.branch.map { .init(branch: $0, worktree: observation.worktree ?? false) }
+        )
+        item.sessionIssues = observation.sessionIssues?.map { .init(rawValue: $0.rawValue) }
+        item.currentWorktree = observation.currentWorktree
+        item.bindingProcess = observation.bindingProcess
+        return item
     }
 
     // Compatibility output only. Live consumers use the ordered observations,

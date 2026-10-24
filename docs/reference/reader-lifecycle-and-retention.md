@@ -289,6 +289,21 @@ freshness/history deadlines. Torn lines and incomplete tails do not gain
 freshness from unchanged metadata. No file contents, access rights or liveness
 are inferred from a directory timestamp.
 
+The polling adapter retains a bounded conversion cache for at most 64 sessions.
+It compares the complete current observation except `observedAt`, reuses only
+equal conversions, and always publishes the current observation and envelope
+timestamps. Placement changes invalidate the cache; absent sessions are pruned.
+Duplicates and overflow remain in the output, not silently deduplicated or
+dropped. This skips repeated child/legacy-hierarchy conversion, not reader,
+identity, process-liveness or deadline work. Surface-row hover cards are resolved
+on demand rather than during hidden row rendering, using the same lazy provider
+and open/update revalidation as agent rows. Any surface without a hover
+connection exposes neither a preview keyboard hint nor a preview action;
+availability is checked without constructing the card. A single status-only
+session also has no preview target: the shared surface-row session target excludes
+retained status for previews, inspection, tags, icons, pets and Beats. Retained
+status remains visible, and surface inspection/navigation remain available.
+
 The three native callback tests are inventoried local opt-in acceptance in
 `scripts/local-ui-acceptance.json`, enabled with
 `CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE=1 ./scripts/test.sh --focused SidebarFileWatcherAcceptanceTests`.

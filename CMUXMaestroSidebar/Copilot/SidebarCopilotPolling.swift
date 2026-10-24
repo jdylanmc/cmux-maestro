@@ -111,10 +111,11 @@ final class SidebarCopilotPolling {
         changes: Changes? = nil,
         now: @escaping @Sendable () -> Date = { Date() }
     ) {
+        let adapter = CopilotSnapshotAdapterCache()
         self.read = read ?? { placements in
             let window = await tailWindowMiB()
             let source = try await reader.read(surfaceIDs: Set(placements.keys), tailWindowMiB: window)
-            return CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements)
+            return await adapter.snapshot(source, workspaceBySurface: placements)
         }
         self.readManaged = readManaged ?? (read == nil ? { await reader.managedSessionDetails($0) } : { _ in [:] })
         if let hasPendingHistory {
