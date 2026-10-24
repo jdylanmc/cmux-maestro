@@ -483,7 +483,10 @@ independent terminal. This literal #10 integration does not complete broader
   owner. Shared session-root or binding-directory refusal/replacement, revoked
   binding/topology evidence, and a foreign or ambiguous source-header owner
   remain global barriers. The shared session root is revalidated before the
-  batch escapes, including when a tail failed. The same error at a shared
+  batch escapes, including when a tail failed or only ended observations exist.
+  An ended-only missing root must remain absent; recreation or refusal before
+  publication invalidates that batch rather than fabricating confirmed death.
+  The same error at a shared
   boundary is not downgraded because a session was being read.
   Projected diagnostics may aggregate session permission failures, but names,
   managed-session correlation, placement caching and navigation use only the

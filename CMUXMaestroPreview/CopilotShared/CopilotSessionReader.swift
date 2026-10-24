@@ -640,7 +640,7 @@ actor CopilotSessionReader {
                 entry.record, liveness: status == .alive ? .ambiguous : Self.liveness(status), now: batch.now
             ))
         }
-        if let root, (try? directoryRemainsValid(root, at: index.directories.sessions)) != true {
+        if (try? directoryRemainsValid(root, at: index.directories.sessions)) != true {
             batch.observations.removeAll()
             batch.issues.append(.identityChanged)
         }
@@ -895,10 +895,16 @@ actor CopilotSessionReader {
         if !cycleIssues.contains(issue) { cycleIssues.append(issue) }
     }
 
-    private func directoryRemainsValid(_ descriptor: Int32, at url: URL) throws -> Bool {
-        let current = try CopilotFileAccess.openDirectory(url, owner: verifier.uid)
-        defer { close(current) }
-        return try CopilotFileAccess.statFile(descriptor).sameFile(as: CopilotFileAccess.statFile(current))
+    private func directoryRemainsValid(_ descriptor: Int32?, at url: URL) throws -> Bool {
+        do {
+            let current = try CopilotFileAccess.openDirectory(url, owner: verifier.uid)
+            defer { close(current) }
+            guard let descriptor else { return false }
+            return try CopilotFileAccess.statFile(descriptor).sameFile(as: CopilotFileAccess.statFile(current))
+        } catch CopilotFileError.missing where descriptor == nil {
+            // Ended-only observations may use absence, but must revalidate it too.
+            return true
+        }
     }
 
     private static func sameBindingIdentity(_ lhs: CopilotIdentityRecord, _ rhs: CopilotIdentityRecord) -> Bool {
