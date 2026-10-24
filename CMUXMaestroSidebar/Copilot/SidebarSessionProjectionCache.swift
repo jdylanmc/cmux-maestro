@@ -16,6 +16,12 @@ final class SidebarSessionProjectionCache {
     private var entries: [UUID: SidebarCopilotProjectionCache] = [:]
     private(set) var computationCount = 0
     private(set) var lastPassComputationCount = 0
+    private(set) var childAssessmentCount = 0
+
+    func assessment(snapshot: AgentSessionSnapshot, index: Int) -> AgentSessionObservationAssessment {
+        childAssessmentCount += 1
+        return snapshot.assess(snapshot.sessions[index], at: "sessions[\(index)]")
+    }
 
     func prepare(
         snapshot: AgentSessionSnapshot, topology: SidebarTopology, history: SidebarHistorySettings,
