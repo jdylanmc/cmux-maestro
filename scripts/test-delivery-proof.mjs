@@ -2768,7 +2768,7 @@ process.exitCode=packet.code;
 
 async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}, statusTimeoutMs,
   startManagedRuntime, endGate = createSessionEndGate(), endSession, hasSessionLock = async () => true,
-  checkCustody = async () => {} } = {}) {
+  checkCustody = async () => {}, onJoin } = {}) {
   const f = await managedFixture(t, { owners: [0, 0] });
   const own = f.bindings[0];
   const env = {
@@ -2783,7 +2783,8 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
     send: async (value) => { calls.sent.push(value); f.events.emit("born-send"); },
     rpc: { gitHubAuth: { getStatus: async () => {
       calls.auth++;
-      return auth ?? { isAuthenticated: true, login: "human-account", host: "https://github.com" };
+      return typeof auth === "function" ? auth()
+        : auth ?? { isAuthenticated: true, login: "human-account", host: "https://github.com" };
     } } },
   };
   const born = await startBornManaged({
@@ -2805,6 +2806,7 @@ async function bornFixture(t, { auth, enroll, parentPid = 4242, environment = {}
       tools = Object.fromEntries(options.tools.map((tool) =>
         [tool.name, (args, invocation = { sessionId: own.sessionId }) => tool.handler(args, invocation)]));
       tools.declared = options.tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+      await onJoin?.(hooks, { sessionId: own.sessionId });
       return session;
     },
     enroll: async (request, controller) => {
@@ -3157,12 +3159,12 @@ test("born managed: a recorded refusal is never tried again at a prompt", async 
   assert.equal(report.managed.message, "Maestro is at its session limit.");
 });
 
-test("born managed: an unverified account is recorded as a refusal; an unverified provider never reaches the controller", async (t) => {
+test("born managed: an unverified account remains pending; an unverified provider never reaches the controller", async (t) => {
   for (const auth of [{ isAuthenticated: false }, { isAuthenticated: true, login: "--x", host: "github.com" },
     { isAuthenticated: true, login: "human", host: "example.com" }, new Promise(() => {})]) {
     const f = await bornFixture(t, { auth, statusTimeoutMs: 20,
       enroll: async () => { throw Object.assign(new Error("x"), { reason: "account-unverified" }); } });
-    assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
+    assert.deepEqual((await readiness(f)).managed, { status: "pending", origin: "born-managed",
       reason: "account-unverified", message: ENROLLMENT_MESSAGES["account-unverified"] });
     assert.equal(f.calls.enroll.length, 1);
     assert.equal(f.calls.enroll[0].request.login, null);
@@ -3173,6 +3175,69 @@ test("born managed: an unverified account is recorded as a refusal; an unverifie
     assert.deepEqual((await readiness(f)).managed, { status: "unavailable", origin: "born-managed",
       reason: "provider-process-unverified", message: ENROLLMENT_MESSAGES["provider-process-unverified"] });
     assert.equal(f.calls.enroll.length + f.calls.auth, 0);
+  }
+});
+
+test("born managed: only a later exact event with a verified account can enroll", async (t) => {
+  let verified = false;
+  const f = await bornFixture(t, { auth: () => verified
+    ? { isAuthenticated: true, login: "human-account", host: "github.com" }
+    : { isAuthenticated: false },
+  });
+  for (let event = 0; event < 3; event++) {
+    await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+    assert.equal((await readiness(f)).status, "diagnostic-only");
+    assert.equal((await f.tools.maestro_spawn({})).resultType, "failure");
+  }
+  verified = true;
+  const calls = f.calls.auth;
+  await f.hooks.onUserPromptSubmitted({}, { sessionId: randomUUID() });
+  assert.equal(f.calls.auth, calls);
+  assert.equal((await readiness(f)).status, "diagnostic-only");
+  await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  assert.equal((await readiness(f)).status, "managed");
+  assert.equal(f.calls.enroll.at(-1).request.login, "human-account");
+});
+
+test("born managed: provider conflict remains refused until an exact release and later event", async (t) => {
+  let released = false;
+  const f = await bornFixture(t, { enroll: async request => {
+    if (!released) throw Object.assign(new Error("conflict"), { reason: "provider-already-enrolled" });
+    return { ok: true, nodeId: f.own.nodeId, workspaceId: request.workspaceId,
+      sessionId: request.sessionId, generation: 1, routes: f.root, peer: f.own.peer };
+  } });
+  for (let event = 0; event < 3; event++) {
+    await f.hooks.onSessionStart({}, { sessionId: f.own.sessionId });
+    assert.equal((await readiness(f)).managed.reason, "provider-already-enrolled");
+    assert.equal((await f.tools.maestro_send({})).resultType, "failure");
+  }
+  released = true;
+  await f.hooks.onPostToolUse({}, { sessionId: f.own.sessionId });
+  assert.equal((await readiness(f)).status, "managed");
+  assert.equal(f.calls.enroll.length, 5);
+});
+
+test("born managed: an exact end during join is buffered once until the runtime is installed", async (t) => {
+  const f = await bornFixture(t, { onJoin: async (hooks, invocation) => {
+    await hooks.onSessionEnd({ reason: "user_exit", finalMessage: "PRIVATE" }, invocation);
+    await hooks.onSessionEnd({ reason: "user_exit" }, invocation);
+  } });
+  assert.equal(f.calls.ended.length, 1);
+  assert.deepEqual(f.calls.ended[0].request, { identity: {
+    nodeId: f.own.nodeId, workspaceId: f.own.workspaceId, sessionId: f.own.sessionId,
+    generation: 1, capability: f.own.capability,
+  } });
+});
+
+test("born managed: foreign, non-exit and hung-up early ends never record a release", async (t) => {
+  for (const kind of ["foreign", "abort", "hangup"]) {
+    const gate = createSessionEndGate();
+    const f = await bornFixture(t, { endGate: gate, onJoin: async (hooks, invocation) => {
+      if (kind === "hangup") gate.hungUp = true;
+      await hooks.onSessionEnd({ reason: kind === "abort" ? "abort" : "user_exit" },
+        kind === "foreign" ? { sessionId: randomUUID() } : invocation);
+    } });
+    assert.equal(f.calls.ended.length, 0);
   }
 });
 

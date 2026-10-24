@@ -2778,10 +2778,39 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
         # A new provider for a new session is decided on its own.
         self.assertTrue(self.enroll()["ok"])
 
-    def test_unverified_account_is_recorded_and_never_enrolls_on_reload(self):
+    def test_unverified_account_refuses_without_a_final_decision(self):
         first, reload = self.enroll(repeat=2, login=None, host=None)
         self.refused(first, "account-unverified")
         self.refused(reload, "account-unverified")
+        self.assertEqual(self.h.state().get("enrollmentAttempts", {}), {})
+
+    def test_later_verified_account_enrolls_in_the_same_provider(self):
+        verified = (
+            "request = {'workspaceId': env['CMUX_WORKSPACE_ID'], 'surfaceId': env['CMUX_SURFACE_ID'],"
+            " 'sessionId': env['SESSION_ID'], 'pid': os.getpid(), 'login': 'human-account', 'host': 'github.com'}\n"
+            "result = subprocess.run([sys.executable, driver, 'native-enroll'], input=json.dumps(request),"
+            " env=env, capture_output=True, text=True, timeout=15)\n")
+        first, later = self.enroll(login=None, host=None, env={"FAKE_THEN": verified})
+        self.refused(first, "account-unverified")
+        self.assertTrue(later["ok"], later)
+        node = self.h.state()["nodes"][later["nodeId"]]
+        self.assertEqual(node["copilotAccount"], {"login": "human-account", "host": "github.com"})
+
+    def test_replacement_refused_before_exact_end_enrolls_after_the_end(self):
+        old, new = str(uuid.uuid4()), str(uuid.uuid4())
+        after = self.END_PREVIOUS_SESSION.replace("results[-1]", "results[0]") + (
+            f"env['SESSION_ID'] = {new!r}\n"
+            "request = {'workspaceId': env['CMUX_WORKSPACE_ID'], 'surfaceId': env['CMUX_SURFACE_ID'],"
+            " 'sessionId': env['SESSION_ID'], 'pid': os.getpid(), 'login': 'human-account', 'host': 'github.com'}\n"
+            "result = subprocess.run([sys.executable, driver, 'native-enroll'], input=json.dumps(request),"
+            " env=env, capture_output=True, text=True, timeout=15)\n")
+        first, refused, later = self.enroll(sessions=[old, new], env={"FAKE_THEN": after})
+        self.assertTrue(first["ok"], first)
+        self.refused(refused, "provider-already-enrolled")
+        self.assertTrue(later["ok"], later)
+        state = self.h.state()
+        self.assertNotIn(first["nodeId"], state["nodes"])
+        self.assertEqual(state["nodes"][later["nodeId"]]["copilotSessionId"], new)
 
     def test_reload_after_an_update_reuses_the_enrolled_node(self):
         touch = ("import time\n"
