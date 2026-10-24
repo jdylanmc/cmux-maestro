@@ -70,12 +70,12 @@ ancestors, active/blocked/failed work and outstanding attention stay in outline.
 Exception: ordinary running shell invocations. Verified, unambiguous leaf
 commands fold into quiet metadata line of exact owning session or
 agent, such as "Running a command". Concurrent commands are counted. Blocked,
-attention-bearing, unresolved and structural shell rows stay visible. A nested shell
-command that merely exited with error is not an outline row. It moves to
-session's **Other activity** disclosure, so a stray `bash invocation` failure no longer
-draws a red row under an agent.
-Complete shell records remain available in details. This is
-presentation-only: raw activity evidence, lifecycle state and counts unchanged.
+attention-bearing, unresolved and structural running shell rows stay visible.
+Accepted shell invocation completions, successful or failed, leave the sidebar
+child projection, not merely the outline. They create no failure attention or
+manual dismissal burden, and do not appear in **Other activity**. Reader snapshots
+retain bounded terminal outcomes and lifecycle/replay evidence; agent failures and independent requests stay
+protected (ADR 0010).
 Incomplete-history context and collapsed-branch counts stay with owning
 row, not on standalone diagnostic rows. Managed rows offer disclosure and a
 collapsed work summary only for visible child content; incomplete counts alone

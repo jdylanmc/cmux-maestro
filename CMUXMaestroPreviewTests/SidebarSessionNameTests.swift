@@ -230,9 +230,10 @@ struct SidebarSessionNameTests {
         let observed = [Observed(id: Self.namedSession, surface: Self.unnamedSurface, name: "Synthetic context name")]
         let short = String(Self.namedSession.uuidString.prefix(8)).lowercased()
         let r = try await render(observed, managedOn: Self.unnamedSurface, preferences: fixture.preferences()) {
-            $0.title("Focus Synthetic launch label") != nil
+            $0.title("Focus Terminal \(Self.plainTitle)") != nil
         }
         defer { r.close() }
+        #expect(r.title("Focus Synthetic launch label") == nil, "Conflicting live sessions cannot expose an inert focus button")
         #expect(r.titles.allSatisfy { $0.accessibilityLabel()?.contains(short) != true }, "No row for the session")
         let text = try r.text(nil, "session-name-no-context-row.png")
         #expect(!text.contains("Synthetic context name") && !text.contains(short), "No row for the session: \(text)")

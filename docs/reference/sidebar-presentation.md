@@ -58,6 +58,16 @@ the Active window footer shows only a live, confirmed session (otherwise the
 CMUX title), for unmanaged and born-managed rows alike.
 Exact session identity stays in details.
 
+Unresolved child rows navigate to their owning session's exact terminal even
+when its session heading is suppressed by a managed row. Navigation validates
+the session, child, captured placement and current host topology separately
+from Details eligibility. Unavailable focus targets render static titles;
+targets invalidated after capture report the existing stale-target footer.
+An exactly verified in-process replacement's current children can navigate:
+the retained, positively replaced observation is not a conflicting occupant.
+Unverified or protected previous sessions still prevent ambiguous navigation.
+No guessed ancestry, surface or replacement-session navigation.
+
 Managed primary clicks and **Focus surface** validate the captured node, run,
 session, generation and exact CMUX placement independently of Details access.
 They never substitute another session or a moved/recreated surface. A missing

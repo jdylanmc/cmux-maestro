@@ -373,7 +373,11 @@ struct SidebarLayoutRenderingTests {
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
         let navigation = SidebarNavigation()
-        let workspace = UUID(), surface = UUID()
+        let fixtures = SidebarTreeFixtures()
+        let workspace = fixtures.workspaceA, surface = fixtures.surfaceA
+        navigation.update(topology: fixtures.topology(), connected: true,
+                          workspaceAllowed: true, surfaceAllowed: true,
+                          perform: { _ in Issue.record("Synthetic rendering must not navigate") })
         func pixels(_ state: AgentWorkState, needsInput: Bool = false,
                     session: SidebarCopilotSession? = nil) throws -> [UInt8] {
             let item = session.map { SidebarAgentIconCardItem.session($0, title: "Helper") } ?? SidebarAgentIconCardItem(
@@ -896,7 +900,8 @@ struct SidebarLayoutRenderingTests {
     @Test(arguments: [NSScroller.Style.overlay, .legacy])
     func nativeEightLevelOutlineRetainsMinimumTitleWidthAt280(style: NSScroller.Style) async throws {
         let fixtures = SidebarTreeFixtures()
-        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true)
+        let model = makeModel(fixtures: fixtures, longMetadata: true, deep: true,
+                              now: Date(timeIntervalSince1970: 1_800_000_000))
         let fixture = try SidebarPreferenceFixture()
         // An enabled Beat puts the trailing Beat icon on the session row; the deep title keeps its width.
         let stores = SidebarStoreFixture()
@@ -1893,9 +1898,9 @@ struct SidebarLayoutRenderingTests {
     }
 
     private func makeModel(
-        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil, shellActivity: Bool = false, deep: Bool = false
+        fixtures: SidebarTreeFixtures, longMetadata: Bool, childLimit: Int? = nil,
+        shellActivity: Bool = false, deep: Bool = false, now: Date = Date()
     ) -> SidebarConnectionModel {
-        let now = Date()
         let rootLabel = "Synthetic coordinator reviewing deeply nested layout and accessibility coverage"
         let childLabel = "Synthetic child verifying long metadata without losing running or blocked status"
         var children: [CopilotChildWork] = [
@@ -1994,6 +1999,13 @@ struct SidebarLayoutRenderingTests {
             model.copilot.updateManagedSubjects(model.orchestration.snapshot)
         }
         model.setVisible(true)
+        let renderNow: Date
+        if expectedSessions == 0 {
+            renderNow = Date(timeIntervalSince1970: 1_800_000_000)
+        } else {
+            await sidebarEventually { model.copilot.tree.sessions.count == expectedSessions }
+            renderNow = try #require(model.copilot.tree.generatedAt)
+        }
         let frame = NSRect(x: 0, y: 0, width: width, height: height)
         let window = NSWindow(contentRect: frame, styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -2001,7 +2013,10 @@ struct SidebarLayoutRenderingTests {
         let evidence = AppearanceEvidence()
         // The public contrast getter is read-only; this SDK-exposed backing key is test-only.
         // A high-contrast NSAppearance alone does not update SwiftUI's contrast environment.
-        let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores)
+        // Layout fixtures freeze observation, presentation and action time together.
+        let view = NSHostingView(rootView: SidebarView(model: model, preferences: preferences, stores: stores,
+                                                      actionNow: { renderNow })
+            .environment(\.sidebarPresentationNow, { renderNow })
             .modifier(FocusViewport(budget: focusViewportBudget, frameSize: frame.size))
             .background(AppearanceProbe(evidence: evidence).frame(width: 0, height: 0))
             .environment(\._colorSchemeContrast, appearance.contrast)

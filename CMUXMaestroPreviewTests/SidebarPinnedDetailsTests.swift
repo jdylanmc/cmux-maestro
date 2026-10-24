@@ -65,7 +65,7 @@ struct SidebarPinnedDetailsTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test func missingSurfaceTitleDisablesNativePrimaryClick() throws {
+    @Test func missingSurfaceTitleHasNoNativePrimaryClick() throws {
         let navigation = SidebarNavigation()
         navigation.update(
             topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
@@ -77,10 +77,8 @@ struct SidebarPinnedDetailsTests {
         ) { Text("Ended session") })
         hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 40)
         hosting.layoutSubtreeIfNeeded()
-        let button = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }.first)
-        #expect(!button.isEnabled)
-        button.performClick(nil)
-        #expect(navigation.status == .idle, "Disabled native title must not invoke focus or Details")
+        #expect(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }.isEmpty)
+        #expect(navigation.status == .idle, "Static title must not invoke focus or Details")
     }
 
     private func hierarchy(
@@ -463,7 +461,8 @@ struct SidebarPinnedDetailsTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 700),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .environment(\._accessibilityReduceMotion, true))
         window.contentView = hosting
         window.orderFront(nil)
         defer {
@@ -499,23 +498,10 @@ struct SidebarPinnedDetailsTests {
         try await settle(hosting)
         if change.hasSuffix("primary") { capturedPrimary() }
         else { presenter.invoke(item) }
-        try await Task.sleep(for: .milliseconds(100))
         print("R123 captured \(subject)/\(change): hostActions=\(nativeActions.count), acknowledgements=\(preferences.attention.acknowledged.count)")
-        #expect(nativeActions.isEmpty && model.navigation.status == .idle)
+        #expect(nativeActions.isEmpty && model.navigation.status == .staleTarget)
         #expect(preferences.attention.acknowledged.isEmpty && polling.tree.attentionOwnerCount == 2)
-        let panels = window.childWindows ?? []
-        let panel = try #require(panels.count == 1 ? panels.first?.contentView : nil)
-        try await settle(panel)
-        let bitmap = try capture(panel)
-        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/layout-validation/offscreen")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let destination = folder.appendingPathComponent("retained123-placement-\(subject)-\(change).png")
-        let warning = try await unavailableInspectorPixels(
-            in: bitmap, dark: panel.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua,
-            inset: (panel.bounds.width - 300) / 2, opaque: false, destination: destination
-        )
-        #expect(warning, "Stale placement must surface the existing explicit unavailable inspector")
+        #expect(window.childWindows?.isEmpty != false, "Stale focus reports the navigation footer, not a Details panel")
 
         let freshRow = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }
             .first { $0.accessibilityLabel() == label })

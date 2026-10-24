@@ -139,15 +139,15 @@ nonisolated struct CopilotShellReducerTests {
             reducer.consume(try completion("shell_completed", shell: "separate-process", code: code, agent: "worker"))
         }
         let state = reducer.value()
-        guard let worker = state.children.first(where: { $0.id == "worker" }),
-              let invocation = state.children.first(where: { $0.id == "shell:invocation" }) else {
-            throw Failure(description: "Independent worker and real invocation rows must remain")
+        guard let worker = state.children.first(where: { $0.id == "worker" }) else {
+            throw Failure(description: "Independent worker failure must remain")
         }
         try check(worker.name == "Background shell" && worker.state == .failed, "Never suppress real worker errors by display name")
         try check(worker.terminalEvent?.id == workerFailure && worker.attention?.first?.kind == .error,
                   "Worker error must retain its own actual failure evidence")
-        try check(invocation.kind == .shell && invocation.state == .failed && invocation.attention?.first?.kind == .error,
-                  "Never suppress all shell-kind work or real invocation errors")
+        let invocation = state.children.first(where: { $0.id == "shell:invocation" })
+        try check(invocation?.state == .failed && invocation?.attention?.isEmpty == true,
+                  "An ended invocation retains outcome evidence, not agent-failure attention")
         try check(state == before, "Background process events must add no row, error, aborted signal or dismissal burden")
     }
 

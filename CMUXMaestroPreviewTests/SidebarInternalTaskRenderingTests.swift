@@ -6,6 +6,28 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test(arguments: [false, true])
+    func unavailableParentFocusIsNotAButton(_ connected: Bool) throws {
+        let data = SidebarTreeFixtures()
+        let navigation = SidebarNavigation()
+        navigation.update(topology: data.topology(), connected: connected,
+                          workspaceAllowed: true, surfaceAllowed: true, perform: { _ in })
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 40),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: FocusButton(
+            target: .surface(workspaceID: data.workspaceA, surfaceID: data.surfaceA),
+            navigation: navigation, label: "Open parent chat for Unknown agent",
+            inspection: .unmanaged(.child(sessionID: data.sessionID, childID: "fragment"))
+        ) { Text("Unknown agent") }
+            .environment(\.sidebarFocusInspection, { _, _ in nil })
+            .frame(width: 350, height: 40))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        #expect(buttons(host).isEmpty, "An unavailable exact surface must render static content, not an inert button")
+    }
+
     @Test(arguments: [SidebarDensity.compact, .comfortable], [280, 350, 460])
     func unresolvedFragmentsRenderOneNeutralLine(_ density: SidebarDensity, _ width: Int) throws {
         let data = SidebarTreeFixtures()
@@ -388,7 +410,7 @@ struct SidebarInternalTaskRenderingTests {
         let model = await makeModel(data, children: [
             .init(id: "result", parentID: nil, kind: .subagent, name: "Finished task", state: .completed,
                   model: nil, terminalEvent: .init(id: event, timestamp: now)),
-            .init(id: "shell", parentID: "result", kind: .shell, name: "Finished shell", state: .completed,
+            .init(id: "legacy", parentID: "result", kind: .skill, name: "Finished skill", state: .completed,
                   model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
         ], now: now)
         defer { model.setVisible(false) }
@@ -401,7 +423,7 @@ struct SidebarInternalTaskRenderingTests {
         control.performClick(nil)
         await sidebarEventually { names(mounted.host).isEmpty }
         #expect(preferences.history.dismissed == [.init(sessionID: data.sessionID, childID: "result", eventID: event)])
-        #expect(model.copilot.tree.sessions[0].nodes.contains { $0.id == "shell" })
+        #expect(model.copilot.tree.sessions[0].nodes.contains { $0.id == "legacy" })
         #expect(model.navigation.status == .idle)
         #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 2)
         try capture(mounted.host, name: "review1-dismiss-hidden-child-\(retention.rawValue)-\(mode.rawValue)")

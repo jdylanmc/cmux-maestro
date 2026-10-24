@@ -25,6 +25,11 @@ with pending request is never eligible, even with an outcome.
 Acknowledgement, history dismissal and focus never send approval, answers,
 cancellation or any agent-control command. CMUX unread counts stay untouched.
 
+Accepted tool completions never create error attention, even on non-zero shell
+outcomes. Completed shell rows leave the sidebar projection, while reader
+snapshots retain bounded terminal outcomes and lifecycle/replay evidence. This does not clear independent
+permission/answer requests or genuine agent failures (ADR 0010).
+
 **Turn finished** = matching primary `assistant.turn_end` recorded.
 It does not mean session or background children finished. Show it as checkmark
 state badge on idle session, no separate text line (accessibility label

@@ -8,6 +8,78 @@ struct SidebarInternalTaskTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let event = UUID(uuidString: "13100000-0000-0000-0000-000000000001")!
 
+    @Test(arguments: ["bash", "powershell", "local_shell", "view"], [false, true])
+    func endedToolDoesNotProtectUnresolvedAgent(_ tool: String, _ success: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
+        reducer.consume(try copilotTestEvent("assistant.turn_start", agent: "fragment", data: ["turnId": "turn"]))
+        reducer.consume(try copilotTestEvent("tool.execution_start", agent: "fragment", data: [
+            "toolCallId": "invocation", "toolName": tool
+        ]))
+        let running = reducer.value()
+        if tool != "view" {
+            #expect(running.children.contains { $0.id == "shell:invocation" && $0.state == .working })
+        }
+        reducer.consume(try copilotTestEvent("tool.execution_complete", agent: "fragment", data: [
+            "toolCallId": "invocation", "success": success
+        ]))
+        reducer.consume(try copilotTestEvent("assistant.turn_end", agent: "fragment", data: ["turnId": "turn"]))
+        let ended = reducer.value()
+        let session = try #require(project(ended.children, history: .init(retention: .never), complete: false).sessions.first)
+        if tool == "view" {
+            #expect(ended.children.map(\.id) == ["fragment"])
+        } else {
+            let invocation = try #require(ended.children.first { $0.id == "shell:invocation" })
+            #expect(invocation.state == (success ? .completed : .failed))
+            #expect(invocation.terminalEvent != nil)
+            #expect(invocation.attention?.isEmpty == true)
+        }
+        #expect(session.nodes.map(\.id) == ["fragment"])
+        #expect(session.hiddenHistoryCount == 0)
+        #expect(session.attentionOwnerCount == 0)
+        #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
+        #expect(session.childSections(layout: .init()).isEmpty)
+        #expect(session.taskboardActivity.isEmpty)
+        #expect(session.nodes.allSatisfy { $0.dismissibleFailure(sessionID: session.id) == nil })
+    }
+
+    @Test func finishedInvocationDoesNotProtectCompletedTaskOutcome() throws {
+        let children = [
+            task("result", state: .completed),
+            CopilotChildWork(id: "shell:invocation", parentID: "result", kind: .shell,
+                             name: "bash invocation", state: .failed, model: nil,
+                             terminalEvent: .init(id: event, timestamp: now))
+        ]
+        let tree = project(children, history: .init(retention: .never))
+        let session = try #require(tree.sessions.first)
+        #expect(session.nodes.map(\.id) == ["result"])
+        #expect(session.nodes.first?.dismissibleOutcome(sessionID: session.id) == key("result"))
+        #expect(session.hiddenHistoryCount == 0)
+    }
+
+    @Test func genuineFailureAndPermissionSurviveToolFailure() throws {
+        var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
+        reducer.consume(try copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Worker"
+        ]))
+        reducer.consume(try copilotTestEvent("tool.execution_start", agent: "worker", data: [
+            "toolCallId": "invocation", "toolName": "view"
+        ]))
+        reducer.consume(try copilotTestEvent("permission.requested", agent: "worker", data: ["requestId": "permission"]))
+        reducer.consume(try copilotTestEvent("tool.execution_complete", agent: "worker", data: [
+            "toolCallId": "invocation", "success": false
+        ]))
+        let blocked = try #require(project(reducer.value().children).sessions.first?.nodes.first)
+        #expect(blocked.state == .blocked)
+        #expect(blocked.attention.map(\.kind) == [.permission])
+        reducer.consume(try copilotTestEvent("subagent.failed", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Worker"
+        ]))
+        let failed = try #require(project(reducer.value().children).sessions.first?.nodes.first)
+        #expect(failed.state == .failed)
+        #expect(failed.attention.map(\.kind) == [.error])
+        #expect(failed.terminalEvent != nil)
+    }
+
     @Test func unresolvedFragmentsCompactWithoutHidingProtectedEvidence() throws {
         let fragments: [CopilotChildWork] = [
             .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
@@ -112,7 +184,7 @@ struct SidebarInternalTaskTests {
             let section = try #require(visible.tree.sessions[0].childSections(layout: .init(), taskboard: taskboard).first)
             let offered = try #require(section.rows[0].node.dismissibleOutcome(sessionID: fixtures.sessionID))
             #expect(offered == key("result"))
-            #expect(tree.sessions[0].nodes[0].hasChildren)
+            #expect(tree.sessions[0].nodes[0].hasChildren == (kind != .shell))
             #expect(tree.sessions[0].nodes[0].dismissibleOutcome(sessionID: fixtures.sessionID) == offered)
         }
         #expect(preferences.dismissInternalTask(key("result"), in: tree, now: now))
@@ -122,8 +194,13 @@ struct SidebarInternalTaskTests {
         #expect(preferences.history.dismissed == [key("result")])
         let historyVisible = SidebarVisibleWork(tree: project(children, history: preferences.history), managed: [],
                                                 history: preferences.history, showEnded: true, now: now)
-        #expect(historyVisible.tree.sessions[0].nodes.map(\.id) == ["result", "legacy"])
-        #expect(historyVisible.tree.sessions[0].nodes[0].historyAncestor, "Only ancestry remains, not the dismissed outcome")
+        if kind == .shell {
+            #expect(historyVisible.tree.sessions[0].nodes.isEmpty, "Show ended cannot restore finished invocations")
+        } else {
+            #expect(historyVisible.tree.sessions[0].nodes.map(\.id) == ["result", "legacy"])
+            let ancestor = try #require(historyVisible.tree.sessions[0].nodes.first)
+            #expect(ancestor.historyAncestor, "Only ancestry remains, not the dismissed outcome")
+        }
     }
 
     @Test func finishedTasksDoNotMakeARowExpandableUntilTheEyeIsOn() throws {

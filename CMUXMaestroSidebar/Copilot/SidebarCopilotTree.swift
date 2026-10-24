@@ -335,12 +335,17 @@ struct SidebarCopilotTree: Equatable {
                 return (child.id.rawValue, value)
             })
             var hidden: Set<String> = []
+            var finishedInvocations: Set<String> = []
             for child in validated {
                 // Outstanding current attention is not completed-history noise.
                 // Even malformed attention protects a row until evidence recovers.
                 guard childAttention[child.id.rawValue]?.values.isEmpty == true,
                       childAttention[child.id.rawValue]?.degraded == false else { continue }
-                if child.isInternalTask {
+                if child.kind == .shell, child.workState.isTerminal,
+                   !assessment.invalidStates.contains(child.id) {
+                    finishedInvocations.insert(child.id.rawValue)
+                    hidden.insert(child.id.rawValue)
+                } else if child.isInternalTask {
                     let state = trustworthyState(
                         assessment.invalidStates.contains(child.id) ? .unknown : child.workState, liveness: liveness
                     )
@@ -384,6 +389,7 @@ struct SidebarCopilotTree: Equatable {
                 || tree.omitted > 0 || assessment.omittedChildren > 0
             var protectedAncestors: Set<String> = []
             for child in validated {
+                if finishedInvocations.contains(child.id.rawValue) { continue }
                 let state = trustworthyState(
                     assessment.invalidStates.contains(child.id) ? .unknown : child.workState, liveness: liveness
                 )
@@ -428,7 +434,10 @@ struct SidebarCopilotTree: Equatable {
                 omittedChildrenCount: tree.omitted + assessment.omittedChildren,
                 omittedActiveChildrenCount: tree.omittedActive,
                 hasUncountedChildren: assessment.hasUncountedChildren,
-                hiddenHistoryCount: validated.filter { hidden.contains($0.id.rawValue) && $0.workState.isTerminal }.count,
+                hiddenHistoryCount: validated.filter {
+                    hidden.contains($0.id.rawValue) && $0.workState.isTerminal
+                        && !finishedInvocations.contains($0.id.rawValue)
+                }.count,
                 attention: sessionAttention.values, attentionDegraded: sessionAttention.degraded, activity: sessionActivity.value,
                 internalTaskCountsIncomplete: validated.contains {
                     $0.isInternalTask && (trustworthyState($0.workState, liveness: liveness) == .unknown

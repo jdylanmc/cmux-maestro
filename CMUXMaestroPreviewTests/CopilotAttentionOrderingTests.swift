@@ -156,7 +156,7 @@ nonisolated struct CopilotAttentionOrderingTests {
         #expect(state(current.value(), owner: owner) == (type == "abort" ? .cancelled : .failed))
     }
 
-    @Test func matchedToolFailureSharesUnknownTimingAcrossActivityAndAttention() throws {
+    @Test func matchedToolFailureKeepsUnknownActivityTimingWithoutAttention() throws {
         for name in ["view", "bash"] {
             for owner in owners {
                 let rows = try [
@@ -168,8 +168,8 @@ nonisolated struct CopilotAttentionOrderingTests {
                 var reducer = replay(rows, session: UUID())
                 let value = reducer.value()
                 let outcomeOwner = name == "bash" ? "shell:tool" : owner
-                #expect(signals(value, owner: outcomeOwner).map(\.kind) == [.error])
-                #expect(signals(value, owner: outcomeOwner).first?.occurredAt == nil)
+                #expect(signals(value, owner: outcomeOwner).isEmpty)
+                #expect(signals(value, owner: owner).isEmpty)
                 let activity = owner == nil ? value.activity : value.children.first { $0.id == owner }?.activity
                 #expect(activity?.summary == "Last completed tool: \(name)")
                 #expect(activity?.lastEventAt == nil)

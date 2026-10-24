@@ -273,8 +273,10 @@ nonisolated struct CopilotEventReducerTests {
     @Test func shellAndScopedAbortUseAcceptedTerminalEvidence() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         try feed(&reducer, "tool.execution_start", ["toolCallId": "shell", "toolName": "bash"])
+        #expect(reducer.value().children.first?.state == .working)
         try feed(&reducer, "tool.execution_complete", ["toolCallId": "shell", "success": false])
-        let failed = reducer.value().children.first?.terminalEvent
+        let failed = try #require(reducer.value().children.first?.terminalEvent)
+        #expect(reducer.value().children.first?.state == .failed)
         try feed(&reducer, "tool.execution_complete", ["toolCallId": "shell", "success": true])
         #expect(reducer.value().children.first?.terminalEvent == failed)
         try feed(&reducer, "subagent.started", agent: "child", ["toolCallId": "task", "agentDisplayName": "Child"])

@@ -262,10 +262,10 @@ nonisolated struct CopilotAttentionTests {
         #expect(reducer.value().attention.isEmpty)
         #expect(reducer.value().activity?.summary == "Executing tool: view")
         reducer.consume(try attentionEvent("tool.execution_complete", data: ["toolCallId": "tool", "success": false]))
-        #expect(reducer.value().attention.first?.kind == .error)
+        #expect(reducer.value().attention.isEmpty)
     }
 
-    @Test func primaryTurnEndDoesNotSilentlyAcknowledgeAnEarlierToolError() throws {
+    @Test func primaryTurnEndDoesNotPromoteToolFailureToAgentError() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         for line in try [
             attentionEvent("assistant.turn_start", data: ["turnId": "main"]),
@@ -274,7 +274,7 @@ nonisolated struct CopilotAttentionTests {
             attentionEvent("assistant.turn_end", data: ["turnId": "main"])
         ] { reducer.consume(line) }
         #expect(reducer.value().state == .idle)
-        #expect(reducer.value().attention.map(\.kind) == [.error, .turnFinished])
+        #expect(reducer.value().attention.map(\.kind) == [.turnFinished])
         reducer.consume(try attentionEvent("tool.execution_start", data: ["toolCallId": "new", "toolName": "rg"]))
         #expect(reducer.value().attention.isEmpty)
     }

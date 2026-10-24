@@ -1010,9 +1010,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             // This is the tool invocation's lifetime, not evidence that a
             // background shell process has exited.
             finish("shell:\(tool)", state: event.success == true ? .completed : .failed,
-                   event: event, matchedEvidence: evidence)
-        } else if invocation.executing, event.success == false {
-            recordOutcome(.error, owner: invocation.agentID, evidence: evidence)
+                   event: event, matchedEvidence: evidence, recordsOutcome: false)
         }
         // Shell joins are fully projected. Keep other completed owners until
         // pressure, so a delayed subagent.started still gets its known parent.
@@ -1237,7 +1235,7 @@ nonisolated struct CopilotEventReducer: Sendable {
 
     private mutating func finish(
         _ id: String, state: CopilotWorkState, event: CopilotEventProjection,
-        matchedEvidence: CopilotTerminalEvent? = nil
+        matchedEvidence: CopilotTerminalEvent? = nil, recordsOutcome: Bool = true
     ) {
         guard let item = work[id] else { return }
         guard matchedEvidence != nil || !isStale(event, owner: id) else { return }
@@ -1250,7 +1248,9 @@ nonisolated struct CopilotEventReducer: Sendable {
         work[id]?.configurationStart = nil
         if state == .failed || state == .cancelled {
             work[id]?.multiTurn = false
-            recordOutcome(state == .failed ? .error : .aborted, owner: id, evidence: evidence)
+            if recordsOutcome {
+                recordOutcome(state == .failed ? .error : .aborted, owner: id, evidence: evidence)
+            }
         }
         retireRequests(owner: id)
         turns.removeValue(forKey: Owner(agentID: id))
