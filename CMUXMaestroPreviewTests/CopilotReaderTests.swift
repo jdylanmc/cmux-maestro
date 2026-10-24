@@ -1245,6 +1245,48 @@ nonisolated struct CopilotReaderTests {
         #expect(!current.isComplete)
     }
 
+    @Test(arguments: [false, true])
+    func endedRootChangeDuringFinalOwnerFenceRejectsPublication(initiallyPresent: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        if !initiallyPresent { try FileManager.default.removeItem(at: fixture.sessions) }
+        let displacedRoot = fixture.root.appendingPathComponent("displaced-root")
+        let trigger = fixture.root.appendingPathComponent("change-root-at-final-fence")
+        // Discovery and ended-candidate probes precede the final owner fence.
+        // A present root also causes inspectEndedOwner's independent owner probe.
+        let earlierProbes = (0..<(initiallyPresent ? 3 : 2)).map {
+            fixture.root.appendingPathComponent("prior-owner-probe-\($0)")
+        }
+        for probe in earlierProbes { try Data().write(to: probe) }
+        try Data().write(to: trigger)
+        let conflicting = CopilotProcessIdentity(
+            pid: 4243, parentPID: 1, uid: fixture.process.uid, startSeconds: 1, startMicroseconds: 0
+        )
+        let reader = fixture.reader(lookup: { pid in
+            do {
+                if let prior = earlierProbes.first(where: { FileManager.default.fileExists(atPath: $0.path) }) {
+                    try FileManager.default.removeItem(at: prior)
+                } else if FileManager.default.fileExists(atPath: trigger.path) {
+                    try FileManager.default.removeItem(at: trigger)
+                    if initiallyPresent { try FileManager.default.moveItem(at: fixture.sessions, to: displacedRoot) }
+                    try FileManager.default.createDirectory(at: fixture.session, withIntermediateDirectories: true)
+                    try Data().write(to: fixture.session.appendingPathComponent("inuse.\(conflicting.pid).lock"))
+                }
+            } catch {
+                Issue.record(error)
+            }
+            return pid == conflicting.pid ? .found(conflicting) : .dead
+        })
+        let raced = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(!FileManager.default.fileExists(atPath: trigger.path))
+        #expect(raced.issues.contains(.identityChanged))
+        #expect(raced.sessions.isEmpty && !raced.isComplete)
+        let current = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(current.sessions.first?.liveness == .ambiguous)
+        #expect(!current.isComplete)
+    }
+
     @Test func replacementWithForeignSessionHeaderRemainsGlobal() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
