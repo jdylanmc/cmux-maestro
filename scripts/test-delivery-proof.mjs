@@ -3199,6 +3199,18 @@ test("born managed: only a later exact event with a verified account can enroll"
   assert.equal(f.calls.enroll.at(-1).request.login, "human-account");
 });
 
+test("born managed: definitive controller refusal stays final even without an account observation", async (t) => {
+  for (const reason of ["capacity-unavailable", "surface-owned", "session-live-or-uncertain"]) {
+    const f = await bornFixture(t, { auth: { isAuthenticated: false }, enroll: async () => {
+      throw Object.assign(new Error("synthetic refusal"), { reason });
+    } });
+    assert.equal((await readiness(f)).managed.reason, reason);
+    assert.equal((await readiness(f)).managed.status, "unavailable");
+    await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+    assert.equal(f.calls.enroll.length, 1);
+  }
+});
+
 test("born managed: provider conflict remains refused until an exact release and later event", async (t) => {
   let released = false;
   const f = await bornFixture(t, { enroll: async request => {
