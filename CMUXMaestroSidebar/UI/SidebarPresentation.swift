@@ -589,6 +589,10 @@ enum SidebarPresentation {
                   session.workspaceID == workspace, session.surfaceID == surface,
                   session.nodes.filter({ $0.id == childID }).count == 1,
                   !replacedSessionIDs(tree, managed: managed.nodes, now: now).contains(sessionID),
+                  !coalescingManagedNodes(managed.nodes, observations: tree, now: now).contains(where: {
+                      $0.workspaceId == workspace && $0.surfaceId == surface
+                          && $0.copilotSessionId != nil && $0.copilotSessionId != sessionID
+                  }),
                   !tree.sessions.contains(where: {
                       $0.id != sessionID && $0.workspaceID == workspace && $0.surfaceID == surface
                           && $0.liveness != .dead
