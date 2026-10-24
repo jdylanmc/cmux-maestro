@@ -39,18 +39,23 @@ struct SidebarHistoryPollingTests {
         }
         _ = project(fixtures.snapshot(sessions: [first, second], now: initial))
         #expect(cache.computationCount == 2)
+        #expect(cache.childAssessmentCount == 2)
         _ = project(fixtures.snapshot(sessions: [
             fixtures.session(state: .working, now: initial), second
         ], now: initial))
         #expect(cache.computationCount == 3, "One semantic change rebuilds one session")
+        #expect(cache.childAssessmentCount == 2, "Session-state validation does not reassess unchanged children")
         _ = project(fixtures.snapshot(sessions: [first, second], complete: false, now: initial))
         #expect(cache.lastPassComputationCount == 2)
+        #expect(cache.childAssessmentCount == 4, "Global completeness changes invalidate structural reuse")
         _ = project(fixtures.snapshot(sessions: [first, second], issues: [.identityChanged], now: initial))
         #expect(cache.lastPassComputationCount == 2)
+        #expect(cache.childAssessmentCount == 6, "Global issues invalidate structural reuse")
         let duplicate = project(fixtures.snapshot(sessions: [first, first, second], now: initial))
         #expect(duplicate.sessions.map(\.id) == [fixtures.otherSessionID])
         _ = project(fixtures.snapshot(sessions: [first, second], now: initial), onto: fixtures.topology(moved: true))
         #expect(cache.lastPassComputationCount == 2)
+        #expect(cache.childAssessmentCount == 9, "Duplicate rejection and topology moves retain their barriers")
     }
 
     @Test(arguments: [1, 3])
