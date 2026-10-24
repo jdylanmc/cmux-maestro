@@ -65,7 +65,7 @@ struct SidebarPinnedDetailsTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
-    @Test func missingSurfaceTitleDisablesNativePrimaryClick() throws {
+    @Test func missingSurfaceTitleHasNoNativePrimaryClick() throws {
         let navigation = SidebarNavigation()
         navigation.update(
             topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
@@ -77,10 +77,8 @@ struct SidebarPinnedDetailsTests {
         ) { Text("Ended session") })
         hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 40)
         hosting.layoutSubtreeIfNeeded()
-        let button = try #require(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }.first)
-        #expect(!button.isEnabled)
-        button.performClick(nil)
-        #expect(navigation.status == .idle, "Disabled native title must not invoke focus or Details")
+        #expect(views(hosting).compactMap { $0 as? SidebarTitleNativeButton }.isEmpty)
+        #expect(navigation.status == .idle, "Static title must not invoke focus or Details")
     }
 
     private func hierarchy(

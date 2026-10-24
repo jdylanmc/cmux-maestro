@@ -6,6 +6,32 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func retainedChildRejectsReplacementManagedBindingBeforeObservationArrives() throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let child = CopilotChildWork(
+            id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+            name: "Unknown agent", state: .failed, model: nil
+        )
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [fixtures.session(liveness: .dead, children: [child], now: date)], now: date),
+            onto: fixtures.topology(), now: date
+        )
+        let replacement = SidebarOrchestrationNode(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "coordinator",
+            label: "Replacement", workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+            generation: 2, phase: "registered", availability: "idle",
+            copilotSessionId: fixtures.otherSessionID, createdAt: date, updatedAt: date
+        )
+        let resolved = SidebarPresentation.focusTarget(
+            for: .unmanaged(.child(sessionID: fixtures.sessionID, childID: "fragment")),
+            capturedPlacement: .surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA),
+            hierarchy: fixtures.hierarchy(), connected: true, tree: tree,
+            managed: .init(version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [replacement]),
+            availability: .ready, now: date
+        )
+        #expect(resolved == nil, "A retained child cannot focus another managed session before its observation arrives")
+    }
+
     @Test func unknownChildOfManagedSessionFocusesExactParent() async throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let owner = SidebarOrchestrationNode(
