@@ -15,6 +15,7 @@ SOURCES=(
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotIdentityVerifier.swift"
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSessionNameParser.swift"
     "$ROOT/CMUXMaestroCopilotHook/CopilotHookRecorder.swift"
+    "$ROOT/CMUXMaestroCopilotHook/CopilotBindingRetirement.swift"
     "$ROOT/CMUXMaestroCopilotHook/main.swift"
 )
 xcrun swiftc -swift-version 5 -strict-concurrency=complete -enable-upcoming-feature InferSendableFromCaptures \

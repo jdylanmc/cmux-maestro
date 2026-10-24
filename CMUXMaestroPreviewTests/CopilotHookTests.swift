@@ -77,6 +77,157 @@ struct CopilotHookTests: Sendable {
         return file
     }
 
+    @Test(arguments: ["rewrite", "resume", "unknown"])
+    func retirementRevalidatesConcurrentChanges(change: String) throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        let newest = try historicalBinding(root, number: 2, pid: 202)
+        let previous = try CopilotIdentityJSON.decode(Data(contentsOf: older))
+        let replacement = CopilotIdentityRecord(
+            sessionID: previous.sessionID, surfaceID: previous.surfaceID,
+            launchWorkspaceID: previous.launchWorkspaceID, ownerPID: 101,
+            ownerStartSeconds: 1, ownerStartMicroseconds: 0, recordedAt: previous.recordedAt)
+        let replacementData = try CopilotIdentityJSON.encode(replacement)
+        let calls = HookProbeCalls()
+        let probe: @Sendable (Int32) -> HookLookup = { pid in
+            if pid == 201, calls.next() == 3 {
+                switch change {
+                case "rewrite":
+                    do {
+                        try replacementData.write(to: older, options: .atomic)
+                        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: older.path)
+                    } catch { Issue.record(error) }
+                case "resume":
+                    do {
+                        try Data().write(to: root.appendingPathComponent(
+                            "state/\(previous.sessionID.uuidString.lowercased())/inuse.101.lock"))
+                    } catch { Issue.record(error) }
+                default: return .unavailable
+                }
+            }
+            return lookup(pid)
+        }
+
+        #expect(recorder(root, process: probe).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(FileManager.default.fileExists(atPath: older.path))
+        #expect(FileManager.default.fileExists(atPath: newest.path))
+        if change == "rewrite" {
+            #expect(try CopilotIdentityJSON.decode(Data(contentsOf: older)) == replacement)
+        }
+    }
+
+    @Test func retirementNeverDeletesBusyBindingOrInstallLocks() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        _ = try historicalBinding(root, number: 2, pid: 202)
+        let lockURL = older.deletingLastPathComponent().appendingPathComponent(
+            ".\(older.deletingPathExtension().lastPathComponent).lock")
+        let fd = open(lockURL.path, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)
+        #expect(fd >= 0)
+        defer { close(fd) }
+        #expect(flock(fd, LOCK_EX | LOCK_NB) == 0)
+        let installLock = root.appendingPathComponent("integration/install.lock")
+        try Data("preserve-install-lock".utf8).write(to: installLock)
+        let before = try CMUXMaestroPreview.CopilotFileAccess.statFile(fd)
+
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(FileManager.default.fileExists(atPath: older.path))
+        #expect(try CMUXMaestroPreview.CopilotFileAccess.statFile(fd) == before)
+        #expect(try String(contentsOf: installLock, encoding: .utf8) == "preserve-install-lock")
+        #expect(flock(fd, LOCK_UN) == 0)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        #expect(!FileManager.default.fileExists(atPath: older.path))
+        #expect(FileManager.default.fileExists(atPath: lockURL.path))
+    }
+
+    @Test(arguments: ["missing-source", "reused-pid", "hard-link", "permissions", "unsupported", "archive-failure"])
+    func retirementPreservesUnverifiableOrUnarchivableBindings(reason: String) throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        _ = try historicalBinding(root, number: 2, pid: 202)
+        switch reason {
+        case "missing-source":
+            try FileManager.default.removeItem(at: root.appendingPathComponent(
+                "state/\(older.deletingPathExtension().lastPathComponent)"))
+        case "hard-link":
+            try FileManager.default.linkItem(at: older, to: root.appendingPathComponent("linked-binding"))
+        case "permissions":
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: older.path)
+        case "unsupported":
+            let data = try String(contentsOf: older, encoding: .utf8)
+            try Data(data.replacingOccurrences(of: "\"schemaVersion\":1", with: "\"schemaVersion\":2").utf8)
+                .write(to: older)
+        case "archive-failure":
+            try Data("not a directory".utf8).write(to: root.appendingPathComponent("integration/retired-bindings"))
+        default: break
+        }
+        let probe: @Sendable (Int32) -> HookLookup = { pid in
+            if pid == 201, reason == "reused-pid" {
+                return .found(HookProcess(pid: pid, parentPID: 1, uid: getuid(), startSeconds: 9, startMicroseconds: 1))
+            }
+            return lookup(pid)
+        }
+
+        #expect(recorder(root, process: probe).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(FileManager.default.fileExists(atPath: older.path))
+    }
+
+    @Test func retirementBoundsCandidateWorkAndRotatesPastTheFirstBatch() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        for number in 1...70 { _ = try historicalBinding(root, number: number, pid: 201) }
+
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+
+        let status = root.appendingPathComponent("integration/binding-retirement-status.json")
+        let first = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: status)) as? [String: Any])
+        #expect(first["examined"] as? Int == 64)
+        #expect(first["retired"] as? Int == 63)
+        let last = root.appendingPathComponent("integration/bindings/00000000-0000-4000-8000-000000000070.json")
+        #expect(FileManager.default.fileExists(atPath: last.path))
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let second = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: status)) as? [String: Any])
+        #expect(second["examined"] as? Int == 7)
+        #expect(second["retired"] as? Int == 5)
+        #expect(FileManager.default.fileExists(atPath: last.path))
+        #expect(try binding(root).ownerPID == 101)
+    }
+
+    @Test func retirementDirectoryOverflowDoesNoCandidateWork() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        _ = try historicalBinding(root, number: 2, pid: 202)
+        for index in 0..<4097 {
+            try Data().write(to: root.appendingPathComponent("integration/bindings/foreign-\(index)"))
+        }
+
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+
+        let status = try #require(JSONSerialization.jsonObject(with: Data(contentsOf:
+            root.appendingPathComponent("integration/binding-retirement-status.json"))) as? [String: Any])
+        #expect(status["status"] as? String == "limited")
+        #expect(status["examined"] as? Int == 0)
+        #expect(status["retired"] as? Int == 0)
+        #expect(FileManager.default.fileExists(atPath: older.path))
+    }
+
     @Test func ownSessionAppearanceNeedsExistingProofAndSurvivesHookRefreshes() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

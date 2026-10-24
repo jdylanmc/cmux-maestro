@@ -122,7 +122,13 @@ nonisolated struct CopilotHookRecorder {
     }
 
     func bind(payload: Data, environment: [String: String]) -> HookOutcome {
-        record(payload: payload, environment: environment, intent: .bind)
+        let outcome = record(payload: payload, environment: environment, intent: .bind)
+        if outcome == .recorded {
+            CopilotBindingRetirement(
+                integrationRoot: integrationRoot, sessionStateRoot: sessionStateRoot, process: process
+            ).run()
+        }
+        return outcome
     }
 
     func setAppearance(

@@ -55,17 +55,20 @@ binding's identity. No archive retention/deletion policy is introduced here.
 ## Bounds and failure
 
 Each pass enumerates at most 4096 directory entries plus one overflow check,
-reads at most 64 binding candidates (16 KiB each), and retains a dead survivor
+selects at most 64 binding candidates (16 KiB each), and retains a dead survivor
 per surface within that batch. A private filename cursor rotates batches;
 it is a scheduling hint, never ownership evidence. Enumeration overflow skips
 retirement, not reader discovery. Incomplete batches can leave extra dead
 bindings; cleanup is not a completeness guarantee. Permanent locks still
 contribute directory entries.
 
-At most 63 candidates retire per pass. Each candidate gets at most two bounded
-512-entry custody inspections for itself and its survivor. All lock attempts
+At most 63 candidates retire per pass. Selection checks each candidate's
+custody once; each retirement gets two further bounded 512-entry custody
+inspections for itself and its survivor. All lock attempts
 are nonblocking. Failures preserve evidence and publish a bounded generic
 retirement status, separate from successful binding publication.
+Each retirement rereads its candidate and survivor twice to fence concurrent
+replacement; those reads use the same 16 KiB record bound.
 
 Readers remain unchanged: independently verify process, binding, routing and
 replay evidence, skip dead owners for active capacity and retain content-free
