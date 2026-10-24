@@ -282,6 +282,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Invalidated file watchers finish before requesting recovery reads, avoiding
+  reads against a retired registration. The native regression fails promptly
+  rather than hanging while awaiting a replacement watcher (#368).
 - Repeated turns can settle idle when an interleaved background tool's start
   predates the bounded tail. Unowned completions preserve replay-checked
   envelope continuity without acquiring ownership or completing work (#352).

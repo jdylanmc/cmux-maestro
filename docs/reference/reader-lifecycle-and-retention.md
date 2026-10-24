@@ -253,8 +253,12 @@ Shown/bound-set changes replace the registration and request one catch-up read
 to cover the registration gap. Events from a retired subscription are discarded.
 Ordinary binding-directory `.write` events only wake the reader: they do not
 finish the stream, re-register session roots or log watcher retirement. Only
-directory `.rename`, `.delete` or `.revoke` ends that lease. The deterministic
-registration-count test drives this same callback policy, including combined flags.
+directory `.rename`, `.delete` or `.revoke` ends that lease. Invalidating directory
+events and recursive stream-loss/root-change batches finish without first yielding
+an ordinary change: termination clears the old registration before requesting its
+recovery read. Earlier independent changes may still be buffered. The deterministic
+registration-count test holds consumption between a change and termination,
+including combined flags, so early wakeups cannot hide behind scheduler ordering.
 
 A newest-one stream and one pending-change flag bound bursts and changes during
 an in-flight read. The first notification opens a cancellable 200 ms coalescing

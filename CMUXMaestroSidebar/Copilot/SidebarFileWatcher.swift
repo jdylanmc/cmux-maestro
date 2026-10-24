@@ -16,9 +16,11 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
         let continuation: AsyncStream<Void>.Continuation
 
         func receive(_ flags: DispatchSource.FileSystemEvent) {
-            continuation.yield(())
             if !flags.intersection([.rename, .delete, .revoke]).isEmpty {
+                // Termination wakes the reader after clearing the invalidated registration.
                 continuation.finish()
+            } else {
+                continuation.yield(())
             }
         }
     }
@@ -122,7 +124,6 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
             nil, { _, context, count, _, flags, _ in
                 guard let context else { return }
                 let sink = Unmanaged<Sink>.fromOpaque(context).takeUnretainedValue()
-                sink.continuation.yield(())
                 let invalidated = FSEventStreamEventFlags(
                     kFSEventStreamEventFlagMustScanSubDirs | kFSEventStreamEventFlagUserDropped
                     | kFSEventStreamEventFlagKernelDropped | kFSEventStreamEventFlagEventIdsWrapped
@@ -130,6 +131,8 @@ nonisolated final class SidebarFileWatcher: SidebarFileWatching, @unchecked Send
                 )
                 if (0..<count).contains(where: { flags[$0] & invalidated != 0 }) {
                     sink.continuation.finish()
+                } else {
+                    sink.continuation.yield(())
                 }
             },
             &context, roots.map(\.path) as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),

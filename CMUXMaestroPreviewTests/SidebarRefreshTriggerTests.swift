@@ -352,7 +352,10 @@ struct SidebarRefreshTriggerTests {
         defer {
             poller.setVisible(false)
             leases.continuation.finish()
-            Task { await reads.cancel() }
+            Task {
+                await reads.cancel()
+                await first.consumption.resume()
+            }
         }
         poller.update(topology: fixtures.topology(), connected: true)
         poller.setVisible(true)
@@ -367,9 +370,12 @@ struct SidebarRefreshTriggerTests {
             await reads.complete(value)
             await sidebarEventually { await fallback.active == 1 }
         }
+        // Hold the subscriber between a premature change value and stream termination.
+        await first.consumption.pauseAfterNextValue()
         first.delivery.receive(invalidation)
         await sidebarEventually { await reads.calls == 32 }
-        #expect(registrations.now().timeIntervalSince1970 == 2)
+        try #require(registrations.now().timeIntervalSince1970 == 2,
+                     "Invalidation must replace the lease before waking the reader")
         let replacement = try #require(await iterator.next())
         await reads.complete(value)
         await sidebarEventually { await fallback.active == 1 }
@@ -592,14 +598,46 @@ nonisolated private final class SyntheticFileLease: SidebarFileWatching {
 nonisolated private final class SyntheticDirectoryLease: SidebarFileWatching {
     let events: AsyncStream<Void>
     let delivery: SidebarFileWatcher.DirectoryEvents
+    let consumption = DirectoryConsumption()
 
     init() {
         let stream = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        events = stream.stream
+        let consumption = consumption
+        events = AsyncStream(unfolding: { await consumption.next(from: stream.stream) })
         delivery = .init(continuation: stream.continuation)
     }
 
     deinit { delivery.continuation.finish() }
+}
+
+private actor DirectoryConsumption {
+    private var pauseAfterValue = false
+    private var paused = false
+    private let barrier = RefreshBarrier()
+
+    func pauseAfterNextValue() {
+        pauseAfterValue = true
+    }
+
+    func next(from stream: AsyncStream<Void>) async -> Void? {
+        if paused {
+            do { try await barrier.wait() }
+            catch {
+                #expect(error is CancellationError)
+                return nil
+            }
+        }
+        var iterator = stream.makeAsyncIterator()
+        let value = await iterator.next()
+        if value != nil, pauseAfterValue { paused = true }
+        return value
+    }
+
+    func resume() async {
+        paused = false
+        pauseAfterValue = false
+        await barrier.release()
+    }
 }
 
 private actor RefreshCounter {
