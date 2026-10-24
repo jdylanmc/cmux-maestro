@@ -508,6 +508,7 @@ actor CopilotSessionReader {
             batch.observations.append(observation(
                 record, liveness: liveness, now: batch.now,
                 includeBindingProcess: liveness == .unknown && issues == [.stateUnavailable]
+                    && !retainedEvidenceProtectsUnknownRow(id)
             ))
         case .failed(let failure):
             publishedCohort.insert(id)
@@ -537,6 +538,15 @@ actor CopilotSessionReader {
     private func recordIssues(_ issues: [CopilotIssue], for id: UUID, batch: inout Batch) {
         batch.scopedIssues[id, default: []] += issues.filter(\.isSessionScoped)
         batch.issues += issues.filter { !$0.isSessionScoped }
+    }
+
+    private func retainedEvidenceProtectsUnknownRow(_ id: UUID) -> Bool {
+        guard let tail = tails[id] else { return false }
+        guard let value = tail.lastComplete, tail.target == nil, tail.partial.isEmpty,
+              !tail.historyIncomplete, !tail.droppingOversizedLine, !tail.discardingInitialLine,
+              tail.stamp?.size == tail.offset, tail.reducer.issues.isEmpty else { return true }
+        // Withhold correlation rather than republishing protected private history as current state.
+        return [.failed, .blocked].contains(value.state) || !value.attention.isEmpty || !value.children.isEmpty
     }
 
     private func rememberEnded(_ entry: Binding) {

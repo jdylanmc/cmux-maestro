@@ -10,7 +10,7 @@ nonisolated struct CopilotReaderTests {
     @MainActor func retainedProtectionSurvivesCustodyLossBeforeReplacement(_ initial: String) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
-        var rows = [try copilotTestEvent("session.idle")]
+        var rows = [try copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1])]
         switch initial {
         case "error": rows.append(try copilotTestEvent("session.error"))
         case "blocked": rows.append(try copilotTestEvent("permission.requested", data: ["requestId": "approval"]))
@@ -19,8 +19,10 @@ nonisolated struct CopilotReaderTests {
             rows.append(try copilotTestEvent("subagent.started", agent: "child", data: [
                 "toolCallId": "spawn", "agentDisplayName": "Synthetic task"
             ]))
-            rows.append(try copilotTestEvent("subagent.failed", data: ["toolCallId": "spawn"]))
-        default: break
+            rows.append(try copilotTestEvent("subagent.failed", data: [
+                "toolCallId": "spawn", "agentDisplayName": "Synthetic task"
+            ]))
+        default: rows.append(try copilotTestEvent("session.idle"))
         }
         try fixture.writeEvents(rows)
         let reader = fixture.reader()

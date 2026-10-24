@@ -24,7 +24,9 @@ An unknown interactive root may also yield its row after an in-process session
 replacement, but only to one fresh, uniquely bound alive session on the exact same
 surface with the same recorded provider PID and microsecond start time. The old
 root must have no failed/blocked state, attention, tasks or omitted/hidden task
-evidence. Ambiguous custody, duplicate identities, missing process correlation,
+evidence. Protected or incomplete retained reader history withholds correlation
+after custody loss without publishing that stale content as current state.
+Ambiguous custody, duplicate identities, missing process correlation,
 stale evidence and denied access keep the old row. Process correlation is
 transient reader-to-presentation metadata: it is neither encoded in snapshots
 nor displayed, and it never changes custody, enrollment or capacity (#347).
