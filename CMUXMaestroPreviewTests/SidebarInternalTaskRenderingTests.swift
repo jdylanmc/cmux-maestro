@@ -410,7 +410,7 @@ struct SidebarInternalTaskRenderingTests {
         let model = await makeModel(data, children: [
             .init(id: "result", parentID: nil, kind: .subagent, name: "Finished task", state: .completed,
                   model: nil, terminalEvent: .init(id: event, timestamp: now)),
-            .init(id: "shell", parentID: "result", kind: .shell, name: "Finished shell", state: .completed,
+            .init(id: "legacy", parentID: "result", kind: .skill, name: "Finished skill", state: .completed,
                   model: nil, terminalEvent: .init(id: UUID(), timestamp: now))
         ], now: now)
         defer { model.setVisible(false) }
@@ -423,7 +423,7 @@ struct SidebarInternalTaskRenderingTests {
         control.performClick(nil)
         await sidebarEventually { names(mounted.host).isEmpty }
         #expect(preferences.history.dismissed == [.init(sessionID: data.sessionID, childID: "result", eventID: event)])
-        #expect(model.copilot.tree.sessions[0].nodes.contains { $0.id == "shell" })
+        #expect(model.copilot.tree.sessions[0].nodes.contains { $0.id == "legacy" })
         #expect(model.navigation.status == .idle)
         #expect(SidebarTopology(model.hierarchy).workspaceBySurface.count == 2)
         try capture(mounted.host, name: "review1-dismiss-hidden-child-\(retention.rawValue)-\(mode.rawValue)")

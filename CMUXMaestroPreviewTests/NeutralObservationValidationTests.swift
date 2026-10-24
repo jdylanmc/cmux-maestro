@@ -165,7 +165,7 @@ struct NeutralObservationValidationTests {
         let session = try #require(tree.sessions.first)
         #expect(session.nodes.map(\.id) == ["skewed", "live"])
         #expect(session.nodes.filter(\.attentionDegraded).map(\.id) == ["skewed"])
-        #expect(session.hiddenHistoryCount == 3)
+        #expect(session.hiddenHistoryCount == 2, "Finished invocations are not hidden history")
         #expect(session.childrenComplete == false && tree.availability == .partial)
         #expect(session.nodes.first?.activity?.lastEventAt == nil)
     }

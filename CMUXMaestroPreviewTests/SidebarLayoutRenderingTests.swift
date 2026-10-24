@@ -373,7 +373,11 @@ struct SidebarLayoutRenderingTests {
         defer { fixture.cleanup() }
         let preferences = fixture.preferences()
         let navigation = SidebarNavigation()
-        let workspace = UUID(), surface = UUID()
+        let fixtures = SidebarTreeFixtures()
+        let workspace = fixtures.workspaceA, surface = fixtures.surfaceA
+        navigation.update(topology: fixtures.topology(), connected: true,
+                          workspaceAllowed: true, surfaceAllowed: true,
+                          perform: { _ in Issue.record("Synthetic rendering must not navigate") })
         func pixels(_ state: AgentWorkState, needsInput: Bool = false,
                     session: SidebarCopilotSession? = nil) throws -> [UInt8] {
             let item = session.map { SidebarAgentIconCardItem.session($0, title: "Helper") } ?? SidebarAgentIconCardItem(

@@ -246,7 +246,7 @@ private final class HistoryPreferenceProjection {
             CopilotChildWork(id: $0, parentID: nil, kind: .subagent, name: $0, state: .completed, model: nil,
                              terminalEvent: .init(id: eventID, timestamp: now.addingTimeInterval(-60)))
         } + ["legacy-a", "legacy-b"].map {
-            CopilotChildWork(id: $0, parentID: nil, kind: .shell, name: $0, state: .completed, model: nil,
+            CopilotChildWork(id: $0, parentID: nil, kind: .skill, name: $0, state: .completed, model: nil,
                              terminalEvent: .init(id: eventID, timestamp: now.addingTimeInterval(-60)))
         } + [fixtures.child("working", state: .working)]
         snapshot = fixtures.snapshot(sessions: [fixtures.session(id: sessionID, children: children, now: now)], now: now)
