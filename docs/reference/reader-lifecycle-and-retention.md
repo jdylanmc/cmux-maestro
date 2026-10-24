@@ -297,8 +297,8 @@ Duplicates and overflow remain in the output, not silently deduplicated or
 dropped. This skips repeated child/legacy-hierarchy conversion, not reader,
 identity, process-liveness or deadline work. Surface-row hover cards are resolved
 on demand rather than during hidden row rendering, using the same lazy provider
-and open/update revalidation as agent rows. A non-session surface without a
-hover connection exposes neither a preview keyboard hint nor a preview action;
+and open/update revalidation as agent rows. Any surface without a hover
+connection exposes neither a preview keyboard hint nor a preview action;
 availability is checked without constructing the card.
 
 The three native callback tests are inventoried local opt-in acceptance in
