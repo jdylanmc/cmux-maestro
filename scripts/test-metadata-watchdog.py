@@ -12,6 +12,7 @@ import uuid
 MODES = ("complete", "stalled-clock", "polling-clock", "sampler-timeout",
          "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
          "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
+         "sampling-complete-output", "sampling-complete-no-output", "sampling-forced-backstop",
          "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held")
 
 
@@ -25,6 +26,10 @@ def metadata_readiness(report):
     require(report.get("metadataPID") is not None and isinstance(ready, dict),
             f"Metadata watchdog not-ready: {report}")
     return ready
+
+
+def diagnostic_outcome(report, directory):
+    return report["diagnosticOutcome"]
 
 
 def main():
@@ -63,6 +68,7 @@ def main():
         else:
             require(result.returncode == 124, output.read_text())
             report = json.loads((case / "stall.json").read_text())
+            outcome = diagnostic_outcome(report, case)
             if mode.startswith("owned-"):
                 ready = metadata_readiness(report)
             try:
@@ -74,7 +80,7 @@ def main():
             require(report["pid"] > 1, report)
             # Release the owned fixture above, then observe exit without signaling
             # a PID whose unreaped ownership anchor ended with the probe.
-            child = None if mode.startswith("diagnostic-") else int((case / "child.pid").read_text())
+            child = None if mode.startswith(("diagnostic-", "sampling-")) else int((case / "child.pid").read_text())
             deadline = time.monotonic() + 60
             while child is not None:
                 try:
@@ -87,10 +93,18 @@ def main():
             print(f"Exact sampler {report['samplerPID']} reaped/absent; {child_description}.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
-            minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-")) else (2 if mode == "polling-clock" else 1)
+            minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-", "sampling-")) else (2 if mode == "polling-clock" else 1)
             require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
-            if mode.startswith(("sampler-", "owned-", "diagnostic-")):
+            if mode == "sampling-forced-backstop":
+                require(outcome == "diagnostic-incomplete", report)
+            elif mode.startswith("sampling-"):
+                require(outcome == "complete" and report["sampleStatus"] == "exit-17", report)
+                if mode == "sampling-complete-output":
+                    require(report["sample"] == "synthetic-exit-17-sample\n", report)
+                else:
+                    require(report.get("sample") is None and "sample.txt" in report["sampleReadError"], report)
+            elif mode.startswith(("sampler-", "owned-", "diagnostic-")):
                 timed_out = mode in ("sampler-timeout", "sampler-timeout-no-output")
                 require(report["sampleStatus"] == ("timed-out/signal-9" if timed_out else "exit-17"), report)
                 require(int((case / "sampler.pid").read_text()) == report["samplerPID"], report)

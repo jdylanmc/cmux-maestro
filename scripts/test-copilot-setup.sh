@@ -79,6 +79,7 @@ if [[ "${1:-}" == "--compile-only" ]]; then
 fi
 if [[ "${1:-}" != "--guide-only" ]]; then
     python3 "$ROOT/scripts/test-metadata-watchdog-report.py"
+    python3 "$ROOT/scripts/test-metadata-watchdog-completion.py"
     python3 "$ROOT/scripts/test-metadata-watchdog.py" \
         --probe "$OUTPUT/metadata-watchdog-probe" --results-root "$OUTPUT/metadata-watchdog"
 fi

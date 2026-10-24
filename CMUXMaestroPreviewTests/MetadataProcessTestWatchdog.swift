@@ -12,6 +12,8 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     let limit: Duration
     private let samplerExecutable: URL
     private let observation: CopilotSetupObservation?
+    private let automaticDiagnosticBackstop: Bool
+    private let beforeSampling: @Sendable (MetadataProcessTestWatchdog) -> Void
     private var phase = "fixture"
     private var deadline: ContinuousClock.Instant
     private var samples = 0
@@ -27,12 +29,16 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     init(directory: URL, testIdentity: String = MetadataProcessTestWatchdog.test,
          limit: Duration = .seconds(30),
          samplerExecutable: URL = URL(fileURLWithPath: "/usr/bin/sample"),
-         observation: CopilotSetupObservation? = nil) throws {
+         observation: CopilotSetupObservation? = nil,
+         automaticDiagnosticBackstop: Bool = true,
+         beforeSampling: @escaping @Sendable (MetadataProcessTestWatchdog) -> Void = { _ in }) throws {
         self.directory = directory
         self.testIdentity = testIdentity
         self.limit = limit
         self.samplerExecutable = samplerExecutable
         self.observation = observation
+        self.automaticDiagnosticBackstop = automaticDiagnosticBackstop
+        self.beforeSampling = beforeSampling
         deadline = ContinuousClock.now.advanced(by: limit)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Thread.detachNewThread { self.observe() }
@@ -271,10 +277,11 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
 
     private func diagnose(_ initial: Report) -> Never {
         // Sampling must not turn a bounded diagnostic into another indefinite wait.
-        Thread.detachNewThread {
-            Thread.sleep(forTimeInterval: 5)
-            self.killSampler()
-            _exit(124)
+        if automaticDiagnosticBackstop {
+            Thread.detachNewThread {
+                Thread.sleep(forTimeInterval: 5)
+                self.forceDiagnosticBackstop()
+            }
         }
         var report = initial
         if report.metadataPID != nil {
@@ -297,6 +304,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
             report.samplerPID = try spawnSampler(output: sampleURL)
             report.samplerReaped = false
             save(report)
+            beforeSampling(self)
             if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {
                 report.sampleStatus = Self.exitDescription(status)
                 report.samplerReaped = true
@@ -321,6 +329,17 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         save(report)
         // Never resume a stalled assertion or reinterpret cancellation as a pass.
         _exit(124)
+    }
+
+    func forceDiagnosticBackstop() {
+        killSampler()
+        _exit(124)
+    }
+
+    func waitForDiagnosticExit() -> Never {
+        let gate = NSCondition()
+        gate.lock()
+        while true { gate.wait() }
     }
 
     private enum SamplerFailure: Error {
