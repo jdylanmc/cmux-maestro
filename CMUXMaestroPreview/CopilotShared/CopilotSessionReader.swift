@@ -590,6 +590,18 @@ actor CopilotSessionReader {
     }
 
     private func appendEndedObservations(_ index: BindingIndex, batch: inout Batch) throws {
+        guard !endedBindingsBySurface.isEmpty else { return }
+        let root: Int32?
+        do {
+            root = try CopilotFileAccess.openDirectory(index.directories.sessions, owner: verifier.uid)
+        } catch CopilotFileError.missing {
+            root = nil
+        } catch {
+            try Self.rethrowCancellation(error)
+            batch.issues.append(Self.issue(error))
+            return
+        }
+        defer { if let root { close(root) } }
         for (surface, cached) in endedBindingsBySurface {
             try Task.checkCancellation()
             let entry: Binding
@@ -615,11 +627,12 @@ actor CopilotSessionReader {
             }
             let status: CopilotIdentityStatus
             do {
-                status = try inspectEndedOwner(entry.record, index: index)
+                status = try inspectEndedOwner(entry.record, root: root)
             } catch {
                 try Self.rethrowCancellation(error)
-                recordIssues([Self.issue(error)], for: entry.record.sessionID, batch: &batch)
-                status = .unknown
+                let issue = Self.issue(error)
+                recordIssues([issue], for: entry.record.sessionID, batch: &batch)
+                status = [.permissionDenied, .identityChanged, .ambiguousIdentity].contains(issue) ? .ambiguous : .unknown
             }
             recordIssues(status == .alive ? [.identityChanged] : Self.issues(status),
                          for: entry.record.sessionID, batch: &batch)
@@ -627,12 +640,15 @@ actor CopilotSessionReader {
                 entry.record, liveness: status == .alive ? .ambiguous : Self.liveness(status), now: batch.now
             ))
         }
+        if let root, (try? directoryRemainsValid(root, at: index.directories.sessions)) != true {
+            batch.observations.removeAll()
+            batch.issues.append(.identityChanged)
+        }
     }
 
-    private func inspectEndedOwner(_ record: CopilotIdentityRecord, index: BindingIndex) throws -> CopilotIdentityStatus {
+    private func inspectEndedOwner(_ record: CopilotIdentityRecord, root: Int32?) throws -> CopilotIdentityStatus {
+        guard let root else { return .dead }
         do {
-            let root = try CopilotFileAccess.openDirectory(index.directories.sessions, owner: verifier.uid)
-            defer { close(root) }
             let session = try CopilotFileAccess.openDirectory(
                 at: root, name: record.sessionID.uuidString.lowercased(), owner: verifier.uid
             )
