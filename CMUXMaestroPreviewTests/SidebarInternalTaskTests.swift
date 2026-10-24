@@ -104,6 +104,67 @@ struct SidebarInternalTaskTests {
         #expect(!tree.hasCompleteCounts)
     }
 
+    @Test func completedTaskHiddenByEyeDoesNotProtectUnresolvedParent() throws {
+        var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
+        reducer.consume(try copilotTestEvent("assistant.turn_start", agent: "fragment", data: ["turnId": "turn"]))
+        reducer.consume(try copilotTestEvent("subagent.started", agent: "nested", data: [
+            "toolCallId": "spawn", "parentId": "fragment", "agentDisplayName": "Task"
+        ]))
+        reducer.consume(try copilotTestEvent("subagent.completed", agent: "nested", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Task"
+        ]))
+        reducer.consume(try copilotTestEvent("assistant.turn_end", agent: "fragment", data: ["turnId": "turn"]))
+        let session = try #require(project(reducer.value().children, complete: false).sessions.first)
+        let evidence = session.nodes
+        #expect(evidence.map(\.id) == ["fragment", "nested"])
+        #expect(evidence[0].hasChildren)
+        #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
+        for taskboard in [false, true] {
+            #expect(session.childSections(layout: .init(), taskboard: taskboard).isEmpty)
+            var revealed = SidebarLayoutSettings()
+            try revealed.setIdleTasksVisible(true, in: session.workspaceID)
+            let rows = session.childSections(layout: revealed, taskboard: taskboard).flatMap(\.rows)
+            #expect(rows.map(\.id) == ["fragment", "nested"])
+            #expect(rows.first?.node.hasChildren == true)
+        }
+        #expect(session.nodes == evidence, "Presentation does not discard the retained outcome")
+    }
+
+    @Test(arguments: [false, true])
+    func protectedRowHasNoDisclosureForPresentationHiddenChildren(_ expanded: Bool) throws {
+        let session = try #require(project([
+            .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Unknown agent", state: .blocked, model: nil, attention: [signal(.permission)]),
+            task("nested", parent: "fragment", state: .completed)
+        ], complete: false).sessions.first)
+        var layout = SidebarLayoutSettings()
+        layout.setExpanded(expanded, for: .child("fragment", sessionID: session.id))
+        for taskboard in [false, true] {
+            let rows = session.childSections(layout: layout, taskboard: taskboard).flatMap(\.rows)
+            #expect(rows.map(\.id) == ["fragment"])
+            #expect(rows.first?.node.hasChildren == false)
+            #expect(rows.first?.collapsedSummary == nil)
+        }
+        #expect(session.nodes[0].hasChildren)
+        #expect(session.attentionOwnerCount == 1)
+    }
+
+    @Test(arguments: [CopilotWorkState.working, .blocked, .failed, .completed])
+    func visibleProtectedDescendantRetainsCompletedAncestry(_ state: CopilotWorkState) throws {
+        let session = try #require(project([
+            .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Unknown agent", state: .idle, model: nil),
+            task("context", parent: "fragment", state: .completed),
+            task("nested", parent: "context", state: state, attention: state == .completed ? [signal(.answer)] : [])
+        ], complete: false).sessions.first)
+        for taskboard in [false, true] {
+            let rows = session.childSections(layout: .init(), taskboard: taskboard).flatMap(\.rows)
+            #expect(rows.map(\.id) == ["fragment", "context", "nested"])
+            #expect(rows.map(\.node.hasChildren) == [true, true, false])
+        }
+        #expect(session.unresolvedFragments.isEmpty)
+    }
+
     @Test(arguments: [AgentWorkState.unknown, .working, .idle, .completed, .cancelled])
     func fragmentCompactionRetainsEvidenceInBothPresentations(_ state: AgentWorkState) {
         var fragment = SidebarCopilotNode(
