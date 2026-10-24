@@ -1036,7 +1036,7 @@ struct SidebarView: View {
         SidebarPresentation.focusTarget(
             for: target, capturedPlacement: capturedPlacement, hierarchy: model.hierarchy, connected: connected,
             tree: model.copilot.tree, managed: model.orchestration.snapshot,
-            availability: model.orchestration.availability, now: now()
+            availability: model.orchestration.availability, now: actionNow()
         )
     }
 

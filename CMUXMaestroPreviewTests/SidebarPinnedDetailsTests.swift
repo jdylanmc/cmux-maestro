@@ -461,7 +461,8 @@ struct SidebarPinnedDetailsTests {
         let window = NSWindow(contentRect: NSRect(x: 100, y: 100, width: 340, height: 700),
                               styleMask: .titled, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences))
+        let hosting = NSHostingView(rootView: SidebarView(model: model, preferences: preferences)
+            .environment(\._accessibilityReduceMotion, true))
         window.contentView = hosting
         window.orderFront(nil)
         defer {
