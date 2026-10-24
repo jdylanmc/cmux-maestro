@@ -71,6 +71,11 @@ contention. Injected-clock tests cover both slow and fast actor turns.
 - Orchestration snapshots and naming use an injected clock. Polling tests await
   publication at the existing pause boundary rather than counting scheduler yields.
   Cadence fixtures suspend until cancellation, never a 60-second accidental tick.
+- Watcher invalidation tests hold stream consumption after an ordinary change,
+  exposing any read that overtakes lease termination. The registration prerequisite
+  throws before awaiting a replacement, and teardown releases controlled reads:
+  an invalidation-ordering regression reports a failure instead of stranding the
+  native job. Rename, delete, revoke and combined write/rename retain coverage (#368).
 - Multiwindow teardown awaits a subscribed scene publication, not host-local
   connection invalidation. The shared-scene test still sends its final snapshot
   during teardown. Synthetic endpoint and publication durations distinguish XPC
