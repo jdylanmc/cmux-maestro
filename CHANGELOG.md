@@ -286,6 +286,10 @@ Notable changes are recorded using Keep a Changelog categories.
   of repeated unknown-agent rows. Named tasks, attention and required ancestry
   remain visible; bounded history and work-state evidence stay unchanged (#341).
 
+- Sessions no longer stay Working after Copilot restarts turn counters within
+  one interaction and ends without `session.idle`. Exact turn evidence settles
+  the primary state across interleaved background events, while background
+  work and incomplete history stay separate (#343).
 - Copilot CLI 1.0.103 no longer blocks installation on removed remote flags.
   Setup selects supported no-sync controls from runtime help, keeps older CLI
   support, and refuses unknown controls. Installer failures show only vetted

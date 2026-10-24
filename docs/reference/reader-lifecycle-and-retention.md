@@ -40,20 +40,40 @@ It is not a counter or inferred user-message epoch. Retired interaction identiti
 use existing bounded replay guard. New primary interaction does not reset
 still-running children or their pending requests.
 
+Copilot also restarts the turn counter within the same interaction. A fresh
+`assistant.turn_start` event UUID establishes a new occurrence in the current
+interaction, even if its owner/interaction/turn tuple was already seen.
+Exact event replays, retired interactions and uncertain replay-filter matches
+still refuse. Repeated tuples require occurrence-specific causal proof:
+matching interaction tags alone cannot anchor a message or end. Parent links
+must reach the current start or causal tip; tool evidence must retain that
+start's exact event UUID as its origin. A correctly tagged message may also
+anchor through continuous session-wide parent links, including interleaved
+background-owner events. Each active turn retains one extra envelope tip for
+that continuity, not another owner's work evidence. That tip alone cannot
+prove a turn end, tool origin or untagged message. Once a matching tagged
+message or current-origin tool proves the occurrence, interleaved foreign
+envelopes may carry that proven causal tip to its end. No unbounded graph is
+retained. An accepted end establishes idle without a separate `session.idle`;
+trailing hook and usage-checkpoint envelopes do not reopen work. Neither idle
+nor those envelopes finish background children or outstanding tools.
+
 End with explicit interaction ID must match current accepted owner
-turn. Ends without that field keep legacy pairing when turn identity is
+turn (and needs causal proof when the entire tuple repeats).
+Ends without that field keep legacy pairing when turn identity is
 unambiguous. For reused IDs, they need current causal parent or uniquely
 matched tool completion whose start tied to current turn. Across ignored payload-bearing events, use only envelope
 IDs/parent links. Never decode prompt,
 arguments, results or message content for this. Tracking is
-bounded to one causal tip per active owner and one origin per retained tool.
+bounded to one causal tip and one envelope-continuity tip per active owner,
+plus one origin per retained tool.
 It is not an accumulated transcript graph.
 Validate optional interaction/turn tags on `tool.execution_complete` against
 its recorded tool origin. If no origin recorded, validate against current accepted owner turn.
 Explicit contradictions cannot complete current work or advance its
 causal tip. Matching tags do not create missing tool ownership.
 
-All tool-associated events are excluded from generic parent bridging. This includes tool-backed subagent events and unjoined
+Same-owner tool-associated events are excluded from generic parent bridging. This includes tool-backed subagent events and unjoined
 shell notifications.
 Accepted tool starts, completions and partial results advance causal tip only
 through known tool whose recorded origin is current accepted owner turn.
@@ -62,6 +82,8 @@ are nil or raw turn ID matches. Partial results decode only bounded optional
 tool/turn/interaction metadata, never output content. Matching current partial
 may advance the single tip. It does not change work state or manufacture an
 outcome. Non-tool envelope bridges keep bounded current-parent behavior.
+Cross-owner continuity does not assign a foreign tool to the primary turn;
+it only carries already-proven occurrence evidence along the shared chain.
 
 Missing/gapped causal evidence for reused nil-interaction end yields
 `ambiguousTurn` and unknown primary state, not fabricated completion. Pending

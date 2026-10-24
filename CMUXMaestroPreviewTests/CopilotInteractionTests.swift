@@ -4,6 +4,187 @@ import Testing
 
 @Suite(.serialized)
 nonisolated struct CopilotInteractionTests {
+    @Test(arguments: [false, true], [false, true])
+    func repeatedScopedMessageBridgesInterleavedBackgroundEnvelopes(partial: Bool, afterProof: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let ids = (0..<10).map {
+            UUID(uuidString: String(format: "34310000-0000-0000-0000-%012d", $0))!
+        }
+        reducer.consume(try interactionEvent("assistant.turn_start", id: ids[0], turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", id: ids[1], parent: ids[0], turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: ids[2], parent: ids[1],
+                                             turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: ids[3], parent: ids[2], owner: "background",
+                                             turn: "0", interaction: "background"))
+        reducer.consume(try interactionEvent("tool.execution_start", id: ids[4], parent: ids[3], owner: "background",
+                                             data: ["toolCallId": "background-tool", "toolName": "bash"]))
+        if partial {
+            reducer.consume(try interactionEvent("tool.execution_partial_result", id: ids[5], parent: ids[4],
+                                                 owner: "background", data: ["toolCallId": "background-tool"]))
+        }
+        reducer.consume(try interactionEvent("session.usage_record", id: ids[6], parent: ids[partial ? 5 : 4]))
+        reducer.consume(try interactionEvent("assistant.message", id: ids[7], parent: ids[6],
+                                             turn: "0", interaction: "same"))
+        if afterProof {
+            reducer.consume(try interactionEvent("session.usage_record", id: ids[9], parent: ids[7],
+                                                 owner: "background"))
+        }
+        reducer.consume(try interactionEvent("assistant.turn_end", id: ids[8], parent: ids[afterProof ? 9 : 7],
+                                             turn: "0"))
+        let value = reducer.value()
+        #expect(value.state == .idle)
+        #expect(value.attention.map(\.kind) == [.turnFinished])
+        #expect(value.attention.last?.evidence.eventID == ids[8])
+        #expect(value.children.first { $0.id == "background" }?.state == .working)
+        #expect(value.children.first { $0.id == "background" }?.activity?.kind == .executing)
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test func repeatedScopedToolProofSurvivesForeignEndEnvelope() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), tool = UUID(), child = UUID(), completed = UUID(), bridge = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("tool.execution_start", id: tool, parent: current,
+                                             data: ["toolCallId": "current-tool", "toolName": "view"]))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: child, parent: tool, owner: "background",
+                                             turn: "0", interaction: "background"))
+        reducer.consume(try interactionEvent("tool.execution_complete", id: completed, parent: child,
+                                             data: ["toolCallId": "current-tool", "success": true]))
+        reducer.consume(try interactionEvent("session.usage_record", id: bridge, parent: completed, owner: "background"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: bridge, turn: "0"))
+        #expect(reducer.value().state == .idle)
+        #expect(reducer.value().attention.map(\.kind) == [.turnFinished])
+        #expect(reducer.value().children.first?.state == .working)
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test func sameInteractionTurnCounterRestartSettlesWithoutSessionIdle() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        reducer.consume(try interactionEvent("subagent.started", owner: "background", data: [
+            "toolCallId": "background", "agentDisplayName": "Background"
+        ]))
+        reducer.consume(try interactionEvent("tool.execution_start", owner: "background", data: [
+            "toolCallId": "long-tool", "toolName": "bash"
+        ]))
+        reducer.consume(try interactionEvent("permission.requested", owner: "waiting",
+                                             data: ["requestId": "approval"]))
+        let rows = try repeatedScopedTurnTail()
+        for row in rows { reducer.consume(row) }
+        let settled = reducer.value()
+        #expect(settled.state == .idle)
+        #expect(settled.attention.map(\.kind) == [.turnFinished])
+        #expect(settled.attention.last?.evidence.eventID == UUID(uuidString: "34300000-0000-0000-0000-000000000022"))
+        #expect(settled.children.first { $0.id == "background" }?.state == .working)
+        #expect(settled.children.first { $0.id == "background" }?.activity?.kind == .executing)
+        #expect(settled.children.first { $0.id == "waiting" }?.state == .blocked)
+        #expect(reducer.issues.isEmpty)
+        for row in rows { reducer.consume(row) }
+        #expect(reducer.value() == settled)
+
+        reducer.consume(try interactionEvent("tool.execution_start", data: [
+            "toolCallId": "new-long-tool", "toolName": "bash"
+        ]))
+        for type in ["hook.start", "hook.end", "session.usage_checkpoint"] {
+            reducer.consume(try interactionEvent(type))
+        }
+        #expect(reducer.value().state == .working)
+        #expect(reducer.value().activity?.kind == .executing)
+        #expect(reducer.value().attention.isEmpty)
+    }
+
+    @Test(arguments: ["untagged", "wrong-tags", "none"])
+    func repeatedScopedContinuityAloneCannotProveAnEnd(message: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), child = UUID(), bridge = UUID()
+        reducer.consume(try interactionEvent("assistant.turn_start", id: old, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, turn: "0", interaction: "same"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: child, parent: current, owner: "background",
+                                             turn: "0", interaction: "background"))
+        if message != "none" {
+            reducer.consume(try interactionEvent("assistant.message", id: bridge, parent: child,
+                                                 turn: message == "wrong-tags" ? "1" : nil,
+                                                 interaction: message == "wrong-tags" ? "same" : nil))
+        }
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: message == "none" ? child : bridge,
+                                             turn: "0", interaction: "same"))
+        #expect(reducer.value().state == .unknown)
+        #expect(reducer.value().attention.isEmpty)
+        #expect(reducer.value().children.first?.state == .working)
+        #expect(reducer.issues == [.ambiguousTurn])
+    }
+
+    @Test(arguments: [nil, "child"] as [String?], ["end", "message", "tool"])
+    func repeatedScopedTupleNeedsOccurrenceProof(owner: String?, staleProof: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let old = UUID(), current = UUID(), stale = UUID()
+        let oldStart = try interactionEvent("assistant.turn_start", id: old, owner: owner,
+                                           turn: "0", interaction: "same")
+        reducer.consume(oldStart)
+        reducer.consume(try interactionEvent("tool.execution_start", parent: old, owner: owner,
+                                             data: ["toolCallId": "old-tool", "toolName": "view"]))
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: old, owner: owner, turn: "0"))
+        reducer.consume(try interactionEvent("assistant.turn_start", id: current, owner: owner,
+                                             turn: "0", interaction: "same"))
+        let working = reducer.value()
+        #expect((owner == nil ? working.state : working.children.first?.state) == .working)
+        reducer.consume(oldStart)
+        #expect(reducer.value() == working)
+        if staleProof == "message" {
+            reducer.consume(try interactionEvent("assistant.message", id: stale, parent: old, owner: owner,
+                                                 turn: "0", interaction: "same"))
+        } else if staleProof == "tool" {
+            reducer.consume(try interactionEvent("tool.execution_complete", id: stale, parent: current,
+                                                 owner: owner, turn: "0", interaction: "same",
+                                                 data: ["toolCallId": "old-tool", "success": true]))
+        }
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: staleProof == "end" ? old : stale,
+                                             owner: owner, turn: "0", interaction: "same"))
+        #expect((owner == nil ? reducer.value().state : reducer.value().children.first?.state) == .unknown)
+        #expect(reducer.value().attention.isEmpty)
+        reducer.consume(try interactionEvent("assistant.turn_end", parent: current, owner: owner,
+                                             turn: "0", interaction: "same"))
+        #expect((owner == nil ? reducer.value().state : reducer.value().children.first?.state) == .idle)
+    }
+
+    @MainActor @Test(arguments: [false, true])
+    func repeatedScopedTailPublishesIdleThroughReaderAndSidebar(bounded: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let clock = CopilotReaderTestClock()
+        var prefix = try [interactionEvent("session.start", data: [
+            "sessionId": fixture.sessionID.uuidString, "version": 1
+        ])]
+        if bounded {
+            prefix.append(try interactionEvent("assistant.message", data: [
+                "content": String(repeating: "x", count: 17 * 1_048_576)
+            ]))
+        }
+        let rows = try repeatedScopedTurnTail()
+        try fixture.writeEvents(prefix + rows.prefix(20))
+        let reader = fixture.reader(clock: { clock.now() })
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.first?.state == .working)
+        for row in rows.dropFirst(20) { try fixture.append(row + Data([10])) }
+        let finished = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(finished.sessions.first?.state == .idle)
+        #expect(finished.sessions.first?.sessionIssues == (bounded ? [.readLimitReached] : nil))
+        #expect(finished.isComplete == !bounded)
+        #expect(interactionTree(finished, fixture: fixture).sessions.first?.state == .idle)
+        #expect(await reader.hasPendingHistory() == false)
+        let bytes = await reader.eventReadBytes
+        clock.advance(by: 7_200)
+        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(unchanged.sessions.first?.state == .idle)
+        #expect(unchanged.sessions.first?.observedAt == clock.now())
+        #expect(await reader.eventReadBytes == bytes)
+        #expect(interactionTree(unchanged, fixture: fixture).sessions.first?.state == .idle)
+        let rebuilt = try await fixture.reader(clock: { clock.now() }).read(surfaceIDs: [fixture.surface])
+        #expect(rebuilt.sessions.first?.state == .idle)
+        #expect(rebuilt.sessions.first?.attention == unchanged.sessions.first?.attention)
+    }
+
     @Test(arguments: ["known-retained", "known-retired", "missing-retained", "missing-retired"], [false, true])
     func rawOwnerReuseGuardSurvivesUnknownKindAndRetirement(scenario: String, spill: Bool) throws {
         let missingSpawn = scenario.hasPrefix("missing")
@@ -1457,6 +1638,46 @@ nonisolated func interactionEvent(
     if let date { event["timestamp"] = date.ISO8601Format() }
     if let owner { event["agentId"] = owner }
     return try JSONSerialization.data(withJSONObject: event, options: [.sortedKeys])
+}
+
+// Metadata-only reproduction: the same interaction restarts 0/1 after 0/1/2/3.
+// Hook and usage envelopes trail the final end; no session.idle is emitted.
+nonisolated func repeatedScopedTurnTail() throws -> [Data] {
+    let ids = (0..<26).map {
+        UUID(uuidString: String(format: "34300000-0000-0000-0000-%012d", $0))!
+    }
+    var rows: [Data] = []
+    for turn in 0..<4 {
+        rows.append(try interactionEvent("assistant.turn_start", id: ids[turn * 2],
+                                         turn: "\(turn)", interaction: "same"))
+        rows.append(try interactionEvent("assistant.turn_end", id: ids[turn * 2 + 1],
+                                         parent: ids[turn * 2], turn: "\(turn)"))
+    }
+    rows += try [
+        interactionEvent("hook.start", id: ids[8], parent: ids[7]),
+        interactionEvent("hook.end", id: ids[9], parent: ids[8]),
+        interactionEvent("tool.execution_start", id: ids[10], parent: ids[9],
+                         data: ["toolCallId": "delivery", "toolName": "notification"]),
+        interactionEvent("tool.execution_complete", id: ids[11], parent: ids[10],
+                         data: ["toolCallId": "delivery", "success": true]),
+        interactionEvent("assistant.turn_start", id: ids[12], parent: ids[11], turn: "0", interaction: "same"),
+        interactionEvent("hook.end", id: ids[13], parent: ids[12]),
+        interactionEvent("session.usage_record", id: ids[14], parent: ids[13]),
+        interactionEvent("assistant.message", id: ids[15], parent: ids[14], turn: "0", interaction: "same"),
+        interactionEvent("tool.execution_start", id: ids[16], parent: ids[15],
+                         data: ["toolCallId": "current", "toolName": "view"]),
+        interactionEvent("tool.execution_complete", id: ids[17], parent: ids[16], turn: "0", interaction: "same",
+                         data: ["toolCallId": "current", "success": true]),
+        interactionEvent("assistant.turn_end", id: ids[18], parent: ids[17], turn: "0"),
+        interactionEvent("assistant.turn_start", id: ids[19], parent: ids[18], turn: "1", interaction: "same"),
+        interactionEvent("session.usage_record", id: ids[20], parent: ids[19]),
+        interactionEvent("assistant.message", id: ids[21], parent: ids[20], turn: "1", interaction: "same"),
+        interactionEvent("assistant.turn_end", id: ids[22], parent: ids[21], turn: "1"),
+        interactionEvent("hook.start", id: ids[23], parent: ids[22]),
+        interactionEvent("hook.end", id: ids[24], parent: ids[23]),
+        interactionEvent("session.usage_checkpoint", id: ids[25], parent: ids[24])
+    ]
+    return rows
 }
 
 // Copilot 1.0.88's observed seven-event sequence, with deterministic replacement
