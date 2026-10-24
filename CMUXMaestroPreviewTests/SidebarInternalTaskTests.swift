@@ -8,6 +8,55 @@ struct SidebarInternalTaskTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let event = UUID(uuidString: "13100000-0000-0000-0000-000000000001")!
 
+    @Test(arguments: ["bash", "powershell", "local_shell", "view"], [false, true])
+    func endedToolDoesNotProtectUnresolvedAgent(_ tool: String, _ success: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
+        reducer.consume(try copilotTestEvent("assistant.turn_start", agent: "fragment", data: ["turnId": "turn"]))
+        reducer.consume(try copilotTestEvent("tool.execution_start", agent: "fragment", data: [
+            "toolCallId": "invocation", "toolName": tool
+        ]))
+        let running = reducer.value()
+        if tool != "view" {
+            #expect(running.children.contains { $0.id == "shell:invocation" && $0.state == .working })
+        }
+        reducer.consume(try copilotTestEvent("tool.execution_complete", agent: "fragment", data: [
+            "toolCallId": "invocation", "success": success
+        ]))
+        reducer.consume(try copilotTestEvent("assistant.turn_end", agent: "fragment", data: ["turnId": "turn"]))
+        let ended = reducer.value()
+        let session = try #require(project(ended.children, complete: false).sessions.first)
+        #expect(ended.children.map(\.id) == ["fragment"])
+        #expect(session.attentionOwnerCount == 0)
+        #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
+        #expect(session.childSections(layout: .init()).isEmpty)
+        #expect(session.taskboardActivity.isEmpty)
+        #expect(session.nodes.allSatisfy { $0.dismissibleFailure(sessionID: session.id) == nil })
+    }
+
+    @Test func genuineFailureAndPermissionSurviveToolFailure() throws {
+        var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
+        reducer.consume(try copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Worker"
+        ]))
+        reducer.consume(try copilotTestEvent("tool.execution_start", agent: "worker", data: [
+            "toolCallId": "invocation", "toolName": "view"
+        ]))
+        reducer.consume(try copilotTestEvent("permission.requested", agent: "worker", data: ["requestId": "permission"]))
+        reducer.consume(try copilotTestEvent("tool.execution_complete", agent: "worker", data: [
+            "toolCallId": "invocation", "success": false
+        ]))
+        let blocked = try #require(project(reducer.value().children).sessions.first?.nodes.first)
+        #expect(blocked.state == .blocked)
+        #expect(blocked.attention.map(\.kind) == [.permission])
+        reducer.consume(try copilotTestEvent("subagent.failed", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Worker"
+        ]))
+        let failed = try #require(project(reducer.value().children).sessions.first?.nodes.first)
+        #expect(failed.state == .failed)
+        #expect(failed.attention.map(\.kind) == [.error])
+        #expect(failed.terminalEvent != nil)
+    }
+
     @Test func unresolvedFragmentsCompactWithoutHidingProtectedEvidence() throws {
         let fragments: [CopilotChildWork] = [
             .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,

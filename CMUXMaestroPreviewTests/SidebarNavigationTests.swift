@@ -6,6 +6,51 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func unknownChildOfManagedSessionFocusesExactParent() async throws {
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let owner = endedNode(now: date, phase: "registered")
+        let managed = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: date, complete: true, omittedCount: 0, nodes: [owner]
+        )
+        let children: [CopilotChildWork] = [
+            .init(id: "fragment", parentID: "unresolved-owner", kind: .unknown,
+                  name: "Unknown agent", state: .blocked, model: nil)
+        ]
+        let tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [fixtures.session(children: children, now: date)], now: date),
+            onto: fixtures.topology(), now: date
+        )
+        #expect(SidebarPresentation.rowlessSessionIDs(tree, managed: [owner], now: date).contains(fixtures.sessionID))
+        let target = SidebarNavigationTarget.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)
+        let subject = SidebarInspection.Target.unmanaged(.child(sessionID: fixtures.sessionID, childID: "fragment"))
+        let recorder = SidebarHostRecorder()
+        let model = responseOrderingModel()
+        model.update(context: context(recorder: recorder))
+        let resolved = try #require(SidebarPresentation.focusTarget(
+            for: subject, capturedPlacement: target, hierarchy: model.hierarchy, connected: true,
+            tree: tree, managed: managed, availability: .ready, now: date
+        ))
+        SidebarRowAction.focus(resolved, navigation: model.navigation, prepareSeen: { _ in {} }).perform()
+        await sidebarEventually { recorder.actions.count == 1 }
+        #expect(recorder.actions == [.selectSurface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)])
+        recorder.reply(0, .accepted)
+        await sidebarEventually { model.navigation.status == .selected }
+        #expect(SidebarPresentation.focusTarget(
+            for: subject, capturedPlacement: target, hierarchy: .empty, connected: true,
+            tree: tree, managed: managed, availability: .ready, now: date
+        ) == nil)
+        var replacedTree = tree
+        replacedTree.sessions = [SidebarCopilotSession(
+            id: fixtures.otherSessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: .alive, state: .idle, model: nil, observedAt: date, nodes: [],
+            childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )]
+        #expect(SidebarPresentation.focusTarget(
+            for: subject, capturedPlacement: target, hierarchy: model.hierarchy, connected: true,
+            tree: replacedTree, managed: managed, availability: .ready, now: date
+        ) == nil, "A foreign coalesced owner cannot lend its surface to a child")
+    }
+
     @Test func registeredCoordinatorKeepsValidatedSurfaceNavigation() throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let node = SidebarOrchestrationNode(

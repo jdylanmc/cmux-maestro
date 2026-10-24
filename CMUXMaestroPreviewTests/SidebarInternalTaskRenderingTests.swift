@@ -6,6 +6,20 @@ import Testing
 @MainActor
 @Suite(SidebarAppKitTestScope())
 struct SidebarInternalTaskRenderingTests {
+    @Test func unavailableParentFocusIsNotAButton() throws {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 350, height: 40),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        let host = NSHostingView(rootView: FocusButton(
+            target: .surface(workspaceID: UUID(), surfaceID: UUID()),
+            navigation: SidebarNavigation(), label: "Open parent chat for Unknown agent"
+        ) { Text("Unknown agent") }.frame(width: 350, height: 40))
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        host.layoutSubtreeIfNeeded()
+        #expect(buttons(host).isEmpty, "An unavailable exact surface must render static content, not an inert button")
+    }
+
     @Test(arguments: [SidebarDensity.compact, .comfortable], [280, 350, 460])
     func unresolvedFragmentsRenderOneNeutralLine(_ density: SidebarDensity, _ width: Int) throws {
         let data = SidebarTreeFixtures()
