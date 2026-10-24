@@ -8,6 +8,98 @@ struct SidebarAgentHoverTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test(arguments: ["shell_completed", "shell_detached_completed"], [1, 137, 143])
+    func backgroundShellExitCannotChangeAnySidebarConsumer(_ notification: String, _ exitCode: Int) throws {
+        var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
+        let hierarchy = directoryHierarchy("/synthetic/worktree")
+        let topology = SidebarTopology(hierarchy)
+        func project(_ value: CopilotReducedState) -> SidebarCopilotTree {
+            let observation = CopilotSessionObservation(
+                sessionID: fixtures.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+                liveness: .alive, state: value.state, model: value.model, children: value.children, observedAt: now,
+                attention: value.attention, activity: value.activity
+            )
+            let snapshot = CopilotSnapshotAdapter.snapshot(
+                fixtures.snapshot(sessions: [observation], now: now),
+                workspaceBySurface: topology.workspaceBySurface
+            )
+            return SidebarCopilotTree.project(snapshot, onto: topology, now: now, history: .init(retention: .never))
+        }
+        reducer.consume(try copilotTestEvent("assistant.turn_start", data: ["turnId": "root"]))
+        reducer.consume(try copilotTestEvent("subagent.started", agent: "worker", data: [
+            "toolCallId": "spawn", "agentDisplayName": "Background shell"
+        ]))
+        reducer.consume(try copilotTestEvent("tool.execution_start", agent: "worker", data: [
+            "toolCallId": "invocation", "toolName": "bash"
+        ]))
+        for phase in ["running", "invocation-ended", "agent-failed", "session-failed"] {
+            switch phase {
+            case "invocation-ended":
+                reducer.consume(try copilotTestEvent("tool.execution_complete", agent: "worker", data: [
+                    "toolCallId": "invocation", "success": false
+                ]))
+            case "agent-failed":
+                reducer.consume(try copilotTestEvent("subagent.failed", data: [
+                    "toolCallId": "spawn", "agentDisplayName": "Background shell"
+                ]))
+            case "session-failed":
+                reducer.consume(try copilotTestEvent("session.error", data: [:]))
+            default: break
+            }
+            let before = reducer.value()
+            let original = project(before)
+            let payload = try copilotTestEvent("system.notification", agent: "worker", data: [
+                "kind": ["type": notification, "shellId": "invocation", "exitCode": exitCode]
+            ])
+            reducer.consume(payload)
+            reducer.consume(payload)
+            let after = reducer.value()
+            #expect(after == before, "Background metadata and replay must not change work or attention")
+            #expect(reducer.issues.isEmpty)
+            let tree = project(after)
+            let session = try #require(tree.sessions.first)
+            #expect(session.nodes.map(\.id) == (phase == "running" ? ["worker", "shell:invocation"] : ["worker"]))
+            #expect(session.attentionOwnerCount == (phase == "session-failed" ? 2 : phase == "agent-failed" ? 1 : 0))
+            let worker = try #require(session.nodes.first { $0.id == "worker" })
+            let failed = phase == "agent-failed" || phase == "session-failed"
+            #expect(worker.state == (failed ? .failed : .working))
+            #expect(worker.attention.contains { $0.kind == .error } == failed)
+            #expect(session.attention.contains { $0.kind == .error } == (phase == "session-failed"))
+            #expect(SidebarPresentation.sessionState(session).tone == (phase == "session-failed" ? .red : .green))
+            for taskboard in [false, true] {
+                #expect(session.childSections(layout: .init(), taskboard: taskboard).flatMap(\.rows).map(\.id)
+                    == original.sessions[0].childSections(layout: .init(), taskboard: taskboard).flatMap(\.rows).map(\.id))
+            }
+            let activity = try #require(SidebarPresentation.collapsedActivity(
+                sessions: tree.sessions, managed: [], availability: .ready, observations: tree, now: now
+            ))
+            #expect(activity.visual == SidebarPresentation.state(failed ? .failed : .working))
+            #expect(activity.count == (phase == "agent-failed" ? 1 : 2))
+            #expect(SidebarPresentation.workspaceAttention(
+                sessions: tree.sessions, managed: [], availability: .ready, now: now, observations: tree
+            ) == SidebarPresentation.workspaceAttention(
+                sessions: original.sessions, managed: [], availability: .ready, now: now, observations: original
+            ))
+            for target in [
+                SidebarAgentHoverTarget.session(session.id), .child(sessionID: session.id, childID: "worker")
+            ] {
+                let hover = try #require(card(target, sessions: tree.sessions, hierarchy: hierarchy))
+                #expect(hover == card(target, sessions: original.sessions, hierarchy: hierarchy))
+            }
+            #expect(card(.child(sessionID: session.id, childID: "shell-session:invocation"),
+                         sessions: tree.sessions, hierarchy: hierarchy) == nil)
+            let pinned = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy, connected: true, tree: tree, managed: .empty, availability: .ready, now: now
+            )
+            #expect(pinned.isAgent)
+            #expect(pinned.visual == SidebarPresentation.sessionState(session))
+            #expect(pinned == SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy, connected: true, tree: original, managed: .empty, availability: .ready, now: now
+            ))
+            #expect(pinned.otherActivity.isEmpty)
+        }
+    }
+
     private func session(
         id: UUID? = nil, surface: UUID? = nil, name: String = "model",
         liveness: AgentProcessLiveness = .alive, childrenComplete: Bool = true
