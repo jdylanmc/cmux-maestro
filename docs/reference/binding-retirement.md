@@ -93,6 +93,7 @@ reclaim every historical binding or restore directory-entry capacity.
 Readers independently verify process, binding, routing and
 replay evidence, skip dead owners for active capacity and retain content-free
 ended presentation. A missing cached ended binding is forgotten without a
-global identity-change warning; changed/unsafe/unknown evidence retains existing
-diagnostics. Cleanup failure or absence must never admit stale work or
-prevent a live session's discovery.
+global identity-change warning, whether it disappears before the read or during
+decoration before the final publication fence. Active binding disappearance and
+changed/unsafe/unknown evidence retain existing diagnostics. Cleanup failure or
+absence must never admit stale work or prevent a live session's discovery.

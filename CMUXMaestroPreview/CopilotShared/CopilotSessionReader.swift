@@ -779,11 +779,23 @@ actor CopilotSessionReader {
             let ended = endedBindingsBySurface[observation.surfaceID].flatMap {
                 $0.record.sessionID == observation.sessionID ? $0 : nil
             }
-            guard let entry = active ?? ended,
-                  active != nil || verifier.lookup(entry.record.ownerPID) == .dead,
-                  (try? bindingRemainsValid(
-                    entry.record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
-                  )) == true else {
+            let valid: Bool
+            if let entry = active ?? ended,
+               active != nil || verifier.lookup(entry.record.ownerPID) == .dead {
+                do {
+                    valid = try bindingRemainsValid(
+                        entry.record, stamp: entry.stamp, filename: entry.filename, directory: index.descriptor
+                    )
+                } catch CopilotFileError.missing where active == nil {
+                    endedBindingsBySurface.removeValue(forKey: observation.surfaceID)
+                    continue
+                } catch {
+                    valid = false
+                }
+            } else {
+                valid = false
+            }
+            guard valid else {
                 tails.removeValue(forKey: observation.sessionID)
                 bindingsByID.removeValue(forKey: observation.sessionID)
                 publishedCohort.remove(observation.sessionID)
