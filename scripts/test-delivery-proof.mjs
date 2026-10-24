@@ -3150,6 +3150,51 @@ test("born managed: an unrecorded refusal is asked once more, then stands until 
     reason: "enrollment-busy", message: ENROLLMENT_MESSAGES["enrollment-busy"] });
 });
 
+for (const deferred of ["account-unverified", "provider-already-enrolled"]) {
+  for (const transient of ["enrollment-busy", "session-not-persisted", "awaiting-first-prompt"]) {
+    test(`born managed: ${deferred} deferrals preserve the ${transient} retry`, async (t) => {
+      let attempt = 0;
+      const f = await bornFixture(t, {
+        auth: () => deferred === "account-unverified" && attempt < 2
+          ? { isAuthenticated: false }
+          : { isAuthenticated: true, login: "human-account", host: "github.com" },
+        enroll: async request => {
+          const reason = [deferred, deferred, transient][attempt++];
+          if (reason) throw Object.assign(new Error("synthetic refusal"), { reason });
+          return { ok: true, nodeId: f.own.nodeId, workspaceId: request.workspaceId,
+            sessionId: request.sessionId, generation: 1, routes: f.root, peer: f.own.peer };
+        },
+      });
+      const invocation = { sessionId: f.own.sessionId };
+      await f.hooks.onUserPromptSubmitted({}, invocation);
+      assert.equal((await readiness(f)).managed.reason, deferred);
+      await f.hooks.onUserPromptSubmitted({}, invocation);
+      assert.equal((await readiness(f)).managed.reason, transient);
+      assert.equal((await readiness(f)).managed.status, "pending");
+      await f.hooks.onUserPromptSubmitted({}, invocation);
+      assert.equal((await readiness(f)).status, "managed");
+      assert.equal(f.calls.enroll.length, 4);
+      assert.equal(f.calls.enroll.at(-1).request.login, "human-account");
+    });
+  }
+}
+
+test("born managed: deferrals do not reset the shared transient-refusal bound", async (t) => {
+  const reasons = ["enrollment-busy", "account-unverified", "provider-already-enrolled", "session-not-persisted"];
+  let attempt = 0;
+  const f = await bornFixture(t, { enroll: async () => {
+    throw Object.assign(new Error("synthetic refusal"), { reason: reasons[attempt++] });
+  } });
+  for (let event = 1; event < reasons.length; event++) {
+    assert.equal((await readiness(f)).managed.status, "pending");
+    await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+    assert.equal((await readiness(f)).managed.reason, reasons[event]);
+  }
+  assert.equal((await readiness(f)).managed.status, "unavailable");
+  await f.hooks.onUserPromptSubmitted({}, { sessionId: f.own.sessionId });
+  assert.equal(f.calls.enroll.length, 4);
+});
+
 test("born managed: a recorded refusal is never tried again at a prompt", async (t) => {
   const f = await bornFixture(t, { enroll: async () => {
     throw Object.assign(new Error("x"), { reason: "capacity-unavailable" }); } });
