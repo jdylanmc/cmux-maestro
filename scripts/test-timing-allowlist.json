@@ -143,18 +143,19 @@
     }
   },
   "CMUXMaestroPreviewTests/MetadataProcessTestWatchdog.swift": {
-    "reason": "Executor-independent diagnostic deadline and bounded sampler. Metadata probes retain their 30-second default; setup cleanup explicitly supplies supervisedWaitLimit + 10 seconds (currently 70), outside every inner 60-second hang guard. No new timing statements or counts; see docs/reference/ci-test-determinism.md.",
+    "reason": "Executor-independent hang guards and bounded sampling. One terminal publisher uses the existing five-second sampling budget, then confirms cleanup and saves before exit; sampling expiry is diagnostic-incomplete, not a correctness oracle. Controlled publication tests signal expiry without wall time. See docs/reference/ci-test-determinism.md.",
     "statements": {
       "deadline = ContinuousClock.now.advanced(by: limit)": 2,
       "let instant = ContinuousClock.now": 1,
       "while !finished, !triggered, ContinuousClock.now < deadline {": 1,
       "lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },": 1,
-      "Thread.sleep(forTimeInterval: 5)": 1,
-      "if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {": 1,
-      "let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))": 1,
-      "while ContinuousClock.now < deadline {": 1,
+      "let deadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(5)) : nil": 1,
+      "if let deadline, ContinuousClock.now >= deadline { break }": 1,
+      "let sampleDeadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(3)) : nil": 1,
+      "let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))": 2,
+      "if let deadline, ContinuousClock.now >= deadline { return nil }": 1,
       "Thread.sleep(forTimeInterval: 0.01)": 1,
-      "_ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))": 1
+      "_ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))": 2
     }
   },
   "CMUXMaestroPreviewTests/SidebarAttentionCoordinationTests.swift": {

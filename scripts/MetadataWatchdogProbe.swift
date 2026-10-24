@@ -6,16 +6,22 @@ import os
 @main
 struct MetadataWatchdogProbe {
     static func main() async throws {
-        guard CommandLine.arguments.count == 3 else { exit(2) }
+        let forcedBackstop = CommandLine.arguments.count == 4 &&
+            CommandLine.arguments[3] == "--force-diagnostic-backstop"
+        guard CommandLine.arguments.count == 3 || forcedBackstop else { exit(2) }
         let mode = CommandLine.arguments[1]
         guard ["complete", "stalled-clock", "polling-clock", "sampler-timeout",
                "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
                "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
+               "sampling-complete-output", "sampling-complete-no-output", "sampling-forced-backstop",
+               "sampling-spawn-failure",
                "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held"]
             .contains(mode) else { exit(2) }
         let directory = URL(fileURLWithPath: CommandLine.arguments[2])
         var sampler = URL(fileURLWithPath: "/usr/bin/sample")
-        if mode.hasPrefix("sampler-") || mode.hasPrefix("owned-") || mode.hasPrefix("diagnostic-") {
+        if mode == "sampling-spawn-failure" {
+            sampler = directory.appendingPathComponent("missing-sampler")
+        } else if mode.hasPrefix("sampler-") || mode.hasPrefix("owned-") || mode.hasPrefix("diagnostic-") || mode.hasPrefix("sampling-") {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             sampler = directory.appendingPathComponent("stuck-sampler")
             let pidFile = CopilotPluginManifest.shellQuoted(directory.appendingPathComponent("sampler.pid").path)
@@ -23,12 +29,14 @@ struct MetadataWatchdogProbe {
             switch mode {
             case "sampler-exit-no-output":
                 behavior = "exit 17"
-            case "sampler-exit-with-output":
+            case "sampler-exit-with-output", "sampling-complete-output":
                 behavior = "printf 'synthetic-exit-17-sample\\n' > \"$5\"\nexit 17"
             case "sampler-timeout-no-output":
                 behavior = "trap '' TERM\nexec /bin/sleep 10"
             case "sampler-timeout":
                 behavior = "printf 'partial-sample-before-stall\\n' > \"$5\"\ntrap '' TERM\nexec /bin/sleep 10"
+            case "sampling-forced-backstop":
+                behavior = "exec /bin/sleep 90"
             default:
                 behavior = "exit 17"
             }
@@ -45,7 +53,19 @@ struct MetadataWatchdogProbe {
         let watchdog = try MetadataProcessTestWatchdog(
             directory: directory, testIdentity: "MetadataWatchdogProbe/\(mode)",
             limit: .seconds(mode.hasPrefix("owned-") ? 70 : (mode == "complete" ? 0.3 : 2)),
-            samplerExecutable: sampler, observation: observation)
+            samplerExecutable: sampler, observation: observation,
+            automaticDiagnosticBackstop: !mode.hasPrefix("sampling-") && !forcedBackstop,
+            beforeSampling: { watchdog in
+                if mode == "sampling-forced-backstop" || forcedBackstop {
+                    watchdog.forceDiagnosticBackstop()
+                    watchdog.waitForDiagnosticExit()
+                }
+            })
+        if mode.hasPrefix("sampling-") {
+            watchdog.begin("negative-control/\(mode)")
+            watchdog.trigger()
+            watchdog.waitForDiagnosticExit()
+        }
         if mode == "complete" {
             watchdog.begin("completed-negative-control")
             let before = ContinuousClock.now

@@ -21,6 +21,29 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   for its exact unreaped POSIX exit before capturing the report. Missing readiness
   remains an explicit not-ready failure, never a KeyError or passing fallback.
   Deadline-sample counts remain assertions only in clock-fault controls.
+- Diagnostic publication commits the core readiness/process observation to
+  `stall.json` before sampling. One terminal publisher owns sampler cleanup,
+  atomic final publication and exit; a second thread cannot interrupt its write.
+  `diagnosticOutcome` marks `complete` or `diagnostic-incomplete`. Sampling is
+  best effort: its five-second budget can select the latter, which a negative
+  control accepts only with every core assertion still satisfied, confirmed
+  sampler reaping/absence, and no `stall.json.sb-*` files. Unmarked, partial,
+  incorrect-core or uncleaned reports fail. Final file I/O must return before
+  this publisher exits; the subprocess harness remains the outer hang guard.
+  `samplerStarted: true` requires an exact positive `samplerPID` and confirmed
+  reaping. A spawn failure instead publishes `samplerStarted: false`, no PID,
+  a `failed:` sample status and a `complete` diagnostic outcome. In that state,
+  `samplerReaped: true` means cleanup was unnecessary because no child started;
+  no PID absence probe is performed. Missing or contradictory identity still
+  fails. The controlled `sampling-spawn-failure` case uses a missing executable;
+  core assertions and the no-temporary-files check remain unconditional.
+  Explicit signals hold sampling and force backstop publication in all four
+  owned modes. Separate controlled completion modes disable the sampling timer
+  and the sampler's short wait budget, awaiting its actual exit under the outer
+  harness hang guard. They verify sample output and sample-read-error semantics.
+  A normal sampler exit that wins a deadline's kill request retains its actual
+  exit code, not a synthetic `timed-out/exit-0` status. No elapsed
+  time or CPU-load deadline determines their correctness verdict (#364).
 - Setup supervision starts both gated children before advancing their injected
   deadlines; neither can finish early. The observer retains the MainActor versus
   detached-driver distinction. Deadline-helper tests release an explicit timeout

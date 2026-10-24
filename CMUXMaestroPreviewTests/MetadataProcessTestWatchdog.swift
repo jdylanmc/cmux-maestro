@@ -12,6 +12,8 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     let limit: Duration
     private let samplerExecutable: URL
     private let observation: CopilotSetupObservation?
+    private let automaticDiagnosticBackstop: Bool
+    private let beforeSampling: @Sendable (MetadataProcessTestWatchdog) -> Void
     private var phase = "fixture"
     private var deadline: ContinuousClock.Instant
     private var samples = 0
@@ -19,6 +21,10 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     private var finished = false
     private var triggered = false
     private var samplerPID: Int32?
+    private var reapedSamplerStatus: Int32?
+    private var diagnosticResult: Report?
+    private var diagnosticBackstopRequested = false
+    private var publicationClaimed = false
     private var metadataPID: Int32?
     private var metadataReadiness: ProcessObservation?
     private var runnerMetadataReturned = false
@@ -27,12 +33,16 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     init(directory: URL, testIdentity: String = MetadataProcessTestWatchdog.test,
          limit: Duration = .seconds(30),
          samplerExecutable: URL = URL(fileURLWithPath: "/usr/bin/sample"),
-         observation: CopilotSetupObservation? = nil) throws {
+         observation: CopilotSetupObservation? = nil,
+         automaticDiagnosticBackstop: Bool = true,
+         beforeSampling: @escaping @Sendable (MetadataProcessTestWatchdog) -> Void = { _ in }) throws {
         self.directory = directory
         self.testIdentity = testIdentity
         self.limit = limit
         self.samplerExecutable = samplerExecutable
         self.observation = observation
+        self.automaticDiagnosticBackstop = automaticDiagnosticBackstop
+        self.beforeSampling = beforeSampling
         deadline = ContinuousClock.now.advanced(by: limit)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         Thread.detachNewThread { self.observe() }
@@ -122,6 +132,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         var sample: String?
         var sampleReadError: String?
         var samplerPID: Int32?
+        var samplerStarted: Bool?
         var samplerReaped: Bool?
         var samplerSignalError: Int32?
         var metadataPID: Int32?
@@ -130,6 +141,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         var runnerMetadataReturned: Bool
         var outerTaskValueReceived: Bool
         var supervision: CopilotSetupObservation.Snapshot?
+        var diagnosticOutcome: String?
     }
 
     struct ProcessRecord: Encodable, Sendable {
@@ -259,45 +271,50 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
                                    status: info.pbi_status))
     }
 
-    private func save(_ report: Report) {
+    @discardableResult
+    private func save(_ report: Report) -> Bool {
         do {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(report).write(to: directory.appendingPathComponent("stall.json"), options: .atomic)
+            return true
         } catch {
             Self.log("Cannot preserve metadata stall report: \(error)")
+            return false
         }
     }
 
     private func diagnose(_ initial: Report) -> Never {
-        // Sampling must not turn a bounded diagnostic into another indefinite wait.
-        Thread.detachNewThread {
-            Thread.sleep(forTimeInterval: 5)
-            self.killSampler()
-            _exit(124)
-        }
         var report = initial
-        if report.metadataPID != nil {
-            report.metadataAtStall = ProcessObservation(state: "pending")
-        }
-        save(report)
         if let pid = report.metadataPID {
-            // This query runs outside the condition, inside the existing hard
-            // diagnostic bound. Never adopt a PID whose readiness was unknown.
+            // Core evidence is complete before best-effort sampling begins.
             if let expected = report.metadataReadiness?.process {
                 report.metadataAtStall = Self.observeProcess(pid, expected: expected)
             } else {
                 report.metadataAtStall = ProcessObservation(state: "unknown-readiness")
             }
-            save(report)
         }
+        guard save(report) else { _exit(124) }
         Self.log("Metadata test stalled: phase=\(report.phase) deadlineSamples=\(report.deadlineSamples) report=\(directory.path)/stall.json")
         let sampleURL = directory.appendingPathComponent("sample.txt")
         do {
             report.samplerPID = try spawnSampler(output: sampleURL)
-            report.samplerReaped = false
+            report.samplerStarted = true
+        } catch {
+            report.samplerStarted = false
+            report.samplerReaped = true
+            report.sampleStatus = "failed: \(error)"
+            report.diagnosticOutcome = "complete"
             save(report)
-            if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {
+            _exit(124)
+        }
+        report.samplerReaped = false
+        let core = report
+        Thread.detachNewThread { self.publishDiagnostic(core) }
+        do {
+            beforeSampling(self)
+            let sampleDeadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(3)) : nil
+            if let status = try waitForSampler(until: sampleDeadline) {
                 report.sampleStatus = Self.exitDescription(status)
                 report.samplerReaped = true
             } else {
@@ -305,9 +322,8 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
                 if signalError != 0 { report.samplerSignalError = signalError }
                 let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))
                 report.samplerReaped = status != nil
-                report.sampleStatus = "timed-out/" + (status.map(Self.exitDescription) ?? "reap-unconfirmed")
+                report.sampleStatus = Self.sampleDescription(status)
             }
-            save(report)
             do {
                 report.sample = try String(contentsOf: sampleURL, encoding: .utf8)
             } catch {
@@ -318,9 +334,61 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
             report.sampleStatus = "failed: \(error)"
             Self.log("Metadata stall sampling failed: \(error)")
         }
+        condition.lock()
+        if !publicationClaimed { diagnosticResult = report }
+        condition.signal()
+        condition.unlock()
+        waitForDiagnosticExit()
+    }
+
+    func forceDiagnosticBackstop() {
+        condition.lock()
+        diagnosticBackstopRequested = true
+        condition.signal()
+        condition.unlock()
+    }
+
+    private func publishDiagnostic(_ core: Report) -> Never {
+        let deadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(5)) : nil
+        condition.lock()
+        while diagnosticResult == nil, !diagnosticBackstopRequested {
+            if let deadline, ContinuousClock.now >= deadline { break }
+            if deadline != nil {
+                _ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))
+            } else {
+                condition.wait()
+            }
+        }
+        var report = diagnosticResult ?? core
+        let incomplete = diagnosticResult == nil
+        publicationClaimed = true
+        condition.unlock()
+
+        report.diagnosticOutcome = incomplete ? "diagnostic-incomplete" : "complete"
+        let signalError = killSampler()
+        if signalError != 0 { report.samplerSignalError = signalError }
+        do {
+            let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))
+            report.samplerReaped = status != nil
+            if incomplete {
+                report.sampleStatus = "backstop/" + (status.map(Self.exitDescription) ?? "reap-unconfirmed")
+            } else if report.sampleStatus.hasPrefix("timed-out/") {
+                report.sampleStatus = Self.sampleDescription(status)
+            }
+        } catch {
+            report.samplerReaped = false
+            report.sampleStatus = "cleanup-failed: \(error)"
+        }
+        // This is the sole terminal writer and exit owner; no backstop can
+        // interrupt its atomic publication. Missing publication still fails.
         save(report)
-        // Never resume a stalled assertion or reinterpret cancellation as a pass.
         _exit(124)
+    }
+
+    func waitForDiagnosticExit() -> Never {
+        let gate = NSCondition()
+        gate.lock()
+        while true { gate.wait() }
     }
 
     private enum SamplerFailure: Error {
@@ -365,23 +433,26 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         return pid
     }
 
-    private func waitForSampler(until deadline: ContinuousClock.Instant) throws -> Int32? {
-        while ContinuousClock.now < deadline {
+    private func waitForSampler(until deadline: ContinuousClock.Instant?) throws -> Int32? {
+        while true {
             condition.lock()
             guard let pid = samplerPID else {
+                let status = reapedSamplerStatus
                 condition.unlock()
+                if let status { return status }
                 throw SamplerFailure.system(ECHILD)
             }
             var status: Int32 = 0
             let result = waitpid(pid, &status, WNOHANG)
             let failure = errno
             if result > 0 || (result < 0 && failure == ECHILD) { samplerPID = nil }
+            if result > 0 { reapedSamplerStatus = status }
             condition.unlock()
             if result > 0 { return status }
             if result < 0 && failure != EINTR { throw SamplerFailure.system(failure) }
+            if let deadline, ContinuousClock.now >= deadline { return nil }
             Thread.sleep(forTimeInterval: 0.01)
         }
-        return nil
     }
 
     @discardableResult
@@ -396,6 +467,12 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
 
     private static func exitDescription(_ status: Int32) -> String {
         status & 0x7f == 0 ? "exit-\(status >> 8)" : "signal-\(status & 0x7f)"
+    }
+
+    private static func sampleDescription(_ status: Int32?) -> String {
+        guard let status else { return "timed-out/reap-unconfirmed" }
+        // A normal exit can win the race with a deadline's kill request.
+        return (status & 0x7f == 0 ? "" : "timed-out/") + exitDescription(status)
     }
 
     private static func log(_ message: String) {

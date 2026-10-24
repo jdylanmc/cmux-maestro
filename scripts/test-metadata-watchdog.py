@@ -12,6 +12,8 @@ import uuid
 MODES = ("complete", "stalled-clock", "polling-clock", "sampler-timeout",
          "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
          "owned-living", "owned-result-before-task", "owned-task-received", "owned-exited",
+         "sampling-complete-output", "sampling-complete-no-output", "sampling-forced-backstop",
+         "sampling-spawn-failure",
          "diagnostic-cancel-pending", "diagnostic-cancel-returned", "diagnostic-lock-held")
 
 
@@ -27,10 +29,29 @@ def metadata_readiness(report):
     return ready
 
 
+def diagnostic_outcome(report, directory):
+    outcome = report.get("diagnosticOutcome")
+    require(outcome in ("complete", "diagnostic-incomplete"), f"Unmarked diagnostic report: {report}")
+    require(report.get("samplerReaped") is True, f"Sampler cleanup unconfirmed: {report}")
+    if report.get("samplerStarted") is False:
+        status = report.get("sampleStatus")
+        require("samplerPID" not in report and outcome == "complete"
+                and isinstance(status, str) and status.startswith("failed:"),
+                f"Sampler not-started evidence is contradictory: {report}")
+    else:
+        require(report.get("samplerStarted") is True
+                and type(report.get("samplerPID")) is int and report["samplerPID"] > 1,
+                f"Sampler identity unconfirmed: {report}")
+    require(not list(directory.glob("stall.json.sb-*")), "Interrupted diagnostic temporary files remain")
+    return outcome
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--results-root", required=True, type=Path)
+    parser.add_argument("--force-diagnostic-backstop", action="store_true",
+                        help="Hold sampling at its explicit boundary and request the backstop outcome.")
     parser.add_argument("--mode", action="append", choices=MODES,
                         help="Run only the selected finite controls; default runs every control.")
     args = parser.parse_args()
@@ -47,7 +68,10 @@ def main():
             release = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
         try:
             with output.open("w") as stream:
-                result = subprocess.run([str(args.probe.resolve()), mode, str(case.resolve())],
+                command = [str(args.probe.resolve()), mode, str(case.resolve())]
+                if args.force_diagnostic_backstop:
+                    command.append("--force-diagnostic-backstop")
+                result = subprocess.run(command,
                                         stdout=stream, stderr=subprocess.STDOUT,
                                         timeout=80 if mode.startswith("owned-") else 10)
         finally:
@@ -63,18 +87,20 @@ def main():
         else:
             require(result.returncode == 124, output.read_text())
             report = json.loads((case / "stall.json").read_text())
+            outcome = diagnostic_outcome(report, case)
             if mode.startswith("owned-"):
                 ready = metadata_readiness(report)
-            try:
-                os.kill(report["samplerPID"], 0)
-            except ProcessLookupError:
-                pass
-            else:
-                raise RuntimeError(f"Sampler was not reaped: {report}")
+            if "samplerPID" in report:
+                try:
+                    os.kill(report["samplerPID"], 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise RuntimeError(f"Sampler was not reaped: {report}")
             require(report["pid"] > 1, report)
             # Release the owned fixture above, then observe exit without signaling
             # a PID whose unreaped ownership anchor ended with the probe.
-            child = None if mode.startswith("diagnostic-") else int((case / "child.pid").read_text())
+            child = None if mode.startswith(("diagnostic-", "sampling-")) else int((case / "child.pid").read_text())
             deadline = time.monotonic() + 60
             while child is not None:
                 try:
@@ -84,13 +110,35 @@ def main():
                 require(time.monotonic() < deadline, f"Finite probe child {child} did not exit.")
                 time.sleep(0.05)
             child_description = "no metadata child" if child is None else f"finite child {child} absent"
-            print(f"Exact sampler {report['samplerPID']} reaped/absent; {child_description}.", flush=True)
+            sampler_description = (f"exact sampler {report['samplerPID']} reaped/absent"
+                                   if "samplerPID" in report else "sampler never started")
+            print(f"{sampler_description}; {child_description}.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
-            minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-")) else (2 if mode == "polling-clock" else 1)
+            minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-", "sampling-")) else (2 if mode == "polling-clock" else 1)
             require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
-            if mode.startswith(("sampler-", "owned-", "diagnostic-")):
+            if mode == "sampling-spawn-failure":
+                require(report["samplerStarted"] is False, report)
+            if mode == "sampling-forced-backstop" or args.force_diagnostic_backstop:
+                require(outcome == "diagnostic-incomplete", report)
+            if report["samplerStarted"] is False:
+                require(not mode.startswith("sampling-complete-"), report)
+                require(report.get("sample") is None and report.get("sampleReadError") is None, report)
+                require(not (case / "sample.txt").exists(), report)
+            elif outcome == "diagnostic-incomplete":
+                require(not mode.startswith("sampling-complete-"), report)
+                print(f"Metadata watchdog {mode}: diagnostic-incomplete; core and cleanup still required.", flush=True)
+            elif mode.startswith("sampling-"):
+                require(outcome == "complete" and report["sampleStatus"] == "exit-17", report)
+                if mode == "sampling-complete-output":
+                    require(report["sample"] == "synthetic-exit-17-sample\n", report)
+                    require((case / "sample.txt").read_text() == report["sample"], report)
+                    require(report.get("sampleReadError") is None, report)
+                else:
+                    require(report.get("sample") is None and "sample.txt" in report["sampleReadError"], report)
+                    require(not (case / "sample.txt").exists(), report)
+            elif mode.startswith(("sampler-", "owned-", "diagnostic-")):
                 timed_out = mode in ("sampler-timeout", "sampler-timeout-no-output")
                 require(report["sampleStatus"] == ("timed-out/signal-9" if timed_out else "exit-17"), report)
                 require(int((case / "sampler.pid").read_text()) == report["samplerPID"], report)
