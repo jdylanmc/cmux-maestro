@@ -6,6 +6,132 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test(arguments: ["idle", "error", "blocked", "task"])
+    @MainActor func retainedProtectionSurvivesCustodyLossBeforeReplacement(_ initial: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        var rows = [try copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1])]
+        switch initial {
+        case "error": rows.append(try copilotTestEvent("session.error"))
+        case "blocked": rows.append(try copilotTestEvent("permission.requested", data: ["requestId": "approval"]))
+        case "task":
+            rows.append(try copilotTestEvent("tool.execution_start", data: ["toolCallId": "spawn", "toolName": "task"]))
+            rows.append(try copilotTestEvent("subagent.started", agent: "child", data: [
+                "toolCallId": "spawn", "agentDisplayName": "Synthetic task"
+            ]))
+            rows.append(try copilotTestEvent("subagent.failed", data: [
+                "toolCallId": "spawn", "agentDisplayName": "Synthetic task"
+            ]))
+        default: rows.append(try copilotTestEvent("session.idle"))
+        }
+        try fixture.writeEvents(rows)
+        let reader = fixture.reader()
+        let before = try await reader.read(surfaceIDs: [fixture.surface])
+        let prior = try #require(before.sessions.first)
+        #expect(prior.liveness == .alive)
+        if initial != "idle" {
+            #expect(prior.attention?.isEmpty == false || !prior.children.isEmpty || prior.state == .blocked)
+        }
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.4242.lock"))
+        let directory = try fixture.addSession(surface: fixture.surface)
+        let replacement = try #require(UUID(uuidString: directory.lastPathComponent))
+        try Data().write(to: directory.appendingPathComponent("inuse.4242.lock"))
+        var events = try copilotTestEvent("session.start", data: ["sessionId": replacement.uuidString, "version": 1])
+        events.append(10)
+        events.append(try copilotTestEvent("session.idle"))
+        events.append(10)
+        try events.write(to: directory.appendingPathComponent("events.jsonl"))
+        let after = try await reader.read(surfaceIDs: [fixture.surface])
+        let old = try #require(after.sessions.first { $0.sessionID == fixture.sessionID })
+        #expect(old.liveness == .unknown && old.state == .unknown)
+        #expect(old.children.isEmpty && old.attention?.isEmpty != false, "Do not republish stale content as current")
+        #expect((old.bindingProcess != nil) == (initial == "idle"),
+                "Retained protection must prevent unknown-root displacement despite content-free publication")
+        #expect(after.sessions.first { $0.sessionID == replacement }?.liveness == .alive)
+        #expect(await reader.retentionCounts().tails == 2, "Protection does not retire retained evidence")
+    }
+
+    @Test @MainActor func inProcessReplacementsDisplaceOnlyTheirUnprotectedUnknownRoots() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let now = Date(timeIntervalSince1970: 2_000)
+        let surfaces = [fixture.surface, UUID()]
+        let secondOld = try fixture.addSession(surface: surfaces[1])
+        let oldIDs = [fixture.sessionID, try #require(UUID(uuidString: secondOld.lastPathComponent))]
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.4242.lock"))
+        let processes = [fixture.process, CopilotProcessIdentity(
+            pid: 4243, parentPID: 1, uid: getuid(), startSeconds: 2, startMicroseconds: 7
+        )]
+        var currentIDs: [UUID] = []
+        var roots: [SidebarOrchestrationNode] = []
+        for index in surfaces.indices {
+            let directory = try fixture.addSession(surface: surfaces[index])
+            let currentID = try #require(UUID(uuidString: directory.lastPathComponent))
+            currentIDs.append(currentID)
+            for id in [oldIDs[index], currentID] {
+                try fixture.writeRecord(.init(
+                    sessionID: id, surfaceID: surfaces[index], launchWorkspaceID: fixture.workspace,
+                    ownerPID: processes[index].pid, ownerStartSeconds: processes[index].startSeconds,
+                    ownerStartMicroseconds: processes[index].startMicroseconds, recordedAt: now
+                ))
+            }
+            try Data().write(to: directory.appendingPathComponent("inuse.\(processes[index].pid).lock"))
+            try Data("name: Synthetic review \(index)\n".utf8).write(to: directory.appendingPathComponent("workspace.yaml"))
+            var events = try copilotTestEvent("session.start", data: ["sessionId": currentID.uuidString, "version": 1])
+            events.append(10)
+            events.append(try copilotTestEvent("assistant.turn_start", data: ["turnId": "current"]))
+            events.append(10)
+            try events.write(to: directory.appendingPathComponent("events.jsonl"))
+            roots.append(.init(
+                id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+                workspaceId: fixture.workspace, surfaceId: surfaces[index], generation: 1,
+                phase: "turn-running", availability: "busy", copilotSessionId: oldIDs[index],
+                executionMode: .interactive, createdAt: now, updatedAt: now
+            ))
+        }
+        let reader = fixture.reader(lookup: { pid in
+            processes.first { $0.pid == pid }.map(CopilotProcessLookup.found) ?? .dead
+        })
+        let snapshot = try await reader.read(surfaceIDs: Set(surfaces))
+        let hierarchy = HierarchySnapshot(
+            sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
+            workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: true,
+            workspaces: [.init(
+                id: fixture.workspace, title: .available("Synthetic"), detail: .available(nil),
+                isSelected: .available(true), isPinned: .available(false), unreadCount: .available(0),
+                rootPath: .unavailable, projectRootPath: .unavailable,
+                surfaces: .available(surfaces.map {
+                    .init(id: $0, title: "Synthetic terminal", kind: .terminal, isFocused: false,
+                          isPinned: false, unreadCount: 0, workingDirectory: .unavailable)
+                })
+            )], windowID: UUID()
+        )
+        let tree = SidebarCopilotTree.project(snapshot, onto: SidebarTopology(hierarchy), now: now)
+        let neutral = CopilotSnapshotAdapter.snapshot(snapshot, workspaceBySurface: Dictionary(
+            uniqueKeysWithValues: surfaces.map { ($0, fixture.workspace) }
+        ))
+        let decoded = try AgentSessionSnapshotJSONCodec.decode(AgentSessionSnapshotJSONCodec.encode(neutral))
+        #expect(decoded.sessions.allSatisfy { $0.bindingProcess == nil }, "Wire snapshots never carry process correlation")
+        let decodedTree = SidebarCopilotTree.project(decoded, onto: SidebarTopology(hierarchy), now: now)
+        #expect(SidebarPresentation.displacedManagedNodeIDs(roots, observations: decodedTree, now: now).isEmpty)
+        #expect(tree.sessions.filter { oldIDs.contains($0.id) }.allSatisfy { $0.liveness == .unknown })
+        #expect(tree.sessions.count == 4)
+        for showEnded in [false, true] {
+            let visible = SidebarVisibleWork(tree: tree, managed: roots, history: .init(), showEnded: showEnded, now: now)
+            #expect(visible.managed.isEmpty)
+            #expect(Set(visible.tree.sessions.map(\.id)) == Set(currentIDs))
+            #expect(Set(visible.tree.sessions.compactMap(\.sessionName)) == ["Synthetic review 0", "Synthetic review 1"])
+            #expect(visible.tree.sessions.allSatisfy { $0.liveness == .alive && $0.state == .working })
+            let placements = SidebarPresentation.sessionPlacements(
+                visible.tree.sessions, managed: visible.managed, observations: tree, now: now
+            )
+            #expect(placements.allSatisfy { !$0.hasNoSurfaceRow })
+            #expect(SidebarPlacementCache().placements(tree: tree, managed: roots, now: now).displaced == Set(roots.map(\.id)))
+        }
+        #expect(snapshot.sessions.count == 4, "Presentation never retires reader evidence")
+        #expect(await reader.retentionCounts().bindings == 4)
+    }
+
     @Test @MainActor func preWindowSpawnsDoNotBecomeDuplicateUnknownAgentRows() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

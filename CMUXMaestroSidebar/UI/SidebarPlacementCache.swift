@@ -1,6 +1,6 @@
 import Foundation
 
-/// Placement depends on identity and freshness, never a session's potentially large child history.
+/// Placement keys retain identity, freshness and a bounded protection summary, not child history.
 @MainActor
 final class SidebarPlacementCache {
     struct Placement: Equatable {
@@ -63,6 +63,9 @@ final class SidebarPlacementCache {
         let dead: Bool
         let fresh: Bool
         let withinEnvelope: Bool
+        let bindingProcess: AgentBindingProcess?
+        let canYieldUnknown: Bool
+        let statusOnly: Bool
     }
 
     private struct Managed: Equatable {
@@ -70,6 +73,7 @@ final class SidebarPlacementCache {
         let workspace: UUID
         let surface: UUID
         let session: UUID?
+        let canYieldUnknown: Bool
     }
 
     private struct Key: Equatable {
@@ -92,10 +96,14 @@ final class SidebarPlacementCache {
                         fresh: SidebarCopilotTree.isFresh(tree.sessions[index].observedAt, now: now),
                         withinEnvelope: tree.generatedAt.map {
                             tree.sessions[index].observedAt <= $0.addingTimeInterval(1)
-                        } ?? false)
+                        } ?? false,
+                        bindingProcess: tree.sessions[index].bindingProcess,
+                        canYieldUnknown: SidebarPresentation.canYieldUnknownSession(tree.sessions[index]),
+                        statusOnly: tree.sessions[index].statusOnly)
             },
             managed: managed.map {
-                Managed(id: $0.id, workspace: $0.workspaceId, surface: $0.surfaceId, session: $0.copilotSessionId)
+                Managed(id: $0.id, workspace: $0.workspaceId, surface: $0.surfaceId, session: $0.copilotSessionId,
+                        canYieldUnknown: SidebarPresentation.canYieldUnknownRoot($0))
             },
             current: [.ready, .partial].contains(tree.availability) && !tree.issues.contains(.permissionDenied)
                 && tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
@@ -105,21 +113,7 @@ final class SidebarPlacementCache {
         var result = Snapshot()
         let identityCounts = input.sessions.reduce(into: [UUID: Int]()) { $0[$1.id, default: 0] += 1 }
         result.identityCounts = identityCounts
-        if input.current {
-            for node in input.managed {
-                guard let ownSession = node.session else { continue }
-                let candidates = input.sessions.indices.filter {
-                    input.sessions[$0].workspace == node.workspace && input.sessions[$0].surface == node.surface
-                        && !input.sessions[$0].dead
-                }
-                guard candidates.count == 1, let index = candidates.first else { continue }
-                let session = input.sessions[index]
-                if session.alive && session.fresh && session.withinEnvelope
-                    && identityCounts[session.id] == 1 && session.id != ownSession {
-                    result.displaced.insert(node.id)
-                }
-            }
-        }
+        result.displaced = SidebarPresentation.displacedManagedNodeIDs(managed, observations: tree, now: now)
         let owners = input.managed.filter { !result.displaced.contains($0.id) }
         for node in input.managed {
             let surface = Surface(workspace: node.workspace, surface: node.surface)

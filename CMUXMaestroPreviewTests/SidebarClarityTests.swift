@@ -8,6 +8,80 @@ struct SidebarClarityTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test(arguments: [
+        "matching", "pid", "seconds", "microseconds", "missing-process", "surface", "workspace",
+        "two-alive", "ambiguous-old", "duplicate", "stale-old", "stale-current", "stale-snapshot",
+        "permission", "failed", "blocked", "attention", "task", "hidden-history", "omitted-task",
+        "degraded-attention", "status-only", "failed-root"
+    ])
+    func unknownRootReplacementRequiresExactUnprotectedProcess(_ scenario: String) {
+        let process = AgentBindingProcess(pid: 42, startSeconds: 100, startMicroseconds: 7)
+        func root(phase: String = "turn-running") -> SidebarOrchestrationNode {
+            .init(id: fixtures.otherSessionID, runId: fixtures.sessionID, parentId: nil,
+                  role: "coordinator", label: "Copilot session", workspaceId: fixtures.workspaceA,
+                  surfaceId: fixtures.surfaceA, generation: 1, phase: phase, availability: "busy",
+                  copilotSessionId: fixtures.otherSessionID, executionMode: .interactive,
+                  createdAt: now, updatedAt: now)
+        }
+        func old(liveness: AgentProcessLiveness = .unknown, state: AgentWorkState = .unknown,
+                 omitted: Int = 0) -> SidebarCopilotSession {
+            .init(bindingProcess: process, id: fixtures.otherSessionID, workspaceID: fixtures.workspaceA,
+                  surfaceID: fixtures.surfaceA, liveness: liveness, state: state, model: nil,
+                  observedAt: now, nodes: [], childrenComplete: false, treeDegraded: true,
+                  omittedChildrenCount: omitted, omittedActiveChildrenCount: omitted)
+        }
+        var previous = old()
+        var current = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil)
+        current.bindingProcess = process
+        var managed = [root()]
+        var tree = SidebarCopilotTree(availability: .partial, sessions: [previous, current],
+                                     issues: [.stateUnavailable], generatedAt: now)
+        let cache = SidebarPlacementCache()
+        #expect(cache.placements(tree: tree, managed: managed, now: now).displaced == [managed[0].id])
+        switch scenario {
+        case "pid": current.bindingProcess = .init(pid: 43, startSeconds: 100, startMicroseconds: 7)
+        case "seconds": current.bindingProcess = .init(pid: 42, startSeconds: 101, startMicroseconds: 7)
+        case "microseconds": current.bindingProcess = .init(pid: 42, startSeconds: 100, startMicroseconds: 8)
+        case "missing-process": current.bindingProcess = nil
+        case "surface":
+            current = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceB, model: nil)
+            current.bindingProcess = process
+        case "workspace":
+            current = managedSession(id: fixtures.sessionID, surface: fixtures.surfaceA, model: nil,
+                                     workspace: fixtures.workspaceB)
+            current.bindingProcess = process
+        case "two-alive": previous = old(liveness: .alive)
+        case "ambiguous-old": previous = old(liveness: .ambiguous)
+        case "stale-old": previous.observedAt = now.addingTimeInterval(-9)
+        case "stale-current": current.observedAt = now.addingTimeInterval(-9)
+        case "stale-snapshot": tree.generatedAt = now.addingTimeInterval(-9)
+        case "permission": tree.issues = [.permissionDenied]
+        case "failed": previous = old(state: .failed)
+        case "blocked": previous = old(state: .blocked)
+        case "attention": previous.attention = [signal(.error)]
+        case "task": previous.nodes = [node(state: .blocked)]
+        case "hidden-history": previous.hiddenHistoryCount = 1
+        case "omitted-task": previous = old(omitted: 1)
+        case "degraded-attention": previous.attentionDegraded = true
+        case "status-only": previous.statusOnly = true
+        case "failed-root": managed = [root(phase: "turn-failed")]
+        default: break
+        }
+        tree.sessions = [previous, current]
+        if scenario == "duplicate" { tree.sessions.append(current) }
+        let expected: Set<UUID> = scenario == "matching" ? [managed[0].id] : []
+        #expect(SidebarPresentation.displacedManagedNodeIDs(managed, observations: tree, now: now) == expected)
+        #expect(cache.placements(tree: tree, managed: managed, now: now).displaced == expected,
+                "Cached placement must invalidate when exact identity or protected evidence changes")
+        for showEnded in [false, true] {
+            let visible = SidebarVisibleWork(tree: tree, managed: managed, history: .init(), showEnded: showEnded, now: now)
+            #expect(visible.managed.isEmpty == (scenario == "matching"))
+            if scenario != "matching" {
+                #expect(visible.tree.sessions.contains { $0.id == previous.id })
+            }
+        }
+    }
+
     @Test func replacedRegistrationLeavesNoRowAndKeepsLiveDescendants() throws {
         let old = SidebarOrchestrationNode(
             id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Previous failed coordinator",

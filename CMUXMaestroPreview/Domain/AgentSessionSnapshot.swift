@@ -591,6 +591,14 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     var location: AgentSessionLocation? = nil
     var currentWorktree: AgentSessionWorktree? = nil
     var sessionIssues: [AgentSnapshotIssue]? = nil
+    var bindingProcess: AgentBindingProcess? = nil
+
+    // Process correlation is local presentation evidence, never part of the neutral wire contract.
+    private enum CodingKeys: String, CodingKey {
+        case identity, binding, title, state, activity, model, paths, timing, childWork
+        case stateDetail, liveness, observedAt, launchBinding, appearance, attention, childWorkObservation
+        case location, currentWorktree, sessionIssues
+    }
 
     var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
 
