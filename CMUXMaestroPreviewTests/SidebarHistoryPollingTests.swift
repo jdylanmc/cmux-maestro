@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Observation
 import Testing
@@ -216,7 +217,7 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
-    @Test(arguments: ["marker", "tail", "symlink", "permission", "rotation", "shrink", "rewrite"])
+    @Test(arguments: ["marker", "tail", "symlink", "permission", "changed", "rotation", "shrink", "rewrite"])
     func oneUnavailableSessionDoesNotHideHealthySibling(_ failure: String) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
@@ -237,6 +238,10 @@ struct SidebarHistoryPollingTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: appearance.path)
         let otherEvents = other.appendingPathComponent("events.jsonl")
         try (copilotTestEvent("session.idle") + Data([10])).write(to: otherEvents)
+        let otherDirectory = try CopilotFileAccess.openDirectory(other)
+        let otherStamp = try CopilotFileAccess.statEntry(at: otherDirectory, name: "events.jsonl")
+        close(otherDirectory)
+        let rotateOnRead = fixture.root.appendingPathComponent("rotate-on-read")
         if failure != "marker" { try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock")) }
         let topology = SidebarTopology(.init(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
@@ -252,13 +257,21 @@ struct SidebarHistoryPollingTests {
             )], windowID: UUID()
         ))
         let clock = HistoryTestClock(initial)
-        let reader = fixture.reader(clock: { clock.advance(0.1); return clock.read() })
+        let reader = fixture.reader(clock: { clock.advance(0.1); return clock.read() }, eventRead: { fd, offset, count in
+            let bytes = try CopilotFileAccess.read(fd, offset: offset, count: count)
+            if try CopilotFileAccess.statFile(fd).sameFile(as: otherStamp),
+               FileManager.default.fileExists(atPath: rotateOnRead.path) {
+                try FileManager.default.removeItem(at: rotateOnRead)
+                try Data("{".utf8).write(to: otherEvents, options: .atomic)
+            }
+            return bytes
+        })
         let harness = HistoryPollingHarness()
         let poller = poller(clock, harness)
         defer { poller.setVisible(false) }
         poller.update(topology: topology, connected: true)
         poller.setVisible(true)
-        for index in 1...2 {
+        for index in 1...3 {
             await sidebarEventually { await harness.reads == index }
             if index == 2 {
                 switch failure {
@@ -269,6 +282,12 @@ struct SidebarHistoryPollingTests {
                     try FileManager.default.createSymbolicLink(at: otherEvents, withDestinationURL: fixture.events)
                 case "permission":
                     try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: otherEvents.path)
+                case "changed":
+                    let handle = try FileHandle(forWritingTo: otherEvents)
+                    try handle.seekToEnd()
+                    try handle.write(contentsOf: Data([32]))
+                    try handle.close()
+                    try Data().write(to: rotateOnRead)
                 case "rotation", "shrink":
                     try Data("{".utf8).write(to: otherEvents, options: failure == "rotation" ? .atomic : [])
                 case "rewrite":
@@ -281,11 +300,11 @@ struct SidebarHistoryPollingTests {
             let observed = try #require(source.sessions.first { $0.sessionID == fixture.sessionID })
             #expect(observed.observedAt < source.generatedAt)
             #expect(!source.issues.contains(.stateUnavailable))
-            if failure == "marker" || (index == 2 && failure == "tail") {
+            if failure == "marker" || (index >= 2 && failure == "tail") {
                 #expect(!source.isComplete)
                 #expect(source.sessions.first { $0.sessionID == otherID }?.sessionIssues == [.stateUnavailable])
             }
-            if index == 2 && !["marker", "tail"].contains(failure) {
+            if index >= 2 && !["marker", "tail"].contains(failure) {
                 let refused = try #require(source.sessions.first { $0.sessionID == otherID })
                 let expected: CopilotIssue = failure == "symlink" ? .ambiguousIdentity
                     : failure == "permission" ? .permissionDenied : .identityChanged
@@ -293,6 +312,9 @@ struct SidebarHistoryPollingTests {
                 #expect(!source.issues.contains(expected))
                 #expect(refused.state == .unknown && refused.children.isEmpty)
                 #expect(!source.isComplete)
+                if failure == "changed" {
+                    #expect(!FileManager.default.fileExists(atPath: rotateOnRead.path))
+                }
             }
             await harness.succeed(source)
             await sidebarEventually { await harness.isPaused }
@@ -304,7 +326,7 @@ struct SidebarHistoryPollingTests {
             #expect(poller.tree.eligibleSessionName(
                 id: fixture.sessionID, workspaceID: fixture.workspace, surfaceID: fixture.surface, now: clock.read()
             ) == "Synthetic healthy session")
-            if index == 2 {
+            if index >= 2 {
                 #expect(!poller.tree.statusSessions.contains { $0.id == fixture.sessionID })
                 if failure == "tail" {
                     #expect(poller.tree.statusSessions.first { $0.id == otherID }?.lastKnownState == .idle)
@@ -314,11 +336,12 @@ struct SidebarHistoryPollingTests {
                     #expect(poller.tree.sessions.first { $0.id == otherID }?.state == .unknown)
                     #expect(!poller.tree.statusSessions.contains { $0.id == otherID })
                 }
-            } else {
+            }
+            if index < 3 {
                 clock.advance(2)
                 await harness.nextRead()
             }
-            if index == 2 && failure != "marker" {
+            if index == 3 && failure != "marker" {
                 if failure == "symlink" { try FileManager.default.removeItem(at: otherEvents) }
                 if failure == "permission" {
                     try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otherEvents.path)
@@ -326,7 +349,7 @@ struct SidebarHistoryPollingTests {
                 try (copilotTestEvent("session.idle") + Data([10])).write(to: otherEvents, options: .atomic)
                 clock.advance(2)
                 await harness.nextRead()
-                await sidebarEventually { await harness.reads == 3 }
+                await sidebarEventually { await harness.reads == 4 }
                 await harness.succeed(try await reader.read(surfaceIDs: [fixture.surface, otherSurface]))
                 await sidebarEventually { await harness.isPaused }
                 #expect(poller.tree.sessions.first { $0.id == otherID }?.state == .idle)
@@ -924,6 +947,32 @@ struct SidebarHistoryPollingTests {
         ))
         await sidebarEventually { await harness.isPaused && poller.tree.sessions.count == 2 }
         #expect(poller.tree.sessions.first { $0.id == fixtures.sessionID }?.childrenComplete == true)
+        poller.setVisible(false)
+        await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
+    }
+
+    @Test(arguments: [CopilotIssue.identityChanged, .ambiguousIdentity, .permissionDenied])
+    func globalBarrierRejectsHealthySiblingsEvenWithFutureEnvelope(_ issue: CopilotIssue) async {
+        let clock = HistoryTestClock(initial)
+        let harness = HistoryPollingHarness()
+        let poller = poller(clock, harness)
+        start(poller)
+        await sidebarEventually { await harness.reads == 1 }
+        await harness.succeed(snapshot(at: initial))
+        await sidebarEventually { await harness.isPaused }
+        clock.advance(2)
+        await harness.nextRead()
+        await sidebarEventually { await harness.reads == 2 }
+        var uncertain = fixtures.session(
+            id: fixtures.otherSessionID, surface: fixtures.surfaceB, liveness: .ambiguous, now: clock.read()
+        )
+        uncertain.sessionIssues = [issue]
+        await harness.succeed(fixtures.snapshot(
+            sessions: [fixtures.session(now: clock.read()), uncertain],
+            issues: [issue], complete: false, now: clock.read().addingTimeInterval(0.5)
+        ))
+        await sidebarEventually { await harness.isPaused }
+        #expect(poller.tree.sessions.isEmpty && poller.tree.statusSessions.isEmpty)
         poller.setVisible(false)
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }

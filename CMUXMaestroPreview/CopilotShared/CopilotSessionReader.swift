@@ -55,12 +55,14 @@ actor CopilotSessionReader {
         var targetAt: Date?
         var historyIncomplete = false
         var discardingInitialLine = false
+        var projectionInvalidated = false
     }
 
     private let roots: (@Sendable () throws -> (bindings: URL, sessions: URL))
     private let clock: @Sendable () -> Date
     private let verifier: CopilotIdentityVerifier
     private let limits: CopilotReaderLimits
+    private let eventRead: @Sendable (Int32, Int64, Int) throws -> Data
     private var tails: [UUID: Tail] = [:]
     private var pendingHistory = false
     private var tailWindowBytes = CopilotTailWindow.defaultMiB * 1_048_576
@@ -92,18 +94,21 @@ actor CopilotSessionReader {
         clock = { Date() }
         verifier = CopilotIdentityVerifier()
         limits = CopilotReaderLimits()
+        eventRead = CopilotFileAccess.read
     }
 
     init(
         bindingDirectory: URL, sessionStateRoot: URL,
         uid: UInt32 = getuid(), clock: @escaping @Sendable () -> Date = { Date() },
         processLookup: @escaping @Sendable (Int32) -> CopilotProcessLookup = CopilotProcessProbe.read,
-        limits: CopilotReaderLimits = CopilotReaderLimits()
+        limits: CopilotReaderLimits = CopilotReaderLimits(),
+        eventRead: @escaping @Sendable (Int32, Int64, Int) throws -> Data = CopilotFileAccess.read
     ) {
         roots = { (bindingDirectory, sessionStateRoot) }
         self.clock = clock
         verifier = CopilotIdentityVerifier(uid: uid, lookup: processLookup)
         self.limits = limits
+        self.eventRead = eventRead
     }
 
     func read(
@@ -176,6 +181,10 @@ actor CopilotSessionReader {
         try appendEndedObservations(index, batch: &batch)
         try decorateObservations(index, batch: &batch)
         fenceObservations(index, batch: &batch)
+        guard (try? directoryRemainsValid(root, at: index.directories.sessions)) == true else {
+            resetDiscovery()
+            return snapshot(now: now, observations: [], issues: [.identityChanged])
+        }
         return try publish(index, batch: batch)
     }
 
@@ -210,6 +219,7 @@ actor CopilotSessionReader {
         var reachedBoundary = false
         var sessionName: String?
         var workspaceSource: CopilotWorktreeSource?
+        var failure: CopilotIssue?
         let previouslyPublished: Bool
     }
 
@@ -477,6 +487,7 @@ actor CopilotSessionReader {
             read.hasUnread = (advancing.stamp?.size ?? 0) > advancing.offset
         } catch {
             try Self.rethrowCancellation(error)
+            read.failure = Self.issue(error)
             read.issues.append(Self.issue(error))
             // A failed, explicitly unavailable observation must not pin
             // every later binding behind an unreadable transcript.
@@ -515,7 +526,8 @@ actor CopilotSessionReader {
         case .failed(let failure):
             publishedCohort.insert(id)
             recordIssues([failure], for: id, batch: &batch)
-            batch.observations.append(observation(record, liveness: .unknown, now: batch.now))
+            let unsafe = [.identityChanged, .ambiguousIdentity, .permissionDenied].contains(failure)
+            batch.observations.append(observation(record, liveness: unsafe ? .ambiguous : .unknown, now: batch.now))
         case .read(let read):
             tails[id] = read.tail
             if read.tail.historyIncomplete {
@@ -525,14 +537,26 @@ actor CopilotSessionReader {
             batch.madeProgress = batch.madeProgress
                 || (read.advanced && (fastDiscoveryCycle || read.previouslyPublished))
             batch.unreadHistory = batch.unreadHistory || read.hasUnread
-            recordIssues(read.issues.filter { $0 == .stateUnavailable }, for: id, batch: &batch)
-            batch.issues += read.issues.filter { $0 != .stateUnavailable }
+            // Only the tail operation failed; binding and custody fences still passed.
+            let localIssues = read.issues.filter {
+                $0 == .stateUnavailable || ($0.isSessionScoped && ($0 == read.failure
+                    || (read.tail.projectionInvalidated && !read.tail.reducer.issues.contains($0))))
+            }
+            batch.scopedIssues[id, default: []] += localIssues
+            batch.issues += read.issues.filter { !localIssues.contains($0) }
+            let unsafeTail = localIssues.contains {
+                [.identityChanged, .ambiguousIdentity, .permissionDenied].contains($0)
+            }
             var result = observation(
-                record, liveness: .alive, now: read.tail.lastCompleteAt ?? batch.now,
-                value: read.tail.lastComplete ?? CopilotReducedState(), includeBindingProcess: true
+                record, liveness: unsafeTail ? .ambiguous : .alive,
+                now: unsafeTail ? batch.now : (read.tail.lastCompleteAt ?? batch.now),
+                value: read.failure == nil ? (read.tail.lastComplete ?? CopilotReducedState()) : CopilotReducedState(),
+                includeBindingProcess: !unsafeTail
             )
-            result.sessionName = read.sessionName
-            batch.workspaceSources[id] = read.workspaceSource
+            if !unsafeTail {
+                result.sessionName = read.sessionName
+                batch.workspaceSources[id] = read.workspaceSource
+            }
             batch.observations.append(result)
         }
     }
@@ -941,15 +965,12 @@ actor CopilotSessionReader {
             }
         }
         if reset {
-            let saved = tail.lastComplete
-            let savedAt = tail.lastCompleteAt
             tail = Tail(record: tail.record, reducer: CopilotEventReducer(
                 sessionID: tail.record.sessionID, maximumRelationships: limits.maximumRelationships,
                 maximumLifecycleEvents: limits.maximumLifecycleEvents,
                 maximumReplayFilterWords: limits.maximumReplayFilterWords
             ))
-            tail.lastComplete = saved
-            tail.lastCompleteAt = savedAt
+            tail.projectionInvalidated = true
         }
         if tail.target == nil && before.size - tail.offset > Int64(tailWindowBytes) {
             tail.offset = before.size - Int64(tailWindowBytes)
@@ -1064,6 +1085,7 @@ actor CopilotSessionReader {
                 // A verified boundary can publish conservative semantic limits,
                 // but malformed data, invalid schemas and identity errors cannot.
                 tail.lastComplete = value
+                tail.projectionInvalidated = false
                 // Verified current EOF is fresh; an older prefix with unread
                 // appends must retain its captured age.
                 tail.lastCompleteAt = tail.offset == after.size ? now : (tail.targetAt ?? now)
@@ -1078,6 +1100,10 @@ actor CopilotSessionReader {
             issues.append(.loadingHistory)
             if tail.offset < after.size { issues.append(.readLimitReached) }
         }
+        if tail.projectionInvalidated {
+            issues.removeAll { $0 == .loadingHistory }
+            issues.append(.identityChanged)
+        }
         return (issues, reachedBoundary)
     }
 
@@ -1090,11 +1116,15 @@ actor CopilotSessionReader {
         } else if tail.reducer.canPublishProjection, tail.lastComplete != nil {
             tail.lastCompleteAt = now
         }
+        if tail.projectionInvalidated {
+            issues.removeAll { $0 == .loadingHistory }
+            issues.append(.identityChanged)
+        }
         return (issues, true)
     }
 
     private func readEventBytes(_ descriptor: Int32, offset: Int64, count: Int) throws -> Data {
-        let bytes = try CopilotFileAccess.read(descriptor, offset: offset, count: count)
+        let bytes = try eventRead(descriptor, offset, count)
         eventReadBytes += bytes.count
         return bytes
     }

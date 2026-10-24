@@ -105,7 +105,7 @@ final class SidebarPlacementCache {
                 Managed(id: $0.id, workspace: $0.workspaceId, surface: $0.surfaceId, session: $0.copilotSessionId,
                         canYieldUnknown: SidebarPresentation.canYieldUnknownRoot($0))
             },
-            current: [.ready, .partial].contains(tree.availability) && !tree.issues.contains(.permissionDenied)
+            current: [.ready, .partial].contains(tree.availability) && !tree.hasGlobalPermissionDenial
                 && tree.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
         )
         guard key != input else { return snapshot }

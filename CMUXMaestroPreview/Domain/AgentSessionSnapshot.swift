@@ -303,7 +303,8 @@ nonisolated struct AgentSnapshotIssue: RawRepresentable, Codable, Equatable, Sen
 
     var isCosmetic: Bool { self == .appearanceUnavailable }
     var isSessionScoped: Bool {
-        self == .ambiguousIdentity || self == .identityChanged || self == .stateUnavailable || self == .readLimitReached
+        self == .ambiguousIdentity || self == .identityChanged || self == .stateUnavailable
+            || self == .permissionDenied || self == .readLimitReached
     }
 }
 

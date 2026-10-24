@@ -1201,12 +1201,82 @@ nonisolated struct CopilotReaderTests {
         try FileManager.default.createSymbolicLink(at: fixture.events, withDestinationURL: sentinel)
         let snapshot = try await fixture.reader().read(surfaceIDs: [fixture.surface])
         #expect(!snapshot.isComplete)
-        #expect(snapshot.issues.contains(.ambiguousIdentity))
+        #expect(snapshot.sessions.first?.sessionIssues == [.ambiguousIdentity])
+        #expect(!snapshot.issues.contains(.ambiguousIdentity))
         try FileManager.default.removeItem(at: fixture.session)
         try FileManager.default.createSymbolicLink(at: fixture.session, withDestinationURL: fixture.root)
         let directory = try await fixture.reader().read(surfaceIDs: [fixture.surface])
         #expect(directory.sessions.first?.sessionIssues?.contains(.ambiguousIdentity) == true)
         #expect(!directory.isComplete)
+    }
+
+    @Test func replacementWithForeignSessionHeaderRemainsGlobal() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: other.appendingPathComponent("events.jsonl"))
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let reader = fixture.reader()
+        let surfaces: Set<UUID> = [fixture.surface, otherSurface]
+        #expect(try await reader.read(surfaceIDs: surfaces).sessions.count == 2)
+        try fixture.writeEvents([copilotTestEvent("session.start", data: [
+            "sessionId": UUID().uuidString, "version": 1
+        ])], atomic: true)
+        let refused = try await reader.read(surfaceIDs: surfaces)
+        #expect(refused.issues.contains(.identityChanged))
+        #expect(refused.sessions.first { $0.sessionID == fixture.sessionID }?.state == .unknown)
+        #expect(!refused.isComplete)
+    }
+
+    @Test(arguments: ["replace", "symlink", "permission"])
+    func sharedSessionRootChangeDuringTailReadRemainsGlobal(_ failure: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let otherSurface = UUID()
+        let other = try fixture.addSession(surface: otherSurface)
+        try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(to: other.appendingPathComponent("events.jsonl"))
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let trigger = fixture.root.appendingPathComponent("change-root")
+        let moved = fixture.root.appendingPathComponent("previous-root")
+        let reader = fixture.reader(eventRead: { fd, offset, count in
+            let bytes = try CopilotFileAccess.read(fd, offset: offset, count: count)
+            if FileManager.default.fileExists(atPath: trigger.path) {
+                try FileManager.default.removeItem(at: trigger)
+                if failure == "permission" {
+                    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: fixture.sessions.path)
+                } else {
+                    try FileManager.default.moveItem(at: fixture.sessions, to: moved)
+                    if failure == "symlink" {
+                        try FileManager.default.createSymbolicLink(at: fixture.sessions, withDestinationURL: moved)
+                    } else {
+                        try FileManager.default.createDirectory(at: fixture.sessions, withIntermediateDirectories: false)
+                    }
+                }
+            }
+            return bytes
+        })
+        let surfaces: Set<UUID> = [fixture.surface, otherSurface]
+        #expect(try await reader.read(surfaceIDs: surfaces).sessions.count == 2)
+        try fixture.append(Data([32]))
+        try Data().write(to: trigger)
+        let refused = try await reader.read(surfaceIDs: surfaces)
+        #expect(!FileManager.default.fileExists(atPath: trigger.path))
+        #expect(refused.sessions.isEmpty)
+        #expect(refused.issues.contains(.identityChanged))
+        #expect(!refused.isComplete)
+        #expect(await reader.retentionCounts().tails == 2)
+        if failure == "permission" {
+            try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.sessions.path)
+        } else {
+            try FileManager.default.removeItem(at: fixture.sessions)
+            try FileManager.default.moveItem(at: moved, to: fixture.sessions)
+        }
+        try fixture.writeEvents([copilotTestEvent("session.idle")], atomic: true)
+        let recovered = try await reader.read(surfaceIDs: surfaces)
+        #expect(recovered.sessions.count == 2 && recovered.isComplete)
     }
 
     @Test func oneAmbiguousSessionDoesNotBlankOrPoisonHealthySessions() async throws {
@@ -2118,14 +2188,15 @@ nonisolated struct CopilotReaderFixture: Sendable {
     func reader(
         limits: CopilotReaderLimits = CopilotReaderLimits(),
         lookup: (@Sendable (Int32) -> CopilotProcessLookup)? = nil,
-        clock: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 2_000) }
+        clock: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 2_000) },
+        eventRead: @escaping @Sendable (Int32, Int64, Int) throws -> Data = CopilotFileAccess.read
     ) -> CopilotSessionReader {
         let owner = process
         return CopilotSessionReader(
             bindingDirectory: bindings, sessionStateRoot: sessions,
             clock: clock,
             processLookup: lookup ?? { $0 == owner.pid ? .found(owner) : .dead },
-            limits: limits
+            limits: limits, eventRead: eventRead
         )
     }
 
