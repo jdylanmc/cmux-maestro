@@ -583,19 +583,20 @@ enum SidebarPresentation {
         guard case .surface(let workspace, let surface) = capturedPlacement else { return nil }
         if case .unmanaged(.child(let sessionID, let childID)) = target {
             let matches = tree.sessions.filter { $0.id == sessionID }
+            let replaced = replacedSessionIDs(tree, managed: managed.nodes, now: now)
             guard matches.count == 1, let session = matches.first,
                   tree.isCurrent(session, now: now), !tree.issues.contains(.permissionDenied),
                   !session.statusOnly, [.alive, .dead].contains(session.liveness),
                   session.workspaceID == workspace, session.surfaceID == surface,
                   session.nodes.filter({ $0.id == childID }).count == 1,
-                  !replacedSessionIDs(tree, managed: managed.nodes, now: now).contains(sessionID),
+                  !replaced.contains(sessionID),
                   !coalescingManagedNodes(managed.nodes, observations: tree, now: now).contains(where: {
                       $0.workspaceId == workspace && $0.surfaceId == surface
                           && $0.copilotSessionId != nil && $0.copilotSessionId != sessionID
                   }),
                   !tree.sessions.contains(where: {
                       $0.id != sessionID && $0.workspaceID == workspace && $0.surfaceID == surface
-                          && $0.liveness != .dead
+                          && $0.liveness != .dead && !replaced.contains($0.id)
                   }),
                   let subject = inspection(
                     for: .unmanaged(.surface(workspaceID: workspace, surfaceID: surface)),
