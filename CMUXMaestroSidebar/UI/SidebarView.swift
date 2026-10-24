@@ -2264,7 +2264,7 @@ struct SurfaceRow: View {
                     .help(inspectionLabel)
                     .accessibilityLabel(inspectionLabel)
                 }
-                SidebarHoverRegion(dataProvider: { preview }) {
+                SidebarHoverRegion(dataProvider: (singleSession != nil || connected) ? { preview } : nil) {
                   FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
                     navigation: navigation,
