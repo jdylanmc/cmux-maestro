@@ -20,6 +20,10 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def metadata_readiness(report):
+    return report["metadataReadiness"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", required=True, type=Path)
@@ -46,6 +50,8 @@ def main():
         else:
             require(result.returncode == 124, output.read_text())
             report = json.loads((case / "stall.json").read_text())
+            if mode.startswith("owned-"):
+                ready = metadata_readiness(report)
             try:
                 os.kill(report["samplerPID"], 0)
             except ProcessLookupError:
@@ -102,7 +108,6 @@ def main():
                 if mode == "stalled-clock":
                     require("MetadataWatchdogProbe" in report["sample"], report["sample"])
             if mode.startswith("owned-"):
-                ready = report["metadataReadiness"]
                 current = report["metadataAtStall"]
                 require(report["metadataPID"] == child, report)
                 require(ready["state"] == "living", report)

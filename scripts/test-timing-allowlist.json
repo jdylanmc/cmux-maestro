@@ -147,7 +147,7 @@
     "statements": {
       "deadline = ContinuousClock.now.advanced(by: limit)": 2,
       "let instant = ContinuousClock.now": 1,
-      "while !finished, ContinuousClock.now < deadline {": 1,
+      "while !finished, !triggered, ContinuousClock.now < deadline {": 1,
       "lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },": 1,
       "Thread.sleep(forTimeInterval: 5)": 1,
       "if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {": 1,

@@ -119,6 +119,10 @@ struct MetadataWatchdogProbe {
             return frozen
         })
         watchdog.begin("negative-control/\(mode)")
+        if mode == "owned-living" {
+            watchdog.trigger()
+            holdTask()
+        }
         let task = Task {
             let result = await runner.metadata(executable: server, path: "/usr/bin:/bin")
             watchdog.metadataCallReturned()
