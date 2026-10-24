@@ -371,7 +371,14 @@ nonisolated struct CopilotReaderTests {
         }
         let rejected = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(!rejected.isComplete)
-        #expect(rejected.sessions.first?.observedAt == observedAt)
+        let unavailable = try #require(rejected.sessions.first)
+        #expect(unavailable.state == .unknown && unavailable.children.isEmpty)
+        if change == "missing" {
+            #expect(unavailable.observedAt == observedAt)
+        } else {
+            #expect(unavailable.observedAt == clock.now())
+            #expect(unavailable.liveness == .ambiguous)
+        }
         #expect(await reader.eventReadBytes == bytes)
         let issues = rejected.issues + (rejected.sessions.first?.sessionIssues ?? [])
         #expect(issues.contains(change == "permissions" ? .permissionDenied
