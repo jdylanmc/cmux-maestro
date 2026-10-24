@@ -2143,6 +2143,68 @@ nonisolated struct CopilotReaderTests {
         }
     }
 
+    @Test(arguments: ["removed", "rerouted", "unsafe", "active-removed"])
+    func bindingChangesDuringEndedOwnerProbeReachTheFinalFence(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let liveSurface = UUID()
+        let liveDirectory = try fixture.addSession(surface: liveSurface)
+        let liveID = try #require(UUID(uuidString: liveDirectory.lastPathComponent))
+        let liveOwner = CopilotProcessIdentity(
+            pid: 8888, parentPID: 1, uid: getuid(), startSeconds: 1, startMicroseconds: 0
+        )
+        try fixture.writeRecord(.init(
+            sessionID: liveID, surfaceID: liveSurface, launchWorkspaceID: fixture.workspace,
+            ownerPID: liveOwner.pid, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+            recordedAt: fixture.record.recordedAt
+        ))
+        try Data().write(to: liveDirectory.appendingPathComponent("inuse.\(liveOwner.pid).lock"))
+        try (copilotTestEvent("session.idle") + Data([10])).write(
+            to: liveDirectory.appendingPathComponent("events.jsonl")
+        )
+        let trigger = fixture.root.appendingPathComponent("change-binding-during-ended-custody-probe")
+        let probePID: Int32 = 7331
+        try Data().write(to: fixture.session.appendingPathComponent("inuse.\(probePID).lock"))
+        let changedID = change == "active-removed" ? liveID : fixture.sessionID
+        let binding = fixture.bindings.appendingPathComponent(changedID.uuidString.lowercased() + ".json")
+        let reader = fixture.reader(lookup: { pid in
+            // Only ended-custody inspection sees this marker, after active reads and the ended binding read.
+            if pid == probePID, FileManager.default.fileExists(atPath: trigger.path) {
+                do {
+                    try FileManager.default.removeItem(at: trigger)
+                    switch change {
+                    case "rerouted":
+                        try fixture.writeRecord(.init(
+                            sessionID: fixture.sessionID, surfaceID: UUID(),
+                            launchWorkspaceID: fixture.workspace, ownerPID: fixture.process.pid,
+                            ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+                            recordedAt: fixture.record.recordedAt
+                        ), atomic: true)
+                    case "unsafe":
+                        guard chmod(binding.path, 0o000) == 0 else { throw CopilotFileError.io }
+                    default:
+                        try FileManager.default.removeItem(at: binding)
+                    }
+                } catch {
+                    Issue.record(error)
+                }
+            }
+            return pid == liveOwner.pid ? .found(liveOwner) : .dead
+        })
+        let surfaces: Set<UUID> = [fixture.surface, liveSurface]
+        let first = try await reader.read(surfaceIDs: surfaces)
+        try #require(first.sessions.first { $0.sessionID == fixture.sessionID }?.liveness == .dead)
+        try #require(first.sessions.first { $0.sessionID == liveID }?.state == .idle)
+        try #require(await reader.endedBindingCount() == 1)
+        try Data().write(to: trigger)
+        let raced = try await reader.read(surfaceIDs: surfaces)
+        try #require(!FileManager.default.fileExists(atPath: trigger.path))
+        #expect(!raced.sessions.contains { $0.sessionID == changedID })
+        #expect(raced.sessions.count == 1)
+        #expect(raced.issues.contains(.identityChanged) == (change != "removed"))
+        #expect(await reader.endedBindingCount() == (change == "active-removed" ? 1 : 0))
+    }
+
     @Test func endedObservationCacheIsBoundedSeparatelyFromActiveTails() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
