@@ -7,6 +7,72 @@ struct CopilotSnapshotAdapterTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let eventID = UUID(uuidString: "10000000-1000-1000-1000-000000000010")!
 
+    @Test func cachedConversionReusesUnchangedSessionsWithoutReplacingEvidenceTimes() async {
+        let cache = CopilotSnapshotAdapterCache()
+        let placements = fixtures.topology().workspaceBySurface
+        var observations = [
+            fixtures.session(children: (0..<100).map { fixtures.child("child-\($0)", state: .working) }, now: now),
+            fixtures.session(id: fixtures.otherSessionID, surface: fixtures.surfaceB, now: now)
+        ]
+        for index in 0...30 {
+            let date = now.addingTimeInterval(Double(index * 2))
+            observations[0].observedAt = date
+            // The second session deliberately retains older evidence.
+            let source = fixtures.snapshot(sessions: observations, now: date)
+            let actual = await cache.snapshot(source, workspaceBySurface: placements)
+            #expect(actual == CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements))
+            #expect(actual.sessions[0].observedAt == date)
+            #expect(actual.sessions[1].observedAt == now)
+        }
+        #expect(await cache.sessionBuildCount == 2)
+        #expect(await cache.workspaceBuildCount == 1)
+        observations[0].sessionName = "Changed name"
+        observations[0].sessionIssues = [.stateUnavailable]
+        let changed = fixtures.snapshot(sessions: observations, issues: [.loadingHistory], complete: false, now: now)
+        #expect(await cache.snapshot(changed, workspaceBySurface: placements)
+            == CopilotSnapshotAdapter.snapshot(changed, workspaceBySurface: placements))
+        #expect(await cache.sessionBuildCount == 3)
+        let moved = fixtures.topology(moved: true).workspaceBySurface
+        #expect(await cache.snapshot(changed, workspaceBySurface: moved)
+            == CopilotSnapshotAdapter.snapshot(changed, workspaceBySurface: moved))
+        #expect(await cache.sessionBuildCount == 5)
+        #expect(await cache.workspaceBuildCount == 2)
+        print("Controlled 60s / 30 unchanged refreshes: 0 additional session conversions and 0 topology conversions.")
+    }
+
+    @Test(arguments: [CopilotLiveness.dead, .unknown, .ambiguous])
+    func cachedConversionPublishesLivenessChangesImmediately(liveness: CopilotLiveness) async {
+        let cache = CopilotSnapshotAdapterCache()
+        let placements = fixtures.topology().workspaceBySurface
+        let initial = fixtures.snapshot(sessions: [fixtures.session(now: now)], now: now)
+        _ = await cache.snapshot(initial, workspaceBySurface: placements)
+        let changed = fixtures.snapshot(sessions: [fixtures.session(liveness: liveness, now: now)], now: now)
+        #expect(await cache.snapshot(changed, workspaceBySurface: placements)
+            == CopilotSnapshotAdapter.snapshot(changed, workspaceBySurface: placements))
+        #expect(await cache.sessionBuildCount == 2)
+    }
+
+    @Test func cachedConversionPreservesDuplicateIdentitiesAndBoundsRetention() async {
+        let cache = CopilotSnapshotAdapterCache()
+        let placements = fixtures.topology().workspaceBySurface
+        var observations = (0..<70).map { index in
+            fixtures.session(id: UUID(uuidString: String(format: "10000000-0000-0000-0000-%012d", index))!, now: now)
+        }
+        observations.append(fixtures.session(id: observations[0].sessionID, state: .working, now: now))
+        let source = fixtures.snapshot(sessions: observations, now: now)
+        for _ in 0..<2 {
+            #expect(await cache.snapshot(source, workspaceBySurface: placements)
+                == CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements))
+            #expect(await cache.retainedSessionCount <= CopilotReaderLimits().maximumSessions)
+        }
+        let empty = fixtures.snapshot(sessions: [], issues: [.permissionDenied], complete: false, now: now)
+        #expect(await cache.snapshot(empty, workspaceBySurface: [:])
+            == CopilotSnapshotAdapter.snapshot(empty, workspaceBySurface: [:]))
+        #expect(await cache.retainedSessionCount == 0)
+        #expect(await cache.snapshot(source, workspaceBySurface: placements)
+            == CopilotSnapshotAdapter.snapshot(source, workspaceBySurface: placements))
+    }
+
     @Test(arguments: [CopilotLiveness.dead, .ambiguous, .unknown])
     func uncertainParentKeepsExactChildAttentionWithoutClaimingLiveWork(_ liveness: CopilotLiveness) throws {
         let child = CopilotChildWork(id: "protected", parentID: nil, kind: .subagent, name: "Protected child",
