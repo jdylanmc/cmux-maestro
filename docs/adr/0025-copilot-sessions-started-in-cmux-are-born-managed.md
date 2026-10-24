@@ -66,6 +66,10 @@ its runtime observer is installed. It stores only a pending bit and forwards
 the joined session's exact identity after runtime startup settles, including
 failure after observer installation. It never waits for startup inside the
 join callback, retains hook content, or records an end after a hangup.
+The existing bounded shutdown gate is armed before join, so termination cannot
+discard a buffered callback merely because the runtime has not started yet.
+Definitive refusal or initialization failure settles the wait when no observer
+can be installed.
 
 This amends the earlier one-decision and retry limits only for these incomplete
 observations. Deterministic synthetic controller/extension scenarios establish

@@ -834,7 +834,6 @@ export async function startBornManaged({ joinSession, environment = process.env,
   });
 
   let controllerCalls = 0;
-  // One attempt: the session's own account, the controller's decision, then this runtime.
   const attempt = async () => {
     controllerCalls++;
     // An unverified account reaches the controller as null; it cannot admit the session.
@@ -859,7 +858,6 @@ export async function startBornManaged({ joinSession, environment = process.env,
     try {
       enrolled = await enroll({ ...placement, pid: providerPid, ...account }, controller);
       requireCondition(account.login !== null);
-      // A committed enrollment may report a deferred projection or routes it could not retire.
       exactKeys(enrolled, ["ok", "nodeId", "workspaceId", "sessionId", "generation", "routes", "peer",
         ...["projection", "routesNotRetired"].filter(key => Object.hasOwn(enrolled, key))]);
       requireCondition(UUID.test(enrolled.nodeId) && enrolled.sessionId === sessionId &&
@@ -910,7 +908,10 @@ export async function startBornManaged({ joinSession, environment = process.env,
         return undefined;
       }
       return attempt();
-    })().finally(() => { inFlight = null; });
+    })().finally(() => {
+      inFlight = null;
+      if (state.status === "unavailable" && !delegates.onSessionEnd) endGate.finish();
+    });
     return inFlight;
   };
   // Hook content is never read; a bounded wait lets this exact session's turn use the tools.
@@ -924,27 +925,30 @@ export async function startBornManaged({ joinSession, environment = process.env,
   };
 
   signal?.throwIfAborted();
-  // SessionEnd reaches the runtime's observer once enrollment installed it, even if the runtime
-  // then failed. A resumed session's sessionStart fires only after its first prompt.
-  session = await joinSession({ tools, hooks: {
-    onSessionEnd: async (input, invocation) => {
-      if (endGate.hungUp || input?.reason !== "user_exit" || invocation?.sessionId !== sessionId) {
-        return delegates.onSessionEnd?.(input, invocation);
-      }
-      if (endSeen) return undefined;
-      endSeen = true;
-      // Keep one bit, not hook content; join may await this callback.
-      bufferedEnd = true;
-      return flushEnd();
-    },
-    onUserPromptSubmitted: onEvent, onSessionStart: onEvent, onPostToolUse: onEvent, onAgentStop: onEvent,
-  } });
-  signal?.throwIfAborted();
-  requireCondition(session?.sessionId === sessionId);
-  onJoined?.(session);  // Beats need only the joined session, not enrollment.
-  if (state.status !== "pending") return { session };
-  const listener = await advance();
-  return listener === undefined ? { session } : { session, listener };
+  if (state.status === "pending") endGate.armed = true;
+  try {
+    session = await joinSession({ tools, hooks: {
+      onSessionEnd: async (input, invocation) => {
+        if (endGate.hungUp || input?.reason !== "user_exit" || invocation?.sessionId !== sessionId) {
+          return delegates.onSessionEnd?.(input, invocation);
+        }
+        if (endSeen) return undefined;
+        endSeen = true;
+        bufferedEnd = true;
+        return flushEnd();
+      },
+      onUserPromptSubmitted: onEvent, onSessionStart: onEvent, onPostToolUse: onEvent, onAgentStop: onEvent,
+    } });
+    signal?.throwIfAborted();
+    requireCondition(session?.sessionId === sessionId);
+    onJoined?.(session);
+    if (state.status !== "pending") return { session };
+    const listener = await advance();
+    return listener === undefined ? { session } : { session, listener };
+  } catch (error) {
+    endGate.finish();
+    throw error;
+  }
 }
 
 export async function startReadiness({ joinSession, environment = process.env, signal }) {
