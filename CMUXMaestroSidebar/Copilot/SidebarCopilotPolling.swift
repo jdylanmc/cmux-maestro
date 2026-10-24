@@ -49,6 +49,7 @@ final class SidebarCopilotPolling {
     @ObservationIgnored private var projectionCache: SidebarCopilotProjectionCache?
     @ObservationIgnored private let sessionCache = SidebarSessionProjectionCache()
     var sessionProjectionCount: Int { sessionCache.computationCount }
+    var childAssessmentCount: Int { sessionCache.childAssessmentCount }
     @ObservationIgnored private(set) var historyExpiryWakeCount = 0
     @ObservationIgnored private var historyDiagnosticStart: Date?
     @ObservationIgnored private var historyDiagnosticWakes = 0

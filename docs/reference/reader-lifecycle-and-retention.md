@@ -304,6 +304,19 @@ session also has no preview target: the shared surface-row session target exclud
 retained status for previews, inspection, tags, icons, pets and Beats. Retained
 status remains visible, and surface inspection/navigation remain available.
 
+Per-session temporal projection and child assessment have separate reuse
+boundaries. Session-only changes and history/attention expiry still reproject
+the affected session, but do not revalidate unchanged child payloads. The child
+cache retains at most 64 valid assessments, keyed by exact provider/session
+identity, schema, error path, legacy children and flat observation (including
+its losslessness flag). It reuses only under a finite envelope timestamp no
+earlier than the successfully assessed envelope: child activity-date validity
+then cannot regress. Invalid/future evidence is never cached; time advancement
+and rollback take the validator again when required. Session validation always
+runs when projecting. Topology/global context changes clear both caches,
+absent identities are pruned, and scope teardown clears retained assessments.
+No attention/history/freshness deadline or liveness check is skipped.
+
 The three native callback tests are inventoried local opt-in acceptance in
 `scripts/local-ui-acceptance.json`, enabled with
 `CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE=1 ./scripts/test.sh --focused SidebarFileWatcherAcceptanceTests`.

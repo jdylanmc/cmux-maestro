@@ -777,7 +777,8 @@ extension AgentSessionSnapshot {
     // Both strict validation and the live consumer use these checks. A consumer
     // can retain safe peers/fields while refusing invalid history and ancestry.
     nonisolated func assess(
-        _ session: AgentSessionSnapshotItem, at path: String
+        _ session: AgentSessionSnapshotItem, at path: String,
+        childAssessment: AgentSessionObservationAssessment? = nil
     ) -> AgentSessionObservationAssessment {
         var result = AgentSessionObservationAssessment()
         result.check { try validateValue(session.title, at: "\(path).title") }
@@ -797,6 +798,17 @@ extension AgentSessionSnapshot {
                                generatedAt: generatedAt, at: "\(path).timing")
             try validateActivityTiming(activity: session.activity, timing: session.timing, at: path)
         }
+        var children = childAssessment ?? assessChildStructure(session, at: path)
+        if let error = result.firstError { children.firstError = error }
+        children.sessionStateIsValid = result.sessionStateIsValid
+        return children
+    }
+
+    /// Child evidence validation depends on its payload, owner, error path and envelope time, not display time.
+    nonisolated func assessChildStructure(
+        _ session: AgentSessionSnapshotItem, at path: String
+    ) -> AgentSessionObservationAssessment {
+        var result = AgentSessionObservationAssessment()
         let legacy = assessChildren(session.childWork, session: session.identity, flat: false, at: "\(path).childWork")
         let evidence = session.childWorkObservation.map {
             assessChildren($0.items, session: session.identity, flat: true, at: "\(path).childWorkObservation.items")

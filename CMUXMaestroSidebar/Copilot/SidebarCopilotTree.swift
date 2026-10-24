@@ -317,7 +317,8 @@ struct SidebarCopilotTree: Equatable {
             }
             var sessionExpiry: Date?
             let liveness = observation.liveness ?? .unknown
-            let assessment = snapshot.assess(observation, at: "sessions[\(sessionIndex)]")
+            let assessment = sessionCache?.assessment(snapshot: snapshot, index: sessionIndex)
+                ?? snapshot.assess(observation, at: "sessions[\(sessionIndex)]")
             let children = assessment.children
             let groups = Dictionary(grouping: children, by: \.id)
             let validated = children.filter {
