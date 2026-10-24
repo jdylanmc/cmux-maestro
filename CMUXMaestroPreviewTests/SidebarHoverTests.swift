@@ -5,6 +5,53 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
+    @Test func hiddenSurfaceRowDoesNotResolveAgentPreview() throws {
+        let fixture = SidebarTreeFixtures()
+        let preferenceFixture = try SidebarPreferenceFixture()
+        let stores = SidebarStoreFixture()
+        defer { preferenceFixture.cleanup(); stores.cleanup() }
+        let preferences = preferenceFixture.preferences()
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        let tree = SidebarCopilotTree.project(
+            fixture.snapshot(sessions: [fixture.session(now: date)], now: date),
+            onto: fixture.topology(), now: date
+        )
+        let session = try #require(tree.sessions.first)
+        let context = SidebarReorderContext.empty(
+            backend: LocalSidebarReorderBackend(store: preferences), session: SidebarReorderDragSession()
+        )
+        var builds = 0
+        let row = SurfaceRow(
+            workspaceID: fixture.workspaceA,
+            surface: .init(id: fixture.surfaceA, title: "Synthetic", kind: .terminal, isFocused: false,
+                           isPinned: false, unreadCount: 0, workingDirectory: .available("/synthetic")),
+            reorder: context.handle(for: fixture.surfaceA, noun: "surface"),
+            sessions: [session], countsComplete: true, navigation: SidebarNavigation(), layout: .init(),
+            setExpanded: { _, _ in }, dismiss: { _ in }, acknowledge: { _ in }, selection: .constant(nil)
+        )
+        let host = NSHostingView(rootView: row.environment(preferences)
+            .environment(\.sidebarPetStore, stores.pets)
+            .environment(\.sidebarAgentHoverProvider, { _ in
+                builds += 1
+                return .init(id: "synthetic", category: "Agent preview", title: "Synthetic")
+            }))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer {
+            for anchor in descendants(host).compactMap({ $0 as? SidebarHoverAnchorView }) {
+                anchor.presenter?.detach()
+            }
+            window.contentView = nil
+            window.close()
+        }
+        host.layoutSubtreeIfNeeded()
+        #expect(!descendants(host).compactMap { $0 as? SidebarHoverAnchorView }.isEmpty)
+        #expect(builds == 0)
+        #expect(!window.isVisible)
+    }
+
     @Test func hiddenAgentPreviewsDoNotBuildCardsUntilOpened() throws {
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 400, height: 400),
                               styleMask: .borderless, backing: .buffered, defer: false)
