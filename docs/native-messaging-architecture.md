@@ -231,7 +231,9 @@ reports `awaiting-first-prompt`. The `onUserPromptSubmitted`, `onSessionStart`,
 without reading their content.
 `awaiting-first-prompt`, `session-not-persisted` (Copilot's never-saved `--resume`
 startup placeholder) and `enrollment-busy` are not recorded; the loader asks the
-controller at most twice per join for those reasons. `account-unverified` stays
+controller again after the first such refusal; the second is final for the
+join, even when the reasons differ. Account/provider deferrals neither consume
+nor reset this shared budget. `account-unverified` stays
 pending and unrecorded; later exact-session hooks observe the account again.
 Previously recorded account-unverified refusals are reconsidered. A provider
 conflict stays pending too, but its recorded refusal permits enrollment only

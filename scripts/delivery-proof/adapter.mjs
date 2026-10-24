@@ -833,9 +833,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
     },
   });
 
-  let controllerCalls = 0;
+  let retryRefusals = 0;
   const attempt = async () => {
-    controllerCalls++;
     // An unverified account reaches the controller as null; it cannot admit the session.
     let account = { login: null, host: null };
     let statusTimer;
@@ -868,7 +867,8 @@ export async function startBornManaged({ joinSession, environment = process.env,
       // invokeEnroll is the one gate that admits a recorded login, and only for account-mismatch.
       const reason = ENROLLMENT_REASONS.has(error?.reason) ? error.reason
         : account.login === null ? "account-unverified" : "enrollment-failed";
-      state = { status: DEFERRED_TO_EVENT.has(reason) || RETRIED_ONCE.has(reason) && controllerCalls < 2
+      if (RETRIED_ONCE.has(reason)) retryRefusals++;
+      state = { status: DEFERRED_TO_EVENT.has(reason) || RETRIED_ONCE.has(reason) && retryRefusals < 2
         ? "pending" : "unavailable", reason,
         ...(typeof error?.recordedAccount === "string" ? { recordedAccount: error.recordedAccount } : {}) };
       return undefined;

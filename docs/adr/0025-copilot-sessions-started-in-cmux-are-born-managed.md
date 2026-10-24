@@ -58,8 +58,10 @@ may ask again, but the controller repeats the refusal until no node holds that
 exact provider. An in-process replacement still requires the earlier born
 root's recorded, exact-generation session end; absent custody or extension
 termination is not an end. Every admission check runs again. Concurrent events
-share one attempt; no timer or daemon retries enrollment. The two-call limit
-for the other unrecorded refusal reasons remains unchanged.
+share one attempt; no timer or daemon retries enrollment. The second refusal
+among `awaiting-first-prompt`, `session-not-persisted` and `enrollment-busy`
+remains final for the join. Account/provider deferrals neither consume nor
+reset that shared retry budget.
 
 The extension retains at most one exact `user_exit` callback received before
 its runtime observer is installed. It stores only a pending bit and forwards
