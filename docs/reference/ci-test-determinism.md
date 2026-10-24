@@ -71,6 +71,15 @@ contention. Injected-clock tests cover both slow and fast actor turns.
 - A denied installer process-group probe is conservatively treated as present.
   Only proven absence permits recovery; a transient permission refusal cannot
   crash a completion wait or release its retained guard.
+- The installer bridge-death fixture publishes one atomic FIFO readiness record
+  only after opening its release channel. Its 60-second readiness hang guard
+  covers the full upgrade and compensating restore, not a 15-second startup
+  budget. Buffered readiness wins over a delayed observer; installer exit before
+  readiness reports its synthetic failure. Cleanup buffers release even when
+  readiness was not consumed, so an assertion cannot strand the gated provider.
+  All four bridge/guardian-death variants still assert the lease and restoration
+  ordering. The failure was reproduced under bounded local CPU pressure (#345);
+  no CI rerun or elapsed-time assertion is used as evidence of correctness.
 - Cross-process preference tests still exercise real locks, writes, file
   presentation, and existing observable projections. Their 60-second bounds only
   detect a missing event; no manual refresh substitutes for notification delivery.
