@@ -296,6 +296,11 @@ Notable changes are recorded using Keep a Changelog categories.
   provider holder at later session events. Exact session-end callbacks received
   during extension join are retained until the managed observer is installed
   (#348). Actual interactive `/resume` callback ordering remains unverified.
+
+- Identity hooks retire bounded batches of superseded, verified-dead Copilot
+  bindings while preserving the newest ended binding per surface, resumed and
+  uncertain owners, permanent locks and sanitized recovery records (#336).
+
 - Unattributed internal activity shares one neutral unresolved indicator instead
   of repeated unknown-agent rows. Named tasks, attention and required ancestry
   remain visible; bounded history and work-state evidence stay unchanged (#341).

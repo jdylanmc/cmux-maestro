@@ -82,6 +82,7 @@
 		C08100000000000000000002 /* AgentSignals.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
 		C06100000000000000000001 /* Helper in Embed Helpers */ = {isa = PBXBuildFile; fileRef = C06100000000000000000002; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C06100000000000000000010 /* CopilotHookRecorder.swift in App Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000011; };
+		C03360000000000000000001 /* CopilotBindingRetirement.swift in App Sources */ = {isa = PBXBuildFile; fileRef = C03360000000000000000002; };
 		C06100000000000000000101 /* CopilotIdentityRecord.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000201; };
 		C06100000000000000000102 /* CopilotPaths.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000202; };
 		C06100000000000000000103 /* CopilotModels.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000203; };
@@ -255,6 +256,7 @@
 		C08100000000000000000003 /* AgentSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentSignals.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000002 /* CMUXMaestroCopilotHook */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CMUXMaestroCopilotHook; sourceTree = BUILT_PRODUCTS_DIR; };
 		C06100000000000000000011 /* CopilotHookRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotHookRecorder.swift; sourceTree = SOURCE_ROOT; };
+		C03360000000000000000002 /* CopilotBindingRetirement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotBindingRetirement.swift; sourceTree = SOURCE_ROOT; };
 		C0A700000000000000000004 /* CopilotWorktree.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotWorktree.swift; sourceTree = SOURCE_ROOT; };
 		C0A700000000000000000008 /* CopilotLocationRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotLocationRecord.swift; sourceTree = SOURCE_ROOT; };
 		C0A700000000000000000009 /* CopilotSessionNameParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/CopilotSessionNameParser.swift; sourceTree = SOURCE_ROOT; };
@@ -486,6 +488,7 @@
 				D10500000000000000000004 /* HierarchySnapshot.swift */,
 				D10500000000000000000005 /* SidebarConnectionModel.swift */,
 				C06100000000000000000011 /* CopilotHookRecorder.swift */,
+				C03360000000000000000002 /* CopilotBindingRetirement.swift */,
 				C06100000000000000000201 /* CopilotIdentityRecord.swift */,
 				C0A700000000000000000004 /* CopilotWorktree.swift */,
 				C0A700000000000000000008 /* CopilotLocationRecord.swift */,
@@ -751,6 +754,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C06100000000000000000010 /* CopilotHookRecorder.swift in App Sources */,
+				C03360000000000000000001 /* CopilotBindingRetirement.swift in App Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

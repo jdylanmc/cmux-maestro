@@ -55,8 +55,19 @@ private func run() {
     pid = getpid()
     lookup = { @Sendable pid in CopilotProcessProbe.read(pid) }
     #endif
-    let recorder = CopilotHookRecorder(integrationRoot: root, sessionStateRoot: state,
+    var recorder = CopilotHookRecorder(integrationRoot: root, sessionStateRoot: state,
                                        processID: pid, process: lookup)
+    #if MAESTRO_HOOK_TESTING
+    if let descriptor = inherited("MAESTRO_TEST_LOCK_READY_FD").flatMap(Int32.init) {
+        recorder.bindingLock = { fd, operation in
+            let result = flock(fd, operation | LOCK_NB)
+            guard result != 0, errno == EWOULDBLOCK else { return result }
+            var ready: UInt8 = 1
+            _ = write(descriptor, &ready, 1)
+            return operation & LOCK_NB != 0 ? result : flock(fd, operation)
+        }
+    }
+    #endif
     guard let input = boundedInput() else {
         recorder.diagnose(.invalidInput)
         return
