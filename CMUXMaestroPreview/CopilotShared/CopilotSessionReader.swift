@@ -82,6 +82,7 @@ actor CopilotSessionReader {
     private var identityCache: [String: Binding] = [:]
     private var unseenIdentities: Set<String> = []
     private(set) var eventReadBytes = 0
+    private(set) var eventFileOpens = 0
     private(set) var projectionBuilds = 0
     private(set) var identityReads = 0
 
@@ -904,6 +905,7 @@ actor CopilotSessionReader {
     private func advance(
         _ tail: inout Tail, session: Int32, budget: inout Int, now: Date
     ) throws -> (issues: [CopilotIssue], reachedBoundary: Bool) {
+        eventFileOpens += 1
         let file = try CopilotFileAccess.openRegular(at: session, name: "events.jsonl", owner: verifier.uid)
         defer { close(file) }
         let before = try CopilotFileAccess.statFile(file)

@@ -315,7 +315,7 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.identityCacheCount() == 0)
     }
 
-    @Test func unchangedEventFileDoesNotReadBytesOrRebuildProjection() async throws {
+    @Test func unchangedEventFileDoesNotReopenReadBytesOrRebuildProjection() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
         try fixture.writeEvents([copilotTestEvent("session.idle")])
@@ -325,10 +325,14 @@ nonisolated struct CopilotReaderTests {
         #expect(first.isComplete && first.sessions.first?.state == .idle)
         let bytes = await reader.eventReadBytes
         let builds = await reader.projectionBuilds
-        clock.advance(by: 600)
-        let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
-        #expect(unchanged.isComplete && unchanged.sessions.first?.state == .idle)
-        #expect(unchanged.sessions.first?.observedAt == clock.now())
+        let opens = await reader.eventFileOpens
+        for _ in 0..<30 {
+            clock.advance(by: 2)
+            let unchanged = try await reader.read(surfaceIDs: [fixture.surface])
+            #expect(unchanged.isComplete && unchanged.sessions.first?.state == .idle)
+            #expect(unchanged.sessions.first?.observedAt == clock.now())
+        }
+        #expect(await reader.eventFileOpens == opens)
         #expect(await reader.eventReadBytes == bytes)
         #expect(await reader.projectionBuilds == builds)
         #expect(await reader.hasPendingHistory() == false)
@@ -337,6 +341,7 @@ nonisolated struct CopilotReaderTests {
         try fixture.append(appended)
         let changed = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(changed.isComplete && changed.sessions.first?.state == .working)
+        #expect(await reader.eventFileOpens == opens + 1)
         #expect(await reader.projectionBuilds == builds + 1)
         #expect(await reader.eventReadBytes <= bytes + appended.count + 512)
     }
