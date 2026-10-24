@@ -32,7 +32,10 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   this publisher exits; the subprocess harness remains the outer hang guard.
   Explicit signals hold sampling and force backstop publication in all four
   owned modes. Separate controlled completion modes disable the sampling timer
-  and verify both sample output and sample-read-error semantics. No elapsed
+  and the sampler's short wait budget, awaiting its actual exit under the outer
+  harness hang guard. They verify sample output and sample-read-error semantics.
+  A normal sampler exit that wins a deadline's kill request retains its actual
+  exit code, not a synthetic `timed-out/exit-0` status. No elapsed
   time or CPU-load deadline determines their correctness verdict (#364).
 - Setup supervision starts both gated children before advancing their injected
   deadlines; neither can finish early. The observer retains the MainActor versus

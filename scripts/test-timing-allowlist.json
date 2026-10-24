@@ -151,9 +151,9 @@
       "lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },": 1,
       "let deadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(5)) : nil": 1,
       "if let deadline, ContinuousClock.now >= deadline { break }": 1,
-      "if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {": 1,
+      "let sampleDeadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(3)) : nil": 1,
       "let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))": 2,
-      "if ContinuousClock.now >= deadline { return nil }": 1,
+      "if let deadline, ContinuousClock.now >= deadline { return nil }": 1,
       "Thread.sleep(forTimeInterval: 0.01)": 1,
       "_ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))": 2
     }

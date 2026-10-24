@@ -309,7 +309,8 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         Thread.detachNewThread { self.publishDiagnostic(core) }
         do {
             beforeSampling(self)
-            if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {
+            let sampleDeadline = automaticDiagnosticBackstop ? ContinuousClock.now.advanced(by: .seconds(3)) : nil
+            if let status = try waitForSampler(until: sampleDeadline) {
                 report.sampleStatus = Self.exitDescription(status)
                 report.samplerReaped = true
             } else {
@@ -317,7 +318,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
                 if signalError != 0 { report.samplerSignalError = signalError }
                 let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))
                 report.samplerReaped = status != nil
-                report.sampleStatus = "timed-out/" + (status.map(Self.exitDescription) ?? "reap-unconfirmed")
+                report.sampleStatus = Self.sampleDescription(status)
             }
             do {
                 report.sample = try String(contentsOf: sampleURL, encoding: .utf8)
@@ -365,9 +366,10 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         do {
             let status = try waitForSampler(until: .now.advanced(by: .seconds(1)))
             report.samplerReaped = status != nil
-            if incomplete || report.sampleStatus.hasPrefix("timed-out/") {
-                report.sampleStatus = (incomplete ? "backstop/" : "timed-out/") +
-                    (status.map(Self.exitDescription) ?? "reap-unconfirmed")
+            if incomplete {
+                report.sampleStatus = "backstop/" + (status.map(Self.exitDescription) ?? "reap-unconfirmed")
+            } else if report.sampleStatus.hasPrefix("timed-out/") {
+                report.sampleStatus = Self.sampleDescription(status)
             }
         } catch {
             report.samplerReaped = false
@@ -427,7 +429,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         return pid
     }
 
-    private func waitForSampler(until deadline: ContinuousClock.Instant) throws -> Int32? {
+    private func waitForSampler(until deadline: ContinuousClock.Instant?) throws -> Int32? {
         while true {
             condition.lock()
             guard let pid = samplerPID else {
@@ -444,7 +446,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
             condition.unlock()
             if result > 0 { return status }
             if result < 0 && failure != EINTR { throw SamplerFailure.system(failure) }
-            if ContinuousClock.now >= deadline { return nil }
+            if let deadline, ContinuousClock.now >= deadline { return nil }
             Thread.sleep(forTimeInterval: 0.01)
         }
     }
@@ -461,6 +463,12 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
 
     private static func exitDescription(_ status: Int32) -> String {
         status & 0x7f == 0 ? "exit-\(status >> 8)" : "signal-\(status & 0x7f)"
+    }
+
+    private static func sampleDescription(_ status: Int32?) -> String {
+        guard let status else { return "timed-out/reap-unconfirmed" }
+        // A normal exit can win the race with a deadline's kill request.
+        return (status & 0x7f == 0 ? "" : "timed-out/") + exitDescription(status)
     }
 
     private static func log(_ message: String) {
