@@ -1589,7 +1589,7 @@ nonisolated struct CopilotInteractionTests {
             rows += [toolEnd, end]
             let state = reducer.value()
             #expect(state.state == .idle)
-            #expect(state.attention.map(\.kind) == (index == 4 ? [.error, .turnFinished] : [.turnFinished]))
+            #expect(state.attention.map(\.kind) == [.turnFinished])
             #expect(state.attention.last?.evidence.eventID == endID)
             #expect(state.attention.last?.evidence.eventID != previousOutcome)
             #expect(state.children.first { $0.id == "background" }?.state == .working)

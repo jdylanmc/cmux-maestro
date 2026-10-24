@@ -71,10 +71,10 @@ Exception: ordinary running shell invocations. Verified, unambiguous leaf
 commands fold into quiet metadata line of exact owning session or
 agent, such as "Running a command". Concurrent commands are counted. Blocked,
 attention-bearing, unresolved and structural running shell rows stay visible.
-Accepted shell invocation completions, successful or failed, leave the published
+Accepted shell invocation completions, successful or failed, leave the sidebar
 child projection, not merely the outline. They create no failure attention or
-manual dismissal burden, and do not appear in **Other activity**. Private bounded
-lifecycle/replay evidence remains; agent failures and independent requests stay
+manual dismissal burden, and do not appear in **Other activity**. Reader snapshots
+retain bounded terminal outcomes and lifecycle/replay evidence; agent failures and independent requests stay
 protected (ADR 0010).
 Incomplete-history context and collapsed-branch counts stay with owning
 row, not on standalone diagnostic rows. Managed rows offer disclosure and a

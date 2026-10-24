@@ -24,13 +24,36 @@ struct SidebarInternalTaskTests {
         ]))
         reducer.consume(try copilotTestEvent("assistant.turn_end", agent: "fragment", data: ["turnId": "turn"]))
         let ended = reducer.value()
-        let session = try #require(project(ended.children, complete: false).sessions.first)
-        #expect(ended.children.map(\.id) == ["fragment"])
+        let session = try #require(project(ended.children, history: .init(retention: .never), complete: false).sessions.first)
+        if tool == "view" {
+            #expect(ended.children.map(\.id) == ["fragment"])
+        } else {
+            let invocation = try #require(ended.children.first { $0.id == "shell:invocation" })
+            #expect(invocation.state == (success ? .completed : .failed))
+            #expect(invocation.terminalEvent != nil)
+            #expect(invocation.attention?.isEmpty == true)
+        }
+        #expect(session.nodes.map(\.id) == ["fragment"])
+        #expect(session.hiddenHistoryCount == 0)
         #expect(session.attentionOwnerCount == 0)
         #expect(session.unresolvedFragments.map(\.id) == ["fragment"])
         #expect(session.childSections(layout: .init()).isEmpty)
         #expect(session.taskboardActivity.isEmpty)
         #expect(session.nodes.allSatisfy { $0.dismissibleFailure(sessionID: session.id) == nil })
+    }
+
+    @Test func finishedInvocationDoesNotProtectCompletedTaskOutcome() throws {
+        let children = [
+            task("result", state: .completed),
+            CopilotChildWork(id: "shell:invocation", parentID: "result", kind: .shell,
+                             name: "bash invocation", state: .failed, model: nil,
+                             terminalEvent: .init(id: event, timestamp: now))
+        ]
+        let tree = project(children, history: .init(retention: .never))
+        let session = try #require(tree.sessions.first)
+        #expect(session.nodes.map(\.id) == ["result"])
+        #expect(session.nodes.first?.dismissibleOutcome(sessionID: session.id) == key("result"))
+        #expect(session.hiddenHistoryCount == 0)
     }
 
     @Test func genuineFailureAndPermissionSurviveToolFailure() throws {
@@ -161,7 +184,7 @@ struct SidebarInternalTaskTests {
             let section = try #require(visible.tree.sessions[0].childSections(layout: .init(), taskboard: taskboard).first)
             let offered = try #require(section.rows[0].node.dismissibleOutcome(sessionID: fixtures.sessionID))
             #expect(offered == key("result"))
-            #expect(tree.sessions[0].nodes[0].hasChildren)
+            #expect(tree.sessions[0].nodes[0].hasChildren == (kind != .shell))
             #expect(tree.sessions[0].nodes[0].dismissibleOutcome(sessionID: fixtures.sessionID) == offered)
         }
         #expect(preferences.dismissInternalTask(key("result"), in: tree, now: now))
@@ -171,8 +194,13 @@ struct SidebarInternalTaskTests {
         #expect(preferences.history.dismissed == [key("result")])
         let historyVisible = SidebarVisibleWork(tree: project(children, history: preferences.history), managed: [],
                                                 history: preferences.history, showEnded: true, now: now)
-        #expect(historyVisible.tree.sessions[0].nodes.map(\.id) == ["result", "legacy"])
-        #expect(historyVisible.tree.sessions[0].nodes[0].historyAncestor, "Only ancestry remains, not the dismissed outcome")
+        if kind == .shell {
+            #expect(historyVisible.tree.sessions[0].nodes.isEmpty, "Show ended cannot restore finished invocations")
+        } else {
+            #expect(historyVisible.tree.sessions[0].nodes.map(\.id) == ["result", "legacy"])
+            let ancestor = try #require(historyVisible.tree.sessions[0].nodes.first)
+            #expect(ancestor.historyAncestor, "Only ancestry remains, not the dismissed outcome")
+        }
     }
 
     @Test func finishedTasksDoNotMakeARowExpandableUntilTheEyeIsOn() throws {

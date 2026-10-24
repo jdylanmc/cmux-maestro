@@ -87,7 +87,9 @@ nonisolated struct CopilotAttentionOrderingTests {
         #expect(activity?.lastEventAt == nil)
         #expect(value.children.first { $0.id == "sibling" }?.activity?.summary == "Executing tool: rg")
         if name == "bash" {
-            #expect(!value.children.contains { $0.id == "shell:tool" })
+            #expect(value.children.first { $0.id == "shell:tool" }?.state == .completed)
+            #expect(value.children.first { $0.id == "shell:tool" }?.terminalEvent != nil)
+            #expect(value.children.first { $0.id == "shell:tool" }?.terminalEvent?.timestamp == nil)
         }
         reducer.consume(try attentionEvent("tool.execution_complete", agent: owner, data: ["toolCallId": "tool", "success": true],
                                           timestamp: "2026-09-12T12:00:40Z"))

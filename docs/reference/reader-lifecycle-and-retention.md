@@ -26,8 +26,8 @@ Acknowledgement, history dismissal and focus never send approval, answers,
 cancellation or any agent-control command. CMUX unread counts stay untouched.
 
 Accepted tool completions never create error attention, even on non-zero shell
-outcomes. Completed shell rows leave the published projection, while private
-bounded lifecycle/replay evidence remains. This does not clear independent
+outcomes. Completed shell rows leave the sidebar projection, while reader
+snapshots retain bounded terminal outcomes and lifecycle/replay evidence. This does not clear independent
 permission/answer requests or genuine agent failures (ADR 0010).
 
 **Turn finished** = matching primary `assistant.turn_end` recorded.

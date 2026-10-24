@@ -58,10 +58,10 @@ ID without adding a duplicate. No historical backfill or name-based matching.
 ### Other activity and session history
 
 Tool invocation completion is not an agent failure. Successful and failed shell
-invocations leave the published child rows when their exact completion is
+invocations leave the sidebar child rows when their exact completion is
 accepted; other tools likewise create no failure attention on their owner.
 They require no manual dismissal and are not restored by **Show ended agents**.
-Private bounded replay evidence remains. Agent errors, genuine sub-agent
+Reader snapshots retain bounded terminal outcomes and replay evidence. Agent errors, genuine sub-agent
 failures and independent permission/answer requests retain their protections.
 
 The completed-work history controls in sidebar **Settings** are shared by

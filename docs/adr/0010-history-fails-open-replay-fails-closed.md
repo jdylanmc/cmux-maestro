@@ -12,8 +12,9 @@ Consequence: users may see more history until reset. A false positive in the 128
 
 An accepted `tool.execution_complete`, successful or not, is ordinary tool work.
 It creates no persistent error/attention outcome on the invocation or its owning
-agent. Ended shell invocations leave the published child projection; private
-bounded lifecycle evidence and replay guards remain. Running invocations keep
+agent. Ended shell invocations leave the sidebar child projection, not the
+reader snapshot: bounded terminal outcomes, lifecycle evidence and replay guards
+remain available to reader consumers. Running invocations keep
 their existing presentation. This exclusion is independent of history settings,
 expiry and manual dismissal, and does not infer that a background process exited.
 

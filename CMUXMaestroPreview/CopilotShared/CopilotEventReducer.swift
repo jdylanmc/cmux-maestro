@@ -546,8 +546,6 @@ nonisolated struct CopilotEventReducer: Sendable {
             }
             let attention = attention(for: id)
             let blocked = attention.contains { $0.kind.isBlocking }
-            // Completed invocation evidence stays private for replay, not as agent history.
-            if item.kind == .shell, Self.terminal(item.state), attention.isEmpty { continue }
             children.append(CopilotChildWork(
                 id: id, parentID: parent, kind: item.kind, name: item.name,
                 state: blocked && !ended ? .blocked : item.state, model: item.model,

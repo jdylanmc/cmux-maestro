@@ -145,8 +145,9 @@ nonisolated struct CopilotShellReducerTests {
         try check(worker.name == "Background shell" && worker.state == .failed, "Never suppress real worker errors by display name")
         try check(worker.terminalEvent?.id == workerFailure && worker.attention?.first?.kind == .error,
                   "Worker error must retain its own actual failure evidence")
-        try check(!state.children.contains(where: { $0.id == "shell:invocation" }),
-                  "An ended invocation must not leave an agent-failure row")
+        let invocation = state.children.first(where: { $0.id == "shell:invocation" })
+        try check(invocation?.state == .failed && invocation?.attention?.isEmpty == true,
+                  "An ended invocation retains outcome evidence, not agent-failure attention")
         try check(state == before, "Background process events must add no row, error, aborted signal or dismissal burden")
     }
 
@@ -167,7 +168,7 @@ nonisolated struct CopilotShellReducerTests {
         reducer.consume(try event("tool.execution_complete", data: ["toolCallId": "pressure", "success": true]))
         reducer.consume(oldStart)
         reducer.consume(oldFinish)
-        try check(reducer.value().children.isEmpty, "Old lifecycle replay must not recreate retired worker or ended invocation")
+        try check(reducer.value().children.map(\.id) == ["shell:pressure"], "Old lifecycle replay must not recreate retired worker")
         reducer.consume(try event("subagent.started", agent: "worker", data: [
             "toolCallId": "new-spawn", "agentDisplayName": "Fresh worker"
         ]))
@@ -190,7 +191,7 @@ nonisolated struct CopilotShellReducerTests {
             event("tool.execution_start", data: ["toolCallId": "retire-worker", "toolName": "bash"]),
             event("tool.execution_complete", data: ["toolCallId": "retire-worker", "success": true])
         ] { reducer.consume(payload) }
-        try check(reducer.value().children.isEmpty && reducer.retentionCounts.work == 1,
+        try check(reducer.value().children.map(\.id) == ["shell:retire-worker"] && reducer.retentionCounts.work == 1,
                   "Request placeholder must actually retire under the original one-node bound")
         reducer.consume(try event("permission.requested", agent: "worker", data: ["requestId": "fresh"]))
         let fresh = reducer.value()
