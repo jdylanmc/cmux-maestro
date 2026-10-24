@@ -36,9 +36,12 @@ struct SidebarHoverTests {
         let host = NSHostingView(rootView: row.environment(preferences)
             .environment(\.sidebarPetStore, stores.pets)
             .environment(\.sidebarHoverConnected, connected)
-            .environment(\.sidebarAgentHoverProvider, { _ in
+            .environment(\.sidebarAgentHoverProvider, { target in
                 builds += 1
-                return .init(id: "synthetic", category: "Agent preview", title: "Synthetic")
+                return SidebarAgentHoverContent.card(
+                    for: target, hierarchy: fixture.hierarchy(), connected: connected, tree: tree,
+                    managed: .empty, availability: .ready, now: date
+                )
             }))
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 360, height: 100),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -56,7 +59,7 @@ struct SidebarHoverTests {
         let title = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }.first)
         let menus = descendants(host).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
         let menu = try #require(menus.first)
-        let available = hasSession || connected
+        let available = connected
         #expect(title.preview.available == available)
         #expect(title.accessibilityHelp()?.contains("Tab enters preview controls") == available)
         #expect(menu.menu().items.contains { $0.title == "Preview details" } == available)
