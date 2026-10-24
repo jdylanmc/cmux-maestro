@@ -14,8 +14,47 @@ final class SidebarSessionProjectionCache {
 
     private var context: Context?
     private var entries: [UUID: SidebarCopilotProjectionCache] = [:]
+    private struct ChildInput: Equatable {
+        let schema: SnapshotSchemaVersion
+        let identity: ProviderSessionIdentity
+        let path: String
+        let legacy: [AgentChildWork]
+        let observation: AgentChildWorkObservation?
+    }
+    private struct ChildEntry {
+        let input: ChildInput
+        let generatedAt: Date
+        let assessment: AgentSessionObservationAssessment
+    }
+    private var childEntries: [ProviderSessionIdentity: ChildEntry] = [:]
     private(set) var computationCount = 0
     private(set) var lastPassComputationCount = 0
+    private(set) var childAssessmentCount = 0
+    var retainedChildAssessmentCount: Int { childEntries.count }
+
+    func assessment(snapshot: AgentSessionSnapshot, index: Int) -> AgentSessionObservationAssessment {
+        let session = snapshot.sessions[index]
+        let path = "sessions[\(index)]"
+        let input = ChildInput(schema: snapshot.schemaVersion, identity: session.identity, path: path,
+                               legacy: session.childWork, observation: session.childWorkObservation)
+        let children: AgentSessionObservationAssessment
+        if let cached = childEntries[session.identity], cached.input == input,
+           snapshot.generatedAt.timeIntervalSince1970.isFinite, snapshot.generatedAt >= cached.generatedAt {
+            children = cached.assessment
+        } else {
+            childAssessmentCount += 1
+            children = snapshot.assessChildStructure(session, at: path)
+            childEntries.removeValue(forKey: session.identity)
+            // Only valid evidence is monotonic as the envelope advances; a future-date error can become valid.
+            if children.isValid, snapshot.generatedAt.timeIntervalSince1970.isFinite,
+               childEntries.count < 64 {
+                childEntries[session.identity] = ChildEntry(
+                    input: input, generatedAt: snapshot.generatedAt, assessment: children
+                )
+            }
+        }
+        return snapshot.assess(session, at: path, childAssessment: children)
+    }
 
     func prepare(
         snapshot: AgentSessionSnapshot, topology: SidebarTopology, history: SidebarHistorySettings,
@@ -26,9 +65,11 @@ final class SidebarSessionProjectionCache {
             complete: snapshot.isCompleteApartFromSessionIssues, history: history,
             attention: attention, revealingIdleTasksIn: revealingIdleTasksIn
         )
-        if context != next { entries.removeAll(); context = next }
+        if context != next { entries.removeAll(); childEntries.removeAll(); context = next }
         let present = Set(snapshot.sessions.compactMap { UUID(uuidString: $0.identity.sessionID) })
         entries = entries.filter { present.contains($0.key) }
+        let identities = Set(snapshot.sessions.map(\.identity))
+        childEntries = childEntries.filter { identities.contains($0.key) }
         lastPassComputationCount = 0
     }
 
@@ -57,6 +98,7 @@ final class SidebarSessionProjectionCache {
 
     func removeAll() {
         entries.removeAll()
+        childEntries.removeAll()
         context = nil
     }
 
