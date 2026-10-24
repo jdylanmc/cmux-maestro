@@ -102,7 +102,8 @@ nonisolated enum CopilotIssue: String, Codable, Equatable, Sendable {
 
     // Exact-session identity, unavailable state and history bounds stay local.
     var isSessionScoped: Bool {
-        self == .ambiguousIdentity || self == .identityChanged || self == .stateUnavailable || self == .readLimitReached
+        self == .ambiguousIdentity || self == .identityChanged || self == .stateUnavailable
+            || self == .permissionDenied || self == .readLimitReached
     }
 }
 

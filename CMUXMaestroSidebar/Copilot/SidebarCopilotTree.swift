@@ -137,6 +137,8 @@ struct SidebarCopilotTree: Equatable {
     var availability: SidebarCopilotAvailability
     var sessions: [SidebarCopilotSession]
     var issues: [AgentSnapshotIssue]
+    // Projected diagnostics include session issues; only envelope issues revoke shared access.
+    var globalIssues: [AgentSnapshotIssue]? = nil
     var generatedAt: Date?
     var nextHistoryExpiry: Date? = nil
     // Display records never participate in identity, attention or history authority.
@@ -144,6 +146,8 @@ struct SidebarCopilotTree: Equatable {
     /// Name and appearance of controller-enrolled sessions, by exact session UUID, for rows the
     /// observer has not bound yet (`managedDetails(id:now:)`). Never identity or state evidence.
     var managedDetails: [UUID: CopilotManagedSessionDetails] = [:]
+
+    var hasGlobalPermissionDenial: Bool { (globalIssues ?? issues).contains(.permissionDenied) }
 
     static let waiting = SidebarCopilotTree(
         availability: .waiting, sessions: [], issues: [], generatedAt: nil
@@ -453,6 +457,7 @@ struct SidebarCopilotTree: Equatable {
                 && !sessions.contains(where: \.treeDegraded) ? .ready : .partial,
             sessions: sessions,
             issues: issues,
+            globalIssues: snapshot.globalIssues,
             generatedAt: snapshot.generatedAt,
             nextHistoryExpiry: nextExpiry
         )
@@ -632,7 +637,7 @@ extension SidebarCopilotTree {
     /// ADR 0022 eligibility for one exact session's observation: a ready or partial, fresh,
     /// readable tree; that session UUID observed once, alive, fresh, in this workspace and surface.
     func exactLiveSession(id: UUID, workspaceID: UUID, surfaceID: UUID, now: Date) -> SidebarCopilotSession? {
-        guard availability == .ready || availability == .partial, !issues.contains(.permissionDenied),
+        guard availability == .ready || availability == .partial, !hasGlobalPermissionDenial,
               let generatedAt, Self.isFresh(generatedAt, now: now) else { return nil }
         let matches = sessions.filter { $0.id == id }
         guard matches.count == 1, let session = matches.first,
@@ -646,7 +651,7 @@ extension SidebarCopilotTree {
     /// during observation loss, the last name read while its status grace lasts. Dead, stale,
     /// ambiguous, misplaced or permission-denied evidence names nothing.
     func eligibleSessionName(id: UUID, workspaceID: UUID, surfaceID: UUID, now: Date) -> String? {
-        guard !issues.contains(.permissionDenied) else { return nil }
+        guard !hasGlobalPermissionDenial else { return nil }
         if let live = exactLiveSession(id: id, workspaceID: workspaceID, surfaceID: surfaceID, now: now) {
             return live.sessionName
         }
@@ -664,7 +669,7 @@ extension SidebarCopilotTree {
     /// workspace, surface and session (ADR 0022 amendment, #261). Any observation, live or not,
     /// takes precedence; permission-denied or stale reads name nothing.
     func managedDetails(id: UUID, now: Date) -> CopilotManagedSessionDetails? {
-        guard !issues.contains(.permissionDenied),
+        guard !hasGlobalPermissionDenial,
               !sessions.contains(where: { $0.id == id }), !statusSessions.contains(where: { $0.id == id }),
               let details = managedDetails[id], Self.isFresh(details.readAt, now: now) else { return nil }
         return details

@@ -312,8 +312,9 @@ final class SidebarCopilotPolling {
             currentTree = .init(availability: .unavailable, sessions: [], issues: snapshot.issues ?? [], generatedAt: nil)
             cancelHistoryExpiry()
             scheduleStatusExpiry()
+            if !snapshot.globalIssues.contains(.permissionDenied) { return false }
         }
-        if snapshot.issues?.contains(.permissionDenied) == true {
+        if snapshot.globalIssues.contains(.permissionDenied) {
             self.snapshot = nil
             projectionCache = nil
             sessionCache.removeAll()

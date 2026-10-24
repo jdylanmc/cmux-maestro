@@ -585,7 +585,7 @@ enum SidebarPresentation {
             let matches = tree.sessions.filter { $0.id == sessionID }
             let replaced = replacedSessionIDs(tree, managed: managed.nodes, now: now)
             guard matches.count == 1, let session = matches.first,
-                  tree.isCurrent(session, now: now), !tree.issues.contains(.permissionDenied),
+                  tree.isCurrent(session, now: now), !tree.hasGlobalPermissionDenial,
                   !session.statusOnly, [.alive, .dead].contains(session.liveness),
                   session.workspaceID == workspace, session.surfaceID == surface,
                   session.nodes.filter({ $0.id == childID }).count == 1,
@@ -641,7 +641,7 @@ enum SidebarPresentation {
         guard !showEnded, [.ready, .partial].contains(availability),
               (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt)),
               observations.availability == .ready,
-              !observations.issues.contains(.permissionDenied),
+              !observations.hasGlobalPermissionDenial,
               let generatedAt = observations.generatedAt,
               SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
         let topology = SidebarTopology(hierarchy)
@@ -988,7 +988,7 @@ enum SidebarPresentation {
         _ managed: [SidebarOrchestrationNode], observations: SidebarCopilotTree?, now: Date
     ) -> Set<UUID> {
         guard let observations, [.ready, .partial].contains(observations.availability),
-              !observations.issues.contains(.permissionDenied),
+              !observations.hasGlobalPermissionDenial,
               let generatedAt = observations.generatedAt,
               SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
         return Set(managed.filter { node in
@@ -1123,7 +1123,7 @@ enum SidebarPresentation {
         let bySurface = Dictionary(grouping: sessions, by: \.surfaceID)
         let identityCounts = Dictionary(grouping: observations?.sessions ?? sessions, by: \.id).mapValues(\.count)
         let currentSnapshot = observations.map {
-            [.ready, .partial].contains($0.availability) && !$0.issues.contains(.permissionDenied)
+            [.ready, .partial].contains($0.availability) && !$0.hasGlobalPermissionDenial
                 && $0.generatedAt.map { SidebarCopilotTree.isFresh($0, now: now) } == true
         } ?? true
         var counts: [AgentSummaryState: Int] = [:]
@@ -1469,7 +1469,7 @@ enum SidebarPresentation {
         for node: SidebarOrchestrationNode, in tree: SidebarCopilotTree, now: Date
     ) -> SidebarCopilotSession? {
         guard tree.availability == .ready || tree.availability == .partial,
-              !tree.issues.contains(.permissionDenied),
+              !tree.hasGlobalPermissionDenial,
               let generatedAt = tree.generatedAt,
               SidebarCopilotTree.isFresh(generatedAt, now: now) else {
             return nil
