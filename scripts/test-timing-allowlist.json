@@ -147,7 +147,7 @@
     "statements": {
       "deadline = ContinuousClock.now.advanced(by: limit)": 2,
       "let instant = ContinuousClock.now": 1,
-      "while !finished, ContinuousClock.now < deadline {": 1,
+      "while !finished, !triggered, ContinuousClock.now < deadline {": 1,
       "lastSampleAge: lastSample.map { String(describing: $0.duration(to: .now)) },": 1,
       "Thread.sleep(forTimeInterval: 5)": 1,
       "if let status = try waitForSampler(until: .now.advanced(by: .seconds(3))) {": 1,
@@ -588,7 +588,7 @@
   "scripts/test-metadata-watchdog.py": {
     "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
     "statements": {
-      "deadline = time.monotonic() + 12": 1,
+      "deadline = time.monotonic() + 60": 1,
       "require(time.monotonic() < deadline, f\"Finite probe child {child} did not exit.\")": 1,
       "time.sleep(0.05)": 1
     }

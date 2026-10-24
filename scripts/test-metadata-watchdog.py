@@ -20,6 +20,13 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
+def metadata_readiness(report):
+    ready = report.get("metadataReadiness")
+    require(report.get("metadataPID") is not None and isinstance(ready, dict),
+            f"Metadata watchdog not-ready: {report}")
+    return ready
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", required=True, type=Path)
@@ -32,11 +39,21 @@ def main():
     for mode in args.mode or MODES:
         output = directory / (mode + ".log")
         case = directory / mode
+        release = None
+        if mode.startswith("owned-") and mode != "owned-exited":
+            case.mkdir()
+            gate = case / "child-release"
+            os.mkfifo(gate, 0o600)
+            release = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
         try:
             with output.open("w") as stream:
                 result = subprocess.run([str(args.probe.resolve()), mode, str(case.resolve())],
-                                        stdout=stream, stderr=subprocess.STDOUT, timeout=10)
+                                        stdout=stream, stderr=subprocess.STDOUT,
+                                        timeout=80 if mode.startswith("owned-") else 10)
         finally:
+            if release is not None:
+                os.write(release, b"release\n")
+                os.close(release)
             for log in (output, case / "sampler-stderr.txt"):
                 if log.exists():
                     print(log.read_text(), end="", flush=True)
@@ -46,6 +63,8 @@ def main():
         else:
             require(result.returncode == 124, output.read_text())
             report = json.loads((case / "stall.json").read_text())
+            if mode.startswith("owned-"):
+                ready = metadata_readiness(report)
             try:
                 os.kill(report["samplerPID"], 0)
             except ProcessLookupError:
@@ -53,11 +72,10 @@ def main():
             else:
                 raise RuntimeError(f"Sampler was not reaped: {report}")
             require(report["pid"] > 1, report)
-            # The failing host cannot perform normal cleanup. Its synthetic child
-            # is finite; observe its exit before starting another test, never signal
+            # Release the owned fixture above, then observe exit without signaling
             # a PID whose unreaped ownership anchor ended with the probe.
             child = None if mode.startswith("diagnostic-") else int((case / "child.pid").read_text())
-            deadline = time.monotonic() + 12
+            deadline = time.monotonic() + 60
             while child is not None:
                 try:
                     os.kill(child, 0)
@@ -69,7 +87,7 @@ def main():
             print(f"Exact sampler {report['samplerPID']} reaped/absent; {child_description}.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
-            minimum_samples = 0 if mode == "owned-exited" or mode.startswith("diagnostic-") else (2 if mode == "polling-clock" else 1)
+            minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-")) else (2 if mode == "polling-clock" else 1)
             require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
             if mode.startswith(("sampler-", "owned-", "diagnostic-")):
@@ -102,7 +120,6 @@ def main():
                 if mode == "stalled-clock":
                     require("MetadataWatchdogProbe" in report["sample"], report["sample"])
             if mode.startswith("owned-"):
-                ready = report["metadataReadiness"]
                 current = report["metadataAtStall"]
                 require(report["metadataPID"] == child, report)
                 require(ready["state"] == "living", report)

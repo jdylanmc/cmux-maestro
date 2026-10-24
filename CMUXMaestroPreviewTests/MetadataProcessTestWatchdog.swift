@@ -17,6 +17,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
     private var samples = 0
     private var lastSample: ContinuousClock.Instant?
     private var finished = false
+    private var triggered = false
     private var samplerPID: Int32?
     private var metadataPID: Int32?
     private var metadataReadiness: ProcessObservation?
@@ -63,6 +64,13 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         condition.unlock()
     }
 
+    func trigger() {
+        condition.lock()
+        triggered = true
+        condition.signal()
+        condition.unlock()
+    }
+
     func metadataPIDReady(_ pid: Int32) {
         condition.lock()
         metadataPID = pid
@@ -88,7 +96,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
 
     private func observe() {
         condition.lock()
-        while !finished, ContinuousClock.now < deadline {
+        while !finished, !triggered, ContinuousClock.now < deadline {
             // Date only schedules a wakeup; the failure boundary is monotonic.
             _ = condition.wait(until: Date(timeIntervalSinceNow: 0.1))
         }

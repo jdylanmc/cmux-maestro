@@ -12,6 +12,15 @@ contention. Injected-clock tests cover both slow and fast actor turns.
 
 ## Required behavioral coverage
 
+- Metadata watchdog owned-process controls signal the diagnostic only after
+  capturing readiness and the selected runner/task/exit boundary. A 70-second
+  independent watchdog is a hang backstop, outside the 60-second readiness
+  guard; it no longer races a two-second diagnostic against three-second setup.
+  A harness-owned FIFO retains the living child until release, including failure
+  cleanup, with a separate 90-second orphan guard. Exited-child coverage waits
+  for its exact unreaped POSIX exit before capturing the report. Missing readiness
+  remains an explicit not-ready failure, never a KeyError or passing fallback.
+  Deadline-sample counts remain assertions only in clock-fault controls.
 - Setup supervision starts both gated children before advancing their injected
   deadlines; neither can finish early. The observer retains the MainActor versus
   detached-driver distinction. Deadline-helper tests release an explicit timeout
