@@ -299,7 +299,10 @@ identity, process-liveness or deadline work. Surface-row hover cards are resolve
 on demand rather than during hidden row rendering, using the same lazy provider
 and open/update revalidation as agent rows. Any surface without a hover
 connection exposes neither a preview keyboard hint nor a preview action;
-availability is checked without constructing the card.
+availability is checked without constructing the card. A single status-only
+session also has no preview target: the shared surface-row session target excludes
+retained status for previews, inspection, tags, icons, pets and Beats. Retained
+status remains visible, and surface inspection/navigation remain available.
 
 The three native callback tests are inventoried local opt-in acceptance in
 `scripts/local-ui-acceptance.json`, enabled with

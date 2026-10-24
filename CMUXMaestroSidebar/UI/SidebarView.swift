@@ -2172,8 +2172,8 @@ struct SurfaceRow: View {
     @State private var petPicker: UUID?
     @State private var editingTags: UUID?
     private var singleSession: SidebarCopilotSession? { sessions.count == 1 ? sessions.first : nil }
-    /// Tags belong to the exact session of a single-agent surface.
-    private var tagSession: UUID? { singleSession.flatMap { $0.statusOnly ? nil : $0.id } }
+    private var sessionTargetID: UUID? { singleSession.flatMap { $0.statusOnly ? nil : $0.id } }
+    private var previewAvailable: Bool { connected && (singleSession == nil || sessionTargetID != nil) }
     private var expanded: Bool {
         layout.isExpanded(.surface(surface.id))
             && (singleSession.map { layout.isExpanded(.session($0.id)) } ?? true)
@@ -2214,20 +2214,20 @@ struct SurfaceRow: View {
             .init(title: "Open details", perform: inspect)
         ]
         if hasChildren { items.append(.init(title: expanded ? "Collapse branch" : "Expand branch", perform: toggleExpanded)) }
-        let iconTarget: SidebarIconTarget? = singleSession.flatMap { $0.statusOnly ? nil : .session($0.id) }
+        let iconTarget: SidebarIconTarget? = sessionTargetID.map { .session($0) }
             ?? ((surface.kind == .terminal || surface.kind == .browser) ? .surface(surface.id) : nil)
         return [
             .init(title: "Navigation", actions: items),
             .appearance(icon: iconTarget.map { target in { showingPicker = target } }, agent: singleSession != nil || surface.kind == .agentSession,
-                        pet: singleSession.flatMap { $0.statusOnly ? nil : $0.id }.map { id in { petPicker = id } },
-                        tags: tagSession.map { id in { editingTags = id } }),
+                        pet: sessionTargetID.map { id in { petPicker = id } },
+                        tags: sessionTargetID.map { id in { editingTags = id } }),
             .placement(reorder), .lifecycle()
         ]
     }
 
     private var preview: SidebarHoverCardData? {
-        if let singleSession { return hoverProvider(.session(singleSession.id)) }
-        guard connected else { return nil }
+        guard previewAvailable else { return nil }
+        if let sessionTargetID { return hoverProvider(.session(sessionTargetID)) }
         return .init(id: "surface-\(surface.id)", category: "\(surface.kind.title) preview", title: title,
                      lines: [SidebarSurfaceDirectory.line(surface.workingDirectory),
                              .init(title: "Surface ID", value: surface.id.uuidString)])
@@ -2243,7 +2243,7 @@ struct SurfaceRow: View {
                 }
                 if let singleSession {
                     SidebarItemIcon(
-                        kind: .agent, target: singleSession.statusOnly ? nil : .session(singleSession.id), title: title,
+                        kind: .agent, target: sessionTargetID.map { .session($0) }, title: title,
                         agentGlyph: singleSession.iconId,
                         agentColor: singleSession.iconColor.flatMap(SidebarAvatarColor.init(rawValue:)),
                         inspect: inspect, picker: $showingPicker
@@ -2264,21 +2264,21 @@ struct SurfaceRow: View {
                     .help(inspectionLabel)
                     .accessibilityLabel(inspectionLabel)
                 }
-                SidebarHoverRegion(dataProvider: connected ? { preview } : nil) {
+                SidebarHoverRegion(dataProvider: previewAvailable ? { preview } : nil) {
                   FocusButton(
                     target: .surface(workspaceID: workspaceID, surfaceID: surface.id),
                     navigation: navigation,
-                    label: SidebarPresentation.taggedLabel("Focus \(surface.kind.title) \(title)", tags: preferences.tags(for: tagSession)),
+                    label: SidebarPresentation.taggedLabel("Focus \(surface.kind.title) \(title)", tags: preferences.tags(for: sessionTargetID)),
                     detail: rowMetadataHelp
                 ) {
                     if let singleSession {
-                        SidebarAgentTitleLine(title: title, tags: preferences.tags(for: tagSession)) {
+                        SidebarAgentTitleLine(title: title, tags: preferences.tags(for: sessionTargetID)) {
                             SessionStateBadge(session: singleSession)
                         }
                         .help(rowMetadataHelp)
                     } else {
                         VStack(alignment: .leading, spacing: 4) {
-                            SidebarTaggedTitle(tags: preferences.tags(for: tagSession)) {
+                            SidebarTaggedTitle(tags: preferences.tags(for: sessionTargetID)) {
                                 Text(title).font(.system(size: density.rowTitleSize, weight: .semibold)).lineLimit(1)
                             }
                             Text(rowMetadata).font(.system(size: density.rowMetadataSize)).foregroundStyle(.secondary)
@@ -2302,7 +2302,7 @@ struct SurfaceRow: View {
             .sidebarPetPicker(session: $petPicker, agentChoice: singleSession?.petId)
             .environment(\.sidebarReorderSource, reorder.dragSource)
             .sidebarRowActions(title: title, groups: actions) {
-                SidebarBeatIndicator(session: singleSession.flatMap { $0.statusOnly ? nil : $0.id },
+                SidebarBeatIndicator(session: sessionTargetID,
                                      titleHeight: SidebarBeatIndicator.titleHeight(fontSize: density.rowTitleSize),
                                      belowTitle: 18)
             }
@@ -2342,7 +2342,7 @@ struct SurfaceRow: View {
     }
 
     private func inspect() {
-        if let singleSession, !singleSession.statusOnly { selection = .session(singleSession.id) }
+        if let sessionTargetID { selection = .session(sessionTargetID) }
         else { selection = .surface(workspaceID: workspaceID, surfaceID: surface.id) }
     }
 
