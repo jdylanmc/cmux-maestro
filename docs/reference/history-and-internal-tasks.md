@@ -54,6 +54,13 @@ blocked, failed and necessary ancestor rows remain individual. This is only
 presentation compaction: exact observations, counts, history, uncertainty and
 dismissal rules do not change. Later accepted spawn evidence resolves the same
 ID without adding a duplicate. No historical backfill or name-based matching.
+Compaction and child disclosure use the rows surviving presentation filters,
+before saved expansion is applied. A completed internal task hidden by the
+workspace eye cannot keep an empty ancestor expandable. Revealing that task
+restores its ancestor row. Visible protected descendants retain their entire
+ancestor chain, including completed internal-task context.
+Compacted fragments do not restore hidden completed-task context or protect its
+ancestors; empty context is pruned after compaction.
 
 ### Other activity and session history
 

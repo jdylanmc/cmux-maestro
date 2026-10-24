@@ -32,15 +32,23 @@ struct SidebarInternalTaskRenderingTests {
     func unresolvedFragmentsRenderOneNeutralLine(_ density: SidebarDensity, _ width: Int) throws {
         let data = SidebarTreeFixtures()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
-        let children = (0..<3).map {
-            CopilotChildWork(id: "fragment-\($0)", parentID: "unresolved-owner", kind: .unknown,
-                             name: "Unknown agent", state: .unknown, model: nil)
+        let children = [
+            CopilotChildWork(id: "context", parentID: "unresolved-owner", kind: .subagent,
+                             name: "Finished context", state: .completed, model: nil)
+        ] + (0..<3).flatMap {
+            [
+                CopilotChildWork(id: "fragment-\($0)", parentID: $0 == 0 ? "context" : "unresolved-owner", kind: .unknown,
+                                 name: "Unknown agent", state: .unknown, model: nil),
+                CopilotChildWork(id: "finished-\($0)", parentID: "fragment-\($0)", kind: .subagent,
+                                 name: "Finished task", state: .completed, model: nil)
+            ]
         }
         let tree = SidebarCopilotTree.project(
             data.snapshot(sessions: [data.session(children: children, now: now)], complete: false, now: now),
             onto: data.topology(), now: now
         )
         let session = try #require(tree.sessions.first)
+        #expect(session.nodes.count == 7, "Retained completed outcomes must not change the rendered count line")
         func pixels<V: View>(_ content: V) throws -> Data {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: width, height: 32),
                                   styleMask: .borderless, backing: .buffered, defer: false)

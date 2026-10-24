@@ -286,6 +286,9 @@ Notable changes are recorded using Keep a Changelog categories.
   predates the bounded tail. Unowned completions preserve replay-checked
   envelope continuity without acquiring ownership or completing work (#352).
 
+- Hidden finished internal tasks no longer leave empty expandable **Unknown
+  agent** rows. Unprotected fragments join **+N unresolved**; the workspace eye
+  restores their tasks, while protected descendants keep their ancestry (#353).
 - Unattributed internal activity shares one neutral unresolved indicator instead
   of repeated unknown-agent rows. Named tasks, attention and required ancestry
   remain visible; bounded history and work-state evidence stay unchanged (#341).
