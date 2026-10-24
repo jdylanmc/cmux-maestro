@@ -216,7 +216,7 @@ struct SidebarHistoryPollingTests {
         await sidebarEventually { await harness.activeTimers == 0 && !poller.isReading }
     }
 
-    @Test(arguments: ["marker", "tail"])
+    @Test(arguments: ["marker", "tail", "symlink", "permission", "rotation", "shrink", "rewrite"])
     func oneUnavailableSessionDoesNotHideHealthySibling(_ failure: String) async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
@@ -237,7 +237,7 @@ struct SidebarHistoryPollingTests {
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: appearance.path)
         let otherEvents = other.appendingPathComponent("events.jsonl")
         try (copilotTestEvent("session.idle") + Data([10])).write(to: otherEvents)
-        if failure == "tail" { try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock")) }
+        if failure != "marker" { try Data().write(to: other.appendingPathComponent("inuse.\(fixture.process.pid).lock")) }
         let topology = SidebarTopology(.init(
             sequence: 1, receivedSnapshot: true, workspaceListAvailable: true,
             workspaceMetadataAvailable: true, surfaceMetadataAvailable: true, workspacePathsAvailable: false,
@@ -260,19 +260,45 @@ struct SidebarHistoryPollingTests {
         poller.setVisible(true)
         for index in 1...2 {
             await sidebarEventually { await harness.reads == index }
-            if index == 2 && failure == "tail" { try FileManager.default.removeItem(at: otherEvents) }
+            if index == 2 {
+                switch failure {
+                case "tail":
+                    try FileManager.default.removeItem(at: otherEvents)
+                case "symlink":
+                    try FileManager.default.removeItem(at: otherEvents)
+                    try FileManager.default.createSymbolicLink(at: otherEvents, withDestinationURL: fixture.events)
+                case "permission":
+                    try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: otherEvents.path)
+                case "rotation", "shrink":
+                    try Data("{".utf8).write(to: otherEvents, options: failure == "rotation" ? .atomic : [])
+                case "rewrite":
+                    let size = try Data(contentsOf: otherEvents).count
+                    try Data(repeating: 32, count: size).write(to: otherEvents)
+                default: break
+                }
+            }
             let source = try await reader.read(surfaceIDs: [fixture.surface, otherSurface])
             let observed = try #require(source.sessions.first { $0.sessionID == fixture.sessionID })
             #expect(observed.observedAt < source.generatedAt)
             #expect(!source.issues.contains(.stateUnavailable))
-            if failure == "marker" || index == 2 {
+            if failure == "marker" || (index == 2 && failure == "tail") {
                 #expect(!source.isComplete)
                 #expect(source.sessions.first { $0.sessionID == otherID }?.sessionIssues == [.stateUnavailable])
+            }
+            if index == 2 && !["marker", "tail"].contains(failure) {
+                let refused = try #require(source.sessions.first { $0.sessionID == otherID })
+                let expected: CopilotIssue = failure == "symlink" ? .ambiguousIdentity
+                    : failure == "permission" ? .permissionDenied : .identityChanged
+                #expect(refused.sessionIssues?.contains(expected) == true)
+                #expect(!source.issues.contains(expected))
+                #expect(refused.state == .unknown && refused.children.isEmpty)
+                #expect(!source.isComplete)
             }
             await harness.succeed(source)
             await sidebarEventually { await harness.isPaused }
             let healthy = poller.tree.sessions.first { $0.id == fixture.sessionID }
             #expect(healthy?.state == .working)
+            #expect(healthy?.childrenComplete == true)
             #expect(healthy?.nodes.contains { $0.id == "work" && $0.state == .working } == true)
             #expect(healthy?.petId == "synthetic-pet")
             #expect(poller.tree.eligibleSessionName(
@@ -282,12 +308,30 @@ struct SidebarHistoryPollingTests {
                 #expect(!poller.tree.statusSessions.contains { $0.id == fixture.sessionID })
                 if failure == "tail" {
                     #expect(poller.tree.statusSessions.first { $0.id == otherID }?.lastKnownState == .idle)
-                } else {
+                } else if failure == "marker" {
                     #expect(poller.tree.sessions.first { $0.id == otherID }?.liveness == .unknown)
+                } else {
+                    #expect(poller.tree.sessions.first { $0.id == otherID }?.state == .unknown)
+                    #expect(!poller.tree.statusSessions.contains { $0.id == otherID })
                 }
             } else {
                 clock.advance(2)
                 await harness.nextRead()
+            }
+            if failure != "marker" {
+                if failure == "symlink" { try FileManager.default.removeItem(at: otherEvents) }
+                if failure == "permission" {
+                    try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: otherEvents.path)
+                }
+                try (copilotTestEvent("session.idle") + Data([10])).write(to: otherEvents, options: .atomic)
+                clock.advance(2)
+                await harness.nextRead()
+                await sidebarEventually { await harness.reads == 3 }
+                await harness.succeed(try await reader.read(surfaceIDs: [fixture.surface, otherSurface]))
+                await sidebarEventually { await harness.isPaused }
+                #expect(poller.tree.sessions.first { $0.id == otherID }?.state == .idle)
+                #expect(poller.tree.sessions.first { $0.id == fixture.sessionID }?.state == .working)
+                #expect(poller.tree.statusSessions.isEmpty)
             }
         }
         poller.setVisible(false)
