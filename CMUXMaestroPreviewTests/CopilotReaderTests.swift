@@ -6,6 +6,49 @@ import Testing
 // These disk-heavy scenarios share the test executor with short process-readiness checks.
 @Suite(.serialized)
 nonisolated struct CopilotReaderTests {
+    @Test(arguments: ["idle", "error", "blocked", "task"])
+    @MainActor func retainedProtectionSurvivesCustodyLossBeforeReplacement(_ initial: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        var rows = [try copilotTestEvent("session.idle")]
+        switch initial {
+        case "error": rows.append(try copilotTestEvent("session.error"))
+        case "blocked": rows.append(try copilotTestEvent("permission.requested", data: ["requestId": "approval"]))
+        case "task":
+            rows.append(try copilotTestEvent("tool.execution_start", data: ["toolCallId": "spawn", "toolName": "task"]))
+            rows.append(try copilotTestEvent("subagent.started", agent: "child", data: [
+                "toolCallId": "spawn", "agentDisplayName": "Synthetic task"
+            ]))
+            rows.append(try copilotTestEvent("subagent.failed", data: ["toolCallId": "spawn"]))
+        default: break
+        }
+        try fixture.writeEvents(rows)
+        let reader = fixture.reader()
+        let before = try await reader.read(surfaceIDs: [fixture.surface])
+        let prior = try #require(before.sessions.first)
+        #expect(prior.liveness == .alive)
+        if initial != "idle" {
+            #expect(prior.attention?.isEmpty == false || !prior.children.isEmpty || prior.state == .blocked)
+        }
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.4242.lock"))
+        let directory = try fixture.addSession(surface: fixture.surface)
+        let replacement = try #require(UUID(uuidString: directory.lastPathComponent))
+        try Data().write(to: directory.appendingPathComponent("inuse.4242.lock"))
+        var events = try copilotTestEvent("session.start", data: ["sessionId": replacement.uuidString, "version": 1])
+        events.append(10)
+        events.append(try copilotTestEvent("session.idle"))
+        events.append(10)
+        try events.write(to: directory.appendingPathComponent("events.jsonl"))
+        let after = try await reader.read(surfaceIDs: [fixture.surface])
+        let old = try #require(after.sessions.first { $0.sessionID == fixture.sessionID })
+        #expect(old.liveness == .unknown && old.state == .unknown)
+        #expect(old.children.isEmpty && old.attention?.isEmpty != false, "Do not republish stale content as current")
+        #expect((old.bindingProcess != nil) == (initial == "idle"),
+                "Retained protection must prevent unknown-root displacement despite content-free publication")
+        #expect(after.sessions.first { $0.sessionID == replacement }?.liveness == .alive)
+        #expect(await reader.retentionCounts().tails == 2, "Protection does not retire retained evidence")
+    }
+
     @Test @MainActor func inProcessReplacementsDisplaceOnlyTheirUnprotectedUnknownRoots() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }
