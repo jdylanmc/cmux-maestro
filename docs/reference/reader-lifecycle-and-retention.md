@@ -273,6 +273,18 @@ Failed registration is retried only on the existing read cadence, with no extra
 timer or repeated warning while unavailable. Healthy streams do not reopen
 roots on each poll. Sandbox entitlements and source read/size bounds do not change.
 
+At an unchanged event-file EOF, the reader uses two descriptor-relative,
+no-symlink metadata checks rather than reopening the log. The complete stamp
+(device, inode, birth time, owner, mode, size, mtime and ctime) must match both
+the retained tail and a previous successful read-open. That read-open is reusable
+only when its pre-open entry stamp matched its post-open descriptor stamp;
+concurrent growth or access changes cannot grant a new cached read boundary.
+Any mismatch takes the existing secure open/read path. Binding, process,
+session-directory and publication fences still run on every read, as do exact
+freshness/history deadlines. Torn lines and incomplete tails do not gain
+freshness from unchanged metadata. No file contents, access rights or liveness
+are inferred from a directory timestamp.
+
 The three native callback tests are inventoried local opt-in acceptance in
 `scripts/local-ui-acceptance.json`, enabled with
 `CMUX_MAESTRO_LOCAL_UI_ACCEPTANCE=1 ./scripts/test.sh --focused SidebarFileWatcherAcceptanceTests`.

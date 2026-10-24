@@ -41,6 +41,7 @@ actor CopilotSessionReader {
     private struct Tail: Sendable {
         let record: CopilotIdentityRecord
         var stamp: CopilotFileStamp?
+        var readableStamp: CopilotFileStamp?
         var offset: Int64 = 0
         var partial = Data()
         var droppingOversizedLine = false
@@ -905,6 +906,16 @@ actor CopilotSessionReader {
     private func advance(
         _ tail: inout Tail, session: Int32, budget: inout Int, now: Date
     ) throws -> (issues: [CopilotIssue], reachedBoundary: Bool) {
+        let entry = try CopilotFileAccess.statEntry(at: session, name: "events.jsonl")
+        // Reuse only an EOF whose full metadata still matches a successful read-open.
+        // ctime, ownership, permissions and birth time participate, not just mtime/size.
+        if tail.readableStamp == entry, tail.stamp == entry,
+           tail.offset == entry.size, tail.target == nil {
+            guard entry == (try CopilotFileAccess.statEntry(at: session, name: "events.jsonl")) else {
+                throw CopilotFileError.changed
+            }
+            return refreshUnchangedTail(&tail, now: now)
+        }
         eventFileOpens += 1
         let file = try CopilotFileAccess.openRegular(at: session, name: "events.jsonl", owner: verifier.uid)
         defer { close(file) }
@@ -914,13 +925,8 @@ actor CopilotSessionReader {
                   before == (try CopilotFileAccess.statEntry(at: session, name: "events.jsonl")) else {
                 throw CopilotFileError.changed
             }
-            var issues = tail.reducer.issues
-            if !tail.partial.isEmpty || tail.droppingOversizedLine || tail.discardingInitialLine {
-                issues.append(.loadingHistory)
-            } else if tail.reducer.canPublishProjection, tail.lastComplete != nil {
-                tail.lastCompleteAt = now
-            }
-            return (issues, true)
+            tail.readableStamp = entry == before ? before : nil
+            return refreshUnchangedTail(&tail, now: now)
         }
         var reset = false
         if let previous = tail.stamp {
@@ -1045,6 +1051,9 @@ actor CopilotSessionReader {
             file, offset: max(0, tail.offset - 128), count: Int(min(tail.offset, 128))
         )
         tail.stamp = after
+        // Concurrent growth can carry a permission/ACL change; only the pre-read
+        // stamp was authorized by openRegular. A different final stamp must reopen.
+        tail.readableStamp = entry == before ? before : nil
         projectionBuilds += 1
         let value = tail.reducer.value()
         var issues = tail.reducer.issues
@@ -1059,6 +1068,7 @@ actor CopilotSessionReader {
                 // appends must retain its captured age.
                 tail.lastCompleteAt = tail.offset == after.size ? now : (tail.targetAt ?? now)
             }
+
             tail.target = nil
             tail.targetAt = nil
         }
@@ -1069,6 +1079,18 @@ actor CopilotSessionReader {
             if tail.offset < after.size { issues.append(.readLimitReached) }
         }
         return (issues, reachedBoundary)
+    }
+
+    private func refreshUnchangedTail(
+        _ tail: inout Tail, now: Date
+    ) -> (issues: [CopilotIssue], reachedBoundary: Bool) {
+        var issues = tail.reducer.issues
+        if !tail.partial.isEmpty || tail.droppingOversizedLine || tail.discardingInitialLine {
+            issues.append(.loadingHistory)
+        } else if tail.reducer.canPublishProjection, tail.lastComplete != nil {
+            tail.lastCompleteAt = now
+        }
+        return (issues, true)
     }
 
     private func readEventBytes(_ descriptor: Int32, offset: Int64, count: Int) throws -> Data {

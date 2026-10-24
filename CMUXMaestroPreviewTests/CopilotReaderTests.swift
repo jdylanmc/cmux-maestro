@@ -336,6 +336,8 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.eventReadBytes == bytes)
         #expect(await reader.projectionBuilds == builds)
         #expect(await reader.hasPendingHistory() == false)
+        let idleOpens = await reader.eventFileOpens - opens
+        print("Controlled 60s / 30 unchanged reads: \(idleOpens) event-file opens, 0 event bytes, 0 projection builds.")
 
         let appended = try copilotTestEvent("assistant.turn_start", data: ["turnId": "new"]) + Data([10])
         try fixture.append(appended)
@@ -344,6 +346,66 @@ nonisolated struct CopilotReaderTests {
         #expect(await reader.eventFileOpens == opens + 1)
         #expect(await reader.projectionBuilds == builds + 1)
         #expect(await reader.eventReadBytes <= bytes + appended.count + 512)
+    }
+
+    @Test(arguments: ["permissions", "symlink", "missing"])
+    func unchangedEventCacheCannotRefreshAfterAccessChanges(_ change: String) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        let clock = CopilotReaderTestClock()
+        let reader = fixture.reader(clock: { clock.now() })
+        let first = try await reader.read(surfaceIDs: [fixture.surface])
+        let observedAt = try #require(first.sessions.first?.observedAt)
+        let bytes = await reader.eventReadBytes
+        clock.advance(by: 60)
+        switch change {
+        case "permissions":
+            try #require(chmod(fixture.events.path, 0o000) == 0)
+        case "symlink":
+            let replacement = fixture.root.appendingPathComponent("replacement.jsonl")
+            try FileManager.default.moveItem(at: fixture.events, to: replacement)
+            try FileManager.default.createSymbolicLink(at: fixture.events, withDestinationURL: replacement)
+        default:
+            try FileManager.default.removeItem(at: fixture.events)
+        }
+        let rejected = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(!rejected.isComplete)
+        #expect(rejected.sessions.first?.observedAt == observedAt)
+        #expect(await reader.eventReadBytes == bytes)
+        let issues = rejected.issues + (rejected.sessions.first?.sessionIssues ?? [])
+        #expect(issues.contains(change == "permissions" ? .permissionDenied
+            : change == "symlink" ? .ambiguousIdentity : .stateUnavailable))
+        if change != "missing" { try FileManager.default.removeItem(at: fixture.events) }
+        try fixture.writeEvents([copilotTestEvent("assistant.turn_start", data: ["turnId": "recovered"])])
+        let recovered = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(recovered.isComplete && recovered.sessions.first?.state == .working)
+        #expect(recovered.sessions.first?.observedAt == clock.now())
+    }
+
+    @Test func unchangedEventCacheChecksChangeTimeWhenSizeAndModificationTimeMatch() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("skill.invoked", data: ["name": "old"])])
+        let reader = fixture.reader()
+        #expect(try await reader.read(surfaceIDs: [fixture.surface]).sessions.first?.children.first?.name == "old")
+        let opens = await reader.eventFileOpens
+        let directory = try CopilotFileAccess.openDirectory(fixture.session)
+        defer { close(directory) }
+        let before = try CopilotFileAccess.statEntry(at: directory, name: "events.jsonl")
+        let bytes = try Data(contentsOf: fixture.events)
+        let replacement = Data(String(decoding: bytes, as: UTF8.self).replacingOccurrences(of: "old", with: "new").utf8)
+        let handle = try FileHandle(forWritingTo: fixture.events)
+        try handle.write(contentsOf: replacement)
+        try handle.close()
+        let modified = timespec(tv_sec: Int(before.modifiedSeconds), tv_nsec: Int(before.modifiedNanoseconds))
+        try #require(utimensat(directory, "events.jsonl", [modified, modified], 0) == 0)
+        let after = try CopilotFileAccess.statEntry(at: directory, name: "events.jsonl")
+        #expect(before.sameFile(as: after) && before.size == after.size)
+        #expect(before.modifiedSeconds == after.modifiedSeconds && before.modifiedNanoseconds == after.modifiedNanoseconds)
+        let changed = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(changed.isComplete && changed.sessions.first?.children.first?.name == "new")
+        #expect(await reader.eventFileOpens == opens + 1)
     }
 
     @MainActor
