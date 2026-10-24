@@ -5,7 +5,8 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarHoverTests {
-    @Test func hiddenSurfaceRowDoesNotResolveAgentPreview() throws {
+    @Test(arguments: [false, true], [false, true])
+    func hiddenSurfaceRowDoesNotResolveAgentPreview(hasSession: Bool, connected: Bool) throws {
         let fixture = SidebarTreeFixtures()
         let preferenceFixture = try SidebarPreferenceFixture()
         let stores = SidebarStoreFixture()
@@ -20,17 +21,21 @@ struct SidebarHoverTests {
         let context = SidebarReorderContext.empty(
             backend: LocalSidebarReorderBackend(store: preferences), session: SidebarReorderDragSession()
         )
+        let navigation = SidebarNavigation()
+        navigation.update(topology: fixture.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true,
+                          perform: { _ in Issue.record("Preview availability must not navigate") })
         var builds = 0
         let row = SurfaceRow(
             workspaceID: fixture.workspaceA,
             surface: .init(id: fixture.surfaceA, title: "Synthetic", kind: .terminal, isFocused: false,
                            isPinned: false, unreadCount: 0, workingDirectory: .available("/synthetic")),
             reorder: context.handle(for: fixture.surfaceA, noun: "surface"),
-            sessions: [session], countsComplete: true, navigation: SidebarNavigation(), layout: .init(),
+            sessions: hasSession ? [session] : [], countsComplete: true, navigation: navigation, layout: .init(),
             setExpanded: { _, _ in }, dismiss: { _ in }, acknowledge: { _ in }, selection: .constant(nil)
         )
         let host = NSHostingView(rootView: row.environment(preferences)
             .environment(\.sidebarPetStore, stores.pets)
+            .environment(\.sidebarHoverConnected, connected)
             .environment(\.sidebarAgentHoverProvider, { _ in
                 builds += 1
                 return .init(id: "synthetic", category: "Agent preview", title: "Synthetic")
@@ -48,6 +53,13 @@ struct SidebarHoverTests {
         }
         host.layoutSubtreeIfNeeded()
         #expect(!descendants(host).compactMap { $0 as? SidebarHoverAnchorView }.isEmpty)
+        let title = try #require(descendants(host).compactMap { $0 as? SidebarTitleNativeButton }.first)
+        let menus = descendants(host).compactMap { ($0 as? SidebarRowMenuAnchorView)?.presenter }
+        let menu = try #require(menus.first)
+        let available = hasSession || connected
+        #expect(title.preview.available == available)
+        #expect(title.accessibilityHelp()?.contains("Tab enters preview controls") == available)
+        #expect(menu.menu().items.contains { $0.title == "Preview details" } == available)
         #expect(builds == 0)
         #expect(!window.isVisible)
     }
