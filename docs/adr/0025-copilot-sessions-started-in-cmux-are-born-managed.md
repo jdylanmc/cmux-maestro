@@ -53,6 +53,10 @@ controller once. Previously recorded account-unverified refusals are
 reconsidered, not converted to enrollments. Account mismatch and every other
 definitive refusal remain final. There is no account fallback.
 
+Reconsideration replaces that exact attempt key, even when the attempt table
+is full. New keys still require space; no other live provider's evidence is
+evicted. This applies to both a new born root and a resumed born root.
+
 `provider-already-enrolled` also remains pending in the extension. A later hook
 may ask again, but the controller repeats the refusal until no node holds that
 exact provider. An in-process replacement still requires the earlier born

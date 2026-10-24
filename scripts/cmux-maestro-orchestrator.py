@@ -3450,7 +3450,7 @@ def enroll_new_born_root(root, cmux, snapshot, workspace, surface, session, anch
         except OrchestrationError as error:
             raise EnrollmentRefused("capacity-unavailable") from error
         prune_attempts(state)
-        if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
+        if key not in state["enrollmentAttempts"] and len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
             raise EnrollmentRefused("capacity-unavailable")
         # Decide the generation under the lock, after any archive above moved the floor.
         generation = born_generation(state, session)
@@ -3632,7 +3632,7 @@ def resume_born_root(root, cmux, snapshot, previous, workspace, surface, session
             raise EnrollmentRefused("session-live-or-uncertain")
         require_resumable(current, state)  # includes the lock rescan at the commit boundary
         prune_attempts(state)
-        if len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
+        if key not in state["enrollmentAttempts"] and len(state["enrollmentAttempts"]) >= MAX_HOST_NODES:
             raise EnrollmentRefused("capacity-unavailable")
         if current["phase"] == "resource-retired":
             # A retired root no longer holds a workspace slot; reviving it takes one.
