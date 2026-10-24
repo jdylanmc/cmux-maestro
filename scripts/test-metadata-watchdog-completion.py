@@ -12,6 +12,10 @@ spec.loader.exec_module(watchdog)
 
 
 class DiagnosticCompletionTests(unittest.TestCase):
+    def test_incomplete_marker_does_not_supply_missing_readiness(self):
+        with self.assertRaisesRegex(RuntimeError, "not-ready"):
+            watchdog.metadata_readiness({"diagnosticOutcome": "diagnostic-incomplete", "samplerReaped": True})
+
     def test_unmarked_report_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(RuntimeError, "Unmarked"):

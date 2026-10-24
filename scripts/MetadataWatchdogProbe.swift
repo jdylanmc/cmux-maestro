@@ -6,7 +6,9 @@ import os
 @main
 struct MetadataWatchdogProbe {
     static func main() async throws {
-        guard CommandLine.arguments.count == 3 else { exit(2) }
+        let forcedBackstop = CommandLine.arguments.count == 4 &&
+            CommandLine.arguments[3] == "--force-diagnostic-backstop"
+        guard CommandLine.arguments.count == 3 || forcedBackstop else { exit(2) }
         let mode = CommandLine.arguments[1]
         guard ["complete", "stalled-clock", "polling-clock", "sampler-timeout",
                "sampler-exit-no-output", "sampler-exit-with-output", "sampler-timeout-no-output",
@@ -49,9 +51,9 @@ struct MetadataWatchdogProbe {
             directory: directory, testIdentity: "MetadataWatchdogProbe/\(mode)",
             limit: .seconds(mode.hasPrefix("owned-") ? 70 : (mode == "complete" ? 0.3 : 2)),
             samplerExecutable: sampler, observation: observation,
-            automaticDiagnosticBackstop: !mode.hasPrefix("sampling-"),
+            automaticDiagnosticBackstop: !mode.hasPrefix("sampling-") && !forcedBackstop,
             beforeSampling: { watchdog in
-                if mode == "sampling-forced-backstop" {
+                if mode == "sampling-forced-backstop" || forcedBackstop {
                     watchdog.forceDiagnosticBackstop()
                     watchdog.waitForDiagnosticExit()
                 }

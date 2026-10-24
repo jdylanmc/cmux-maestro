@@ -21,6 +21,19 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   for its exact unreaped POSIX exit before capturing the report. Missing readiness
   remains an explicit not-ready failure, never a KeyError or passing fallback.
   Deadline-sample counts remain assertions only in clock-fault controls.
+- Diagnostic publication commits the core readiness/process observation to
+  `stall.json` before sampling. One terminal publisher owns sampler cleanup,
+  atomic final publication and exit; a second thread cannot interrupt its write.
+  `diagnosticOutcome` marks `complete` or `diagnostic-incomplete`. Sampling is
+  best effort: its five-second budget can select the latter, which a negative
+  control accepts only with every core assertion still satisfied, confirmed
+  sampler reaping/absence, and no `stall.json.sb-*` files. Unmarked, partial,
+  incorrect-core or uncleaned reports fail. Final file I/O must return before
+  this publisher exits; the subprocess harness remains the outer hang guard.
+  Explicit signals hold sampling and force backstop publication in all four
+  owned modes. Separate controlled completion modes disable the sampling timer
+  and verify both sample output and sample-read-error semantics. No elapsed
+  time or CPU-load deadline determines their correctness verdict (#364).
 - Setup supervision starts both gated children before advancing their injected
   deadlines; neither can finish early. The observer retains the MainActor versus
   detached-driver distinction. Deadline-helper tests release an explicit timeout

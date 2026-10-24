@@ -29,13 +29,19 @@ def metadata_readiness(report):
 
 
 def diagnostic_outcome(report, directory):
-    return report["diagnosticOutcome"]
+    outcome = report.get("diagnosticOutcome")
+    require(outcome in ("complete", "diagnostic-incomplete"), f"Unmarked diagnostic report: {report}")
+    require(report.get("samplerReaped") is True, f"Sampler cleanup unconfirmed: {report}")
+    require(not list(directory.glob("stall.json.sb-*")), "Interrupted diagnostic temporary files remain")
+    return outcome
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probe", required=True, type=Path)
     parser.add_argument("--results-root", required=True, type=Path)
+    parser.add_argument("--force-diagnostic-backstop", action="store_true",
+                        help="Hold sampling at its explicit boundary and request the backstop outcome.")
     parser.add_argument("--mode", action="append", choices=MODES,
                         help="Run only the selected finite controls; default runs every control.")
     args = parser.parse_args()
@@ -52,7 +58,10 @@ def main():
             release = os.open(gate, os.O_RDWR | os.O_NONBLOCK)
         try:
             with output.open("w") as stream:
-                result = subprocess.run([str(args.probe.resolve()), mode, str(case.resolve())],
+                command = [str(args.probe.resolve()), mode, str(case.resolve())]
+                if args.force_diagnostic_backstop:
+                    command.append("--force-diagnostic-backstop")
+                result = subprocess.run(command,
                                         stdout=stream, stderr=subprocess.STDOUT,
                                         timeout=80 if mode.startswith("owned-") else 10)
         finally:
@@ -96,14 +105,20 @@ def main():
             minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-", "sampling-")) else (2 if mode == "polling-clock" else 1)
             require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
-            if mode == "sampling-forced-backstop":
+            if mode == "sampling-forced-backstop" or args.force_diagnostic_backstop:
                 require(outcome == "diagnostic-incomplete", report)
+            if outcome == "diagnostic-incomplete":
+                require(not mode.startswith("sampling-complete-"), report)
+                print(f"Metadata watchdog {mode}: diagnostic-incomplete; core and cleanup still required.", flush=True)
             elif mode.startswith("sampling-"):
                 require(outcome == "complete" and report["sampleStatus"] == "exit-17", report)
                 if mode == "sampling-complete-output":
                     require(report["sample"] == "synthetic-exit-17-sample\n", report)
+                    require((case / "sample.txt").read_text() == report["sample"], report)
+                    require(report.get("sampleReadError") is None, report)
                 else:
                     require(report.get("sample") is None and "sample.txt" in report["sampleReadError"], report)
+                    require(not (case / "sample.txt").exists(), report)
             elif mode.startswith(("sampler-", "owned-", "diagnostic-")):
                 timed_out = mode in ("sampler-timeout", "sampler-timeout-no-output")
                 require(report["sampleStatus"] == ("timed-out/signal-9" if timed_out else "exit-17"), report)
