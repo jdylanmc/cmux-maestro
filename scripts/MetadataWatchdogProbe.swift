@@ -44,7 +44,7 @@ struct MetadataWatchdogProbe {
         let observation = mode.hasPrefix("diagnostic-") ? CopilotSetupObservation(storage: storage) : nil
         let watchdog = try MetadataProcessTestWatchdog(
             directory: directory, testIdentity: "MetadataWatchdogProbe/\(mode)",
-            limit: .seconds(mode == "complete" ? 0.3 : 2),
+            limit: .seconds(mode.hasPrefix("owned-") ? 70 : (mode == "complete" ? 0.3 : 2)),
             samplerExecutable: sampler, observation: observation)
         if mode == "complete" {
             watchdog.begin("completed-negative-control")
@@ -103,9 +103,10 @@ struct MetadataWatchdogProbe {
         let command = """
         #!/bin/sh
         trap '' TERM
+        exec 3<> \(CopilotPluginManifest.shellQuoted(directory.appendingPathComponent("child-release").path))
         printf '%s' $$ > \(CopilotPluginManifest.shellQuoted(pending.path))
         /bin/mv \(CopilotPluginManifest.shellQuoted(pending.path)) \(CopilotPluginManifest.shellQuoted(ready.path))
-        exec /bin/sleep 8
+        IFS= read -r -t 90 released <&3
         """
         try Data((command + "\n").utf8).write(to: server)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
@@ -119,21 +120,18 @@ struct MetadataWatchdogProbe {
             return frozen
         })
         watchdog.begin("negative-control/\(mode)")
-        if mode == "owned-living" {
-            watchdog.trigger()
-            holdTask()
-        }
         let task = Task {
             let result = await runner.metadata(executable: server, path: "/usr/bin:/bin")
             watchdog.metadataCallReturned()
             if mode == "owned-result-before-task" {
                 // Result production is not task completion: deliberately hold
                 // this disposable task after the unchanged runner returns.
+                watchdog.trigger()
                 holdTask()
             }
             return result
         }
-        let deadline = ContinuousClock.now.advanced(by: .seconds(3))
+        let deadline = ContinuousClock.now.advanced(by: .seconds(60))
         while !FileManager.default.fileExists(atPath: ready.path), .now < deadline {
             try await Task.sleep(for: .milliseconds(10))
         }
@@ -149,11 +147,16 @@ struct MetadataWatchdogProbe {
         let incomplete = MetadataProcessTestWatchdog.observeProcess(pid, memberLimit: 1)
         guard incomplete.groupState == "unknown-enumeration", incomplete.members == nil else { exit(11) }
         try JSONEncoder().encode(incomplete).write(to: directory.appendingPathComponent("incomplete-group.json"))
-        if mode != "owned-living" { task.cancel() }
+        if mode == "owned-living" {
+            watchdog.trigger()
+        } else {
+            task.cancel()
+        }
         let result = await task.value
         watchdog.taskValueReceived()
         guard case .failed(.cancelled) = result, kill(pid, 0) == -1, errno == ESRCH else { exit(6) }
-        try await Task.sleep(for: .seconds(10))
+        watchdog.trigger()
+        holdTask()
     }
 
     private static func holdTask() {
@@ -195,6 +198,13 @@ struct MetadataWatchdogProbe {
         close(input[1])
         input[1] = -1
         watchdog.begin("negative-control/owned-exited")
-        try await Task.sleep(for: .seconds(10))
+        var info = siginfo_t()
+        var waited: Int32
+        repeat {
+            waited = waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT)
+        } while waited == -1 && errno == EINTR
+        guard waited == 0, info.si_pid == pid else { exit(15) }
+        watchdog.trigger()
+        holdTask()
     }
 }

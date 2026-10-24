@@ -588,7 +588,7 @@
   "scripts/test-metadata-watchdog.py": {
     "reason": "Existing synthetic fixture synchronization/deadline statements, frozen by #276; no new or duplicate timing dependency is admitted. See docs/reference/ci-test-determinism.md for remaining venue limits.",
     "statements": {
-      "deadline = time.monotonic() + 12": 1,
+      "deadline = time.monotonic() + 60": 1,
       "require(time.monotonic() < deadline, f\"Finite probe child {child} did not exit.\")": 1,
       "time.sleep(0.05)": 1
     }
