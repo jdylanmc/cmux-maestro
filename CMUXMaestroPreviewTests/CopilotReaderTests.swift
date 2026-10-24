@@ -62,6 +62,13 @@ nonisolated struct CopilotReaderTests {
             )], windowID: UUID()
         )
         let tree = SidebarCopilotTree.project(snapshot, onto: SidebarTopology(hierarchy), now: now)
+        let neutral = CopilotSnapshotAdapter.snapshot(snapshot, workspaceBySurface: Dictionary(
+            uniqueKeysWithValues: surfaces.map { ($0, fixture.workspace) }
+        ))
+        let decoded = try AgentSessionSnapshotJSONCodec.decode(AgentSessionSnapshotJSONCodec.encode(neutral))
+        #expect(decoded.sessions.allSatisfy { $0.bindingProcess == nil }, "Wire snapshots never carry process correlation")
+        let decodedTree = SidebarCopilotTree.project(decoded, onto: SidebarTopology(hierarchy), now: now)
+        #expect(SidebarPresentation.displacedManagedNodeIDs(roots, observations: decodedTree, now: now).isEmpty)
         #expect(tree.sessions.filter { oldIDs.contains($0.id) }.allSatisfy { $0.liveness == .unknown })
         #expect(tree.sessions.count == 4)
         for showEnded in [false, true] {
@@ -74,6 +81,7 @@ nonisolated struct CopilotReaderTests {
                 visible.tree.sessions, managed: visible.managed, observations: tree, now: now
             )
             #expect(placements.allSatisfy { !$0.hasNoSurfaceRow })
+            #expect(SidebarPlacementCache().placements(tree: tree, managed: roots, now: now).displaced == Set(roots.map(\.id)))
         }
         #expect(snapshot.sessions.count == 4, "Presentation never retires reader evidence")
         #expect(await reader.retentionCounts().bindings == 4)

@@ -505,7 +505,10 @@ actor CopilotSessionReader {
             sessionNames.forget(id)
             publishedCohort.insert(id)
             recordIssues(issues, for: id, batch: &batch)
-            batch.observations.append(observation(record, liveness: liveness, now: batch.now))
+            batch.observations.append(observation(
+                record, liveness: liveness, now: batch.now,
+                includeBindingProcess: liveness == .unknown && issues == [.stateUnavailable]
+            ))
         case .failed(let failure):
             publishedCohort.insert(id)
             recordIssues([failure], for: id, batch: &batch)
@@ -523,7 +526,7 @@ actor CopilotSessionReader {
             batch.issues += read.issues.filter { $0 != .stateUnavailable }
             var result = observation(
                 record, liveness: .alive, now: read.tail.lastCompleteAt ?? batch.now,
-                value: read.tail.lastComplete ?? CopilotReducedState()
+                value: read.tail.lastComplete ?? CopilotReducedState(), includeBindingProcess: true
             )
             result.sessionName = read.sessionName
             batch.workspaceSources[id] = read.workspaceSource
@@ -1064,14 +1067,21 @@ actor CopilotSessionReader {
 
     private func observation(
         _ record: CopilotIdentityRecord, liveness: CopilotLiveness, now: Date,
-        value: CopilotReducedState = CopilotReducedState()
+        value: CopilotReducedState = CopilotReducedState(), includeBindingProcess: Bool = false
     ) -> CopilotSessionObservation {
-        .init(
+        var result = CopilotSessionObservation(
             sessionID: record.sessionID, surfaceID: record.surfaceID,
             launchWorkspaceID: record.launchWorkspaceID, liveness: liveness,
             state: value.state, model: value.model, children: value.children, observedAt: now,
             attention: value.attention, activity: value.activity
         )
+        if includeBindingProcess {
+            result.bindingProcess = .init(
+                pid: record.ownerPID, startSeconds: record.ownerStartSeconds,
+                startMicroseconds: record.ownerStartMicroseconds
+            )
+        }
+        return result
     }
 
     private func snapshot(

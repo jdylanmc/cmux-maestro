@@ -55,6 +55,7 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     var currentWorktree: AgentSessionWorktree? = nil
     var sessionName: String? = nil
     var sessionIssues: [CopilotIssue]? = nil
+    var bindingProcess: AgentSessionSnapshotItem.BindingProcess? = nil
     let sessionID: UUID
     let surfaceID: UUID
     let launchWorkspaceID: UUID
@@ -65,6 +66,11 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     let observedAt: Date
     let attention: [AgentAttention]?
     let activity: AgentActivity?
+
+    private enum CodingKeys: String, CodingKey {
+        case iconId, iconColor, petId, branch, worktree, currentWorktree, sessionName, sessionIssues
+        case sessionID, surfaceID, launchWorkspaceID, liveness, state, model, children, observedAt, attention, activity
+    }
 
     init(
         sessionID: UUID, surfaceID: UUID, launchWorkspaceID: UUID,

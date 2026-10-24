@@ -572,6 +572,15 @@ nonisolated struct AgentChildWork: Codable, Equatable, Sendable {
 }
 
 nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
+    /// Recorded binding identity, not process liveness or authority.
+    struct BindingProcess: Equatable, Sendable {
+        let pid: Int32
+        let startSeconds: UInt64
+        let startMicroseconds: UInt64
+
+        var isValid: Bool { pid > 0 && startSeconds > 0 && startMicroseconds < 1_000_000 }
+    }
+
     let identity: ProviderSessionIdentity
     let binding: AgentSessionBindingObservation
     let title: SnapshotValue<String>
@@ -591,6 +600,14 @@ nonisolated struct AgentSessionSnapshotItem: Codable, Equatable, Sendable {
     var location: AgentSessionLocation? = nil
     var currentWorktree: AgentSessionWorktree? = nil
     var sessionIssues: [AgentSnapshotIssue]? = nil
+    var bindingProcess: BindingProcess? = nil
+
+    // Process correlation is local presentation evidence, never part of the neutral wire contract.
+    private enum CodingKeys: String, CodingKey {
+        case identity, binding, title, state, activity, model, paths, timing, childWork
+        case stateDetail, liveness, observedAt, launchBinding, appearance, attention, childWorkObservation
+        case location, currentWorktree, sessionIssues
+    }
 
     var workState: AgentWorkState { .resolve(state, detail: stateDetail) }
 

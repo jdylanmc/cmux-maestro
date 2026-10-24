@@ -52,6 +52,7 @@ nonisolated enum CopilotSnapshotAdapter {
                 )
                 item.sessionIssues = observation.sessionIssues?.map { .init(rawValue: $0.rawValue) }
                 item.currentWorktree = observation.currentWorktree
+                item.bindingProcess = observation.bindingProcess
                 return item
             },
             issues: source.issues.map { .init(rawValue: $0.rawValue) },

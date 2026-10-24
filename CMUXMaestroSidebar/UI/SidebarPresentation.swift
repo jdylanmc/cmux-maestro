@@ -968,9 +968,16 @@ enum SidebarPresentation {
               SidebarCopilotTree.isFresh(generatedAt, now: now) else { return [] }
         return Set(managed.filter { node in
             guard let managedSessionID = node.copilotSessionId else { return false }
-            let candidates = observations.sessions.indices.filter {
+            var candidates = observations.sessions.indices.filter {
                 observations.sessions[$0].workspaceID == node.workspaceId
                     && observations.sessions[$0].surfaceID == node.surfaceId && observations.sessions[$0].liveness != .dead
+            }
+            if candidates.count == 2,
+               let previous = candidates.first(where: { observations.sessions[$0].id == managedSessionID }),
+               let current = candidates.first(where: { observations.sessions[$0].id != managedSessionID }),
+               canDisplaceUnknownRoot(node, previous: observations.sessions[previous],
+                                      current: observations.sessions[current], observations: observations, now: now) {
+                candidates = [current]
             }
             guard candidates.count == 1, let index = candidates.first,
                   observations.sessions[index].liveness == .alive,
@@ -983,6 +990,37 @@ enum SidebarPresentation {
             // coalesce away a different verified live session on its surface.
             return observations.sessions[index].id != managedSessionID
         }.map(\.id))
+    }
+
+    private static func canDisplaceUnknownRoot(
+        _ node: SidebarOrchestrationNode, previous: SidebarCopilotSession,
+        current: SidebarCopilotSession, observations: SidebarCopilotTree, now: Date
+    ) -> Bool {
+        guard canYieldUnknownRoot(node), canYieldUnknownSession(previous),
+              SidebarCopilotTree.isFresh(previous.observedAt, now: now),
+              let generatedAt = observations.generatedAt,
+              previous.observedAt <= generatedAt.addingTimeInterval(1),
+              observations.sessions.filter({ $0.id == previous.id }).count == 1,
+              let process = previous.bindingProcess, process.isValid,
+              current.bindingProcess == process,
+              current.liveness == .alive, !current.statusOnly else { return false }
+        // A positive same-process binding replaces only the row, never the old session's custody.
+        return true
+    }
+
+    static func canYieldUnknownRoot(_ node: SidebarOrchestrationNode) -> Bool {
+        node.parentId == nil && node.executionMode == .interactive
+            && ["registered", "turn-running"].contains(node.phase)
+    }
+
+    static func canYieldUnknownSession(_ session: SidebarCopilotSession) -> Bool {
+        session.liveness == .unknown && !session.statusOnly
+            && ![.failed, .blocked].contains(session.state)
+            && session.lastKnownState != .failed && session.lastKnownState != .blocked
+            && session.attention.isEmpty && !session.attentionDegraded
+            && session.nodes.isEmpty && session.hiddenHistoryCount == 0
+            && session.omittedChildrenCount == 0 && session.omittedActiveChildrenCount == 0
+            && !session.hasUncountedChildren && !session.internalTaskCountsIncomplete
     }
 
     static func unmanagedSurfaces(

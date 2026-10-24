@@ -83,6 +83,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var currentWorktree: AgentSessionWorktree? = nil
     /// Copilot's own session name (ADR 0022); nil when unavailable.
     var sessionName: String? = nil
+    var bindingProcess: AgentSessionSnapshotItem.BindingProcess? = nil
     let id: UUID
     let workspaceID: UUID
     let surfaceID: UUID
@@ -413,6 +414,7 @@ struct SidebarCopilotTree: Equatable {
                 branch: observation.location?.branch, worktree: observation.location?.worktree ?? false,
                 currentWorktree: observation.currentWorktree,
                 sessionName: displayMetadata(observation.title.knownValue, limit: 200),
+                bindingProcess: observation.bindingProcess.flatMap { $0.isValid ? $0 : nil },
                 id: sessionID,
                 workspaceID: workspaceID,
                 surfaceID: surfaceID,
