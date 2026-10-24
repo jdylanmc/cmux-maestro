@@ -606,6 +606,10 @@ nonisolated struct CopilotEventReducer: Sendable {
             guard let invocation = toolOwners[tool] else {
                 // Missing ownership cannot mutate another current invocation.
                 remember("tool:\(tool)")
+                if let current = turns[Owner(agentID: event.agentID)],
+                   !turnTagsMatch(event, turnID: current.id, interactionID: current.interactionID) {
+                    return false
+                }
                 let eventMatch = seenLifecycleEvents.match(event.id)
                 guard eventMatch != .exact else { return false }
                 guard eventMatch == .absent, !replayExhausted,
