@@ -28,6 +28,55 @@ struct CopilotHookTests: Sendable {
 
     private var payload: Data { Data("{\"sessionId\":\"\(session.uuidString)\"}".utf8) }
 
+    @Test func hookRetiresOnlySupersededDeadBindingsAndKeepsRecoveryEvidence() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let older = try historicalBinding(root, number: 1, pid: 201)
+        let newest = try historicalBinding(root, number: 2, pid: 202)
+        let live = try historicalBinding(root, number: 3, pid: 101)
+        let unknown = try historicalBinding(root, number: 4, pid: 204)
+        let resumed = try historicalBinding(root, number: 5, pid: 205)
+        let resumedID = resumed.deletingPathExtension().lastPathComponent
+        try Data().write(to: root.appendingPathComponent("state/\(resumedID)/inuse.101.lock"))
+        let otherSurface = try historicalBinding(root, number: 6, pid: 206, surface: UUID())
+        let probe: @Sendable (Int32) -> HookLookup = { pid in
+            pid == 204 ? .unavailable : lookup(pid)
+        }
+
+        #expect(recorder(root, process: probe).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(!FileManager.default.fileExists(atPath: older.path))
+        for file in [newest, live, unknown, resumed, otherSurface] {
+            #expect(FileManager.default.fileExists(atPath: file.path))
+        }
+        let archives = try FileManager.default.contentsOfDirectory(
+            at: root.appendingPathComponent("integration/retired-bindings"), includingPropertiesForKeys: nil)
+        #expect(archives.count == 1)
+        let archived = try CopilotIdentityJSON.decode(Data(contentsOf: #require(archives.first)))
+        #expect(archived.ownerPID == 201)
+        let lock = older.deletingLastPathComponent().appendingPathComponent(
+            ".\(older.deletingPathExtension().lastPathComponent).lock")
+        #expect(FileManager.default.fileExists(atPath: lock.path))
+    }
+
+    private func historicalBinding(
+        _ root: URL, number: Int, pid: Int32, surface: UUID? = nil
+    ) throws -> URL {
+        let id = UUID(uuidString: String(format: "00000000-0000-4000-8000-%012d", number))!
+        let record = CopilotIdentityRecord(
+            sessionID: id, surfaceID: surface ?? self.surface, launchWorkspaceID: workspace,
+            ownerPID: pid, ownerStartSeconds: 1, ownerStartMicroseconds: 0,
+            recordedAt: Date(timeIntervalSince1970: Double(number)))
+        let file = root.appendingPathComponent("integration/bindings/\(id.uuidString.lowercased()).json")
+        try CopilotIdentityJSON.encode(record).write(to: file)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("state/\(id.uuidString.lowercased())"), withIntermediateDirectories: true)
+        return file
+    }
+
     @Test func ownSessionAppearanceNeedsExistingProofAndSurvivesHookRefreshes() throws {
         let root = try fixture()
         defer { try? FileManager.default.removeItem(at: root) }

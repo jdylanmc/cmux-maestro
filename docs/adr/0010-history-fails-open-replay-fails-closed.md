@@ -8,6 +8,16 @@ Rejected: silent repair, overwrite on corruption, eviction of exact evidence at 
 
 Consequence: users may see more history until reset. A false positive in the 128-KiB spill filter rejects a fresh event.
 
+## Amendment (2026-10-24, #336): superseded ended bindings
+
+Successful identity hooks may retire bounded batches of superseded,
+verified-dead binding records under their existing session locks. The newest
+dead binding per workspace/surface remains for ended presentation. Sanitized
+identity archives remain outside discovery; reader correctness never depends
+on cleanup. The [retirement contract](../reference/binding-retirement.md)
+defines exact death/resume proof, permissions, retained evidence and bounds.
+No lock is deleted and no live process is controlled.
+
 ## Amendment (2026-10-23): tool invocation outcomes are not agent failures
 
 An accepted `tool.execution_complete`, successful or not, is ordinary tool work.
