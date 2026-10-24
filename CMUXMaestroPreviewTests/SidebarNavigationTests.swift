@@ -6,6 +6,47 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test(arguments: ["matching", "different-process", "two-alive", "protected-previous"])
+    func replacementChildFocusRequiresVerifiedDisplacement(_ scenario: String) {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let process = AgentBindingProcess(pid: 42, startSeconds: 100, startMicroseconds: 7)
+        let owner = SidebarOrchestrationNode(
+            id: fixtures.surfaceB, runId: fixtures.workspaceB, parentId: nil, role: "coordinator",
+            label: "Previous owner", workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA,
+            generation: 1, phase: "turn-running", availability: "busy",
+            copilotSessionId: fixtures.otherSessionID, executionMode: .interactive,
+            createdAt: now, updatedAt: now
+        )
+        let child = CopilotChildWork(id: "child", parentID: nil, kind: .subagent,
+                                    name: "Current helper", state: .working, model: nil)
+        var tree = SidebarCopilotTree.project(
+            fixtures.snapshot(sessions: [fixtures.session(children: [child], now: now)], now: now),
+            onto: fixtures.topology(), now: now
+        )
+        tree.sessions[0].bindingProcess = scenario == "different-process"
+            ? .init(pid: 42, startSeconds: 100, startMicroseconds: 8) : process
+        var previous = SidebarCopilotSession(
+            bindingProcess: process, id: fixtures.otherSessionID, workspaceID: fixtures.workspaceA,
+            surfaceID: fixtures.surfaceA, liveness: scenario == "two-alive" ? .alive : .unknown,
+            state: .unknown, model: nil, observedAt: now, nodes: [], childrenComplete: false,
+            treeDegraded: true, omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        if scenario == "protected-previous" {
+            previous.attention = [.init(kind: .error,
+                evidence: .init(source: "copilot.events", eventID: fixtures.otherSessionID), occurredAt: now)]
+        }
+        tree.sessions.insert(previous, at: 0)
+        let expectedReplacement: Set<UUID> = scenario == "matching" ? [previous.id] : []
+        #expect(SidebarPresentation.replacedSessionIDs(tree, managed: [owner], now: now) == expectedReplacement)
+        let target = SidebarNavigationTarget.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA)
+        #expect(SidebarPresentation.focusTarget(
+            for: .unmanaged(.child(sessionID: fixtures.sessionID, childID: "child")),
+            capturedPlacement: target, hierarchy: fixtures.hierarchy(), connected: true, tree: tree,
+            managed: .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [owner]),
+            availability: .ready, now: now
+        ) == (scenario == "matching" ? target : nil))
+    }
+
     @Test func retainedChildRejectsReplacementManagedBindingBeforeObservationArrives() throws {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let child = CopilotChildWork(
