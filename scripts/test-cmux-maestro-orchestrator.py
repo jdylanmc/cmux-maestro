@@ -39,6 +39,78 @@ legacy_fixture_launcher = _edges["legacy_fixture_launcher"]
 FIXTURE_BYTECODE = tempfile.TemporaryDirectory(prefix="cmux-maestro-fixture-bytecode-")
 
 
+class NotificationTests(unittest.TestCase):
+    def setUp(self):
+        self.api = CONTROLLER_API
+
+    def test_notification_text_is_bounded_and_controls_removed(self):
+        clean = self.api["notification_text"]
+        self.assertEqual(clean("a\x00b\nc\u202ed", 140), "abcd")
+        self.assertEqual(clean("x" * 141, 140), "x" * 139 + "\u2026")
+        for value in ("", "\x00", 123, "x" * 8193):
+            with self.assertRaises(self.api["OrchestrationError"]):
+                clean(value, 140)
+
+    def test_notification_bucket_burst_refill_rollback_and_sessions(self):
+        consume = self.api["notification_consume"]
+        ledger = {"version": 1, "sessions": {}, "clicks": {}}
+        for _ in range(3):
+            consume(ledger, "a", 1000)
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "rate-limited"):
+            consume(ledger, "a", 1059)
+        consume(ledger, "b", 1059)
+        consume(ledger, "a", 1060)
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "rate-limited"):
+            consume(ledger, "a", 999)
+
+    def test_notification_mute_missing_valid_and_corrupt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "notifications.json"
+            read = self.api["notification_muted"]
+            self.assertFalse(read(target))
+            target.write_text('{"version":1,"muted":true}')
+            self.assertTrue(read(target))
+            for content in ('{"version":1,"muted":"false"}', '[]', 'bad'):
+                target.write_text(content)
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "settings-unavailable"):
+                    read(target)
+
+    def test_notification_identity_refuses_unknown_replaced_and_wrong_process(self):
+        actor = {
+            "id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()),
+            "generation": 1, "executionMode": "interactive",
+            "providerProcess": {"pid": 9001, "start": "synthetic"},
+        }
+        fn = self.api["notification_actor"]
+        globals_ = fn.__globals__
+        environment = {"SESSION_ID": actor["copilotSessionId"],
+                       "CMUX_WORKSPACE_ID": actor["workspaceId"], "CMUX_SURFACE_ID": actor["surfaceId"]}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.dict(globals_, {
+                    "direct_process_identity": lambda pid: actor["providerProcess"],
+                    "require_session_custody": lambda *args: None,
+                }):
+            self.assertEqual(fn({"nodes": {"a": actor}}), actor)
+            for state in ({"nodes": {}}, {"nodes": {"a": actor, "b": dict(actor)}},
+                          {"nodes": {"a": {**actor, "surfaceId": str(uuid.uuid4())}}},
+                          {"nodes": {"a": {**actor, "sessionEndedGeneration": 1, "enrollment": "born"}}}):
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                    fn(state)
+            with patch.dict(globals_, {"direct_process_identity": lambda pid: {"pid": 9001, "start": "reused"}}):
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                    fn({"nodes": {"a": actor}})
+
+    def test_notification_focus_refuses_changed_generation_without_cmux(self):
+        fn = self.api["notification_focus_target"]
+        target = {"nodeId": "node", "sessionId": "session", "workspaceId": "workspace",
+                  "surfaceId": "surface", "generation": 1}
+        node = {"id": "node", "copilotSessionId": "session", "workspaceId": "workspace",
+                "surfaceId": "surface", "generation": 2}
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "target-unavailable"):
+            fn({"nodes": {"node": node}}, target)
+
+
 def fixture_root(home):
     return Path(home) / "Library/Application Support/CMUXMaestroPreview/Orchestration"
 
