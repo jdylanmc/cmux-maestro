@@ -33,6 +33,15 @@ def diagnostic_outcome(report, directory):
     outcome = report.get("diagnosticOutcome")
     require(outcome in ("complete", "diagnostic-incomplete"), f"Unmarked diagnostic report: {report}")
     require(report.get("samplerReaped") is True, f"Sampler cleanup unconfirmed: {report}")
+    if report.get("samplerStarted") is False:
+        status = report.get("sampleStatus")
+        require("samplerPID" not in report and outcome == "complete"
+                and isinstance(status, str) and status.startswith("failed:"),
+                f"Sampler not-started evidence is contradictory: {report}")
+    else:
+        require(report.get("samplerStarted") is True
+                and type(report.get("samplerPID")) is int and report["samplerPID"] > 1,
+                f"Sampler identity unconfirmed: {report}")
     require(not list(directory.glob("stall.json.sb-*")), "Interrupted diagnostic temporary files remain")
     return outcome
 
@@ -81,12 +90,13 @@ def main():
             outcome = diagnostic_outcome(report, case)
             if mode.startswith("owned-"):
                 ready = metadata_readiness(report)
-            try:
-                os.kill(report["samplerPID"], 0)
-            except ProcessLookupError:
-                pass
-            else:
-                raise RuntimeError(f"Sampler was not reaped: {report}")
+            if "samplerPID" in report:
+                try:
+                    os.kill(report["samplerPID"], 0)
+                except ProcessLookupError:
+                    pass
+                else:
+                    raise RuntimeError(f"Sampler was not reaped: {report}")
             require(report["pid"] > 1, report)
             # Release the owned fixture above, then observe exit without signaling
             # a PID whose unreaped ownership anchor ended with the probe.
@@ -100,22 +110,25 @@ def main():
                 require(time.monotonic() < deadline, f"Finite probe child {child} did not exit.")
                 time.sleep(0.05)
             child_description = "no metadata child" if child is None else f"finite child {child} absent"
-            print(f"Exact sampler {report['samplerPID']} reaped/absent; {child_description}.", flush=True)
+            sampler_description = (f"exact sampler {report['samplerPID']} reaped/absent"
+                                   if "samplerPID" in report else "sampler never started")
+            print(f"{sampler_description}; {child_description}.", flush=True)
             require(report["test"] == "MetadataWatchdogProbe/" + mode, report)
             require(report["phase"] == "negative-control/" + mode, report)
             minimum_samples = 0 if mode.startswith(("owned-", "diagnostic-", "sampling-")) else (2 if mode == "polling-clock" else 1)
             require(report["deadlineSamples"] >= minimum_samples, report)
             require(report["samplerReaped"] is True, report)
+            if mode == "sampling-spawn-failure":
+                require(report["samplerStarted"] is False, report)
             if mode == "sampling-forced-backstop" or args.force_diagnostic_backstop:
                 require(outcome == "diagnostic-incomplete", report)
-            if outcome == "diagnostic-incomplete":
+            if report["samplerStarted"] is False:
                 require(not mode.startswith("sampling-complete-"), report)
-                print(f"Metadata watchdog {mode}: diagnostic-incomplete; core and cleanup still required.", flush=True)
-            elif mode == "sampling-spawn-failure":
-                require(report.get("samplerStarted") is False and "samplerPID" not in report, report)
-                require(report["sampleStatus"].startswith("failed:"), report)
                 require(report.get("sample") is None and report.get("sampleReadError") is None, report)
                 require(not (case / "sample.txt").exists(), report)
+            elif outcome == "diagnostic-incomplete":
+                require(not mode.startswith("sampling-complete-"), report)
+                print(f"Metadata watchdog {mode}: diagnostic-incomplete; core and cleanup still required.", flush=True)
             elif mode.startswith("sampling-"):
                 require(outcome == "complete" and report["sampleStatus"] == "exit-17", report)
                 if mode == "sampling-complete-output":

@@ -30,6 +30,13 @@ contention. Injected-clock tests cover both slow and fast actor turns.
   sampler reaping/absence, and no `stall.json.sb-*` files. Unmarked, partial,
   incorrect-core or uncleaned reports fail. Final file I/O must return before
   this publisher exits; the subprocess harness remains the outer hang guard.
+  `samplerStarted: true` requires an exact positive `samplerPID` and confirmed
+  reaping. A spawn failure instead publishes `samplerStarted: false`, no PID,
+  a `failed:` sample status and a `complete` diagnostic outcome. In that state,
+  `samplerReaped: true` means cleanup was unnecessary because no child started;
+  no PID absence probe is performed. Missing or contradictory identity still
+  fails. The controlled `sampling-spawn-failure` case uses a missing executable;
+  core assertions and the no-temporary-files check remain unconditional.
   Explicit signals hold sampling and force backstop publication in all four
   owned modes. Separate controlled completion modes disable the sampling timer
   and the sampler's short wait budget, awaiting its actual exit under the outer

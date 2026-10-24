@@ -132,6 +132,7 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         var sample: String?
         var sampleReadError: String?
         var samplerPID: Int32?
+        var samplerStarted: Bool?
         var samplerReaped: Bool?
         var samplerSignalError: Int32?
         var metadataPID: Int32?
@@ -298,7 +299,10 @@ nonisolated final class MetadataProcessTestWatchdog: @unchecked Sendable {
         let sampleURL = directory.appendingPathComponent("sample.txt")
         do {
             report.samplerPID = try spawnSampler(output: sampleURL)
+            report.samplerStarted = true
         } catch {
+            report.samplerStarted = false
+            report.samplerReaped = true
             report.sampleStatus = "failed: \(error)"
             report.diagnosticOutcome = "complete"
             save(report)
