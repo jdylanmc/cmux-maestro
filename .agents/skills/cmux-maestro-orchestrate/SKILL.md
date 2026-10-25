@@ -7,8 +7,9 @@ description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs
 
 Installed invocation: `/cmux-maestro-native:cmux-maestro-orchestrate`.
 
-Use this skill only when the user explicitly delegates work to another Copilot
-session or requests closure of an owned child terminal. Each worker receives a
+Use this skill when the user explicitly delegates work to another Copilot
+session, requests closure of an owned child terminal, or needs an own-session
+human notification. Each worker receives a
 real terminal tab in the coordinator's current CMUX pane and workspace. Never
 create a window or split.
 
@@ -17,6 +18,28 @@ Set the command path once:
 ```sh
 CMUX_MAESTRO_ORCHESTRATOR="${CMUX_MAESTRO_ORCHESTRATOR:-$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator}"
 ```
+
+## Notify the human
+
+Prefer `maestro_notify({"message":"A human decision is needed.","priority":"normal"})`.
+The CLI equivalent is:
+
+```sh
+"$CMUX_MAESTRO_ORCHESTRATOR" notify --message "A human decision is needed." --priority normal
+```
+
+Only the verified invoking managed session may notify. Identity, name, state
+and pet are resolved internally. Messages are limited to 140 characters;
+controls are removed and longer text is shortened with an ellipsis. Use this
+for blockers, decisions and completed tasks, never routine progress or secrets.
+`urgent` adds sound to the macOS system notification; it does not bypass Focus.
+Normal is silent. The sidebar's global **Mute agent notifications** and
+per-session burst of three, refilling one per minute, apply to both interfaces.
+Refusals (`muted`, `rate-limited`, `notifications-not-authorized`) are final for
+that attempt: no automatic retry or alternate notifier. Submission is not
+delivery/read confirmation. Clicks target only the recorded session and
+surface; stale clicks report `Unavailable`. CMUX's optional iPhone forwarding
+does not apply to Maestro's direct macOS notifications.
 
 ## Start a managed coordinator
 

@@ -99,6 +99,31 @@ The legacy saved-account `ready` field does not establish the invoking account.
 The source package's confirmed purpose is preserved in `intent.md`; it is not a
 runtime prerequisite.
 
+## Notify the human
+
+Use `maestro_notify({"message":"Decision needed: choose the release target.","priority":"normal"})`
+for a human blocker, decision, or finished task. Use `urgent` only for a genuinely
+time-sensitive interruption. Never use notifications for routine progress.
+
+Maestro posts a macOS system notification with the verified session's name,
+observed state and pet's first idle frame. The message is shortened to 140
+characters. Normal is silent; urgent adds the default sound, not a Focus bypass.
+Clicking attempts to focus that exact session's terminal; a stale target shows
+`Unavailable`, never a guessed terminal.
+
+Three notifications may burst, then one refills per minute per session.
+The sidebar's **Mute agent notifications** applies globally. `muted`,
+`rate-limited` and `notifications-not-authorized` are refusals, not invitations
+to retry, change settings, use another session or invoke a different notifier.
+Submission does not confirm display, reading or task completion. Keep secrets
+out of notification text; macOS retains the visible content.
+This is Maestro's OS notification, not CMUX's panel: CMUX's optional iPhone
+forwarding does not forward these notifications.
+
+If this tool is absent, the installed orchestrator's `notify --message TEXT
+--priority normal` is the equivalent own-session command. It refuses unverified
+callers; never pass or invent another session's identity.
+
 ## Discover peers
 
 Call `maestro_peers` with the empty object:

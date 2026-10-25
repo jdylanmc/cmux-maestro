@@ -26,6 +26,9 @@ do not copy its source or history, modify it, or make this project depend on it.
   adapter and backwards-compatible disposable proof transport.
 - `scripts/delivery-proof/processes.mjs`: installed owned-process pass
   triggers (ADR 0029).
+- `scripts/delivery-proof/notifications.mjs`: explicit agent-authored human
+  notifications through the containing app (ADR 0030). Messages are transient,
+  never observer evidence or Maestro logs; macOS retains delivered content.
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
   script. Never commit it.
 

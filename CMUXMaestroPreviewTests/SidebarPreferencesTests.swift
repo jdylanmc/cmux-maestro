@@ -6,6 +6,29 @@ import Testing
 @MainActor
 @Suite(.serialized, SidebarAppKitTestScope())
 struct SidebarPreferencesTests {
+    @Test func notificationMutePersistsWithoutChangingOtherPreferences() throws {
+        try withIsolatedDefaults { defaults, file, attentionFile, layoutStore in
+            @MainActor func make() -> SidebarPreferences {
+                SidebarPreferences(defaults: defaults, historyFile: file, attentionFile: attentionFile, layoutStore: layoutStore)
+            }
+            let preferences = make()
+            #expect(!preferences.notificationsMuted)
+            preferences.setNotificationsMuted(true)
+            #expect(preferences.notificationNotice == nil)
+            #expect(make().notificationsMuted)
+            let stored = file.deletingLastPathComponent().appendingPathComponent("sidebar-notifications.json")
+            do {
+                let object = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: stored)) as? [String: Any])
+                #expect(Set(object.keys) == ["version", "muted"])
+                #expect(object["muted"] as? Bool == true)
+            } catch {
+                Issue.record(error)
+            }
+            preferences.setNotificationsMuted(false)
+            #expect(!make().notificationsMuted)
+        }
+    }
+
     @Test
     func exposesExactlyTheTwoSidebarChoices() {
         #expect(SidebarMode.allCases.map(\.title) == ["Hierarchy", "Taskboard"])

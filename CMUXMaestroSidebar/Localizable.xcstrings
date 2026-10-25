@@ -1,6 +1,120 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "notifications.working" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Working"}},
+      "ja": {"stringUnit":{"state":"translated","value":"作業中"}},
+      "de": {"stringUnit":{"state":"translated","value":"In Arbeit"}},
+      "fr": {"stringUnit":{"state":"translated","value":"En cours"}},
+      "es": {"stringUnit":{"state":"translated","value":"Trabajando"}},
+      "ar": {"stringUnit":{"state":"translated","value":"يعمل"}},
+      "ko": {"stringUnit":{"state":"translated","value":"작업 중"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"工作中"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"工作中"}}
+    }},
+    "notifications.input" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Needs input"}},
+      "ja": {"stringUnit":{"state":"translated","value":"入力待ち"}},
+      "de": {"stringUnit":{"state":"translated","value":"Eingabe erforderlich"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Saisie requise"}},
+      "es": {"stringUnit":{"state":"translated","value":"Necesita información"}},
+      "ar": {"stringUnit":{"state":"translated","value":"يحتاج إلى إدخال"}},
+      "ko": {"stringUnit":{"state":"translated","value":"입력 필요"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"需要输入"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"需要輸入"}}
+    }},
+    "notifications.failed" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Failed"}},
+      "ja": {"stringUnit":{"state":"translated","value":"失敗"}},
+      "de": {"stringUnit":{"state":"translated","value":"Fehlgeschlagen"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Échec"}},
+      "es": {"stringUnit":{"state":"translated","value":"Error"}},
+      "ar": {"stringUnit":{"state":"translated","value":"فشل"}},
+      "ko": {"stringUnit":{"state":"translated","value":"실패"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"失败"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"失敗"}}
+    }},
+    "notifications.finished" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Turn finished"}},
+      "ja": {"stringUnit":{"state":"translated","value":"ターン終了"}},
+      "de": {"stringUnit":{"state":"translated","value":"Durchgang beendet"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Tour terminé"}},
+      "es": {"stringUnit":{"state":"translated","value":"Turno finalizado"}},
+      "ar": {"stringUnit":{"state":"translated","value":"انتهى الدور"}},
+      "ko": {"stringUnit":{"state":"translated","value":"턴 완료"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"轮次结束"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"回合結束"}}
+    }},
+    "notifications.cancelled" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Cancelled"}},
+      "ja": {"stringUnit":{"state":"translated","value":"キャンセル済み"}},
+      "de": {"stringUnit":{"state":"translated","value":"Abgebrochen"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Annulé"}},
+      "es": {"stringUnit":{"state":"translated","value":"Cancelado"}},
+      "ar": {"stringUnit":{"state":"translated","value":"أُلغي"}},
+      "ko": {"stringUnit":{"state":"translated","value":"취소됨"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"已取消"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"已取消"}}
+    }},
+    "notifications.idle" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Idle"}},
+      "ja": {"stringUnit":{"state":"translated","value":"待機中"}},
+      "de": {"stringUnit":{"state":"translated","value":"Inaktiv"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Inactif"}},
+      "es": {"stringUnit":{"state":"translated","value":"Inactivo"}},
+      "ar": {"stringUnit":{"state":"translated","value":"خامل"}},
+      "ko": {"stringUnit":{"state":"translated","value":"대기 중"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"空闲"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"閒置"}}
+    }},
+    "notifications.unknown" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Unknown"}},
+      "ja": {"stringUnit":{"state":"translated","value":"不明"}},
+      "de": {"stringUnit":{"state":"translated","value":"Unbekannt"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Inconnu"}},
+      "es": {"stringUnit":{"state":"translated","value":"Desconocido"}},
+      "ar": {"stringUnit":{"state":"translated","value":"غير معروف"}},
+      "ko": {"stringUnit":{"state":"translated","value":"알 수 없음"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"未知"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"未知"}}
+    }},
+    "notifications.urgent" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Urgent"}},
+      "ja": {"stringUnit":{"state":"translated","value":"緊急"}},
+      "de": {"stringUnit":{"state":"translated","value":"Dringend"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Urgent"}},
+      "es": {"stringUnit":{"state":"translated","value":"Urgente"}},
+      "ar": {"stringUnit":{"state":"translated","value":"عاجل"}},
+      "ko": {"stringUnit":{"state":"translated","value":"긴급"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"紧急"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"緊急"}}
+    }},
+    "notifications.mute" : {
+      "extractionState" : "manual", "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Mute agent notifications" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "エージェントの通知をミュート" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Agentenbenachrichtigungen stummschalten" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Désactiver les notifications des agents" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Silenciar notificaciones de agentes" } },
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "كتم إشعارات الوكلاء" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "에이전트 알림 끄기" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "静音代理通知" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "靜音代理通知" } }
+      }
+    },
+    "notifications.unavailable" : {
+      "extractionState" : "manual", "localizations" : {
+        "en" : { "stringUnit" : { "state" : "translated", "value" : "Unavailable" } },
+        "ja" : { "stringUnit" : { "state" : "translated", "value" : "利用不可" } },
+        "de" : { "stringUnit" : { "state" : "translated", "value" : "Nicht verfügbar" } },
+        "fr" : { "stringUnit" : { "state" : "translated", "value" : "Indisponible" } },
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "No disponible" } },
+        "ar" : { "stringUnit" : { "state" : "translated", "value" : "غير متاح" } },
+        "ko" : { "stringUnit" : { "state" : "translated", "value" : "사용할 수 없음" } },
+        "zh-Hans" : { "stringUnit" : { "state" : "translated", "value" : "不可用" } },
+        "zh-Hant" : { "stringUnit" : { "state" : "translated", "value" : "無法使用" } }
+      }
+    },
     "work.unresolved.count" : {
       "extractionState" : "manual",
       "localizations" : {

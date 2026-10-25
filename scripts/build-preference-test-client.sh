@@ -24,6 +24,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     "$ROOT/CMUXMaestroSidebar/Copilot/SidebarWorktreeGroups.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferenceStore.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarPreferences.swift" \
+    "$ROOT/CMUXMaestroSidebar/State/SidebarNotificationSettings.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarIconPreferences.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarOrder.swift" \
     "$ROOT/CMUXMaestroSidebar/State/SidebarTags.swift" \

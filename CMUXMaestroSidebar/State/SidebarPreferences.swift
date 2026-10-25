@@ -43,6 +43,10 @@ final class SidebarPreferences {
     private static let terminalIconStyleKey = "sidebar.terminalIconStyle"
     private static let eventTailWindowKey = "sidebar.eventTailWindowMiB"
     private let defaults: UserDefaults
+    private let notificationStore: SidebarPreferenceStore<SidebarNotificationSettings>
+    var notificationsMuted: Bool { notificationStore.value.settings.muted }
+    var notificationNotice: String? { notificationStore.value.notice }
+    func setNotificationsMuted(_ muted: Bool) { notificationStore.apply { $0.muted = muted } }
     private let layoutStore: SidebarLayoutStore
     var layout: SidebarLayoutSettings { layoutStore.value.settings }
     var layoutNotice: String? { layoutStore.value.notice }
@@ -120,6 +124,10 @@ final class SidebarPreferences {
     ) {
         self.defaults = defaults
         self.layoutStore = layoutStore
+        notificationStore = SidebarPreferenceStore(
+            file: .init(url: historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-notifications.json")),
+            initializeMissingFile: false, preserveSettingsOnSaveFailure: true
+        )
         iconStore = SidebarPreferenceStore(
             file: .init(url: iconFile ?? historyFile.deletingLastPathComponent().appendingPathComponent("sidebar-icons.json")),
             initializeMissingFile: false, preserveSettingsOnSaveFailure: true

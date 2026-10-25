@@ -587,7 +587,7 @@ final class InstallCheckpointFixture: @unchecked Sendable {
         try fixture.write(Data("---\nname: maestro-icon\n---\n".utf8), to: resources.appendingPathComponent("maestro-icon/SKILL.md"))
         try fixture.write(Data("---\nname: maestro-pet\n---\n".utf8), to: resources.appendingPathComponent("maestro-pet/SKILL.md"))
         try fixture.write(Data("# Pet kit fixture\n".utf8), to: resources.appendingPathComponent("maestro-pet/pet_kit.py"))
-        for name in ["adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"] {
+        for name in ["adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"] {
             try FileManager.default.copyItem(at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
                                              to: resources.appendingPathComponent(name))
         }

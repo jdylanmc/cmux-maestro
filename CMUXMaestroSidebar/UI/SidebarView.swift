@@ -1152,6 +1152,13 @@ struct SidebarView: View {
             }
             Divider()
             Text("Completed work history").font(.headline).id("sidebar-settings-history")
+            Toggle(String(localized: "notifications.mute", defaultValue: "Mute agent notifications"), isOn: Binding(
+                get: { preferences.notificationsMuted }, set: { preferences.setNotificationsMuted($0) }
+            ))
+            .accessibilityIdentifier("sidebar-mute-notifications")
+            if let notice = preferences.notificationNotice {
+                Text(notice).font(.caption).foregroundStyle(SidebarTone.attention.color)
+            }
             Stepper(value: Binding(
                 get: { preferences.eventTailWindowMiB },
                 set: { preferences.setEventTailWindowMiB($0) }

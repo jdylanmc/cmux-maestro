@@ -65,7 +65,7 @@ class NotificationTests(unittest.TestCase):
 
     def test_notification_mute_missing_valid_and_corrupt(self):
         with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "notifications.json"
+            target = Path(directory).resolve() / "notifications.json"
             read = self.api["notification_muted"]
             self.assertFalse(read(target))
             target.write_text('{"version":1,"muted":true}')
@@ -109,6 +109,53 @@ class NotificationTests(unittest.TestCase):
                 "surfaceId": "surface", "generation": 2}
         with self.assertRaisesRegex(self.api["OrchestrationError"], "target-unavailable"):
             fn({"nodes": {"node": node}}, target)
+
+    def test_notification_admission_is_durable_muted_and_rechecked(self):
+        api = self.api
+        actor = {"id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+                 "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()), "generation": 1, "label": "Synthetic"}
+        state = {"nodes": {actor["id"]: actor}}
+        calls = []
+        class Host:
+            def validate_surface(self, workspace, surface):
+                calls.append((workspace, surface))
+        fn = api["command_notification_authorize"]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(api["time"], "time", return_value=1000), \
+                patch.object(api["Store"], "read", return_value=state), \
+                patch.dict(fn.__globals__, {"notification_actor": lambda state: actor, "notification_muted": lambda: False}):
+            root = Path(directory).resolve() / "Orchestration"
+            receipts = [fn(root, Host()) for _ in range(3)]
+            self.assertEqual(len({r["clickToken"] for r in receipts}), 3)
+            self.assertEqual(receipts[0]["target"]["surfaceId"], actor["surfaceId"])
+            with self.assertRaisesRegex(api["OrchestrationError"], "rate-limited"):
+                fn(root, Host())
+            with patch.dict(fn.__globals__, {"notification_muted": lambda: True}):
+                with self.assertRaisesRegex(api["OrchestrationError"], "muted"):
+                    fn(root, Host())
+            request = {"clickToken": receipts[0]["clickToken"]}
+            with patch.dict(fn.__globals__, {"notification_input": lambda: request}):
+                self.assertTrue(api["command_notification_confirm"](root, Host())["confirmed"])
+                actor["generation"] = 2
+                with self.assertRaisesRegex(api["OrchestrationError"], "target-unavailable"):
+                    api["command_notification_confirm"](root, Host())
+            ledger = (root / "control/notifications.json").read_text()
+            self.assertNotIn("Synthetic", ledger)
+            self.assertNotIn("message", ledger)
+
+    def test_notification_ledger_rejects_nonregular_and_malformed_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "Orchestration"
+            with self.api["Store"](root) as store:
+                target = root / "control/notifications.json"
+                for content in ('[]', '{"version":1,"sessions":{"bad":null},"clicks":{}}'):
+                    target.write_text(content)
+                    with self.assertRaisesRegex(self.api["OrchestrationError"], "ledger-unavailable"):
+                        self.api["notification_ledger"](store, 1000)
+                target.unlink()
+                os.mkfifo(target)
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "ledger-unavailable"):
+                    self.api["notification_ledger"](store, 1000)
 
 
 def fixture_root(home):
@@ -2305,7 +2352,7 @@ class BornFixture:
         self.addCleanup(shutil.rmtree, self.routes, True)
         self.extension = self.h.path / "installed-extension"
         self.extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, self.extension / name)
             (self.extension / name).chmod(0o600)
         self.install(age=10)
@@ -2319,7 +2366,7 @@ class BornFixture:
         config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(self.extension)}))
         config.chmod(0o600)
         stamp = time.time() - age
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
@@ -2938,7 +2985,7 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
 
     def test_reload_after_an_update_reuses_the_enrolled_node(self):
         touch = ("import time\n"
-                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs'):\n"
+                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs', 'notifications.mjs'):\n"
                  f"    os.utime(os.path.join({str(self.extension)!r}, name), (time.time() + 5, time.time() + 5))")
         first, reload = self.enroll(repeat=2, env={"FAKE_BETWEEN": touch})
         self.assertTrue(first["ok"], first)
@@ -3522,7 +3569,7 @@ class ChildResumeTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.routes, True)
         extension = self.h.path / "installed-extension"
         extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (self.h.root / "bin").mkdir(mode=0o700, exist_ok=True)
@@ -4363,7 +4410,7 @@ class OrchestratorTests(unittest.TestCase):
         try:
             extension = h.root / "extension"
             extension.mkdir(mode=0o700)
-            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
                 shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
                 (extension / name).chmod(0o600)
             (h.root / "bin").mkdir(mode=0o700)
@@ -6603,7 +6650,7 @@ class DirectLaunchTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, routes)
         extension = h.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (h.root / "bin").mkdir(mode=0o700)
@@ -7558,12 +7605,12 @@ class ProcessObservationTests(unittest.TestCase):
         (root / "bin/messaging.json").write_text(json.dumps(
             {"version": 1, "routes": str(routes), "extension": str(extension)}))
         (root / "bin/messaging.json").chmod(0o600)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         configuration = CONTROLLER_API["messaging_configuration"]
         self.assertEqual(configuration(root)["extension"], str(extension))
-        for name in ("processes.mjs", "models.mjs"):
+        for name in ("processes.mjs", "models.mjs", "notifications.mjs"):
             (extension / name).write_bytes(b"x" * 16_385)
             with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "adapter is unavailable"):
                 configuration(root)

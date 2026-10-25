@@ -7,6 +7,10 @@ enum CMUXMaestroEntryPoint {
     @MainActor
     static func main() {
         let arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
+        if arguments.first == MaestroNotificationCommand.flag {
+            Task { @MainActor in exit(await MaestroNotificationCommand.perform()) }
+            dispatchMain()
+        }
         guard arguments.contains(CopilotSetupCommandLine.installFlag)
             || arguments.contains(CopilotSetupCommandLine.bridgeFlag)
             || arguments.contains(MaestroAppLifecycleCommandLine.flag) else {
@@ -46,6 +50,7 @@ enum CMUXMaestroEntryPoint {
 }
 
 struct CMUXMaestroPreviewApp: App {
+    @NSApplicationDelegateAdaptor(MaestroNotificationDelegate.self) private var notificationDelegate
     var body: some Scene {
         #if !CMUX_VALIDATION
         WindowGroup {
