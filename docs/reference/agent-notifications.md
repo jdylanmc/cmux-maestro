@@ -5,6 +5,11 @@
 post through the installed Maestro app and macOS Notification Center. No
 installation, app setting change or session reload happens as a fallback.
 
+CMUX workspace/surface UUIDs are case-normalized. A shell need not export a
+session UUID: the sole eligible binding on that exact surface must still prove
+the caller's provider ancestry and session custody. Present session hints must
+be valid, agree with each other, and match; missing hints never weaken those checks.
+
 The app's one-shot stdin mode needs no preexisting running app. Click delivery
 uses the containing app's notification delegate, including on normal launch.
 **Unverified acceptance gates:** real banners, permission prompt and clicks

@@ -62,6 +62,8 @@ class NotificationTests(unittest.TestCase):
         }):
             self.assertEqual(fn({"nodes": {actor["id"]: actor}}), actor)
             self.assertEqual(custody, [(actor["copilotSessionId"], actor["providerProcess"])])
+            reserved = {**actor, "id": str(uuid.uuid4()), "surfaceId": None, "providerProcess": None}
+            self.assertEqual(fn({"nodes": {actor["id"]: actor, reserved["id"]: reserved}}), actor)
             with patch.dict(fn.__globals__, {"direct_process_identity": lambda pid: {"pid": 9001, "start": "reused"}}):
                 with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
                     fn({"nodes": {actor["id"]: actor}})

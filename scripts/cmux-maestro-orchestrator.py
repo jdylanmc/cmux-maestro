@@ -2848,17 +2848,25 @@ def notification_muted(path=None):
 
 
 def notification_actor(state):
-    session = os.environ.get("SESSION_ID") or os.environ.get("CMUX_MAESTRO_SESSION_ID")
-    candidates = [n for n in state["nodes"].values()
-                  if n["copilotSessionId"] == session
-                  and n.get("workspaceId") == os.environ.get("CMUX_WORKSPACE_ID")
-                  and n.get("surfaceId") == os.environ.get("CMUX_SURFACE_ID")
-                  and n.get("executionMode") == "interactive" and n.get("providerProcess")
-                  and not n.get("archiving") and not session_ended_in_place(n)]
-    if len(candidates) != 1:
-        raise OrchestrationError("notification-identity-unverified")
-    actor = candidates[0]
     try:
+        workspace = canonical_uuid(os.environ.get("CMUX_WORKSPACE_ID"), "current workspace ID")
+        surface = canonical_uuid(os.environ.get("CMUX_SURFACE_ID"), "current surface ID")
+        hints = {canonical_uuid(os.environ[key], "current session ID")
+                 for key in ("SESSION_ID", "CMUX_MAESTRO_SESSION_ID") if key in os.environ}
+        if len(hints) > 1:
+            raise OrchestrationError("notification-identity-unverified")
+        candidates = [n for n in state["nodes"].values()
+                      if n.get("executionMode") == "interactive" and n.get("providerProcess")
+                      and n.get("surfaceId") and not n.get("archiving") and not session_ended_in_place(n)
+                      and canonical_uuid(n.get("workspaceId"), "stored workspace ID") == workspace
+                      and canonical_uuid(n.get("surfaceId"), "stored surface ID") == surface
+                      and (not hints or canonical_uuid(n["copilotSessionId"], "stored session ID") in hints)]
+        if len(candidates) != 1:
+            raise OrchestrationError("notification-identity-unverified")
+        actor = candidates[0]
+        session = canonical_uuid(actor["copilotSessionId"], "stored session ID")
+        # Shells need not expose a session UUID. Surface selection is only a
+        # candidate: exact provider ancestry and sole session custody authorize it.
         provider = actor["providerProcess"]
         if direct_process_identity(provider["pid"]) != provider:
             raise OrchestrationError("notification-identity-unverified")
