@@ -1,6 +1,17 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "notifications.sender" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Maestro agent"}},
+      "ja": {"stringUnit":{"state":"translated","value":"Maestro エージェント"}},
+      "de": {"stringUnit":{"state":"translated","value":"Maestro-Agent"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Agent Maestro"}},
+      "es": {"stringUnit":{"state":"translated","value":"Agente de Maestro"}},
+      "ar": {"stringUnit":{"state":"translated","value":"وكيل Maestro"}},
+      "ko": {"stringUnit":{"state":"translated","value":"Maestro 에이전트"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"Maestro 智能体"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"Maestro 智慧代理"}}
+    }},
     "notifications.working" : { "extractionState": "manual", "localizations": {
       "en": {"stringUnit":{"state":"translated","value":"Working"}},
       "ja": {"stringUnit":{"state":"translated","value":"作業中"}},

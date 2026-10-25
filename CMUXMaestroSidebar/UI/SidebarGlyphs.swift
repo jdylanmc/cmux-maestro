@@ -123,10 +123,9 @@ final class SidebarGlyphCatalog {
 
     private static func resource(_ name: String, maximum: Int) throws -> Data {
         guard let url = SidebarIconResources.bundle.resourceURL?
-            .appendingPathComponent("NerdFonts", isDirectory: true).appendingPathComponent(name),
-              let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size <= maximum else { throw ResourceError.unavailable }
-        return try Data(contentsOf: url)
+            .appendingPathComponent("NerdFonts", isDirectory: true).appendingPathComponent(name)
+        else { throw ResourceError.unavailable }
+        return try CopilotFileAccess.readBundledResource(url, maximum: maximum)
     }
 
     private static func digest(_ data: Data) -> String {

@@ -17,8 +17,31 @@ An authored notification message is an explicit content-transfer exception:
 bounded, sanitized text goes in memory to the installed containing app and
 macOS Notification Center. It is not observed session content. Maestro logs
 neither the message nor system error text. macOS retains notification content.
-The first idle frame of the verified session's pet becomes a PNG attachment;
-the bundled robot is the fallback.
+
+Owner amendment after isolated native proof (#371): use communication
+notifications, not a pet attachment. The exact sender's selected sidebar glyph
+and color become its avatar, rendered from the existing hash-pinned bundled
+font/catalog. Human session overrides and reset-to-default win over authored
+agent appearance. The same named/custom colors are used as the sidebar; no
+arbitrary fonts or image paths are accepted. Unreadable/invalid preferences or
+unavailable glyphs refuse instead of silently replacing a human choice.
+
+The displayed sender is the short localized "Maestro agent", not a session
+filename, invented coordinator role or work state. Exact session identity remains
+in the opaque account/conversation handle. The system places the sender avatar
+at the leading edge and badges it with the application icon; Maestro does not
+draw that badge. System icon style controls adaptive artwork, separately owned
+by #372. No state subtitle or right attachment is supplied.
+
+This intentionally expands the content-transfer exception to incoming
+`INSendMessageIntent` donations: Siri receives the bounded authored message,
+avatar and app-specific session/conversation identity. No contact identifier,
+phone/email, outgoing human interaction or contact mutation is fabricated.
+Donation informs system suggestions and communication prioritization; it is
+not a promise of zero Siri persistence. A successful donation can remain even
+if subsequent identity revalidation or submission fails. No retention timer,
+bulk donation deletion or retry is added. Permission and exact identity/mute
+checks precede donation; identity/mute is checked again before submission.
 
 Global mute stays in the sidebar's own sandbox container, separate from layout,
 history and attention. The unsandboxed controller reads it. No grant changes.
@@ -56,13 +79,23 @@ leftovers before applying the unchanged 256-entry discovery bound. Exhaustion
 or contention still refuses; no automatic retry or larger scan.
 
 The one-shot `--maestro-notify` invocation uses accessory activation policy;
-normal app launches retain setup/settings and Dock behavior. An unobserved
-work state adds no subtitle instead of the confusing question-mark Unknown;
-notification authorship never substitutes for work-state evidence.
+normal app launches retain setup/settings and Dock behavior. No work state or
+session-name reader is needed to format a notification.
 
 Normal uses active interruption with no sound. Urgent uses active interruption
 with default sound; no time-sensitive entitlement or Focus-bypass promise.
+Communication treatment participates in the OS's people/Focus decisions; no
+Focus-status request or notify-anyway metadata is supplied.
 The OS owns banner layout and notification grouping, not Maestro.
+
+Production adoption requires a correctly signed containing app with the
+Communication Notifications capability and matching production provisioning
+profile. The existing ad-hoc publication policy cannot supply this entitlement;
+its replacement needs separate owner-approved signing/install work. This source
+change adds the intent declaration but does not alter profiles, certificates,
+production signing policy or sidebar entitlements. Missing effective communication
+entitlement refuses before authorization/donation. The isolated synthetic profile
+must never be reused for the production identity.
 
 Real banners, permission prompts and cold-launch click delivery require
 human-installed acceptance. Unsigned builds and mocked notification-center

@@ -103,6 +103,21 @@ nonisolated final class CopilotDirectoryStream: @unchecked Sendable {
 // File descriptors anchor each traversal. No resolve-then-open symlink window,
 // and no path from a transcript is ever passed into these helpers.
 nonisolated enum CopilotFileAccess {
+    static func readBundledResource(_ file: URL, maximum: Int, user: UInt32 = getuid()) throws -> Data {
+        let directory = try openDirectory(file.deletingLastPathComponent())
+        defer { close(directory) }
+        let parent = try statFile(directory)
+        let stamp = try statEntry(at: directory, name: file.lastPathComponent)
+        guard [0, user].contains(parent.uid), parent.permissions & 0o022 == 0,
+              [0, user].contains(stamp.uid), stamp.permissions & 0o022 == 0 else {
+            throw CopilotFileError.unsafePath
+        }
+        return try readStableRegular(
+            at: directory, filename: file.lastPathComponent, owner: stamp.uid, maximum: maximum,
+            permissions: stamp.permissions
+        )
+    }
+
     static func openDirectory(_ url: URL, owner: UInt32? = nil) throws -> Int32 {
         guard url.isFileURL, url.path.hasPrefix("/") else { throw CopilotFileError.unsafePath }
         let components = url.path.split(separator: "/").map(String.init)

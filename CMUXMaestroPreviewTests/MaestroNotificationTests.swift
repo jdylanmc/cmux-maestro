@@ -3,23 +3,19 @@ import Testing
 import UserNotifications
 import CoreGraphics
 import ImageIO
+import Intents
 @testable import CMUXMaestroPreview
 
 @MainActor
 struct MaestroNotificationTests {
-    @Test func unknownStateAddsNoUnsupportedWorkClaim() {
-        let content = MaestroNotificationContent(name: "Synthetic", state: .unknown, message: "Choose one", urgent: false)
-        #expect(content.subtitle.isEmpty)
-    }
-
     @Test func bundledReadAcceptsRootOwnerButCustomReadDoesNot() throws {
         let file = URL(fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns")
         let directory = try CopilotFileAccess.openDirectory(file.deletingLastPathComponent())
         defer { close(directory) }
         #expect(try CopilotFileAccess.statEntry(at: directory, name: file.lastPathComponent).uid == 0)
-        let data = try MaestroNotificationPet.readBundled(file, maximum: 10 * 1024 * 1024)
+        let data = try CopilotFileAccess.readBundledResource(file, maximum: 10 * 1024 * 1024)
         #expect(!data.isEmpty)
-        #expect(throws: (any Error).self) { try MaestroNotificationPet.read(file, maximum: 10 * 1024 * 1024) }
+        #expect(throws: (any Error).self) { try MaestroNotificationAssets.read(file, maximum: 10 * 1024 * 1024) }
     }
 
     @Test func bundledAndCustomReadsRejectUnsafeModesAndSymlinks() throws {
@@ -31,15 +27,15 @@ struct MaestroNotificationTests {
         try Data("synthetic".utf8).write(to: file)
         for mode in [0o622, 0o664, 0o666] {
             #expect(chmod(file.path, mode_t(mode)) == 0)
-            #expect(throws: (any Error).self) { try MaestroNotificationPet.readBundled(file, maximum: 1024) }
-            #expect(throws: (any Error).self) { try MaestroNotificationPet.read(file, maximum: 1024) }
+            #expect(throws: (any Error).self) { try CopilotFileAccess.readBundledResource(file, maximum: 1024) }
+            #expect(throws: (any Error).self) { try MaestroNotificationAssets.read(file, maximum: 1024) }
         }
         #expect(chmod(file.path, 0o600) == 0)
-        #expect(try MaestroNotificationPet.readBundled(file, maximum: 1024) == Data("synthetic".utf8))
+        #expect(try CopilotFileAccess.readBundledResource(file, maximum: 1024) == Data("synthetic".utf8))
         let link = root.appendingPathComponent("link.png")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
-        #expect(throws: (any Error).self) { try MaestroNotificationPet.readBundled(link, maximum: 1024) }
-        #expect(throws: (any Error).self) { try MaestroNotificationPet.read(link, maximum: 1024) }
+        #expect(throws: (any Error).self) { try CopilotFileAccess.readBundledResource(link, maximum: 1024) }
+        #expect(throws: (any Error).self) { try MaestroNotificationAssets.read(link, maximum: 1024) }
     }
 
     @Test func guiControllerPathUsesRegisteredHostAndPreservesBinding() {
@@ -79,38 +75,14 @@ struct MaestroNotificationTests {
     }
 
     @Test func formattingUsesSystemPriorityUniqueIDsAndExactSessionThread() throws {
-        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent(".build/notification-content-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let context = try #require(CGContext(data: nil, width: 512, height: 624, bitsPerComponent: 8, bytesPerRow: 0,
-                                            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
-        let image = try #require(context.makeImage())
-        let sheet = NSMutableData()
-        let destination = try #require(CGImageDestinationCreateWithData(sheet, "public.png" as CFString, 1, nil))
-        CGImageDestinationAddImage(destination, image, nil)
-        #expect(CGImageDestinationFinalize(destination))
-        let bundled = folder.appendingPathComponent("maestro-pet.png")
-        try (sheet as Data).write(to: bundled)
-        let frame = try MaestroNotificationPet(home: folder, bundledSheet: bundled)
-            .png(session: UUID(), agentChoice: "unavailable-custom-pet")
-        let source = try #require(CGImageSourceCreateWithData(frame as CFData, nil))
-        let cropped = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
-        #expect(cropped.width == 64)
-        #expect(cropped.height == 69)
-        let file = folder.appendingPathComponent("pet.png")
-        try frame.write(to: file)
-        let attachment = try UNNotificationAttachment(identifier: "synthetic-pet", url: file)
         let session = UUID()
         let admission = MaestroNotificationAdmission(
             target: .init(nodeId: UUID(), sessionId: session, workspaceId: UUID(), surfaceId: UUID(), generation: 2),
             clickToken: String(repeating: "a", count: 64), name: "Synthetic"
         )
-        let normal = MaestroNotificationContent(name: "Agent\u{0000}\n", state: .working,
-                                               message: String(repeating: "x", count: 141), urgent: false)
-            .request(admission: admission, attachment: attachment)
-        let urgent = MaestroNotificationContent(name: "Agent", state: .blocked, message: "Choose one", urgent: true)
-            .request(admission: admission, attachment: attachment)
+        let normal = MaestroNotificationContent(message: String(repeating: "x", count: 141), urgent: false)
+            .request(admission: admission)
+        let urgent = MaestroNotificationContent(message: "Choose one", urgent: true).request(admission: admission)
         #expect(normal.content.title.isEmpty)
         #expect(normal.content.body == String(repeating: "x", count: 139) + "…")
         #expect(normal.content.subtitle.isEmpty)
@@ -120,9 +92,141 @@ struct MaestroNotificationTests {
         #expect(urgent.content.subtitle.isEmpty)
         #expect(normal.content.threadIdentifier == session.uuidString.lowercased())
         #expect(normal.identifier != urgent.identifier)
-        #expect(normal.content.attachments.count == 1)
+        #expect(normal.content.attachments.isEmpty)
         #expect(normal.content.userInfo["maestroClickToken"] as? String == admission.clickToken)
         #expect(MaestroNotificationContent.text("a\u{202e}b\u{0007}", limit: 140) == "ab")
+    }
+
+    @Test func communicationUsesNeutralTitleExactAccountAndIncomingOnly() throws {
+        let session = UUID()
+        let admission = MaestroNotificationAdmission(
+            target: .init(nodeId: UUID(), sessionId: session, workspaceId: UUID(), surfaceId: UUID(), generation: 2),
+            clickToken: String(repeating: "b", count: 64), name: "Rejected filename.md"
+        )
+        let renderer = try MaestroNotificationAvatar(catalog: .shared.get())
+        let avatar = try renderer.png(choice: .init(glyph: "md-account_music_outline", color: .teal))
+        let interaction = MaestroNotificationCommunication().interaction(
+            admission: admission, message: "Choose\u{0000} one", avatar: avatar, id: "synthetic-request"
+        )
+        let intent = try #require(interaction.intent as? INSendMessageIntent)
+        #expect(interaction.direction == .incoming)
+        #expect(interaction.identifier == "synthetic-request")
+        #expect(intent.sender?.displayName == "Maestro agent")
+        #expect(intent.sender?.contactIdentifier == nil)
+        #expect(intent.sender?.suggestionType == INPersonSuggestionType.none)
+        #expect(intent.sender?.personHandle?.value == "maestro-agent:\(session.uuidString.lowercased())")
+        #expect(intent.conversationIdentifier == "maestro-session:\(session.uuidString.lowercased())")
+        #expect(intent.recipients == nil)
+        #expect(intent.content == "Choose one")
+        #expect(intent.sender?.image != nil)
+    }
+
+    @Test func avatarUsesBundledGlyphColorAndRefusesUnknownGlyph() throws {
+        let renderer = try MaestroNotificationAvatar(catalog: .shared.get())
+        let teal = try renderer.png(choice: .init(glyph: "md-account_music_outline", color: .teal))
+        let blue = try renderer.png(choice: .init(glyph: "md-account_music_outline", color: .blue))
+        let robot = try renderer.png(choice: .init(glyph: "md-robot", color: .teal))
+        #expect(teal != blue && teal != robot)
+        let source = try #require(CGImageSourceCreateWithData(teal as CFData, nil))
+        let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        #expect(image.width == 256 && image.height == 256)
+        #expect(teal.count <= 262_144)
+        #expect(throws: (any Error).self) {
+            try renderer.png(choice: .init(glyph: "../../foreign-font", color: .teal))
+        }
+    }
+
+    @Test func humanIconOverrideAndResetWinWithoutReadingSessionContent() throws {
+        let home = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/notification-appearance-\(UUID().uuidString)")
+        let root = MaestroNotificationAssets.sidebarRoot(home: home)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let session = UUID()
+        let agent = CMUXMaestroPreview.CopilotSessionAppearance(
+            sessionID: session, iconId: "md-account_music_outline", iconColor: "teal"
+        )
+        let reader = MaestroNotificationAppearance(home: home)
+        #expect(try reader.choice(session: session, agent: agent) == .init(glyph: "md-account_music_outline", color: .teal))
+        var settings = CMUXMaestroPreview.SidebarIconSettings()
+        settings.overrides[CMUXMaestroPreview.SidebarIconTarget.session(session).key] =
+            .custom(.init(glyph: "md-duck", color: .custom(.init(red: 18, green: 171, blue: 239))))
+        let file = root.appendingPathComponent("sidebar-icons.json")
+        try JSONEncoder().encode(settings).write(to: file)
+        #expect(try reader.choice(session: session, agent: agent).glyph == "md-duck")
+        #expect(try reader.choice(session: session, agent: agent).color.rawValue == "#12ABEF")
+        #expect(try reader.choice(session: UUID(), agent: nil).glyph == "md-robot")
+        settings.overrides[CMUXMaestroPreview.SidebarIconTarget.session(session).key] = .standard
+        try JSONEncoder().encode(settings).write(to: file)
+        #expect(try reader.choice(session: session, agent: agent) == .init(glyph: "md-robot", color: .theme))
+        #expect(throws: (any Error).self) { try reader.choice(session: UUID(), agent: agent) }
+        try Data("invalid preferences".utf8).write(to: file)
+        #expect(throws: (any Error).self) { try reader.choice(session: session, agent: agent) }
+    }
+
+    @Test func donationPreparationIsPermissionAndIdentityGatedAndRevalidated() async throws {
+        let center = NotificationCenterDouble(status: .denied)
+        let request = UNNotificationRequest(identifier: "synthetic", content: UNMutableNotificationContent(), trigger: nil)
+        var preparationCalls = 0
+        let prepare: (UNNotificationRequest) async throws -> UNNotificationRequest = {
+            preparationCalls += 1
+            return $0
+        }
+        await #expect(throws: MaestroNotificationFailure.unauthorized) {
+            try await MaestroNotificationDelivery(center: center).submit(request, prepare: prepare)
+        }
+        #expect(preparationCalls == 0)
+        center.status = .authorized
+        await #expect(throws: MaestroNotificationFailure.muted) {
+            try await MaestroNotificationDelivery(center: center).submit(request, prepare: prepare) {
+                throw MaestroNotificationFailure.muted
+            }
+        }
+        #expect(preparationCalls == 0)
+        var checks = 0
+        await #expect(throws: MaestroNotificationFailure.unavailable) {
+            try await MaestroNotificationDelivery(center: center).submit(request, prepare: prepare) {
+                checks += 1
+                if checks == 2 { throw MaestroNotificationFailure.unavailable }
+            }
+        }
+        #expect(preparationCalls == 1 && checks == 2)
+        #expect(center.requests.isEmpty)
+    }
+
+    @Test func unsignedValidationCannotDonateCommunication() async throws {
+        let admission = MaestroNotificationAdmission(
+            target: .init(nodeId: UUID(), sessionId: UUID(), workspaceId: UUID(), surfaceId: UUID(), generation: 1),
+            clickToken: String(repeating: "c", count: 64), name: "Synthetic"
+        )
+        let communication = MaestroNotificationCommunication()
+        let request = MaestroNotificationContent(message: "Synthetic", urgent: false).request(admission: admission)
+        let interaction = communication.interaction(admission: admission, message: "Synthetic", avatar: Data(), id: request.identifier)
+        await #expect(throws: MaestroNotificationFailure.unavailable) {
+            try await communication.prepare(request, interaction: interaction)
+        }
+    }
+
+    @Test func authoredAppearanceReadNeedsNoSessionDirectoryAndRejectsMismatchedIdentity() async throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/notification-authored-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reader = CMUXMaestroPreview.CopilotSessionReader(
+            bindingDirectory: root, sessionStateRoot: root.appendingPathComponent("absent-sessions")
+        )
+        let session = UUID()
+        #expect(try await reader.sessionAppearance(for: session) == nil)
+        let appearance = CMUXMaestroPreview.CopilotSessionAppearance(
+            sessionID: session, iconId: "md-account_music_outline", iconColor: "teal"
+        )
+        let file = root.appendingPathComponent("appearance-\(session.uuidString.lowercased()).json")
+        try JSONEncoder().encode(appearance).write(to: file)
+        #expect(chmod(file.path, 0o600) == 0)
+        #expect(try await reader.sessionAppearance(for: session) == appearance)
+        let other = CMUXMaestroPreview.CopilotSessionAppearance(sessionID: UUID(), iconId: "md-robot")
+        try JSONEncoder().encode(other).write(to: file)
+        await #expect(throws: (any Error).self) { try await reader.sessionAppearance(for: session) }
     }
 }
 

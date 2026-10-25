@@ -2,8 +2,6 @@ import Foundation
 import UserNotifications
 
 nonisolated struct MaestroNotificationContent: Sendable {
-    let name: String
-    let state: CopilotWorkState
     let message: String
     let urgent: Bool
 
@@ -14,29 +12,12 @@ nonisolated struct MaestroNotificationContent: Sendable {
         return clean.count > limit ? String(clean.prefix(limit - 1)) + "…" : clean
     }
 
-    var subtitle: String {
-        switch state {
-        case .working: "🟢 " + String(localized: "notifications.working", defaultValue: "Working")
-        case .blocked: "⏸️ " + String(localized: "notifications.input", defaultValue: "Needs input")
-        case .failed: "🔴 " + String(localized: "notifications.failed", defaultValue: "Failed")
-        case .completed: "✅ " + String(localized: "notifications.finished", defaultValue: "Turn finished")
-        case .cancelled: "⏹️ " + String(localized: "notifications.cancelled", defaultValue: "Cancelled")
-        case .idle: "⚪ " + String(localized: "notifications.idle", defaultValue: "Idle")
-        case .unknown: ""
-        }
-    }
-
-    func request(admission: MaestroNotificationAdmission, attachment: UNNotificationAttachment) -> UNNotificationRequest {
+    func request(admission: MaestroNotificationAdmission) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
-        content.title = Self.text(name, limit: 100)
-        content.subtitle = urgent
-            ? [String(localized: "notifications.urgent", defaultValue: "Urgent"), subtitle].filter { !$0.isEmpty }.joined(separator: " · ")
-            : subtitle
         content.body = Self.text(message, limit: 140)
         content.threadIdentifier = admission.target.sessionId.uuidString.lowercased()
         content.interruptionLevel = .active
         content.sound = urgent ? .default : nil
-        content.attachments = [attachment]
         content.userInfo = ["maestroClickToken": admission.clickToken]
         return UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
     }

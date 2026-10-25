@@ -88,7 +88,7 @@ nonisolated struct MaestroNotificationController: Sendable {
         let data = try await tokenCall("notification-focus", token: token)
         struct Reply: Decodable { let target: MaestroNotificationTarget }
         let target = try JSONDecoder().decode(Reply.self, from: data).target
-        let root = MaestroNotificationPet.sidebarRoot(home: try CopilotPaths.realUserHome())
+        let root = MaestroNotificationAssets.sidebarRoot(home: try CopilotPaths.realUserHome())
             .appendingPathComponent("NotificationClicks", isDirectory: true)
         try await MaestroNotificationClick(root: root).focus(target)
     }

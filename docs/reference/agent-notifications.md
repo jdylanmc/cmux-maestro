@@ -17,24 +17,38 @@ uses the containing app's notification delegate, including on normal launch.
 **Unverified acceptance gates:** real banners, permission prompt and clicks
 with Maestro running or cold. The owner performs these after reviewed install.
 
-The title is the exact session's Copilot name, or its managed label when no name
-is available (100 characters maximum). The subtitle is its observed state;
-unknown or incomplete observation omits that state instead of showing a question
-mark. Urgent remains visible even without an observed state. No state is inferred from
-the notification message. The attachment is the selected pet's first idle
-frame: human override, agent choice, bundled Maestro robot fallback. Invalid
-or unreadable custom pets use the bundled robot. macOS decides attachment
-placement; this does not reproduce the sidebar header's exact layout.
+Communication notifications show the sender's selected sidebar glyph/color at
+the leading edge, with the system-owned small app-icon badge. The app badge is
+not manually composited; its light/dark behavior follows OS icon style and the
+separately supplied application artwork. No pet or right-hand attachment.
+Human per-session icon overrides and reset-to-default precede the agent's
+authored choice. Glyphs use the existing pinned Nerd Font catalog and exact
+appearance record; custom colors share the sidebar's sRGB parser/contrast outline.
+Unreadable preferences or unavailable glyphs refuse, rather than changing the
+human's selected identity.
+
+The system-visible sender title is the localized **Maestro agent**. No session
+filename, inferred role or work-state subtitle is supplied. Public content title
+and subtitle remain empty; communication metadata supplies the sender title.
+Account and conversation handles still contain the exact verified session UUID.
 
 The body is shortened to 140 characters including an ellipsis. Control and
 format characters are stripped. Input is bounded before decoding/processing.
 The native/controller boundary conservatively counts Unicode code points;
 Swift presentation counts grapheme clusters. Secrets must not be supplied:
-Maestro retains no message text, but macOS stores delivered notification content.
+Maestro retains no message text, but macOS stores delivered notification content
+and Siri receives incoming communication donations containing the authored
+message, selected avatar and app-specific sender/conversation identity. No
+Contacts lookup/write, phone/email association or outgoing interaction is added.
+Siri may use donations for suggestions. A completed donation may persist even
+if a later identity check or notification submission fails; no automatic retry
+or broad cleanup is performed.
 
-Normal is `.active` and silent. Urgent is `.active`, prefixes the subtitle with
-Urgent and requests default sound. User notification settings and Focus remain
-authoritative; no time-sensitive or critical-alert entitlement is requested.
+Normal is `.active` and silent. Urgent is `.active` and requests default sound.
+User notification settings and Focus remain authoritative; no time-sensitive or
+critical-alert entitlement, Focus-status access or notify-anyway behavior is
+requested. Communication classification can change system prioritization and
+people-based Focus handling; it is not identical to an ordinary notification.
 Notification request IDs are unique; `threadIdentifier` is the exact session
 UUID. Different sessions therefore have separate OS grouping identities and
 notifications are not replaced by reusing a request ID.
@@ -83,9 +97,26 @@ refuse replay. A new connection discards prior requests. No sandbox grant change
 A minimal passive follow-up uses the original agent name and Unavailable;
 it has no action token or sound.
 
-Bundled pet resources accept root or current-user ownership with no group/world
-write permission. Custom pets and preference files remain current-user-only.
-Unsafe, malformed or unreadable custom pets fall back to the bundled robot.
+Bundled font/catalog resources accept root or current-user ownership with no
+group/world write permission, then verify existing pinned hashes. Preference
+files remain current-user-only. No session-name or transcript read is needed.
+
+## Production signing prerequisite
+
+The containing app must carry
+`com.apple.developer.usernotifications.communication = true` in its effective
+signature and a matching, unexpired production profile authorizing that
+capability. Its Info.plist declares `INSendMessageIntent` in `NSUserActivityTypes`.
+The app checks the effective entitlement before authorizing or donating; without
+it notifications return `notification-unavailable`, never an ordinary fallback.
+
+**Current blocker:** the checked-in publication scripts/verifier require ad-hoc
+signing and the previously approved unsandboxed entitlement profile. A production
+profile alone is not sufficient: owner-approved signing/publishing validation
+must also be updated before installation. No signing-policy, certificate,
+profile or Developer Portal mutation is part of this source amendment. Do not
+use the isolated synthetic test profile or replace production bundles manually.
+The sandboxed sidebar needs no communication entitlement or additional grant.
 
 CMUX's optional **Forward notifications to my iPhone** applies to CMUX-owned
 notifications, not these direct Maestro OS notifications. This implementation

@@ -19,17 +19,16 @@ final class MaestroNotificationDelegate: NSObject, NSApplicationDelegate, UNUser
     ) async {
         guard response.actionIdentifier == UNNotificationDefaultActionIdentifier,
               let token = response.notification.request.content.userInfo["maestroClickToken"] as? String else { return }
-        let name = response.notification.request.content.title
-        await open(token: token, name: name)
+        await open(token: token)
     }
 
-    private func open(token: String, name: String) async {
+    private func open(token: String) async {
         guard CopilotSetupAccess.currentAppAllowsChanges else { return }
         do {
             try await MaestroNotificationController.installed().focus(token: token)
         } catch {
             let content = UNMutableNotificationContent()
-            content.title = MaestroNotificationContent.text(name, limit: 100)
+            content.title = String(localized: "notifications.sender", defaultValue: "Maestro agent")
             content.subtitle = String(localized: "notifications.unavailable", defaultValue: "Unavailable")
             content.interruptionLevel = .passive
             do {

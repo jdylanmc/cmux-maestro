@@ -1,15 +1,6 @@
 import Foundation
 import Observation
 
-nonisolated protocol SidebarPreferenceValue: Codable, Equatable, Sendable {
-    init()
-    static var maximumStoredBytes: Int { get }
-    static var failOpen: Self { get }
-    static var unreadableNotice: String { get }
-    static var saveNotice: String { get }
-    var isValid: Bool { get }
-}
-
 nonisolated struct SidebarPreferenceRead<Value: SidebarPreferenceValue>: Equatable, Sendable {
     var settings: Value
     var notice: String?

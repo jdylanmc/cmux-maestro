@@ -21,32 +21,23 @@ struct MaestroNotificationCommand {
                 throw MaestroNotificationFailure.invalidInput
             }
             let controller = try MaestroNotificationController.installed()
+            try MaestroNotificationCommunication.requireEntitlement()
             let admission = try await controller.authorize()
             let reader = CopilotSessionReader()
-            let snapshot = try await reader.read(surfaceIDs: [admission.target.surfaceId])
-            let observation = snapshot.sessions.first {
-                $0.sessionID == admission.target.sessionId && $0.surfaceID == admission.target.surfaceId
-                    && $0.launchWorkspaceID == admission.target.workspaceId
-            }
-            let name = observation?.sessionName ?? admission.name
-            let state = snapshot.isComplete ? observation?.state ?? .unknown : .unknown
+            let appearance = try await reader.sessionAppearance(for: admission.target.sessionId)
             let home = try CopilotPaths.realUserHome()
-            guard let sheet = Bundle.main.url(forResource: "maestro-pet", withExtension: "webp") else {
-                throw MaestroNotificationFailure.unavailable
-            }
-            let png = try await Task.detached {
-                try MaestroNotificationPet(home: home, bundledSheet: sheet)
-                    .png(session: admission.target.sessionId, agentChoice: observation?.petId)
+            let choice = try await Task.detached {
+                try MaestroNotificationAppearance(home: home).choice(session: admission.target.sessionId, agent: appearance)
             }.value
-            let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("maestro-notify-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            let file = temporary.appendingPathComponent("pet.png")
-            try png.write(to: file)
-            let attachment = try UNNotificationAttachment(identifier: "pet", url: file)
-            let content = MaestroNotificationContent(name: name, state: state, message: message, urgent: request.priority == "urgent")
+            let png = try MaestroNotificationAvatar(catalog: SidebarGlyphCatalog.shared.get()).png(choice: choice)
+            let content = MaestroNotificationContent(message: message, urgent: request.priority == "urgent")
+            let notification = content.request(admission: admission)
+            let communication = MaestroNotificationCommunication()
+            let interaction = communication.interaction(admission: admission, message: message, avatar: png, id: notification.identifier)
             let center = SystemMaestroNotificationCenter(center: .current())
-            try await MaestroNotificationDelivery(center: center).submit(content.request(admission: admission, attachment: attachment)) {
+            try await MaestroNotificationDelivery(center: center).submit(notification, prepare: {
+                try await communication.prepare($0, interaction: interaction)
+            }) {
                 try await controller.confirm(token: admission.clickToken)
             }
             FileHandle.standardOutput.write(Data("{\"ok\":true,\"submitted\":true,\"delivery\":\"unconfirmed\"}\n".utf8))

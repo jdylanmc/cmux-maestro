@@ -36,10 +36,13 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
-- Agents can notify the human through macOS with their session name, observed state and
-  pet image. Own-session tools and CLI share a global mute, rate limits and
+- Agents can notify the human through macOS with their selected sidebar glyph
+  and a short "Maestro agent" sender title, not a session filename or pet.
+  Communication notifications use the system app-icon badge and incoming Siri
+  donations; production requires communication-enabled signing.
+  Own-session tools and CLI share a global mute, rate limits and
   exact-terminal click checks through a connected sidebar; urgent adds sound.
-  Missing state is omitted, not inferred; notification-only sending stays out
+  No work state is inferred; notification-only sending stays out
   of the Dock (#370).
 - Collapsed workspace and worktree headers keep an aggregate activity glyph and
   count. Input and blockers take priority over failures and working agents;
