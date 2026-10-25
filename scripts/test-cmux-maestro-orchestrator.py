@@ -43,6 +43,49 @@ class NotificationTests(unittest.TestCase):
     def setUp(self):
         self.api = CONTROLLER_API
 
+    def assert_notification_shell_identity(self, *, session_hint):
+        actor = {
+            "id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()),
+            "generation": 1, "executionMode": "interactive", "enrollment": "born",
+            "providerProcess": {"pid": 9001, "start": "synthetic"},
+        }
+        fn = self.api["notification_actor"]
+        environment = {"CMUX_WORKSPACE_ID": actor["workspaceId"].upper(),
+                       "CMUX_SURFACE_ID": actor["surfaceId"].upper()}
+        if session_hint:
+            environment["SESSION_ID"] = actor["copilotSessionId"].upper()
+        custody = []
+        with patch.dict(os.environ, environment, clear=True), patch.dict(fn.__globals__, {
+            "direct_process_identity": lambda pid: actor["providerProcess"],
+            "require_session_custody": lambda *args: custody.append(args),
+        }):
+            self.assertEqual(fn({"nodes": {actor["id"]: actor}}), actor)
+            self.assertEqual(custody, [(actor["copilotSessionId"], actor["providerProcess"])])
+            with patch.dict(fn.__globals__, {"direct_process_identity": lambda pid: {"pid": 9001, "start": "reused"}}):
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                    fn({"nodes": {actor["id"]: actor}})
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                fn({"nodes": {"a": actor, "b": dict(actor)}})
+            for hints in ({"SESSION_ID": str(uuid.uuid4())},
+                          {"SESSION_ID": "invalid"},
+                          {"SESSION_ID": actor["copilotSessionId"], "CMUX_MAESTRO_SESSION_ID": str(uuid.uuid4())},
+                          {"CMUX_SURFACE_ID": str(uuid.uuid4())}):
+                with patch.dict(os.environ, hints), self.assertRaisesRegex(
+                    self.api["OrchestrationError"], "identity-unverified"
+                ):
+                    fn({"nodes": {actor["id"]: actor}})
+            with patch.dict(fn.__globals__, {
+                "require_session_custody": lambda *args: (_ for _ in ()).throw(self.api["OrchestrationError"]("not custodian")),
+            }), self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                fn({"nodes": {actor["id"]: actor}})
+
+    def test_notification_identity_accepts_uppercase_native_environment(self):
+        self.assert_notification_shell_identity(session_hint=True)
+
+    def test_notification_identity_resolves_verified_cli_without_session_environment(self):
+        self.assert_notification_shell_identity(session_hint=False)
+
     def test_notification_text_is_bounded_and_controls_removed(self):
         clean = self.api["notification_text"]
         self.assertEqual(clean("a\x00b\nc\u202ed", 140), "abcd")
