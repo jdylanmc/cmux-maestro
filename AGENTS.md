@@ -151,7 +151,7 @@ Use the checked-in scripts, which select full Xcode explicitly:
 ./scripts/build-unsigned.sh
 ./scripts/test.sh
 python3 scripts/test-cmux-maestro-orchestrator.py
-./scripts/build-register.sh
+./scripts/build-register.sh --provisioning-profile /absolute/path/to/development.provisionprofile
 ```
 
 Before committing, confirm `git status --short` contains no fetched SDK or build

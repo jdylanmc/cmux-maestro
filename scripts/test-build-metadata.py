@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import importlib.util
+import copy
+from datetime import datetime, timezone
 from contextlib import contextmanager
 import hashlib
 import json
@@ -2071,33 +2073,12 @@ class BuildMetadataTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 metadata.verify_metadata(self.app, "production")
 
-    def test_signed_publication_checks_actual_profile_not_just_signature_validity(self):
+    def test_signed_publication_requires_profile_before_codesign_or_install(self):
         self.fixture("production")
-        helper = self.app / "Contents/Helpers/CMUXMaestroCopilotHook"
-        helper.parent.mkdir()
-        helper.write_bytes(b"synthetic")
-        helper.chmod(0o700)
-        good = {metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS}
-
-        def signed(command, **_):
-            if "--verbose=4" in command:
-                return subprocess.CompletedProcess(command, 0, stdout=b"",
-                                                   stderr=f"Identifier={metadata.BASE_ID}.CopilotHook\nSignature=adhoc\n".encode())
-            profile = {} if command[-1] == str(self.app) else good
-            return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps(profile))
-
-        with patch.object(metadata.subprocess, "run", side_effect=signed) as runner:
-            metadata.verify_signed(self.app)
-            self.assertEqual(runner.call_count, 6)
-            self.assertIn("--strict", runner.call_args_list[0].args[0])
-        def empty_profile(command, **kwargs):
-            if "--verbose=4" in command:
-                return signed(command, **kwargs)
-            return subprocess.CompletedProcess(command, 0, stdout=plistlib.dumps({}), stderr=b"")
-
-        with patch.object(metadata.subprocess, "run", side_effect=empty_profile):
-            with self.assertRaises(ValueError):
+        with patch.object(metadata.subprocess, "run") as runner:
+            with self.assertRaisesRegex(ValueError, "provisioning profile"):
                 metadata.verify_signed(self.app)
+            runner.assert_not_called()
 
     def test_resolved_settings_fail_closed_before_any_build(self):
         for mode, (suffix, point) in metadata.PROFILES.items():
@@ -2146,6 +2127,9 @@ class BuildMetadataTests(unittest.TestCase):
         script = (ROOT / "scripts/build-register.sh").read_text()
         self.assertLess(script.index('--source-entitlements'), script.index('    build\n'))
         self.assertLess(script.index('--mode production --app "$APP"'), script.index('local-preview.py" install'))
+        self.assertLess(script.index('production-signing.py" preflight'), script.index('fetch-sdk.sh'))
+        self.assertLess(script.index('production-signing.py" sign'), script.index('--mode production --app "$APP"'))
+        self.assertIn('shift 2', script)
         self.assertIn('--retire-development-registration "$@"', script)
         self.assertNotIn('pluginkit -a "$APPEX"', script)
 
@@ -2251,6 +2235,126 @@ class BuildMetadataTests(unittest.TestCase):
                 if target["name"] in ("CMUXMaestroPreview", "CMUXMaestroSidebar"):
                     self.assertEqual(settings["CMUX_SIDEBAR_EXTENSION_POINT_ID"], metadata.PRODUCTION_POINT)
         metadata.verify_profile(metadata.plist(ROOT / "CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"))
+
+
+class ProductionSigningTests(unittest.TestCase):
+    def setUp(self):
+        self.signing = metadata.production_signing()
+        self.now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        self.entitlements = {
+            self.signing.APP_ID: "SYNTHETIC1." + metadata.BASE_ID,
+            self.signing.TEAM_ID: "SYNTHETIC1", self.signing.COMMUNICATION: True, self.signing.DEBUG: True,
+        }
+        self.profile = {
+            "TeamIdentifier": ["SYNTHETIC1"], "ApplicationIdentifierPrefix": ["SYNTHETIC1"],
+            "Platform": ["OSX"], "CreationDate": datetime(2029, 1, 1), "ExpirationDate": datetime(2031, 1, 1),
+            "ProvisionedDevices": ["synthetic-device"], "DeveloperCertificates": [b"synthetic-certificate"],
+            "Entitlements": self.entitlements,
+        }
+
+    def policy(self, profile):
+        return self.signing.profile_policy(profile, now=self.now, device="synthetic-device")
+
+    def test_exact_development_profile_uses_only_minimum_app_entitlements(self):
+        self.profile["Entitlements"]["keychain-access-groups"] = ["SYNTHETIC1.*"]
+        actual = self.policy(self.profile)
+        self.assertEqual(set(actual), {self.signing.APP_ID, self.signing.TEAM_ID,
+                                     self.signing.COMMUNICATION, self.signing.DEBUG})
+
+    def test_profile_mismatch_expiry_device_and_extra_capabilities_refuse(self):
+        changes = [
+            ("TeamIdentifier", []), ("TeamIdentifier", ["SYNTHETIC1", "OTHERTEAM1"]),
+            ("ApplicationIdentifierPrefix", ["OTHERTEAM1"]), ("Platform", ["iOS"]),
+            ("CreationDate", datetime(2031, 1, 1)), ("ExpirationDate", datetime(2030, 1, 1)),
+            ("ExpirationDate", None), ("ProvisionedDevices", []), ("ProvisionedDevices", ["another-device"]),
+            ("ProvisionsAllDevices", True), ("DeveloperCertificates", []),
+            ("DeveloperCertificates", ["not-DER"]), ("Entitlements", {}),
+        ]
+        for key, value in changes:
+            with self.subTest(key=key, value=value):
+                profile = copy.deepcopy(self.profile)
+                profile[key] = value
+                with self.assertRaises(ValueError):
+                    self.policy(profile)
+        for key, value in [(self.signing.APP_ID, "SYNTHETIC1.*"),
+                           (self.signing.TEAM_ID, "OTHERTEAM1"), (self.signing.COMMUNICATION, 1),
+                           (self.signing.COMMUNICATION, False), (self.signing.DEBUG, False),
+                           ("com.apple.developer.siri", True)]:
+            with self.subTest(entitlement=key, value=value):
+                profile = copy.deepcopy(self.profile)
+                profile["Entitlements"][key] = value
+                with self.assertRaises(ValueError):
+                    self.policy(profile)
+        for malformed in (None, [], "profile"):
+            with self.assertRaises(ValueError):
+                self.policy(malformed)
+
+    def test_identity_selection_refuses_missing_and_ambiguous_matches(self):
+        first = hashlib.sha1(b"synthetic-certificate").hexdigest().upper()
+        second = hashlib.sha1(b"another-certificate").hexdigest().upper()
+        valid = f'  1) {first} "Apple Development: Synthetic"\n'
+        self.assertEqual(self.signing.select_identity(self.profile, valid), first)
+        for output in ("", f'  1) {second} "Foreign"\n', valid.rstrip() + " (expired)\n"):
+            with self.assertRaises(ValueError):
+                self.signing.select_identity(self.profile, output)
+        self.profile["DeveloperCertificates"].append(b"another-certificate")
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            self.signing.select_identity(self.profile, valid + f'  2) {second} "Second"\n')
+
+    def test_provisioning_device_never_uses_hardware_uuid_proxy(self):
+        def run(command, **_):
+            self.assertEqual(command, ["/usr/sbin/system_profiler", "SPHardwareDataType", "-json"])
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps({
+                "SPHardwareDataType": [{"platform_UUID": "synthetic-device"}]}).encode())
+        with self.assertRaisesRegex(ValueError, "provisioning identity"):
+            self.signing.device_identity(run)
+
+    def test_certificate_team_and_validity_are_checked_without_exporting_keys(self):
+        good = ("subject=CN=Synthetic,OU=SYNTHETIC1,O=Synthetic\n"
+                "notBefore=Jan  1 00:00:00 2029 GMT\nnotAfter=Jan  1 00:00:00 2031 GMT\n")
+        runner = unittest.mock.Mock(return_value=subprocess.CompletedProcess([], 0, stdout=good.encode()))
+        self.signing.certificate_policy(b"synthetic-DER", "SYNTHETIC1", self.now, runner)
+        self.assertEqual(runner.call_args.kwargs["input"], b"synthetic-DER")
+        self.assertNotIn("private", " ".join(runner.call_args.args[0]))
+        for text in (good.replace("SYNTHETIC1", "OTHERTEAM1"), good.replace("2031", "2030"),
+                     good.replace("2029", "2031"), good.replace("notAfter", "missing"),
+                     good.replace("OU=SYNTHETIC1", "OU=SYNTHETIC1,OU=SYNTHETIC1")):
+            runner.return_value = subprocess.CompletedProcess([], 0, stdout=text.encode())
+            with self.assertRaises(ValueError):
+                self.signing.certificate_policy(b"synthetic-DER", "SYNTHETIC1", self.now, runner)
+
+    def test_profile_path_rejects_missing_symlink_writable_and_oversized(self):
+        root = ROOT / ".build/signing-profile-tests" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, root)
+        path = root / "profile"
+        read = self.signing.profile_reader.read_private
+        with self.assertRaises(OSError):
+            read(path)
+        path.write_bytes(b"synthetic-profile")
+        self.assertEqual(read(path), b"synthetic-profile")
+        path.chmod(0o666)
+        with self.assertRaises(ValueError):
+            read(path)
+        path.chmod(0o600)
+        link = root / "link"
+        link.symlink_to(path)
+        with self.assertRaises(OSError):
+            read(link)
+        with path.open("wb") as stream:
+            stream.truncate(1_048_577)
+        with self.assertRaises(ValueError):
+            read(path)
+        with self.assertRaises(ValueError):
+            read(Path("relative-profile"))
+
+    def test_crypto_failure_precedes_hardware_identity_or_signing(self):
+        with patch.object(self.signing.profile_reader, "read_private", return_value=b"untrusted"), \
+             patch.object(self.signing.profile_reader, "decode_verified", side_effect=ValueError("invalid signature")):
+            runner = unittest.mock.Mock()
+            with self.assertRaisesRegex(ValueError, "invalid signature"):
+                self.signing.load_plan(Path("/synthetic/profile"), runner=runner, now=self.now)
+            runner.assert_not_called()
 
 
 if __name__ == "__main__":

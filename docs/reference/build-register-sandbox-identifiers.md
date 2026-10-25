@@ -5,11 +5,15 @@ build-register, sandbox shape, bundle and plugin identifiers, upstream contracts
 ## Build and register locally
 
 ```sh
-./scripts/build-register.sh
+./scripts/build-register.sh --provisioning-profile /absolute/path/to/development.provisionprofile
 ```
 
-Explicit script. Builds with ad hoc identity. Verifies production
-namespace and signed profiles. Then calls coordinated alpha installer.
+Explicit script. Preflights the supplied production development profile and one
+usable existing identity, prepares a local build, then signs all native components
+with that identity. The containing app alone embeds the Communication Notifications
+profile. Verifies production namespace, profile, signer consistency and exact
+entitlements before calling the coordinated alpha installer. No new ad-hoc
+publication. See [profile prerequisites](install-update-recovery.md).
 It **does install owned Copilot integration** with stable app.
 It does not enable/select sidebar, restart or adopt sessions, or modify
 unrelated integrations. Build-only and validation scripts stay separate.

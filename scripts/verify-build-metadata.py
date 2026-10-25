@@ -3,6 +3,7 @@
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import re
 import subprocess
 import sys
 
+sys.dont_write_bytecode = True
 BASE_ID = "com.jdylanmc.CMUXMaestroPreview"
 APP_BUILD_VERSION = "2"
 PRODUCTION_POINT = "com.cmuxterm.app.cmux.sidebar"
@@ -33,6 +35,7 @@ USER_SELECTED_KEY = "com.apple.security.files.user-selected.read-only"
 GUIDE_HOST = "CMUXMaestroGuideUIHost"
 GUIDE_TESTS = "CMUXMaestroGuideUITests"
 GUIDE_RECEIPT_SCHEMA = 2
+_production_signing = None
 GUIDE_SHARED_SOURCES = [
     "CMUXMaestroPreview/Integration/CLIIntegrationGuide.swift",
     "CMUXMaestroPreview/Integration/CLIIntegrationSettingsView.swift",
@@ -57,6 +60,16 @@ GUIDE_TEST_SOURCES = [
 def require(condition, message):
     if not condition:
         raise ValueError(message)
+
+
+def production_signing():
+    global _production_signing
+    if _production_signing is None:
+        spec = importlib.util.spec_from_file_location("production_signing", Path(__file__).with_name("production-signing.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _production_signing = module
+    return _production_signing
 
 
 def plist(path):
@@ -105,7 +118,7 @@ def verify_settings(rows, mode):
             require(settings.get("CURRENT_PROJECT_VERSION") == APP_BUILD_VERSION,
                     "Resolved native feature build version is stale.")
         if mode == "production":
-            require(settings.get("CODE_SIGN_IDENTITY") == "-", "Publication requires the explicit ad-hoc identity.")
+            require(settings.get("CODE_SIGN_IDENTITY") == "-", "Preparation requires the explicit intermediate ad-hoc identity.")
             require(settings.get("CODE_SIGNING_ALLOWED") == "YES", "Publication signing is disabled.")
         else:
             require(settings.get("CODE_SIGNING_ALLOWED") == "NO", "Validation unexpectedly enables signing.")
@@ -322,6 +335,10 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
         require_orchestration=current, require_bridge=current,
     )
     app = Path(app)
+    provisioned = (app / "Contents/embedded.provisionprofile").exists()
+    require(provisioned or not current, "New publication requires a communication provisioning profile.")
+    if provisioned:
+        production_signing().verify(app, runner=runner)
     helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"
     require(helper.is_file() and os.access(helper, os.X_OK), "Bundled identity helper is missing or not executable.")
     for bundle, info in ((app, plist(app / "Contents/Info.plist")), (extension, child)):
@@ -335,7 +352,8 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
     ):
         runner(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(target)],
                check=True, capture_output=True)
-        verify_ad_hoc_identity(target, identifier, runner)
+        if not provisioned:
+            verify_ad_hoc_identity(target, identifier, runner)
         result = runner(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(target)],
                         check=True, capture_output=True)
         profile = plistlib.loads(result.stdout) if result.stdout.strip() else {}
@@ -356,7 +374,7 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
                 require(profile.get(WRITE_KEY, WRITE_PATHS) == WRITE_PATHS, "Rollback expands approved read-write access.")
                 require(set(profile) <= {SANDBOX_KEY, READ_KEY, WRITE_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
                         "Unknown rollback sidebar entitlement.")
-        else:
+        elif not provisioned:
             allowed = {"com.apple.security.get-task-allow"}
             if target == helper and "com.apple.application-identifier" in profile:
                 require(profile["com.apple.application-identifier"] == identifier,
@@ -368,23 +386,7 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
 
 
 def verify_signed(app):
-    extension, child = verify_metadata(app, "production")
-    helper = Path(app) / "Contents/Helpers/CMUXMaestroCopilotHook"
-    require(helper.is_file() and os.access(helper, os.X_OK), "Bundled identity helper is missing or not executable.")
-    subprocess.run(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(app)],
-                   check=True, capture_output=True)
-    subprocess.run(["/usr/bin/codesign", "--verify", "--strict", str(helper)],
-                   check=True, capture_output=True)
-    verify_ad_hoc_identity(helper, BASE_ID + ".CopilotHook", subprocess.run)
-    executable = extension / "Contents/MacOS" / child["CFBundleExecutable"]
-    for target in (extension, executable):
-        result = subprocess.run(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(target)],
-                                check=True, capture_output=True)
-        verify_profile(plistlib.loads(result.stdout))
-    result = subprocess.run(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(app)],
-                            check=True, capture_output=True)
-    require(plistlib.loads(result.stdout).get(SANDBOX_KEY) is not True,
-            "The installer unexpectedly has App Sandbox enabled.")
+    verify_local_preview(app, current=True)
 
 
 def registration_records(output, *, allow_empty=False, include_election=False):

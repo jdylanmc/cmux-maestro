@@ -90,12 +90,16 @@ The OS owns banner layout and notification grouping, not Maestro.
 
 Production adoption requires a correctly signed containing app with the
 Communication Notifications capability and matching production provisioning
-profile. The existing ad-hoc publication policy cannot supply this entitlement;
-its replacement needs separate owner-approved signing/install work. This source
-change adds the intent declaration but does not alter profiles, certificates,
-production signing policy or sidebar entitlements. Missing effective communication
-entitlement refuses before authorization/donation. The isolated synthetic profile
-must never be reused for the production identity.
+profile. Owner amendment: explicit `--provisioning-profile` publication verifies
+the Apple-signed profile, exact app/team/device/dates/capability and one existing
+usable signing identity before building. All embedded native code uses that
+certificate; only the containing app embeds the profile and receives restricted
+communication/app identity entitlements. Sidebar ID/grants stay unchanged.
+The intermediate ad-hoc build is never accepted for new publication. Historical
+receipt-owned ad-hoc status/recovery/rollback remains supported under ADR 0011.
+No portal, certificate, persistent credential configuration or unsigned-validation
+change. Missing effective communication entitlement refuses before authorization/
+donation. The isolated synthetic profile must never be reused for production.
 
 Real banners, permission prompts and cold-launch click delivery require
 human-installed acceptance. Unsigned builds and mocked notification-center

@@ -7,3 +7,6 @@ vendor/.cmux-sdk-fetch/
 vendor/.cmux-sdk.tar.gz
 xcuserdata/
 *.xcuserstate
+*.provisionprofile
+*.mobileprovision
+*.p12

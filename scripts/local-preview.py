@@ -224,7 +224,8 @@ class MacOperations:
         if mutating:
             require(self.install_lock_fd is not None, "Mutating tools require the active install lock.")
             return command_worker.run(self.install_lock_fd, command, timeout=120, **kwargs)
-        return subprocess.run(command, timeout=120, **kwargs)
+        kwargs.setdefault("timeout", 120)
+        return subprocess.run(command, **kwargs)
 
     def verify(self, app, *, current):
         return metadata.verify_local_preview(app, current=current, runner=self.run)

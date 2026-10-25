@@ -2,6 +2,8 @@
 """Synthetic filesystem/registries and owned test processes; no live app or CLI mutation."""
 
 import importlib.util
+import hashlib
+from datetime import datetime, timezone
 import io
 import fcntl
 import errno
@@ -36,6 +38,14 @@ class Interrupted(BaseException):
 
 class SyntheticMac(preview.MacOperations):
     """All external commands are fake. Atomic renames/fsync use real synthetic files."""
+    def verify(self, app, *, current=True):
+        signing = metadata.production_signing()
+        verify = signing.verify
+        with patch.object(signing.profile_reader, "decode_verified", side_effect=lambda data, **_: plistlib.loads(data)), \
+             patch.object(signing, "verify", side_effect=lambda app, **kwargs: verify(
+                 app, now=datetime(2030, 1, 1, tzinfo=timezone.utc), **kwargs)):
+            return super().verify(app, current=current)
+
     def __init__(self):
         self.applications = set()
         self.extensions = set()
@@ -182,10 +192,21 @@ class SyntheticMac(preview.MacOperations):
             if "--verify" in command:
                 if not signature["valid"]:
                     raise subprocess.CalledProcessError(1, command)
+                if "-R" in command:
+                    assert command[command.index("-R") + 1].startswith("="), "Inline requirement must not be parsed as a filename"
+                    fingerprint = hashlib.sha1(signature.get("certificate", "synthetic-certificate").encode()).hexdigest()
+                    if f'H"{fingerprint}"' not in command[command.index("-R") + 1]:
+                        return subprocess.CompletedProcess(command, 1, stdout=b"", stderr=b"not this certificate")
             elif "--verbose=4" in command:
-                stderr = f"Identifier={signature['id']}\nSignature={signature['signing']}\n".encode()
+                stderr = (f"Identifier={signature['id']}\nSignature={signature['signing']}\n"
+                          f"TeamIdentifier={signature.get('team', 'not set')}\n").encode()
             else:
                 stdout = plistlib.dumps(signature["entitlements"])
+        elif command[0] == "/usr/sbin/system_profiler":
+            stdout = json.dumps({"SPHardwareDataType": [{"provisioning_UDID": "synthetic-device"}]}).encode()
+        elif command[0] == "/usr/bin/openssl":
+            stdout = (b"subject=CN=Synthetic,OU=SYNTHETIC1,O=Synthetic\n"
+                      b"notBefore=Jan  1 00:00:00 2020 GMT\nnotAfter=Jan  1 00:00:00 2040 GMT\n")
         elif command[0] == "/usr/bin/ditto":
             source, destination = map(Path, command[-2:])
             if "copy" in self.failures:
@@ -282,7 +303,8 @@ class LocalPreviewImportTests(unittest.TestCase):
                 scripts = root / "scripts"
                 scripts.mkdir()
                 for filename in ("test-local-preview.py", "local-preview.py",
-                                 "verify-build-metadata.py", "preview-command-worker.py"):
+                                 "verify-build-metadata.py", "preview-command-worker.py",
+                                 "production-signing.py", "provisioning-profile.py"):
                     shutil.copyfile(ROOT / "scripts" / filename, scripts / filename)
                 code = next(value for value in getattr(LocalPreviewTests, name).__code__.co_consts
                             if isinstance(value, str) and "spec.loader.exec_module(tests)" in value)
@@ -950,6 +972,10 @@ with installer.locked():
                     run.assert_not_called()
 
     def test_mach_o_inventory_covers_every_architecture_and_alternate_hash(self):
+        for executable in (self.old / "Contents/MacOS/Preview",
+                           self.old / preview.EXTENSION / "Contents/MacOS/Sidebar",
+                           self.old / "Contents/Helpers/CMUXMaestroCopilotHook"):
+            executable.write_bytes(b"not-native-in-this-inventory-test")
         binary = self.old / "universal"
         arm = struct.pack("<III", 0xfeedfacf, 0x100000c, 0)
         intel = struct.pack("<III", 0xfeedfacf, 0x1000007, 3)
@@ -1138,6 +1164,7 @@ with installer.locked():
             (resources / "notifications.mjs").write_text("// synthetic notifications\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview",
+                  "NSUserActivityTypes": ["INSendMessageIntent"],
                   "CMUXMaestroInstallBridge": "copilot-install-v1",
                   "CMUXMaestroAppLifecycleBridge": "graceful-lifecycle-v1"}
         child = {"CFBundleIdentifier": metadata.BASE_ID + ".Extension", "CFBundlePackageType": "XPC!",
@@ -1146,21 +1173,30 @@ with installer.locked():
         (app / "Contents/Info.plist").write_bytes(plistlib.dumps(parent))
         (extension / "Contents/Info.plist").write_bytes(plistlib.dumps(child))
         for binary in [helper, app / "Contents/MacOS/Preview", extension / "Contents/MacOS/Sidebar"]:
-            binary.write_bytes(b"synthetic-executable-" + name.encode())
+            binary.write_bytes(b"\xcf\xfa\xed\xfesynthetic-executable-" + name.encode())
             binary.chmod(0o755)
         (app / "payload").write_text(name)
         signature = lambda ending, entitlements: {
-            "valid": True, "id": metadata.BASE_ID + ending, "signing": "adhoc", "entitlements": entitlements
+            "valid": True, "id": metadata.BASE_ID + ending, "signing": "development",
+            "team": "SYNTHETIC1", "entitlements": entitlements
         }
+        signing = metadata.production_signing()
+        app_entitlements = {
+            signing.APP_ID: "SYNTHETIC1." + metadata.BASE_ID, signing.TEAM_ID: "SYNTHETIC1",
+            signing.DEBUG: True, signing.COMMUNICATION: True,
+        }
+        (app / "Contents/embedded.provisionprofile").write_bytes(plistlib.dumps({
+            "TeamIdentifier": ["SYNTHETIC1"], "ApplicationIdentifierPrefix": ["SYNTHETIC1"],
+            "Platform": ["OSX"], "CreationDate": datetime(2020, 1, 1), "ExpirationDate": datetime(2040, 1, 1),
+            "ProvisionedDevices": ["synthetic-device"], "DeveloperCertificates": [b"synthetic-certificate"],
+            "Entitlements": app_entitlements,
+        }))
         (app / "signatures.json").write_text(json.dumps({
-            "app": signature("", {}),
+            "app": signature("", app_entitlements),
             "extension": signature(".Extension", profile if profile is not None else {
                 metadata.SANDBOX_KEY: True, metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS,
             }),
-            "helper": signature(".CopilotHook", {
-                "com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",
-                "com.apple.security.get-task-allow": True,
-            }),
+            "helper": signature(".CopilotHook", {}),
         }))
         return app
 
@@ -1168,12 +1204,18 @@ with installer.locked():
         return preview.Installer(self.home, destination, self.ops)
 
     def test_helper_identity_entitlement_is_optional_but_must_match_exactly(self):
+        (self.old / "Contents/embedded.provisionprofile").unlink()
+        self.change_signature(self.old, "app", "entitlements", {})
+        for role in ("app", "extension", "helper"):
+            self.change_signature(self.old, role, "signing", "adhoc")
         for entitlements in ({}, {
             "com.apple.application-identifier": metadata.BASE_ID + ".CopilotHook",
             "com.apple.security.get-task-allow": True,
         }):
             self.change_signature(self.old, "helper", "entitlements", entitlements)
-            self.assertEqual(self.ops.verify(self.old, current=True), "2")
+            self.assertEqual(self.ops.verify(self.old, current=False), "2")
+            with self.assertRaisesRegex(ValueError, "New publication"):
+                self.ops.verify(self.old, current=True)
 
     def test_invalid_helper_identity_or_extra_privileges_are_refused_before_staging(self):
         for index, entitlements in enumerate([
@@ -1191,6 +1233,91 @@ with installer.locked():
                     self.operation("install", source)
                 self.assertFalse(self.app.exists())
                 self.assertIsNone(self.receipt()["transaction"])
+
+    def test_signed_components_and_embedded_profile_are_verified_before_publication(self):
+        self.assertEqual(self.ops.verify(self.new, current=True), "2")
+        profile_file = self.new / "Contents/embedded.provisionprofile"
+        profile = plistlib.loads(profile_file.read_bytes())
+        profile["DeveloperCertificates"].append(b"synthetic-alternate")
+        profile_file.write_bytes(plistlib.dumps(profile))
+        self.change_signature(self.new, "helper", "certificate", "synthetic-alternate")
+        with self.assertRaisesRegex(ValueError, "different signing certificates"):
+            self.operation("install", self.new)
+        self.assertFalse(self.app.exists())
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_signing_orders_nested_code_before_parent_with_one_identity_and_minimum_entitlements(self):
+        signing = metadata.production_signing()
+        for name in ("Preview.debug.dylib", "__preview.dylib"):
+            (self.new / "Contents/MacOS" / name).write_bytes(b"\xcf\xfa\xed\xfe-synthetic-dylib")
+        profile = plistlib.loads((self.new / "Contents/embedded.provisionprofile").read_bytes())
+        plan = {"raw": plistlib.dumps(profile), "profile": profile, "identity": "A" * 40,
+                "entitlements": profile["Entitlements"]}
+        signed = []
+
+        def run(command, **kwargs):
+            if "--force" in command:
+                self.assertNotIn("timeout", kwargs)
+                signed.append((Path(command[-1]), command[command.index("--sign") + 1],
+                               plistlib.loads(Path(command[command.index("--entitlements") + 1]).read_bytes())))
+                return subprocess.CompletedProcess(command, 0, stdout=b"", stderr=b"")
+            return self.ops.run(command, **kwargs)
+
+        with patch.object(signing, "load_plan", return_value=plan):
+            signing.sign(self.new, self.root / "explicit-profile", runner=run)
+        self.assertEqual([item[0].name for item in signed], [
+            "Preview.debug.dylib", "__preview.dylib", "CMUXMaestroCopilotHook",
+            "CMUX Maestro Preview Extension.appex", "new.app",
+        ])
+        self.assertEqual({item[1] for item in signed}, {"A" * 40})
+        self.assertTrue(all(item[2] == {} for item in signed[:3]))
+        self.assertEqual(signed[-2][2], {metadata.SANDBOX_KEY: True,
+                                       metadata.READ_KEY: metadata.READ_PATHS, metadata.WRITE_KEY: metadata.WRITE_PATHS})
+        self.assertEqual(signed[-1][2], plan["entitlements"])
+        self.assertFalse((self.new / preview.EXTENSION / "Contents/embedded.provisionprofile").exists())
+        self.assertTrue(any("--all-architectures" in command and "-R" in command for command in self.ops.commands))
+
+    def test_read_only_signing_verifier_preserves_its_bounded_runner_timeout(self):
+        with patch.object(preview.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            preview.MacOperations().run(["/usr/bin/codesign", "--verify", "/synthetic/app"], timeout=30)
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_staged_profile_is_revalidated_before_swap(self):
+        verify = self.ops.verify
+        changed = []
+
+        def tamper(app, *, current=True):
+            if current and app != self.new:
+                file = app / "Contents/embedded.provisionprofile"
+                profile = plistlib.loads(file.read_bytes())
+                profile["Entitlements"][metadata.production_signing().COMMUNICATION] = False
+                file.write_bytes(plistlib.dumps(profile))
+                changed.append(app)
+            return verify(app, current=current)
+
+        with patch.object(self.ops, "verify", side_effect=tamper):
+            with self.assertRaises(ValueError):
+                self.operation("install", self.new)
+        self.assertEqual(len(changed), 1)
+        self.assertFalse(self.app.exists())
+        self.assertFalse(self.ops.moves)
+
+    def test_owned_legacy_adhoc_receipt_survives_signed_update_and_rollback(self):
+        self.operation("install", self.old)
+        (self.app / "Contents/embedded.provisionprofile").unlink()
+        self.change_signature(self.app, "app", "entitlements", {})
+        for role in ("app", "extension", "helper"):
+            self.change_signature(self.app, role, "signing", "adhoc")
+        installer = self.installer()
+        with installer.locked():
+            installer.receipt["current"] = installer.inspect(self.app)
+            installer.save()
+        with self.assertRaisesRegex(ValueError, "New publication"):
+            self.ops.verify(self.app, current=True)
+        self.operation("install", self.new, update=True)
+        self.operation("rollback")
+        self.assertFalse((self.app / "Contents/embedded.provisionprofile").exists())
+        self.assertEqual(self.ops.verify(self.app, current=False), "2")
 
     def operation(self, name, *args, **kwargs):
         installer = self.installer()
@@ -2025,7 +2152,7 @@ with installer.locked():
         for app in (missing, partial):
             with self.subTest(app=app):
                 with self.assertRaisesRegex(ValueError, "orchestration"):
-                    metadata.verify_local_preview(app, current=False, runner=self.ops.run)
+                    self.ops.verify(app, current=False)
 
     def test_update_cannot_force_downgrade_or_adopt_validation_build(self):
         future = self.fixture("future", "3")
@@ -2087,7 +2214,7 @@ with installer.locked():
             ("helper-id", lambda app: self.change_signature(app, "helper", "id", "com.example.Helper")),
             ("helper-unsigned", lambda app: self.change_signature(app, "helper", "valid", False)),
             ("sidebar-unsigned", lambda app: self.change_signature(app, "extension", "valid", False)),
-            ("signer", lambda app: self.change_signature(app, "app", "signing", "Developer ID")),
+            ("signer", lambda app: self.change_signature(app, "app", "team", "OTHERTEAM1")),
             ("sandbox", lambda app: self.change_signature(app, "extension", "entitlements", {})),
             ("helper-privileges", lambda app: self.change_signature(
                 app, "helper", "entitlements", {"com.apple.security.network.client": True})),
