@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import unittest
@@ -1962,6 +1963,61 @@ class BuildMetadataTests(unittest.TestCase):
                      if objects[key]["path"] == "CMUXMaestroPreview")
         exclusions = [objects[key] for key in group["exceptions"] if objects[key]["target"] == target_id]
         self.assertTrue(any("Info.plist" in item["membershipExceptions"] for item in exclusions))
+
+    def test_app_icon_compiles_all_macos_sizes_and_preserves_png_payloads(self):
+        catalog = ROOT / "CMUXMaestroPreview/Assets.xcassets"
+        iconset = catalog / "AppIcon.appiconset"
+        images = json.loads((iconset / "Contents.json").read_text())["images"]
+        expected_slots = {(size, scale) for size in (16, 32, 128, 256, 512) for scale in (1, 2)}
+        self.assertEqual(len(images), 10)
+        self.assertEqual(
+            {(int(image["size"].split("x")[0]), int(image["scale"][0])) for image in images},
+            expected_slots,
+        )
+        for image in images:
+            self.assertEqual(image["idiom"], "mac")
+            self.assertIn("filename", image, "Every macOS icon slot needs authored artwork")
+
+        compiled = self.directory / "compiled-icon"
+        compiled.mkdir()
+        partial = self.directory / "icon-info.plist"
+        result = subprocess.run([
+            "/usr/bin/xcrun", "actool", str(catalog), "--compile", str(compiled),
+            "--platform", "macosx", "--minimum-deployment-target", "14.0",
+            "--app-icon", "AppIcon", "--output-partial-info-plist", str(partial),
+        ], env={**os.environ, "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"},
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        info = plistlib.loads(partial.read_bytes())
+        self.assertEqual(info["CFBundleIconName"], "AppIcon")
+        self.assertEqual(info["CFBundleIconFile"], "AppIcon")
+        assets = json.loads(subprocess.check_output([
+            "/usr/bin/assetutil", "--info", str(compiled / "Assets.car"),
+        ]))
+        renditions = [asset for asset in assets
+                      if asset.get("Name") == "AppIcon" and asset.get("AssetType") == "Icon Image"]
+        self.assertEqual(len(renditions), 10)
+        expected = set()
+        for image in images:
+            scale = int(image["scale"][0])
+            size = int(image["size"].split("x")[0]) * scale
+            data = (iconset / image["filename"]).read_bytes()
+            self.assertEqual(data[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(struct.unpack(">II", data[16:24]), (size, size))
+            expected.add((image["filename"], size, size, scale))
+        self.assertEqual({
+            (asset["RenditionName"], asset["PixelWidth"], asset["PixelHeight"], asset["Scale"])
+            for asset in renditions
+        }, expected)
+        extracted = self.directory / "AppIcon.iconset"
+        subprocess.run([
+            "/usr/bin/iconutil", "--convert", "iconset", str(compiled / "AppIcon.icns"),
+            "--output", str(extracted),
+        ], check=True, capture_output=True)
+        # actool keeps a fallback subset in ICNS; all ten sizes live in Assets.car.
+        # iconutil re-encodes legacy 16px RGB, so compare lossless PNG payloads.
+        for name in ("icon_16x16@2x.png", "icon_128x128.png", "icon_128x128@2x.png"):
+            self.assertEqual((extracted / name).read_bytes(), (iconset / name).read_bytes(), name)
 
     def test_production_preview_disables_profile_output_without_disabling_test_coverage(self):
         production = (ROOT / "scripts/build-register.sh").read_text()
