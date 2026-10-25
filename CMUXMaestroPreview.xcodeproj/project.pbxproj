@@ -7,6 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C37100000000000000000001 = {isa = PBXBuildFile; fileRef = C37100000000000000000011; };
+		C37100000000000000000002 = {isa = PBXBuildFile; fileRef = C37100000000000000000012; };
+		C37100000000000000000003 = {isa = PBXBuildFile; fileRef = C37100000000000000000013; };
+		C37100000000000000000004 = {isa = PBXBuildFile; fileRef = C37100000000000000000011; };
+		C37100000000000000000005 = {isa = PBXBuildFile; fileRef = C37100000000000000000012; };
+		C37100000000000000000006 = {isa = PBXBuildFile; fileRef = C37100000000000000000013; };
+		C37100000000000000000007 = {isa = PBXBuildFile; fileRef = C37100000000000000000014; };
+		C37100000000000000000008 = {isa = PBXBuildFile; fileRef = C37100000000000000000015; };
 		C37000000000000000000001 = {isa = PBXBuildFile; fileRef = C37000000000000000000011; };
 		C37000000000000000000002 = {isa = PBXBuildFile; fileRef = C37000000000000000000012; };
 		C37000000000000000000003 = {isa = PBXBuildFile; fileRef = C37000000000000000000013; };
@@ -194,6 +202,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C37100000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/MaestroNotificationTarget.swift; sourceTree = SOURCE_ROOT; };
+		C37100000000000000000012 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/MaestroClickChannel.swift; sourceTree = SOURCE_ROOT; };
+		C37100000000000000000013 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/MaestroClickEvents.swift; sourceTree = SOURCE_ROOT; };
+		C37100000000000000000014 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Navigation/SidebarNotificationClicks.swift; sourceTree = SOURCE_ROOT; };
+		C37100000000000000000015 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Navigation/SidebarNotificationTargetVerifier.swift; sourceTree = SOURCE_ROOT; };
 		C37000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarNotificationSettings.swift; sourceTree = SOURCE_ROOT; };
 		C37000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = file; path = CMUXMaestroSidebar/Pets/maestro-pet.webp; sourceTree = SOURCE_ROOT; };
 		C37000000000000000000013 = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = CMUXMaestroSidebar/Localizable.xcstrings; sourceTree = SOURCE_ROOT; };
@@ -488,6 +501,11 @@
 				C08100000000000000000003 /* AgentSignals.swift */,
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				C37000000000000000000011,
+				C37100000000000000000011,
+				C37100000000000000000012,
+				C37100000000000000000013,
+				C37100000000000000000014,
+				C37100000000000000000015,
 				C37000000000000000000012,
 				C37000000000000000000013,
 				D12700000000000000000002 /* SidebarPreferenceStore.swift */,
@@ -777,6 +795,11 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C37100000000000000000004,
+				C37100000000000000000005,
+				C37100000000000000000006,
+				C37100000000000000000007,
+				C37100000000000000000008,
 				C01000000000000000000002 /* AgentSessionSnapshot.swift in Test Sources */,
 				C01000000000000000000004 /* CopilotSnapshotAdapter.swift in Test Sources */,
 				C35600000000000000000002 /* CopilotSnapshotAdapterCache.swift in Test Sources */,
@@ -861,6 +884,9 @@
 				C01000000000000000000003 /* CopilotSnapshotAdapter.swift in Sidebar Sources */,
 				C35600000000000000000001 /* CopilotSnapshotAdapterCache.swift in Sidebar Sources */,
 				C06100000000000000000101,
+				C37100000000000000000001,
+				C37100000000000000000002,
+				C37100000000000000000003,
 				C0A700000000000000000001,
 				C0A700000000000000000005,
 				C06100000000000000000102,

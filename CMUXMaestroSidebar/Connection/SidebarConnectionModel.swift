@@ -52,6 +52,7 @@ extension SidebarConnectionModel {
                 do {
                     switch target {
                     case .workspace(let id):
+                        try self?.navigation.validatePendingAction()
                         try await context.host.selectWorkspace(id)
                     case .surface(let workspaceID, let surfaceID):
                         // Selecting a surface in another workspace alone leaves that workspace's
@@ -59,8 +60,10 @@ extension SidebarConnectionModel {
                         let selected = self?.hierarchy.workspaces.first { $0.id == workspaceID }
                         if case .available(false)? = selected?.isSelected,
                            context.grantedActionScopes.contains(.selectWorkspace) {
+                            try self?.navigation.validatePendingAction()
                             try await context.host.selectWorkspace(workspaceID)
                         }
+                        try self?.navigation.validatePendingAction()
                         try await context.host.selectSurface(workspaceID: workspaceID, surfaceID: surfaceID)
                     }
                 } catch CmuxSidebarActionError.cancelled {
@@ -70,6 +73,7 @@ extension SidebarConnectionModel {
                 }
             }
         )
+        notificationClicks?.update(topology: topology, navigation: navigation)
     }
 
     func connectionStatusDidChange(_ status: CmuxSidebarConnectionStatus) {

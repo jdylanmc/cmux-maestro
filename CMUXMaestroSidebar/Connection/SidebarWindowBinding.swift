@@ -22,6 +22,11 @@ final class SidebarWindowBinding: ObservableObject {
         self.model = model ?? SidebarConnectionModel(copilot: SidebarCopilotPolling(
             tailWindowMiB: { preferences.eventTailWindowMiB }
         ))
+        if model == nil, let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first {
+            self.model.notificationClicks = SidebarNotificationClicks(
+                root: support.appendingPathComponent("CMUXMaestroPreview/NotificationClicks", isDirectory: true)
+            )
+        }
     }
 
     /// Follows `scene`; without one this view has no exact window and shows nothing.

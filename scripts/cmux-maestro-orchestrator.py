@@ -2959,7 +2959,7 @@ def notification_focus_target(state, target):
     return node
 
 
-def command_notification_focus(root, cmux):
+def command_notification_focus(root, cmux=None):
     request = notification_input()
     if set(request) != {"clickToken"} or not isinstance(request["clickToken"], str):
         raise OrchestrationError("notification-target-unavailable")
@@ -2974,8 +2974,9 @@ def command_notification_focus(root, cmux):
         if not provider or process_observation(provider) is not True:
             raise OrchestrationError("notification-target-unavailable")
         require_session_custody(actor["copilotSessionId"], provider)
-        cmux.focus(actor["workspaceId"], actor["surfaceId"])
-        return {"focused": True}
+        # A notification click launches under launchd, outside CMUX's socket
+        # ancestry. Only the connected sidebar may perform typed host navigation.
+        return {"target": click["target"]}
 
 
 def command_notification_confirm(root, cmux):
@@ -3020,7 +3021,7 @@ def command_notify(args, root, *, native=False):
         request = {"message": args.message, "priority": args.priority}
         notification_actor(read_state(root))
     message = notification_text(request["message"])
-    if request["priority"] not in {"normal", "urgent"}:
+    if not isinstance(request["priority"], str) or request["priority"] not in {"normal", "urgent"}:
         raise OrchestrationError("notification-input-invalid")
     # The installed helper's provenance selects its containing app, never a caller path.
     helper = Path(identity_helper_path("agent notifications"))
@@ -7802,7 +7803,7 @@ def main(argv=None):
                 elif args.command == "notification-confirm":
                     output = command_notification_confirm(root, Cmux())
                 else:
-                    output = command_notification_focus(root, Cmux())
+                    output = command_notification_focus(root)
                 print(json.dumps({"ok": True, **output}))
                 return 0
             except (OrchestrationError, OSError) as error:

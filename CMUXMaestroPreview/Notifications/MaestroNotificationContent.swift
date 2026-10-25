@@ -22,14 +22,16 @@ nonisolated struct MaestroNotificationContent: Sendable {
         case .completed: "✅ " + String(localized: "notifications.finished", defaultValue: "Turn finished")
         case .cancelled: "⏹️ " + String(localized: "notifications.cancelled", defaultValue: "Cancelled")
         case .idle: "⚪ " + String(localized: "notifications.idle", defaultValue: "Idle")
-        case .unknown: "❔ " + String(localized: "notifications.unknown", defaultValue: "Unknown")
+        case .unknown: ""
         }
     }
 
     func request(admission: MaestroNotificationAdmission, attachment: UNNotificationAttachment) -> UNNotificationRequest {
         let content = UNMutableNotificationContent()
         content.title = Self.text(name, limit: 100)
-        content.subtitle = urgent ? String(localized: "notifications.urgent", defaultValue: "Urgent") + " · \(subtitle)" : subtitle
+        content.subtitle = urgent
+            ? [String(localized: "notifications.urgent", defaultValue: "Urgent"), subtitle].filter { !$0.isEmpty }.joined(separator: " · ")
+            : subtitle
         content.body = Self.text(message, limit: 140)
         content.threadIdentifier = admission.target.sessionId.uuidString.lowercased()
         content.interruptionLevel = .active

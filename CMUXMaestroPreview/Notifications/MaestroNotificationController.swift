@@ -85,14 +85,19 @@ nonisolated struct MaestroNotificationController: Sendable {
     }
 
     func focus(token: String) async throws {
-        try await tokenCall("notification-focus", token: token)
+        let data = try await tokenCall("notification-focus", token: token)
+        struct Reply: Decodable { let target: MaestroNotificationTarget }
+        let target = try JSONDecoder().decode(Reply.self, from: data).target
+        let root = MaestroNotificationPet.sidebarRoot(home: try CopilotPaths.realUserHome())
+            .appendingPathComponent("NotificationClicks", isDirectory: true)
+        try await MaestroNotificationClick(root: root).focus(target)
     }
 
     func confirm(token: String) async throws {
-        try await tokenCall("notification-confirm", token: token)
+        _ = try await tokenCall("notification-confirm", token: token)
     }
 
-    private func tokenCall(_ command: String, token: String) async throws {
+    private func tokenCall(_ command: String, token: String) async throws -> Data {
         guard token.count == 64, token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
             throw MaestroNotificationFailure.invalidInput
         }
@@ -102,5 +107,6 @@ nonisolated struct MaestroNotificationController: Sendable {
         guard status.ok else {
             throw status.error.flatMap(MaestroNotificationFailure.init(rawValue:)) ?? .unavailable
         }
+        return data
     }
 }

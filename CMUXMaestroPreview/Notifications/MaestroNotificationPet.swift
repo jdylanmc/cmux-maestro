@@ -24,7 +24,7 @@ nonisolated struct MaestroNotificationPet: Sendable {
                 if let frame = try? customFrame(folder: folder, id: chosen) { return frame }
             }
         }
-        return try Self.idleFrame(Self.read(bundledSheet, maximum: 10 * 1024 * 1024, owner: nil))
+        return try Self.idleFrame(Self.readBundled(bundledSheet, maximum: 10 * 1024 * 1024))
     }
 
     private func humanChoice(session: UUID) -> String? {
@@ -49,11 +49,29 @@ nonisolated struct MaestroNotificationPet: Sendable {
         return try Self.idleFrame(Self.read(folder.appendingPathComponent(manifest.spritesheetPath), maximum: 10 * 1024 * 1024))
     }
 
-    static func read(_ file: URL, maximum: Int, owner: UInt32? = getuid()) throws -> Data {
-        let directory = try CopilotFileAccess.openDirectory(file.deletingLastPathComponent(), owner: owner)
+    static func read(_ file: URL, maximum: Int) throws -> Data {
+        let directory = try CopilotFileAccess.openDirectory(file.deletingLastPathComponent(), owner: getuid())
         defer { close(directory) }
+        let stamp = try CopilotFileAccess.statEntry(at: directory, name: file.lastPathComponent)
+        guard stamp.permissions & 0o022 == 0 else { throw CopilotFileError.unsafePath }
         return try CopilotFileAccess.readStableRegular(
-            at: directory, filename: file.lastPathComponent, owner: owner ?? getuid(), maximum: maximum
+            at: directory, filename: file.lastPathComponent, owner: getuid(), maximum: maximum,
+            permissions: stamp.permissions
+        )
+    }
+
+    static func readBundled(_ file: URL, maximum: Int, user: UInt32 = getuid()) throws -> Data {
+        let directory = try CopilotFileAccess.openDirectory(file.deletingLastPathComponent())
+        defer { close(directory) }
+        let parent = try CopilotFileAccess.statFile(directory)
+        let stamp = try CopilotFileAccess.statEntry(at: directory, name: file.lastPathComponent)
+        guard [0, user].contains(parent.uid), parent.permissions & 0o022 == 0,
+              [0, user].contains(stamp.uid), stamp.permissions & 0o022 == 0 else {
+            throw CopilotFileError.unsafePath
+        }
+        return try CopilotFileAccess.readStableRegular(
+            at: directory, filename: file.lastPathComponent, owner: stamp.uid, maximum: maximum,
+            permissions: stamp.permissions
         )
     }
 

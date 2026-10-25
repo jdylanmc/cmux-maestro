@@ -7,6 +7,41 @@ import ImageIO
 
 @MainActor
 struct MaestroNotificationTests {
+    @Test func unknownStateAddsNoUnsupportedWorkClaim() {
+        let content = MaestroNotificationContent(name: "Synthetic", state: .unknown, message: "Choose one", urgent: false)
+        #expect(content.subtitle.isEmpty)
+    }
+
+    @Test func bundledReadAcceptsRootOwnerButCustomReadDoesNot() throws {
+        let file = URL(fileURLWithPath: "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns")
+        let directory = try CopilotFileAccess.openDirectory(file.deletingLastPathComponent())
+        defer { close(directory) }
+        #expect(try CopilotFileAccess.statEntry(at: directory, name: file.lastPathComponent).uid == 0)
+        let data = try MaestroNotificationPet.readBundled(file, maximum: 10 * 1024 * 1024)
+        #expect(!data.isEmpty)
+        #expect(throws: (any Error).self) { try MaestroNotificationPet.read(file, maximum: 10 * 1024 * 1024) }
+    }
+
+    @Test func bundledAndCustomReadsRejectUnsafeModesAndSymlinks() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/notification-pet-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = root.appendingPathComponent("pet.png")
+        try Data("synthetic".utf8).write(to: file)
+        for mode in [0o622, 0o664, 0o666] {
+            #expect(chmod(file.path, mode_t(mode)) == 0)
+            #expect(throws: (any Error).self) { try MaestroNotificationPet.readBundled(file, maximum: 1024) }
+            #expect(throws: (any Error).self) { try MaestroNotificationPet.read(file, maximum: 1024) }
+        }
+        #expect(chmod(file.path, 0o600) == 0)
+        #expect(try MaestroNotificationPet.readBundled(file, maximum: 1024) == Data("synthetic".utf8))
+        let link = root.appendingPathComponent("link.png")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        #expect(throws: (any Error).self) { try MaestroNotificationPet.readBundled(link, maximum: 1024) }
+        #expect(throws: (any Error).self) { try MaestroNotificationPet.read(link, maximum: 1024) }
+    }
+
     @Test func guiControllerPathUsesRegisteredHostAndPreservesBinding() {
         let controller = MaestroNotificationController(
             executable: URL(fileURLWithPath: "/synthetic/controller"),
@@ -44,8 +79,9 @@ struct MaestroNotificationTests {
     }
 
     @Test func formattingUsesSystemPriorityUniqueIDsAndExactSessionThread() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let folder = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent(".build/notification-content-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
         let context = try #require(CGContext(data: nil, width: 512, height: 624, bitsPerComponent: 8, bytesPerRow: 0,
                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
@@ -54,7 +90,10 @@ struct MaestroNotificationTests {
         let destination = try #require(CGImageDestinationCreateWithData(sheet, "public.png" as CFString, 1, nil))
         CGImageDestinationAddImage(destination, image, nil)
         #expect(CGImageDestinationFinalize(destination))
-        let frame = try MaestroNotificationPet.idleFrame(sheet as Data)
+        let bundled = folder.appendingPathComponent("maestro-pet.png")
+        try (sheet as Data).write(to: bundled)
+        let frame = try MaestroNotificationPet(home: folder, bundledSheet: bundled)
+            .png(session: UUID(), agentChoice: "unavailable-custom-pet")
         let source = try #require(CGImageSourceCreateWithData(frame as CFData, nil))
         let cropped = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
         #expect(cropped.width == 64)

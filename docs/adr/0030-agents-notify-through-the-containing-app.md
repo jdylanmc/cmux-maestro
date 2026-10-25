@@ -26,6 +26,29 @@ Rate buckets and one-use click capabilities stay in the private control store,
 without message content. Clicks recheck the exact generation, live provider,
 session custody and terminal; unavailable targets never fall back to focus.
 
+Amendment (#371): a notification click launches the app under launchd, so
+CMUX's default `cmuxOnly` socket policy rejects it (ADR 0021). The controller
+consumes and revalidates the click capability without constructing a socket
+client. The app writes only the exact target to a private single-use slot in
+the sidebar's own `NotificationClicks` directory. A connected window holds a
+file-lock lease with a fresh nonce; absence, ambiguous routing or a busy slot
+returns Unavailable, never a queued request.
+
+The sidebar consumes the request before acting, rechecks its five-second
+expiry and connection nonce, current sanitized generation projection, exact
+binding, live provider and sole session custody, then uses the existing typed
+host navigation. Each host mutation rechecks identity, including after a
+workspace-selection suspension. Disconnect releases the lease; a new connection
+discards old requests. The app observes one bounded result through directory
+events, with a 15-second failure deadline. No polling, retry, socket bypass,
+helper, new entitlement or write grant. The single result is navigation
+feedback, never agent completion or messaging evidence.
+
+The one-shot `--maestro-notify` invocation uses accessory activation policy;
+normal app launches retain setup/settings and Dock behavior. An unobserved
+work state adds no subtitle instead of the confusing question-mark Unknown;
+notification authorship never substitutes for work-state evidence.
+
 Normal uses active interruption with no sound. Urgent uses active interruption
 with default sound; no time-sensitive entitlement or Focus-bypass promise.
 The OS owns banner layout and notification grouping, not Maestro.

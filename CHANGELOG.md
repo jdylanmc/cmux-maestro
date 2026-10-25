@@ -36,9 +36,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
-- Agents can notify the human through macOS with their session name, state and
+- Agents can notify the human through macOS with their session name, observed state and
   pet image. Own-session tools and CLI share a global mute, rate limits and
-  exact-terminal click checks; urgent adds sound (#370).
+  exact-terminal click checks through a connected sidebar; urgent adds sound.
+  Missing state is omitted, not inferred; notification-only sending stays out
+  of the Dock (#370).
 - Collapsed workspace and worktree headers keep an aggregate activity glyph and
   count. Input and blockers take priority over failures and working agents;
   incomplete evidence stays visible. Activate the cue to expand, without

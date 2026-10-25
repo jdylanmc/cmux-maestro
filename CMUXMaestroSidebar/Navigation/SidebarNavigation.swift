@@ -43,6 +43,8 @@ final class SidebarNavigation {
     private var task: Task<Void, Never>?
     private var watchdog: Task<Void, Never>?
     private var activeTarget: SidebarNavigationTarget?
+    private var completion: (@MainActor (SidebarNavigationStatus) -> Void)?
+    private var validation: (@MainActor () throws -> Void)?
     private let timeout: @Sendable () async throws -> Void
     private let responseProcessed: @MainActor () -> Void
 
@@ -87,6 +89,7 @@ final class SidebarNavigation {
             watchdog = nil
             activeTarget = nil
             status = connected ? .staleTarget : .disconnected
+            complete()
         } else if changed {
             status = connected ? .idle : .disconnected
         }
@@ -108,6 +111,7 @@ final class SidebarNavigation {
         watchdog = nil
         activeTarget = nil
         status = .cancelled
+        complete()
     }
 
     func disabledReason(for target: SidebarNavigationTarget) -> String? {
@@ -122,7 +126,15 @@ final class SidebarNavigation {
         status = .staleTarget
     }
 
-    func select(_ target: SidebarNavigationTarget, onSuccess: @escaping @MainActor () -> Void = {}) {
+    func select(
+        _ target: SidebarNavigationTarget,
+        onFinish: (@MainActor (SidebarNavigationStatus) -> Void)? = nil,
+        validate: (@MainActor () throws -> Void)? = nil,
+        onSuccess: @escaping @MainActor () -> Void = {}
+    ) {
+        if completion != nil { status = .cancelled; complete() }
+        completion = onFinish
+        validation = validate
         generation &+= 1
         let token = generation
         task?.cancel()
@@ -130,9 +142,9 @@ final class SidebarNavigation {
         task = nil
         watchdog = nil
         activeTarget = nil
-        guard connected, let perform else { status = .disconnected; return }
-        guard isCurrent(target) else { status = .staleTarget; return }
-        guard isAllowed(target) else { status = .denied; return }
+        guard connected, let perform else { status = .disconnected; complete(); return }
+        guard isCurrent(target) else { status = .staleTarget; complete(); return }
+        guard isAllowed(target) else { status = .denied; complete(); return }
         status = .selecting
         activeTarget = target
         let processed = responseProcessed
@@ -140,6 +152,8 @@ final class SidebarNavigation {
             defer { processed() }
             let result: SidebarNavigationStatus
             do {
+                try Task.checkCancellation()
+                try validate?()
                 try await perform(target)
                 result = .selected
             } catch is CancellationError {
@@ -160,6 +174,7 @@ final class SidebarNavigation {
             self.activeTarget = nil
             self.task = nil
             if self.status == .selected { onSuccess() }
+            self.complete()
         }
         let timeout = timeout
         watchdog = Task { [weak self] in
@@ -171,7 +186,20 @@ final class SidebarNavigation {
             self.watchdog = nil
             self.activeTarget = nil
             self.status = .timedOut
+            self.complete()
         }
+    }
+
+    private func complete() {
+        let callback = completion
+        completion = nil
+        validation = nil
+        callback?(status)
+    }
+
+    func validatePendingAction() throws {
+        try Task.checkCancellation()
+        try validation?()
     }
 
     private func isAllowed(_ target: SidebarNavigationTarget) -> Bool {

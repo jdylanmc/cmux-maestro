@@ -8,6 +8,9 @@ enum CMUXMaestroEntryPoint {
     static func main() {
         let arguments = Array(ProcessInfo.processInfo.arguments.dropFirst())
         if arguments.first == MaestroNotificationCommand.flag {
+            // Only the one-shot notification sender is background UI. Explicit app
+            // launches retain their Dock presence and setup/settings windows.
+            NSApplication.shared.setActivationPolicy(.accessory)
             Task { @MainActor in exit(await MaestroNotificationCommand.perform()) }
             dispatchMain()
         }
