@@ -1,12 +1,30 @@
+import AppKit
 import Darwin
 import Foundation
 
 nonisolated struct MaestroNotificationController: Sendable {
     let executable: URL
+    let hostExecutable: URL
 
+    @MainActor
     static func installed() throws -> Self {
         let root = try CopilotPaths.orchestrationRoot()
-        return .init(executable: root.appendingPathComponent("bin/cmux-maestro-orchestrator"))
+        guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.cmuxterm.app"),
+              Bundle(url: app)?.bundleIdentifier == "com.cmuxterm.app" else {
+            throw MaestroNotificationFailure.unavailable
+        }
+        return .init(
+            executable: root.appendingPathComponent("bin/cmux-maestro-orchestrator"),
+            hostExecutable: app.appendingPathComponent("Contents/Resources/bin/cmux")
+        )
+    }
+
+    func environment(inherited: [String: String]) -> [String: String] {
+        var result = inherited
+        // GUI launches lack the terminal's PATH. Resolve the registered host bundle,
+        // not a caller-selected executable, and retain inherited session bindings.
+        result["PATH"] = hostExecutable.deletingLastPathComponent().path + ":/usr/bin:/bin:/usr/sbin:/sbin"
+        return result
     }
 
     func call(_ command: String, input: Data = Data()) async throws -> Data {
@@ -25,6 +43,7 @@ nonisolated struct MaestroNotificationController: Sendable {
             let process = Process()
             let output = Pipe(), stdin = Pipe()
             process.executableURL = executable
+            process.environment = environment(inherited: ProcessInfo.processInfo.environment)
             process.arguments = [command]
             process.standardInput = stdin
             process.standardOutput = output

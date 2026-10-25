@@ -7,6 +7,16 @@ import ImageIO
 
 @MainActor
 struct MaestroNotificationTests {
+    @Test func guiControllerPathUsesRegisteredHostAndPreservesBinding() {
+        let controller = MaestroNotificationController(
+            executable: URL(fileURLWithPath: "/synthetic/controller"),
+            hostExecutable: URL(fileURLWithPath: "/synthetic/cmux.app/Contents/Resources/bin/cmux")
+        )
+        let environment = controller.environment(inherited: ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "SESSION_ID": "synthetic"])
+        #expect(environment["PATH"] == "/synthetic/cmux.app/Contents/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin")
+        #expect(environment["SESSION_ID"] == "synthetic")
+    }
+
     @Test func deniedNeverPromptsOrSubmits() async throws {
         let center = NotificationCenterDouble(status: .denied)
         let request = UNNotificationRequest(identifier: "synthetic", content: UNMutableNotificationContent(), trigger: nil)

@@ -55,6 +55,8 @@ Clicks revalidate node, session, generation, workspace, surface, current provide
 and sole session custody before the existing controller focus operation. Changed,
 ended, missing or ambiguous targets do not focus. A minimal passive follow-up
 uses the original agent name and Unavailable; it has no action token or sound.
+The app resolves CMUX's registered bundle and its bundled CLI instead of relying
+on a GUI-launched process inheriting the terminal's PATH.
 
 CMUX's optional **Forward notifications to my iPhone** applies to CMUX-owned
 notifications, not these direct Maestro OS notifications. This implementation
