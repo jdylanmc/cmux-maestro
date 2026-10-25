@@ -43,6 +43,46 @@ class NotificationTests(unittest.TestCase):
     def setUp(self):
         self.api = CONTROLLER_API
 
+    def test_native_notification_rejects_nonstring_priority(self):
+        fn = self.api["command_notify"]
+        for priority in ([], {}, None, 1, True):
+            with self.subTest(priority=priority), patch.dict(fn.__globals__, {
+                "notification_input": lambda: {"identity": {}, "message": "Synthetic", "priority": priority},
+                "read_state": lambda root: {},
+                "authorize_native_actor": lambda state, identity: {"id": "actor"},
+                "notification_actor": lambda state: {"id": "actor"},
+            }), self.assertRaisesRegex(self.api["OrchestrationError"], "notification-input-invalid"):
+                fn(None, None, native=True)
+
+    def test_notification_click_consumes_token_without_host_access(self):
+        api = self.api
+        actor = {"id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+                 "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()), "generation": 1,
+                 "providerProcess": {"pid": 9001, "start": "synthetic"}}
+        target = {field: actor[key] for key, field in (
+            ("id", "nodeId"), ("copilotSessionId", "sessionId"), ("workspaceId", "workspaceId"),
+            ("surfaceId", "surfaceId"), ("generation", "generation"))}
+        token = "a" * 64
+        class ForbiddenHost:
+            def focus(self, *args):
+                raise AssertionError("GUI notification clicks must never access the CMUX socket")
+        fn = api["command_notification_focus"]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(api["time"], "time", return_value=1000), \
+                patch.object(api["Store"], "read", return_value={"nodes": {actor["id"]: actor}}), \
+                patch.dict(fn.__globals__, {
+                    "notification_input": lambda: {"clickToken": token},
+                    "process_observation": lambda provider: True,
+                    "require_session_custody": lambda *args: None,
+                }):
+            root = Path(directory).resolve() / "Orchestration"
+            with api["Store"](root) as store:
+                api["notification_save"](store, {"version": 1, "sessions": {},
+                    "clicks": {token: {"target": target, "at": 1000}}})
+            self.assertEqual(fn(root, ForbiddenHost()), {"target": target})
+            with self.assertRaisesRegex(api["OrchestrationError"], "target-unavailable"):
+                fn(root, ForbiddenHost())
+
     def assert_notification_shell_identity(self, *, session_hint):
         actor = {
             "id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
