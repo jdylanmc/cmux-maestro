@@ -2969,11 +2969,15 @@ def command_notification_focus(root, cmux=None):
         if click is None:
             raise OrchestrationError("notification-target-unavailable")
         notification_save(store, ledger)
-        actor = notification_focus_target(store.read(), click["target"])
+        state = store.read()
+        actor = notification_focus_target(state, click["target"])
         provider = actor.get("providerProcess")
         if not provider or process_observation(provider) is not True:
             raise OrchestrationError("notification-target-unavailable")
         require_session_custody(actor["copilotSessionId"], provider)
+        # Direct-launch sessions do not heartbeat this projection. Publish the
+        # exact locked state just revalidated, without inventing a node mutation.
+        store._atomic(store.observer_fd, "current.json", store._projection(state))
         # A notification click launches under launchd, outside CMUX's socket
         # ancestry. Only the connected sidebar may perform typed host navigation.
         return {"target": click["target"]}

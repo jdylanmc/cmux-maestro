@@ -29,7 +29,10 @@ session custody and terminal; unavailable targets never fall back to focus.
 Amendment (#371): a notification click launches the app under launchd, so
 CMUX's default `cmuxOnly` socket policy rejects it (ADR 0021). The controller
 consumes and revalidates the click capability without constructing a socket
-client. The app writes only the exact target to a private single-use slot in
+client. It republishes the sanitized projection from that locked state, without
+changing any node timestamp or work state; direct-launched sessions need not
+have recently mutated orchestration state for their click to work.
+The app writes only the exact target to a private single-use slot in
 the sidebar's own `NotificationClicks` directory. A connected window holds a
 file-lock lease with a fresh nonce; absence, ambiguous routing or a busy slot
 returns Unavailable, never a queued request.
@@ -43,6 +46,14 @@ discards old requests. The app observes one bounded result through directory
 events, with a 15-second failure deadline. No polling, retry, socket bypass,
 helper, new entitlement or write grant. The single result is navigation
 feedback, never agent completion or messaging evidence.
+
+One permanent `.registry` lock serializes channel lock-name creation and
+retirement. Retirement takes both window locks non-blocking and verifies their
+inodes before removing only that inactive window's known files. Active leases
+and senders retain their lock inodes. Normal teardown reclaims its window;
+admission and discovery each sweep at most 256 directory entries for crash
+leftovers before applying the unchanged 256-entry discovery bound. Exhaustion
+or contention still refuses; no automatic retry or larger scan.
 
 The one-shot `--maestro-notify` invocation uses accessory activation policy;
 normal app launches retain setup/settings and Dock behavior. An unobserved

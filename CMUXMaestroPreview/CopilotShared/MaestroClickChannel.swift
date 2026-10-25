@@ -28,26 +28,21 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
     let window: UUID
     private let directory: Int32
     private let lock: Int32
+    private let lockName: String
 
     init(root: URL, window: UUID, serving: Bool) throws {
         self.root = root
         self.window = window
+        lockName = window.uuidString.lowercased() + (serving ? ".lease" : ".busy")
         directory = try CopilotFileAccess.openDirectory(root, owner: getuid())
         do {
             guard try CopilotFileAccess.statFile(directory).permissions == 0o700 else {
                 throw CopilotFileError.unsafePath
             }
-            let name = window.uuidString.lowercased() + (serving ? ".lease" : ".busy")
-            let descriptor = openat(directory, name, O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK, 0o600)
-            guard descriptor >= 0 else { throw CopilotFileError.current() }
-            do {
-                let stamp = try CopilotFileAccess.statFile(descriptor)
-                guard stamp.isRegular, stamp.uid == getuid(), stamp.permissions == 0o600,
-                      flock(descriptor, LOCK_EX | LOCK_NB) == 0 else { throw CopilotFileError.unsafePath }
-                lock = descriptor
-            } catch {
-                close(descriptor)
-                throw error
+            let directory = directory, name = lockName
+            lock = try Self.withRegistry(at: directory) {
+                try Self.reclaimRetired(at: directory)
+                return try Self.acquire(at: directory, name: name, create: true)
             }
         } catch {
             close(directory)
@@ -55,7 +50,90 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
         }
     }
 
-    deinit { close(lock); close(directory) }
+    deinit {
+        defer { close(lock); close(directory) }
+        do {
+            try Self.withRegistry(at: directory) {
+                try Self.reclaim(window: window, at: directory, owned: (lockName, lock))
+            }
+        } catch {
+            // Contention leaves an unlocked retired file for the next bounded sweep.
+            fputs("Maestro retired notification channel cleanup unavailable.\n", stderr)
+        }
+    }
+
+    /// This permanent inode serializes lock-name creation and removal across processes.
+    private static func withRegistry<T>(at directory: Int32, _ operation: () throws -> T) throws -> T {
+        let descriptor = try acquire(at: directory, name: ".registry", create: true)
+        defer { close(descriptor) }
+        return try operation()
+    }
+
+    private static func acquire(at directory: Int32, name: String, create: Bool) throws -> Int32 {
+        let descriptor = openat(
+            directory, name, O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK | (create ? O_CREAT : 0), 0o600
+        )
+        guard descriptor >= 0 else { throw CopilotFileError.current() }
+        do {
+            let stamp = try CopilotFileAccess.statFile(descriptor)
+            guard stamp.isRegular, stamp.uid == getuid(), stamp.permissions == 0o600 else {
+                throw CopilotFileError.unsafePath
+            }
+            guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+                if errno == EWOULDBLOCK { throw CopilotFileError.changed }
+                throw CopilotFileError.current()
+            }
+            guard stamp.sameFile(as: try CopilotFileAccess.statEntry(at: directory, name: name)) else {
+                throw CopilotFileError.changed
+            }
+            return descriptor
+        } catch {
+            close(descriptor)
+            throw error
+        }
+    }
+
+    private static func reclaimRetired(at directory: Int32) throws {
+        let entries = try CopilotFileAccess.names(at: directory, limit: 256)
+        var windows: Set<UUID> = []
+        for name in entries.names {
+            let parts = name.split(separator: ".", maxSplits: 1)
+            guard parts.count == 2, let window = UUID(uuidString: String(parts[0])),
+                  window.uuidString.lowercased() == parts[0],
+                  ["lease", "busy", "request", "result", "request.staging", "result.staging"].contains(String(parts[1])) else { continue }
+            windows.insert(window)
+        }
+        for window in windows { try reclaim(window: window, at: directory) }
+    }
+
+    private static func reclaim(window: UUID, at directory: Int32, owned: (String, Int32)? = nil) throws {
+        let prefix = window.uuidString.lowercased() + "."
+        var descriptors: [(String, Int32)] = []
+        defer { for (_, descriptor) in descriptors { close(descriptor) } }
+        for suffix in ["lease", "busy"] {
+            let name = prefix + suffix
+            if owned?.0 == name { continue }
+            do { descriptors.append((name, try acquire(at: directory, name: name, create: false))) }
+            catch CopilotFileError.missing { continue }
+            catch CopilotFileError.changed { return }
+        }
+        // No live lease or sender remains. The registry fences all new openers.
+        for suffix in ["request", "result", "request.staging", "result.staging"] {
+            let name = prefix + suffix
+            do {
+                let stamp = try CopilotFileAccess.statEntry(at: directory, name: name)
+                guard stamp.isRegular, stamp.uid == getuid(), stamp.permissions == 0o600 else {
+                    throw CopilotFileError.unsafePath
+                }
+                guard unlinkat(directory, name, 0) == 0 else { throw CopilotFileError.current() }
+            } catch CopilotFileError.missing { continue }
+        }
+        for (name, descriptor) in descriptors + (owned.map { [$0] } ?? []) {
+            let stamp = try CopilotFileAccess.statFile(descriptor)
+            guard stamp.sameFile(as: try CopilotFileAccess.statEntry(at: directory, name: name)),
+                  unlinkat(directory, name, 0) == 0 else { throw CopilotFileError.changed }
+        }
+    }
 
     func publish(_ lease: Lease) throws {
         guard !lease.workspaces.isEmpty, lease.workspaces.count <= 512,
@@ -87,17 +165,20 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
         let directory = try CopilotFileAccess.openDirectory(root, owner: getuid())
         defer { close(directory) }
         guard try CopilotFileAccess.statFile(directory).permissions == 0o700 else { throw CopilotFileError.unsafePath }
-        let entries = try CopilotFileAccess.names(at: directory, limit: 256)
-        guard !entries.limited else { throw CopilotFileError.tooLarge }
-        var matches: [(UUID, Lease)] = []
-        for name in entries.names where name.hasSuffix(".lease") {
-            guard let window = UUID(uuidString: String(name.dropLast(6))) else { throw CopilotFileError.unsafePath }
-            if let lease = try liveLease(root: root, window: window), lease.workspaces.contains(workspace) {
-                matches.append((window, lease))
+        return try withRegistry(at: directory) {
+            try reclaimRetired(at: directory)
+            let entries = try CopilotFileAccess.names(at: directory, limit: 256)
+            guard !entries.limited else { throw CopilotFileError.tooLarge }
+            var matches: [(UUID, Lease)] = []
+            for name in entries.names where name.hasSuffix(".lease") {
+                guard let window = UUID(uuidString: String(name.dropLast(6))) else { throw CopilotFileError.unsafePath }
+                if let lease = try liveLease(root: root, window: window), lease.workspaces.contains(workspace) {
+                    matches.append((window, lease))
+                }
             }
+            guard matches.count == 1, let match = matches.first else { throw CopilotFileError.missing }
+            return match
         }
-        guard matches.count == 1, let match = matches.first else { throw CopilotFileError.missing }
-        return match
     }
 
     func write<T: Encodable>(_ value: T, slot: String) throws {

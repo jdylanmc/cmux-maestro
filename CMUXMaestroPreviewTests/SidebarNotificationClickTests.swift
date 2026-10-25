@@ -48,13 +48,42 @@ struct SidebarNotificationClickTests {
         withExtendedLifetime(busy) {}
     }
 
+    @Test func boundedSweepsRecoverHistoricalOrphansWithoutReplacingActiveLocks() throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        for _ in 0..<300 {
+            let window = UUID().uuidString.lowercased()
+            for suffix in ["lease", "busy"] {
+                let file = root.appendingPathComponent(window + "." + suffix)
+                try Data().write(to: file)
+                #expect(chmod(file.path, 0o600) == 0)
+            }
+        }
+        let live = try MaestroClickChannel(root: root, window: UUID(), serving: true)
+        try live.publish(.init(nonce: UUID(), workspaces: [fixtures.workspaceA]))
+        #expect(try MaestroClickChannel.destination(root: root, workspace: fixtures.workspaceA).0 == live.window)
+        let directory = try CopilotFileAccess.openDirectory(root, owner: getuid())
+        defer { close(directory) }
+        #expect(try !CopilotFileAccess.names(at: directory, limit: 256).limited)
+        let registry = try CopilotFileAccess.openRegular(at: directory, name: ".registry", owner: getuid(), permissions: 0o600)
+        defer { close(registry) }
+        #expect(flock(registry, LOCK_EX | LOCK_NB) == 0)
+        let stamp = try CopilotFileAccess.statEntry(at: directory, name: ".registry")
+        #expect(throws: (any Error).self) { try MaestroClickChannel(root: root, window: UUID(), serving: true) }
+        #expect(throws: (any Error).self) { try MaestroClickChannel.destination(root: root, workspace: fixtures.workspaceA) }
+        #expect(try CopilotFileAccess.statEntry(at: directory, name: ".registry") == stamp)
+        #expect(flock(registry, LOCK_UN) == 0)
+        #expect(try MaestroClickChannel.destination(root: root, workspace: fixtures.workspaceA).0 == live.window)
+    }
+
     @Test func connectedClickUsesTypedNavigationOnceAndReturnsResult() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let target = target
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let (processed, continuation) = AsyncStream<Void>.makeStream()
-        let navigation = SidebarNavigation(responseProcessed: { continuation.yield(()) })
+        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) },
+                                           responseProcessed: { continuation.yield(()) })
         var calls: [SidebarNavigationTarget] = []
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) {
             calls.append($0)
@@ -85,7 +114,7 @@ struct SidebarNotificationClickTests {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let navigation = SidebarNavigation()
+        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) })
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }
         let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { _ in
@@ -129,7 +158,7 @@ struct SidebarNotificationClickTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let target = target
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let navigation = SidebarNavigation()
+        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) })
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }
         let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { _ in })
@@ -138,10 +167,11 @@ struct SidebarNotificationClickTests {
             nodeId: target.nodeId, sessionId: target.sessionId, workspaceId: target.workspaceId,
             surfaceId: target.surfaceId, generation: target.generation
         )
-        try await MaestroNotificationClick(root: root, now: { date }).focus(appTarget)
+        let sender = MaestroNotificationClick(root: root, now: { date }, timeout: { try await sidebarFrozenExpiry(0) })
+        try await sender.focus(appTarget)
         #expect(calls == 1)
         clicks.stop()
-        await #expect(throws: (any Error).self) { try await MaestroNotificationClick(root: root, now: { date }).focus(appTarget) }
+        await #expect(throws: (any Error).self) { try await sender.focus(appTarget) }
         #expect(calls == 1)
     }
 
@@ -162,11 +192,40 @@ struct SidebarNotificationClickTests {
         #expect(!SidebarNotificationTargetVerifier.matches(replaced, snapshot: snapshot, now: date))
     }
 
+    @Test func explicitClickDeadlineReturnsUnavailableAndRemovesRequest() async throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let target = target
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
+        let lease = try MaestroClickChannel(root: root, window: UUID(), serving: true)
+        try lease.publish(.init(nonce: UUID(), workspaces: [target.workspaceId]))
+        let (started, ready) = AsyncStream<Void>.makeStream()
+        let (deadline, fire) = AsyncStream<Void>.makeStream()
+        defer { ready.finish(); fire.finish() }
+        let sender = MaestroNotificationClick(root: root, now: { date }, timeout: {
+            ready.yield(())
+            for await _ in deadline { return }
+            throw CancellationError()
+        })
+        let appTarget = CMUXMaestroPreview.MaestroNotificationTarget(
+            nodeId: target.nodeId, sessionId: target.sessionId, workspaceId: target.workspaceId,
+            surfaceId: target.surfaceId, generation: target.generation
+        )
+        let pending = Task { try await sender.focus(appTarget) }
+        var iterator = started.makeAsyncIterator()
+        _ = await iterator.next()
+        #expect(try lease.read(MaestroClickChannel.Request.self, slot: "request") != nil)
+        fire.yield(())
+        await #expect(throws: MaestroNotificationFailure.unavailable) { try await pending.value }
+        #expect(try lease.read(MaestroClickChannel.Request.self, slot: "request") == nil)
+        #expect(try lease.read(MaestroClickChannel.Response.self, slot: "result") == nil)
+    }
+
     @Test func disconnectedBeforeDispatchCannotNavigate() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let date = Date(timeIntervalSince1970: 1_800_000_000)
-        let navigation = SidebarNavigation()
+        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) })
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }
         let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { _ in })
@@ -189,7 +248,8 @@ struct SidebarNotificationClickTests {
         let date = Date(timeIntervalSince1970: 1_800_000_000)
         let (processed, continuation) = AsyncStream<Void>.makeStream()
         defer { continuation.finish() }
-        let navigation = SidebarNavigation(responseProcessed: { continuation.yield(()) })
+        let navigation = SidebarNavigation(timeout: { try await sidebarFrozenExpiry(0) },
+                                           responseProcessed: { continuation.yield(()) })
         var replaced = false
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }

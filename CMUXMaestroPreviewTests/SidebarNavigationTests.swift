@@ -6,6 +6,25 @@ import Testing
 struct SidebarNavigationTests {
     private let fixtures = SidebarTreeFixtures()
 
+    @Test func releasedConnectionCannotNavigateThroughRetainedHost() async {
+        let (processed, continuation) = AsyncStream<Void>.makeStream()
+        defer { continuation.finish() }
+        let navigation = SidebarNavigation(
+            timeout: { try await sidebarFrozenExpiry(0) }, responseProcessed: { continuation.yield(()) }
+        )
+        let recorder = SidebarHostRecorder()
+        var model: SidebarConnectionModel? = SidebarConnectionModel(navigation: navigation)
+        model?.update(context: context(recorder: recorder))
+        weak var released = model
+        model = nil
+        #expect(released == nil)
+        navigation.select(.surface(workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA))
+        var iterator = processed.makeAsyncIterator()
+        _ = await iterator.next()
+        #expect(recorder.actions.isEmpty)
+        #expect(navigation.status == .disconnected)
+    }
+
     @Test(arguments: ["matching", "different-process", "two-alive", "protected-previous"])
     func replacementChildFocusRequiresVerifiedDisplacement(_ scenario: String) {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
