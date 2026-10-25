@@ -19,6 +19,35 @@ struct SidebarNotificationClickTests {
               surfaceId: fixtures.surfaceA, generation: 1)
     }
 
+    @Test func retiredWindowChurnPreservesLiveLeaseAndBusyInodes() throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = try MaestroClickChannel(root: root, window: UUID(), serving: true)
+        let busy = try MaestroClickChannel(root: root, window: live.window, serving: false)
+        let lease = MaestroClickChannel.Lease(nonce: UUID(), workspaces: [fixtures.workspaceA])
+        try live.publish(lease)
+        let directory = try CopilotFileAccess.openDirectory(root, owner: getuid())
+        defer { close(directory) }
+        let leaseName = live.window.uuidString.lowercased() + ".lease"
+        let busyName = live.window.uuidString.lowercased() + ".busy"
+        let leaseStamp = try CopilotFileAccess.statEntry(at: directory, name: leaseName)
+        let busyStamp = try CopilotFileAccess.statEntry(at: directory, name: busyName)
+        for _ in 0..<300 {
+            let retired = try MaestroClickChannel(root: root, window: UUID(), serving: true)
+            let sender = try MaestroClickChannel(root: root, window: retired.window, serving: false)
+            try retired.publish(.init(nonce: UUID(), workspaces: [UUID()]))
+            withExtendedLifetime((retired, sender)) {}
+        }
+        let found = try MaestroClickChannel.destination(root: root, workspace: fixtures.workspaceA)
+        #expect(found.0 == live.window && found.1 == lease)
+        #expect(try CopilotFileAccess.statEntry(at: directory, name: leaseName) == leaseStamp)
+        #expect(try CopilotFileAccess.statEntry(at: directory, name: busyName) == busyStamp)
+        #expect(throws: (any Error).self) { try MaestroClickChannel(root: root, window: live.window, serving: true) }
+        #expect(throws: (any Error).self) { try MaestroClickChannel(root: root, window: live.window, serving: false) }
+        #expect(try !CopilotFileAccess.names(at: directory, limit: 256).limited)
+        withExtendedLifetime(busy) {}
+    }
+
     @Test func connectedClickUsesTypedNavigationOnceAndReturnsResult() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
