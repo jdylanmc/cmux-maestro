@@ -58,7 +58,11 @@ class NotificationTests(unittest.TestCase):
         api = self.api
         actor = {"id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
                  "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()), "generation": 1,
-                 "providerProcess": {"pid": 9001, "start": "synthetic"}}
+                 "providerProcess": {"pid": 9001, "start": "synthetic"},
+                 "runId": str(uuid.uuid4()), "parentId": None, "role": "coordinator",
+                 "phase": "turn-running", "availability": "busy", "label": "Synthetic",
+                 "executionMode": "interactive", "createdAt": "2026-10-01T00:00:00Z",
+                 "updatedAt": "2026-10-01T00:00:00Z"}
         target = {field: actor[key] for key, field in (
             ("id", "nodeId"), ("copilotSessionId", "sessionId"), ("workspaceId", "workspaceId"),
             ("surfaceId", "surfaceId"), ("generation", "generation"))}
@@ -74,12 +78,18 @@ class NotificationTests(unittest.TestCase):
                     "notification_input": lambda: {"clickToken": token},
                     "process_observation": lambda provider: True,
                     "require_session_custody": lambda *args: None,
+                    "now": lambda: "2026-10-25T13:00:00Z",
                 }):
             root = Path(directory).resolve() / "Orchestration"
             with api["Store"](root) as store:
                 api["notification_save"](store, {"version": 1, "sessions": {},
                     "clicks": {token: {"target": target, "at": 1000}}})
+                store._atomic(store.observer_fd, "current.json", b'{"generatedAt":"2026-10-01T00:00:00Z"}')
             self.assertEqual(fn(root, ForbiddenHost()), {"target": target})
+            projection = json.loads((root / "observer/current.json").read_text())
+            self.assertEqual(projection["generatedAt"], "2026-10-25T13:00:00Z")
+            self.assertEqual(projection["nodes"][0]["generation"], target["generation"])
+            self.assertEqual(actor["updatedAt"], "2026-10-01T00:00:00Z")
             with self.assertRaisesRegex(api["OrchestrationError"], "target-unavailable"):
                 fn(root, ForbiddenHost())
 
