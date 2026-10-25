@@ -23,18 +23,19 @@ struct SidebarNotificationClickTests {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let target = target
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
         let (processed, continuation) = AsyncStream<Void>.makeStream()
         let navigation = SidebarNavigation(responseProcessed: { continuation.yield(()) })
         var calls: [SidebarNavigationTarget] = []
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) {
             calls.append($0)
         }
-        let clicks = SidebarNotificationClicks(root: root, verify: { #expect($0 == target) })
+        let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { #expect($0 == target) })
         clicks.update(topology: fixtures.topology(), navigation: navigation)
         defer { clicks.stop(); continuation.finish() }
         let (window, lease) = try MaestroClickChannel.destination(root: root, workspace: target.workspaceId)
         let writer = try MaestroClickChannel(root: root, window: window, serving: false)
-        let request = MaestroClickChannel.Request(id: UUID(), nonce: lease.nonce, target: target, createdAt: Date())
+        let request = MaestroClickChannel.Request(id: UUID(), nonce: lease.nonce, target: target, createdAt: date)
         try writer.write(request, slot: "request")
         clicks.consume()
         clicks.consume()
@@ -98,19 +99,20 @@ struct SidebarNotificationClickTests {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
         let target = target
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
         let navigation = SidebarNavigation()
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }
-        let clicks = SidebarNotificationClicks(root: root, verify: { _ in })
+        let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { _ in })
         clicks.update(topology: fixtures.topology(), navigation: navigation)
         let appTarget = CMUXMaestroPreview.MaestroNotificationTarget(
             nodeId: target.nodeId, sessionId: target.sessionId, workspaceId: target.workspaceId,
             surfaceId: target.surfaceId, generation: target.generation
         )
-        try await MaestroNotificationClick(root: root).focus(appTarget)
+        try await MaestroNotificationClick(root: root, now: { date }).focus(appTarget)
         #expect(calls == 1)
         clicks.stop()
-        await #expect(throws: (any Error).self) { try await MaestroNotificationClick(root: root).focus(appTarget) }
+        await #expect(throws: (any Error).self) { try await MaestroNotificationClick(root: root, now: { date }).focus(appTarget) }
         #expect(calls == 1)
     }
 
@@ -134,14 +136,15 @@ struct SidebarNotificationClickTests {
     @Test func disconnectedBeforeDispatchCannotNavigate() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
         let navigation = SidebarNavigation()
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }
-        let clicks = SidebarNotificationClicks(root: root, verify: { _ in })
+        let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { _ in })
         clicks.update(topology: fixtures.topology(), navigation: navigation)
         let (window, lease) = try MaestroClickChannel.destination(root: root, workspace: fixtures.workspaceA)
         let writer = try MaestroClickChannel(root: root, window: window, serving: false)
-        let request = MaestroClickChannel.Request(id: UUID(), nonce: lease.nonce, target: target, createdAt: Date())
+        let request = MaestroClickChannel.Request(id: UUID(), nonce: lease.nonce, target: target, createdAt: date)
         try writer.write(request, slot: "request")
         clicks.consume()
         navigation.disconnect()
@@ -154,20 +157,21 @@ struct SidebarNotificationClickTests {
     @Test func replacementBetweenConsumeAndDispatchRefuses() async throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
+        let date = Date(timeIntervalSince1970: 1_800_000_000)
         let (processed, continuation) = AsyncStream<Void>.makeStream()
         defer { continuation.finish() }
         let navigation = SidebarNavigation(responseProcessed: { continuation.yield(()) })
         var replaced = false
         var calls = 0
         navigation.update(topology: fixtures.topology(), connected: true, workspaceAllowed: true, surfaceAllowed: true) { _ in calls += 1 }
-        let clicks = SidebarNotificationClicks(root: root, verify: { _ in
+        let clicks = SidebarNotificationClicks(root: root, now: { date }, verify: { _ in
             if replaced { throw CopilotFileError.changed }
         })
         clicks.update(topology: fixtures.topology(), navigation: navigation)
         defer { clicks.stop() }
         let (window, lease) = try MaestroClickChannel.destination(root: root, workspace: fixtures.workspaceA)
         let writer = try MaestroClickChannel(root: root, window: window, serving: false)
-        try writer.write(MaestroClickChannel.Request(id: UUID(), nonce: lease.nonce, target: target, createdAt: Date()), slot: "request")
+        try writer.write(MaestroClickChannel.Request(id: UUID(), nonce: lease.nonce, target: target, createdAt: date), slot: "request")
         clicks.consume()
         replaced = true
         var iterator = processed.makeAsyncIterator()
