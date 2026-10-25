@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 256 256">
+  <title>CMUX Maestro - Legato / Glacier dark</title>
+  <defs>
+    <linearGradient id="signature" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#E1F2F1"/>
+      <stop offset=".25" stop-color="#BCDADF"/>
+      <stop offset=".5" stop-color="#D6EAEB"/>
+      <stop offset=".72" stop-color="#A7C6D0"/>
+      <stop offset="1" stop-color="#C6E0E4"/>
+    </linearGradient>
+    <linearGradient id="tile" x1=".1" y1="0" x2=".8" y2="1">
+      <stop stop-color="#305866"/>
+      <stop offset="1" stop-color="#102F42"/>
+    </linearGradient>
+  </defs>
+  <path d="M72 16H184Q240 16 240 72V184Q240 240 184 240H72Q16 240 16 184V72Q16 16 72 16Z"
+    fill="url(#tile)" stroke="#FFFFFF" stroke-opacity=".2" stroke-width="1"/>
+  <path d="M58 172L89 88H109L97 121Q116 87 133 88Q151 89 141 115
+    Q159 88 174 89Q193 90 183 119L166 161Q163 172 176 163L194 148
+    L199 155Q173 184 155 181Q139 177 149 153L167 108
+    Q171 97 158 110Q140 129 123 173H103L125 113
+    Q130 97 116 112Q95 135 79 177Z"
+    fill="#081E2C" opacity=".7" transform="translate(1 4)"/>
+  <path d="M58 172L89 88H109L97 121Q116 87 133 88Q151 89 141 115
+    Q159 88 174 89Q193 90 183 119L166 161Q163 172 176 163L194 148
+    L199 155Q173 184 155 181Q139 177 149 153L167 108
+    Q171 97 158 110Q140 129 123 173H103L125 113
+    Q130 97 116 112Q95 135 79 177Z" fill="url(#signature)"/>
+  <path d="M48 187Q95 178 110 192Q120 202 98 208" fill="none"
+    stroke="url(#signature)" stroke-width="3" stroke-linecap="round"/>
+  <path d="M86 83L112 81" stroke="#E1F2F1" stroke-width="3" stroke-linecap="round"/>
+</svg>
