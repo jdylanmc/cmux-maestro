@@ -201,7 +201,10 @@ class SyntheticMac(preview.MacOperations):
                 stderr = (f"Identifier={signature['id']}\nSignature={signature['signing']}\n"
                           f"TeamIdentifier={signature.get('team', 'not set')}\n").encode()
             else:
-                stdout = plistlib.dumps(signature["entitlements"])
+                architecture = command[command.index("--architecture") + 1] if "--architecture" in command else None
+                actual = signatures.get("sliceEntitlements", {}).get(str(target.relative_to(app)), {}).get(
+                    architecture, signature["entitlements"])
+                stdout = plistlib.dumps(actual)
         elif command[0] == "/usr/sbin/system_profiler":
             stdout = json.dumps({"SPHardwareDataType": [{"provisioning_UDID": "synthetic-device"}]}).encode()
         elif command[0] == "/usr/bin/openssl":
@@ -1245,6 +1248,36 @@ with installer.locked():
             self.operation("install", self.new)
         self.assertFalse(self.app.exists())
         self.assertIsNone(self.receipt()["transaction"])
+
+    def test_same_certificate_alternate_slice_entitlements_refuse_for_every_component(self):
+        arm = struct.pack("<III", 0xfeedfacf, 0x100000c, 0)
+        intel = struct.pack("<III", 0xfeedfacf, 0x1000007, 3)
+        universal = (struct.pack(">II", 0xcafebabe, 2)
+                     + struct.pack(">IIIII", 0x100000c, 0, 48, len(arm), 0)
+                     + struct.pack(">IIIII", 0x1000007, 3, 60, len(intel), 0) + arm + intel)
+        cases = [
+            ("app", "Contents/MacOS/Preview", "."),
+            ("extension", str(preview.EXTENSION / "Contents/MacOS/Sidebar"), str(preview.EXTENSION)),
+            ("helper", "Contents/Helpers/CMUXMaestroCopilotHook", "Contents/Helpers/CMUXMaestroCopilotHook"),
+            ("helper", "Contents/MacOS/Preview.debug.dylib", "Contents/MacOS/Preview.debug.dylib"),
+            ("helper", "Contents/MacOS/__preview.dylib", "Contents/MacOS/__preview.dylib"),
+            ("helper", str(preview.EXTENSION / "Contents/MacOS/Sidebar.debug.dylib"),
+             str(preview.EXTENSION / "Contents/MacOS/Sidebar.debug.dylib")),
+            ("helper", str(preview.EXTENSION / "Contents/MacOS/__preview.dylib"),
+             str(preview.EXTENSION / "Contents/MacOS/__preview.dylib")),
+        ]
+        for index, (role, binary, target) in enumerate(cases):
+            with self.subTest(component=binary):
+                app = self.fixture("slices-" + str(index))
+                (app / binary).write_bytes(universal)
+                self.assertEqual(self.ops.verify(app, current=True), "2")
+                file = app / "signatures.json"
+                signatures = json.loads(file.read_text())
+                bad = {} if role in ("app", "extension") else {"com.apple.security.network.client": True}
+                signatures["sliceEntitlements"] = {target: {"16777223,3": bad}}
+                file.write_text(json.dumps(signatures))
+                with self.assertRaises(ValueError):
+                    self.ops.verify(app, current=True)
 
     def test_signing_orders_nested_code_before_parent_with_one_identity_and_minimum_entitlements(self):
         signing = metadata.production_signing()

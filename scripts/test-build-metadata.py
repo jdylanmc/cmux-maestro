@@ -2356,6 +2356,32 @@ class ProductionSigningTests(unittest.TestCase):
                 self.signing.load_plan(Path("/synthetic/profile"), runner=runner, now=self.now)
             runner.assert_not_called()
 
+    def test_writerless_profile_fifo_is_opened_nonblocking_then_rejected(self):
+        root = ROOT / ".build/signing-profile-tests" / uuid.uuid4().hex
+        root.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, root)
+        fifo = root / "profile.fifo"
+        os.mkfifo(fifo, 0o600)
+        reader = self.signing.profile_reader
+        original = os.open
+        opened = []
+
+        def guarded_open(path, flags, **kwargs):
+            if path == fifo.name:
+                # Stop the old implementation before entering its blocking syscall.
+                self.assertTrue(flags & os.O_NONBLOCK, "Writerless FIFO open would block before fstat")
+                result = original(path, flags, **kwargs)
+                opened.append(result)
+                return result
+            return original(path, flags, **kwargs)
+
+        with patch.object(reader.os, "open", side_effect=guarded_open):
+            with self.assertRaisesRegex(ValueError, "unsafe or oversized"):
+                reader.read_private(fifo)
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(OSError):
+            os.fstat(opened[0])
+
 
 if __name__ == "__main__":
     unittest.main()
