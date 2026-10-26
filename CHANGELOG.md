@@ -42,7 +42,8 @@ Notable changes are recorded using Keep a Changelog categories.
   donations; production requires an explicit development provisioning profile
   and matching existing signing identity. Owned ad-hoc rollback stays supported.
   Publication checks every architecture's entitlements and refuses unsafe
-  profile files without blocking.
+  profile files without blocking. macOS profiles need no debugging grant;
+  published apps do not claim debugging access.
   Own-session tools and CLI share a global mute, rate limits and
   exact-terminal click checks through a connected sidebar; urgent adds sound.
   No work state is inferred; notification-only sending stays out

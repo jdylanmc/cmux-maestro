@@ -58,7 +58,10 @@ The original signed profile is embedded only in the
 containing app. App, sidebar, helper and debug libraries share one certificate;
 the sidebar retains its exact sandbox grants and unchanged ID. Helper/libraries
 get no restricted app entitlements. The containing app alone receives the
-communication, app/team identity and development debugging entitlements.
+communication and app/team identity entitlements, never debugging access.
+On macOS, `com.apple.security.get-task-allow` is unrestricted and need not appear
+in a development profile ([Apple TN3125](https://developer.apple.com/documentation/technotes/tn3125-inside-code-signing-provisioning-profiles#Entitlements-on-macOS)).
+An absent or boolean profile value is accepted without claiming that entitlement.
 Unsigned/test namespaces remain separate.
 
 Ad-hoc signing is only an intermediate build step, never an accepted new

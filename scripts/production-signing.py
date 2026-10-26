@@ -102,15 +102,17 @@ def profile_policy(profile, *, now, device):
     require(isinstance(entitlements, dict), "Profile entitlements are missing.")
     require(entitlements.get(APP_ID) == team[0] + "." + BASE_ID
             and entitlements.get(TEAM_ID) == team[0], "Profile app/team mismatch.")
-    require(entitlements.get(COMMUNICATION) is True and entitlements.get(DEBUG) is True,
-            "Profile must authorize development communication notifications.")
+    require(entitlements.get(COMMUNICATION) is True,
+            "Profile must authorize communication notifications.")
+    require(DEBUG not in entitlements or type(entitlements[DEBUG]) is bool,
+            "Profile debugging entitlement must be boolean.")
     require(set(entitlements) <= {APP_ID, TEAM_ID, COMMUNICATION, DEBUG, "keychain-access-groups"},
             "Profile authorizes unexpected capabilities.")
     certificates = profile.get("DeveloperCertificates")
     require(isinstance(certificates, list) and 0 < len(certificates) <= 32
             and all(isinstance(item, bytes) and 0 < len(item) <= 32_768 for item in certificates),
             "Profile developer certificates are missing or invalid.")
-    return {APP_ID: team[0] + "." + BASE_ID, TEAM_ID: team[0], COMMUNICATION: True, DEBUG: True}
+    return {APP_ID: team[0] + "." + BASE_ID, TEAM_ID: team[0], COMMUNICATION: True}
 
 
 def select_identity(profile, output):
