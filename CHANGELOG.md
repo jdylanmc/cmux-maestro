@@ -48,6 +48,9 @@ Notable changes are recorded using Keep a Changelog categories.
   exact-terminal click checks through a connected sidebar; urgent adds sound.
   No work state is inferred; notification-only sending stays out
   of the Dock (#370).
+- CMUX Maestro has its own Legato / Glacier app icon, separate from session
+  icons and pets. macOS 26+ supports native light/dark appearances through the
+  system icon style; older macOS uses a static light fallback (#372).
 - Collapsed workspace and worktree headers keep an aggregate activity glyph and
   count. Input and blockers take priority over failures and working agents;
   incomplete evidence stays visible. Activate the cue to expand, without

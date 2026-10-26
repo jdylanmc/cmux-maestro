@@ -1,0 +1,26 @@
+{
+  "fill": "none",
+  "groups": [
+    {
+      "name": "Legato",
+      "blend-mode": "normal",
+      "blur-material": null,
+      "layers": [
+        {
+          "name": "Glacier",
+          "fill": "none",
+          "glass": false,
+          "image-name-specializations": [
+            { "value": "Glacier-light.png" },
+            { "appearance": "dark", "value": "Glacier-dark.png" }
+          ],
+          "position": { "scale": 1, "translation-in-points": [0, 0] }
+        }
+      ],
+      "shadow": { "kind": "none", "opacity": 0 },
+      "specular": false,
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": ["macOS"] }
+}
