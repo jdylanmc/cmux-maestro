@@ -285,6 +285,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Active window details follow a positively verified replacement session without
+  treating its retained unknown predecessor as a competing occupant. Ambiguous
+  and unverified observations remain unavailable.
 - Invalidated file watchers finish before requesting recovery reads, avoiding
   reads against a retired registration. The native regression fails promptly
   rather than hanging while awaiting a replacement watcher (#368).
