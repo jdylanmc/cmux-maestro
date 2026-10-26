@@ -49,18 +49,22 @@ extension SidebarConnectionModel {
             workspaceAllowed: context.grantedActionScopes.contains(.selectWorkspace),
             surfaceAllowed: context.grantedActionScopes.contains(.selectSurface),
             perform: { [weak self] target in
+                guard let self else { throw SidebarNavigationError.disconnected }
                 do {
                     switch target {
                     case .workspace(let id):
+                        try self.navigation.validatePendingAction()
                         try await context.host.selectWorkspace(id)
                     case .surface(let workspaceID, let surfaceID):
                         // Selecting a surface in another workspace alone leaves that workspace's
                         // previously focused tab active, so switch workspaces first.
-                        let selected = self?.hierarchy.workspaces.first { $0.id == workspaceID }
+                        let selected = self.hierarchy.workspaces.first { $0.id == workspaceID }
                         if case .available(false)? = selected?.isSelected,
                            context.grantedActionScopes.contains(.selectWorkspace) {
+                            try self.navigation.validatePendingAction()
                             try await context.host.selectWorkspace(workspaceID)
                         }
+                        try self.navigation.validatePendingAction()
                         try await context.host.selectSurface(workspaceID: workspaceID, surfaceID: surfaceID)
                     }
                 } catch CmuxSidebarActionError.cancelled {
@@ -70,6 +74,7 @@ extension SidebarConnectionModel {
                 }
             }
         )
+        notificationClicks?.update(topology: topology, navigation: navigation)
     }
 
     func connectionStatusDidChange(_ status: CmuxSidebarConnectionStatus) {

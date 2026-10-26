@@ -16,6 +16,7 @@ final class SidebarConnectionModel {
     let copilot: SidebarCopilotPolling
     let orchestration: SidebarOrchestrationPolling
     let navigation: SidebarNavigation
+    @ObservationIgnored var notificationClicks: SidebarNotificationClicks?
     @ObservationIgnored let placements = SidebarPlacementCache()
     @ObservationIgnored let visibilityPlacements = SidebarPlacementCache()
     private var latestSequence: UInt64?
@@ -67,6 +68,7 @@ final class SidebarConnectionModel {
         copilot.update(topology: SidebarTopology(hierarchy), connected: false)
         orchestration.update(topology: SidebarTopology(hierarchy), connected: false)
         navigation.disconnect()
+        notificationClicks?.stop()
     }
 
     func showConnected(workspaceCount: Int, surfaceCount: Int) {
@@ -95,6 +97,7 @@ final class SidebarConnectionModel {
         copilot.update(topology: SidebarTopology(hierarchy), connected: false)
         orchestration.update(topology: SidebarTopology(hierarchy), connected: false)
         navigation.disconnect()
+        notificationClicks?.stop()
     }
 
     func replaceHierarchy(with snapshot: HierarchySnapshot) {

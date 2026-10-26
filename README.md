@@ -41,8 +41,11 @@ Needs macOS 14+, Xcode 26.6 (to build), CMUX with sidebar extensions, and Copilo
 
 ```sh
 ./scripts/fetch-sdk.sh        # pinned CMUX ExtensionKit, once
-./scripts/build-register.sh   # build, sign locally, install, set up Copilot
+./scripts/build-register.sh --provisioning-profile /absolute/path/to/development.provisionprofile
 ```
+
+Requires an existing development identity and matching production-app Communication
+Notifications profile. [Signing prerequisites](docs/reference/install-update-recovery.md).
 
 That installs `~/Applications/CMUX Maestro Preview.app` and the Copilot integration in one transaction. Then select **Maestro Sidebar** as the sidebar in CMUX.
 

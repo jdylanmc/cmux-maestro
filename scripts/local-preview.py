@@ -62,46 +62,7 @@ class PreviewBusyError(ValueError):
 
 
 def mach_o_architectures(path):
-    """Read bounded Mach-O architecture headers; codesign validates the actual code."""
-    thin = {b"\xce\xfa\xed\xfe": "<", b"\xcf\xfa\xed\xfe": "<",
-            b"\xfe\xed\xfa\xce": ">", b"\xfe\xed\xfa\xcf": ">"}
-    fat = {b"\xca\xfe\xba\xbe": (">", False), b"\xbe\xba\xfe\xca": ("<", False),
-           b"\xca\xfe\xba\xbf": (">", True), b"\xbf\xba\xfe\xca": ("<", True)}
-    with path.open("rb") as stream:
-        header = stream.read(12)
-        magic = header[:4]
-        if magic in thin:
-            require(len(header) == 12, "Truncated native code header.")
-            cpu, subtype = struct.unpack(thin[magic] + "II", header[4:])
-            return [(cpu, subtype & 0x00ffffff)]
-        if magic not in fat:
-            return []
-        require(len(header) == 12, "Truncated universal code header.")
-        endian, wide = fat[magic]
-        count = struct.unpack(endian + "I", header[4:8])[0]
-        require(0 < count <= 32, "Unsupported universal architecture count.")
-        entry_size = 32 if wide else 20
-        stream.seek(8)
-        table = stream.read(count * entry_size)
-        require(len(table) == count * entry_size, "Truncated universal architecture table.")
-        total = os.fstat(stream.fileno()).st_size
-        architectures, ranges = [], []
-        for index in range(count):
-            entry = table[index * entry_size:(index + 1) * entry_size]
-            cpu, subtype, offset, size = struct.unpack(endian + ("IIQQII" if wide else "IIIII"), entry)[:4]
-            require(offset >= 8 + len(table) and size >= 12 and offset + size <= total,
-                    "Invalid universal code range.")
-            require(all(offset + size <= start or offset >= end for start, end in ranges),
-                    "Overlapping universal code ranges.")
-            ranges.append((offset, offset + size))
-            stream.seek(offset)
-            image = stream.read(12)
-            require(image[:4] in thin and struct.unpack(thin[image[:4]] + "II", image[4:]) == (cpu, subtype),
-                    "Universal architecture does not match its code header.")
-            architecture = (cpu, subtype & 0x00ffffff)
-            require(architecture not in architectures, "Ambiguous universal architecture.")
-            architectures.append(architecture)
-        return architectures
+    return metadata.production_signing().mach_o_architectures(path)
 
 
 def require(condition, message):
@@ -224,7 +185,8 @@ class MacOperations:
         if mutating:
             require(self.install_lock_fd is not None, "Mutating tools require the active install lock.")
             return command_worker.run(self.install_lock_fd, command, timeout=120, **kwargs)
-        return subprocess.run(command, timeout=120, **kwargs)
+        kwargs.setdefault("timeout", 120)
+        return subprocess.run(command, **kwargs)
 
     def verify(self, app, *, current):
         return metadata.verify_local_preview(app, current=current, runner=self.run)

@@ -39,6 +39,220 @@ legacy_fixture_launcher = _edges["legacy_fixture_launcher"]
 FIXTURE_BYTECODE = tempfile.TemporaryDirectory(prefix="cmux-maestro-fixture-bytecode-")
 
 
+class NotificationTests(unittest.TestCase):
+    def setUp(self):
+        self.api = CONTROLLER_API
+
+    def test_native_notification_rejects_nonstring_priority(self):
+        fn = self.api["command_notify"]
+        for priority in ([], {}, None, 1, True):
+            with self.subTest(priority=priority), patch.dict(fn.__globals__, {
+                "notification_input": lambda: {"identity": {}, "message": "Synthetic", "priority": priority},
+                "read_state": lambda root: {},
+                "authorize_native_actor": lambda state, identity: {"id": "actor"},
+                "notification_actor": lambda state: {"id": "actor"},
+            }), self.assertRaisesRegex(self.api["OrchestrationError"], "notification-input-invalid"):
+                fn(None, None, native=True)
+
+    def test_notification_click_consumes_token_without_host_access(self):
+        api = self.api
+        actor = {"id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+                 "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()), "generation": 1,
+                 "providerProcess": {"pid": 9001, "start": "synthetic"},
+                 "runId": str(uuid.uuid4()), "parentId": None, "role": "coordinator",
+                 "phase": "turn-running", "availability": "busy", "label": "Synthetic",
+                 "executionMode": "interactive", "createdAt": "2026-10-01T00:00:00Z",
+                 "updatedAt": "2026-10-01T00:00:00Z"}
+        target = {field: actor[key] for key, field in (
+            ("id", "nodeId"), ("copilotSessionId", "sessionId"), ("workspaceId", "workspaceId"),
+            ("surfaceId", "surfaceId"), ("generation", "generation"))}
+        token = "a" * 64
+        class ForbiddenHost:
+            def focus(self, *args):
+                raise AssertionError("GUI notification clicks must never access the CMUX socket")
+        fn = api["command_notification_focus"]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(api["time"], "time", return_value=1000), \
+                patch.object(api["Store"], "read", return_value={"nodes": {actor["id"]: actor}}), \
+                patch.dict(fn.__globals__, {
+                    "notification_input": lambda: {"clickToken": token},
+                    "process_observation": lambda provider: True,
+                    "require_session_custody": lambda *args: None,
+                    "now": lambda: "2026-10-25T13:00:00Z",
+                }):
+            root = Path(directory).resolve() / "Orchestration"
+            with api["Store"](root) as store:
+                api["notification_save"](store, {"version": 1, "sessions": {},
+                    "clicks": {token: {"target": target, "at": 1000}}})
+                store._atomic(store.observer_fd, "current.json", b'{"generatedAt":"2026-10-01T00:00:00Z"}')
+            self.assertEqual(fn(root, ForbiddenHost()), {"target": target})
+            projection = json.loads((root / "observer/current.json").read_text())
+            self.assertEqual(projection["generatedAt"], "2026-10-25T13:00:00Z")
+            self.assertEqual(projection["nodes"][0]["generation"], target["generation"])
+            self.assertEqual(actor["updatedAt"], "2026-10-01T00:00:00Z")
+            with self.assertRaisesRegex(api["OrchestrationError"], "target-unavailable"):
+                fn(root, ForbiddenHost())
+
+    def assert_notification_shell_identity(self, *, session_hint):
+        actor = {
+            "id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()),
+            "generation": 1, "executionMode": "interactive", "enrollment": "born",
+            "providerProcess": {"pid": 9001, "start": "synthetic"},
+        }
+        fn = self.api["notification_actor"]
+        environment = {"CMUX_WORKSPACE_ID": actor["workspaceId"].upper(),
+                       "CMUX_SURFACE_ID": actor["surfaceId"].upper()}
+        if session_hint:
+            environment["SESSION_ID"] = actor["copilotSessionId"].upper()
+        custody = []
+        with patch.dict(os.environ, environment, clear=True), patch.dict(fn.__globals__, {
+            "direct_process_identity": lambda pid: actor["providerProcess"],
+            "require_session_custody": lambda *args: custody.append(args),
+        }):
+            self.assertEqual(fn({"nodes": {actor["id"]: actor}}), actor)
+            self.assertEqual(custody, [(actor["copilotSessionId"], actor["providerProcess"])])
+            reserved = {**actor, "id": str(uuid.uuid4()), "surfaceId": None, "providerProcess": None}
+            self.assertEqual(fn({"nodes": {actor["id"]: actor, reserved["id"]: reserved}}), actor)
+            with patch.dict(fn.__globals__, {"direct_process_identity": lambda pid: {"pid": 9001, "start": "reused"}}):
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                    fn({"nodes": {actor["id"]: actor}})
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                fn({"nodes": {"a": actor, "b": dict(actor)}})
+            for hints in ({"SESSION_ID": str(uuid.uuid4())},
+                          {"SESSION_ID": "invalid"},
+                          {"SESSION_ID": actor["copilotSessionId"], "CMUX_MAESTRO_SESSION_ID": str(uuid.uuid4())},
+                          {"CMUX_SURFACE_ID": str(uuid.uuid4())}):
+                with patch.dict(os.environ, hints), self.assertRaisesRegex(
+                    self.api["OrchestrationError"], "identity-unverified"
+                ):
+                    fn({"nodes": {actor["id"]: actor}})
+            with patch.dict(fn.__globals__, {
+                "require_session_custody": lambda *args: (_ for _ in ()).throw(self.api["OrchestrationError"]("not custodian")),
+            }), self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                fn({"nodes": {actor["id"]: actor}})
+
+    def test_notification_identity_accepts_uppercase_native_environment(self):
+        self.assert_notification_shell_identity(session_hint=True)
+
+    def test_notification_identity_resolves_verified_cli_without_session_environment(self):
+        self.assert_notification_shell_identity(session_hint=False)
+
+    def test_notification_text_is_bounded_and_controls_removed(self):
+        clean = self.api["notification_text"]
+        self.assertEqual(clean("a\x00b\nc\u202ed", 140), "abcd")
+        self.assertEqual(clean("x" * 141, 140), "x" * 139 + "\u2026")
+        for value in ("", "\x00", 123, "x" * 8193):
+            with self.assertRaises(self.api["OrchestrationError"]):
+                clean(value, 140)
+
+    def test_notification_bucket_burst_refill_rollback_and_sessions(self):
+        consume = self.api["notification_consume"]
+        ledger = {"version": 1, "sessions": {}, "clicks": {}}
+        for _ in range(3):
+            consume(ledger, "a", 1000)
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "rate-limited"):
+            consume(ledger, "a", 1059)
+        consume(ledger, "b", 1059)
+        consume(ledger, "a", 1060)
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "rate-limited"):
+            consume(ledger, "a", 999)
+
+    def test_notification_mute_missing_valid_and_corrupt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory).resolve() / "notifications.json"
+            read = self.api["notification_muted"]
+            self.assertFalse(read(target))
+            target.write_text('{"version":1,"muted":true}')
+            self.assertTrue(read(target))
+            for content in ('{"version":1,"muted":"false"}', '[]', 'bad'):
+                target.write_text(content)
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "settings-unavailable"):
+                    read(target)
+
+    def test_notification_identity_refuses_unknown_replaced_and_wrong_process(self):
+        actor = {
+            "id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()),
+            "generation": 1, "executionMode": "interactive",
+            "providerProcess": {"pid": 9001, "start": "synthetic"},
+        }
+        fn = self.api["notification_actor"]
+        globals_ = fn.__globals__
+        environment = {"SESSION_ID": actor["copilotSessionId"],
+                       "CMUX_WORKSPACE_ID": actor["workspaceId"], "CMUX_SURFACE_ID": actor["surfaceId"]}
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.dict(globals_, {
+                    "direct_process_identity": lambda pid: actor["providerProcess"],
+                    "require_session_custody": lambda *args: None,
+                }):
+            self.assertEqual(fn({"nodes": {"a": actor}}), actor)
+            for state in ({"nodes": {}}, {"nodes": {"a": actor, "b": dict(actor)}},
+                          {"nodes": {"a": {**actor, "surfaceId": str(uuid.uuid4())}}},
+                          {"nodes": {"a": {**actor, "sessionEndedGeneration": 1, "enrollment": "born"}}}):
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                    fn(state)
+            with patch.dict(globals_, {"direct_process_identity": lambda pid: {"pid": 9001, "start": "reused"}}):
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                    fn({"nodes": {"a": actor}})
+
+    def test_notification_focus_refuses_changed_generation_without_cmux(self):
+        fn = self.api["notification_focus_target"]
+        target = {"nodeId": "node", "sessionId": "session", "workspaceId": "workspace",
+                  "surfaceId": "surface", "generation": 1}
+        node = {"id": "node", "copilotSessionId": "session", "workspaceId": "workspace",
+                "surfaceId": "surface", "generation": 2}
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "target-unavailable"):
+            fn({"nodes": {"node": node}}, target)
+
+    def test_notification_admission_is_durable_muted_and_rechecked(self):
+        api = self.api
+        actor = {"id": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+                 "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()), "generation": 1, "label": "Synthetic"}
+        state = {"nodes": {actor["id"]: actor}}
+        calls = []
+        class Host:
+            def validate_surface(self, workspace, surface):
+                calls.append((workspace, surface))
+        fn = api["command_notification_authorize"]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(api["time"], "time", return_value=1000), \
+                patch.object(api["Store"], "read", return_value=state), \
+                patch.dict(fn.__globals__, {"notification_actor": lambda state: actor, "notification_muted": lambda: False}):
+            root = Path(directory).resolve() / "Orchestration"
+            receipts = [fn(root, Host()) for _ in range(3)]
+            self.assertEqual(len({r["clickToken"] for r in receipts}), 3)
+            self.assertEqual(receipts[0]["target"]["surfaceId"], actor["surfaceId"])
+            with self.assertRaisesRegex(api["OrchestrationError"], "rate-limited"):
+                fn(root, Host())
+            with patch.dict(fn.__globals__, {"notification_muted": lambda: True}):
+                with self.assertRaisesRegex(api["OrchestrationError"], "muted"):
+                    fn(root, Host())
+            request = {"clickToken": receipts[0]["clickToken"]}
+            with patch.dict(fn.__globals__, {"notification_input": lambda: request}):
+                self.assertTrue(api["command_notification_confirm"](root, Host())["confirmed"])
+                actor["generation"] = 2
+                with self.assertRaisesRegex(api["OrchestrationError"], "target-unavailable"):
+                    api["command_notification_confirm"](root, Host())
+            ledger = (root / "control/notifications.json").read_text()
+            self.assertNotIn("Synthetic", ledger)
+            self.assertNotIn("message", ledger)
+
+    def test_notification_ledger_rejects_nonregular_and_malformed_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve() / "Orchestration"
+            with self.api["Store"](root) as store:
+                target = root / "control/notifications.json"
+                for content in ('[]', '{"version":1,"sessions":{"bad":null},"clicks":{}}'):
+                    target.write_text(content)
+                    with self.assertRaisesRegex(self.api["OrchestrationError"], "ledger-unavailable"):
+                        self.api["notification_ledger"](store, 1000)
+                target.unlink()
+                os.mkfifo(target)
+                with self.assertRaisesRegex(self.api["OrchestrationError"], "ledger-unavailable"):
+                    self.api["notification_ledger"](store, 1000)
+
+
 def fixture_root(home):
     return Path(home) / "Library/Application Support/CMUXMaestroPreview/Orchestration"
 
@@ -2233,7 +2447,7 @@ class BornFixture:
         self.addCleanup(shutil.rmtree, self.routes, True)
         self.extension = self.h.path / "installed-extension"
         self.extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, self.extension / name)
             (self.extension / name).chmod(0o600)
         self.install(age=10)
@@ -2247,7 +2461,7 @@ class BornFixture:
         config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(self.extension)}))
         config.chmod(0o600)
         stamp = time.time() - age
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
@@ -2866,7 +3080,7 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
 
     def test_reload_after_an_update_reuses_the_enrolled_node(self):
         touch = ("import time\n"
-                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs'):\n"
+                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs', 'notifications.mjs'):\n"
                  f"    os.utime(os.path.join({str(self.extension)!r}, name), (time.time() + 5, time.time() + 5))")
         first, reload = self.enroll(repeat=2, env={"FAKE_BETWEEN": touch})
         self.assertTrue(first["ok"], first)
@@ -3450,7 +3664,7 @@ class ChildResumeTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.routes, True)
         extension = self.h.path / "installed-extension"
         extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (self.h.root / "bin").mkdir(mode=0o700, exist_ok=True)
@@ -4291,7 +4505,7 @@ class OrchestratorTests(unittest.TestCase):
         try:
             extension = h.root / "extension"
             extension.mkdir(mode=0o700)
-            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
                 shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
                 (extension / name).chmod(0o600)
             (h.root / "bin").mkdir(mode=0o700)
@@ -6531,7 +6745,7 @@ class DirectLaunchTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, routes)
         extension = h.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (h.root / "bin").mkdir(mode=0o700)
@@ -7486,12 +7700,12 @@ class ProcessObservationTests(unittest.TestCase):
         (root / "bin/messaging.json").write_text(json.dumps(
             {"version": 1, "routes": str(routes), "extension": str(extension)}))
         (root / "bin/messaging.json").chmod(0o600)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         configuration = CONTROLLER_API["messaging_configuration"]
         self.assertEqual(configuration(root)["extension"], str(extension))
-        for name in ("processes.mjs", "models.mjs"):
+        for name in ("processes.mjs", "models.mjs", "notifications.mjs"):
             (extension / name).write_bytes(b"x" * 16_385)
             with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "adapter is unavailable"):
                 configuration(root)

@@ -68,6 +68,10 @@ _Avoid_: status (too vague)
 Outstanding request or nonblocking outcome for a session: permission, answer, error, abort, turn finished.
 _Avoid_: notification, unread
 
+**Human notification**:
+Explicit agent-authored message delivered through the containing app to macOS.
+Not attention evidence, acknowledgement, or proof of task completion (ADR 0030).
+
 **Turn finished**:
 Primary turn ended by a matching `assistant.turn_end`. Says nothing about the session or background work.
 _Avoid_: done, complete

@@ -10,6 +10,7 @@ import functools
 import hashlib
 import json
 import os
+import pwd
 import re
 import runpy
 from pathlib import Path
@@ -188,7 +189,7 @@ def messaging_configuration(root):
             raise OrchestrationError("Messaging socket path is too long.")
         # extension.mjs imports both modules; a missing one stops the whole native extension.
         for name, maximum in (("extension.mjs", 65_536), ("adapter.mjs", 65_536),
-                              ("processes.mjs", 16_384), ("models.mjs", 16_384)):
+                              ("processes.mjs", 16_384), ("models.mjs", 16_384), ("notifications.mjs", 16_384)):
             descriptor = os.open(extension / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 info = os.fstat(descriptor)
@@ -2790,6 +2791,273 @@ def command_native_custody(root):
         raise OrchestrationError("Custody request does not match the invoking native session.")
     require_born_custody(actor)
     return {"custody": "held"}
+
+
+def notification_text(value, maximum=140):
+    if not isinstance(value, str) or len(value) > 8192:
+        raise OrchestrationError("notification-input-invalid")
+    clean = "".join(c for c in value if unicodedata.category(c) not in {"Cc", "Cf", "Cs"}).strip()
+    if not clean:
+        raise OrchestrationError("notification-input-invalid")
+    return clean if len(clean) <= maximum else clean[:maximum - 1] + "\u2026"
+
+
+def notification_home():
+    return Path(pwd.getpwuid(os.getuid()).pw_dir)
+
+
+def notification_settings_path():
+    return notification_home() / (
+        "Library/Containers/com.jdylanmc.CMUXMaestroPreview.Extension/Data/"
+        "Library/Application Support/CMUXMaestroPreview/sidebar-notifications.json"
+    )
+
+
+def notification_read_json(path, maximum):
+    """Descriptor-relative bounded reads; neither a symlink nor a FIFO is an input."""
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for component in path.parts[1:-1]:
+            next_fd = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = next_fd
+        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        try:
+            info = os.fstat(descriptor)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid()
+                    or info.st_mode & 0o022 or not 0 < info.st_size <= maximum):
+                raise ValueError()
+            return json.loads(os.read(descriptor, maximum + 1))
+        finally:
+            os.close(descriptor)
+    finally:
+        os.close(directory)
+
+
+def notification_muted(path=None):
+    try:
+        value = notification_read_json(path or notification_settings_path(), 1024)
+        if (not isinstance(value, dict) or set(value) != {"version", "muted"}
+                or type(value["version"]) is not int or value["version"] != 1 or type(value["muted"]) is not bool):
+            raise ValueError()
+        return value["muted"]
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, TypeError):
+        raise OrchestrationError("notification-settings-unavailable") from None
+
+
+def notification_actor(state):
+    try:
+        workspace = canonical_uuid(os.environ.get("CMUX_WORKSPACE_ID"), "current workspace ID")
+        surface = canonical_uuid(os.environ.get("CMUX_SURFACE_ID"), "current surface ID")
+        hints = {canonical_uuid(os.environ[key], "current session ID")
+                 for key in ("SESSION_ID", "CMUX_MAESTRO_SESSION_ID") if key in os.environ}
+        if len(hints) > 1:
+            raise OrchestrationError("notification-identity-unverified")
+        candidates = [n for n in state["nodes"].values()
+                      if n.get("executionMode") == "interactive" and n.get("providerProcess")
+                      and n.get("surfaceId") and not n.get("archiving") and not session_ended_in_place(n)
+                      and canonical_uuid(n.get("workspaceId"), "stored workspace ID") == workspace
+                      and canonical_uuid(n.get("surfaceId"), "stored surface ID") == surface
+                      and (not hints or canonical_uuid(n["copilotSessionId"], "stored session ID") in hints)]
+        if len(candidates) != 1:
+            raise OrchestrationError("notification-identity-unverified")
+        actor = candidates[0]
+        session = canonical_uuid(actor["copilotSessionId"], "stored session ID")
+        # Shells need not expose a session UUID. Surface selection is only a
+        # candidate: exact provider ancestry and sole session custody authorize it.
+        provider = actor["providerProcess"]
+        if direct_process_identity(provider["pid"]) != provider:
+            raise OrchestrationError("notification-identity-unverified")
+        require_session_custody(session, provider)
+    except OrchestrationError:
+        raise OrchestrationError("notification-identity-unverified") from None
+    return actor
+
+
+def notification_consume(ledger, session, stamp):
+    # Three immediately, then one per minute. Rollback never refills a bucket.
+    bucket = ledger["sessions"].get(session, {"tokens": 3, "at": stamp})
+    tokens = min(3, bucket["tokens"] + max(0, stamp - bucket["at"]) / 60)
+    if tokens < 1:
+        raise OrchestrationError("rate-limited")
+    if session not in ledger["sessions"] and len(ledger["sessions"]) >= 1024:
+        raise OrchestrationError("notification-capacity-unavailable")
+    ledger["sessions"][session] = {"tokens": tokens - 1, "at": max(stamp, bucket["at"])}
+
+
+def notification_ledger(store, stamp):
+    try:
+        try:
+            value = notification_read_json(store.root / "control/notifications.json", MAX_BYTES)
+        except FileNotFoundError:
+            value = {"version": 1, "sessions": {}, "clicks": {}}
+        if (not isinstance(value, dict) or set(value) != {"version", "sessions", "clicks"}
+                or value["version"] != 1 or not isinstance(value["sessions"], dict)
+                or not isinstance(value["clicks"], dict)
+                or len(value["sessions"]) > 1024 or len(value["clicks"]) > 1024):
+            raise ValueError()
+        for session, bucket in value["sessions"].items():
+            canonical_uuid(session, "notification session")
+            if (set(bucket) != {"tokens", "at"} or type(bucket["tokens"]) not in (int, float)
+                    or not 0 <= bucket["tokens"] <= 3 or type(bucket["at"]) not in (int, float)
+                    or not 0 <= bucket["at"] < 1e12):
+                raise ValueError()
+        for token, click in value["clicks"].items():
+            if (re.fullmatch(r"[a-f0-9]{64}", token) is None or set(click) != {"target", "at"}
+                    or type(click["at"]) not in (int, float) or not 0 <= click["at"] < 1e12):
+                raise ValueError()
+            target = click["target"]
+            if set(target) != {"nodeId", "sessionId", "workspaceId", "surfaceId", "generation"}:
+                raise ValueError()
+            for key in ("nodeId", "sessionId", "workspaceId", "surfaceId"):
+                canonical_uuid(target[key], "notification target")
+            if type(target["generation"]) is not int or target["generation"] < 1:
+                raise ValueError()
+        value["sessions"] = {k: v for k, v in value["sessions"].items() if stamp - v["at"] < 3600}
+        value["clicks"] = {k: v for k, v in value["clicks"].items() if stamp - v["at"] < 86400}
+        return value
+    except (OSError, ValueError, TypeError, KeyError, OrchestrationError):
+        raise OrchestrationError("notification-ledger-unavailable") from None
+
+
+def notification_save(store, ledger):
+    data = json.dumps(ledger, allow_nan=False, separators=(",", ":")).encode()
+    if len(data) > MAX_BYTES:
+        raise OrchestrationError("notification-capacity-unavailable")
+    store._atomic(store.control_fd, "notifications.json", data)
+
+
+def command_notification_authorize(root, cmux):
+    with Store(root) as store:
+        actor = notification_actor(store.read())
+        cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+        if notification_muted():
+            raise OrchestrationError("muted")
+        stamp = time.time()
+        ledger = notification_ledger(store, stamp)
+        notification_consume(ledger, actor["copilotSessionId"], stamp)
+        if len(ledger["clicks"]) >= 1024:
+            raise OrchestrationError("notification-capacity-unavailable")
+        target = {"nodeId": actor["id"], "sessionId": actor["copilotSessionId"],
+                  "workspaceId": actor["workspaceId"], "surfaceId": actor["surfaceId"],
+                  "generation": actor["generation"]}
+        token = secrets.token_hex(32)
+        ledger["clicks"][token] = {"target": target, "at": stamp}
+        notification_save(store, ledger)
+        return {"target": target, "clickToken": token, "name": notification_text(actor["label"], 100)}
+
+
+def notification_focus_target(state, target):
+    node = state["nodes"].get(target["nodeId"])
+    if (node is None or node.get("archiving") or session_ended_in_place(node)
+            or any(node.get(key) != target[field] for key, field in (
+                ("id", "nodeId"), ("copilotSessionId", "sessionId"), ("workspaceId", "workspaceId"),
+                ("surfaceId", "surfaceId"), ("generation", "generation")))):
+        raise OrchestrationError("notification-target-unavailable")
+    return node
+
+
+def command_notification_focus(root, cmux=None):
+    request = notification_input()
+    if set(request) != {"clickToken"} or not isinstance(request["clickToken"], str):
+        raise OrchestrationError("notification-target-unavailable")
+    with Store(root) as store:
+        ledger = notification_ledger(store, time.time())
+        click = ledger["clicks"].pop(request["clickToken"], None)
+        if click is None:
+            raise OrchestrationError("notification-target-unavailable")
+        notification_save(store, ledger)
+        state = store.read()
+        actor = notification_focus_target(state, click["target"])
+        provider = actor.get("providerProcess")
+        if not provider or process_observation(provider) is not True:
+            raise OrchestrationError("notification-target-unavailable")
+        require_session_custody(actor["copilotSessionId"], provider)
+        # Direct-launch sessions do not heartbeat this projection. Publish the
+        # exact locked state just revalidated, without inventing a node mutation.
+        store._atomic(store.observer_fd, "current.json", store._projection(state))
+        # A notification click launches under launchd, outside CMUX's socket
+        # ancestry. Only the connected sidebar may perform typed host navigation.
+        return {"target": click["target"]}
+
+
+def command_notification_confirm(root, cmux):
+    request = notification_input()
+    if set(request) != {"clickToken"} or not isinstance(request["clickToken"], str):
+        raise OrchestrationError("notification-input-invalid")
+    with Store(root, read_only=True) as store:
+        state = store.read()
+        actor = notification_actor(state)
+        click = notification_ledger(store, time.time())["clicks"].get(request["clickToken"])
+        if click is None or notification_focus_target(state, click["target"])["id"] != actor["id"]:
+            raise OrchestrationError("notification-identity-unverified")
+        cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+        if notification_muted():
+            raise OrchestrationError("muted")
+        return {"confirmed": True}
+
+
+def notification_input():
+    try:
+        data = sys.stdin.buffer.read(16_385)
+        if len(data) > 16_384:
+            raise ValueError()
+        value = json.loads(data)
+        if not isinstance(value, dict):
+            raise ValueError()
+        return value
+    except (ValueError, UnicodeError):
+        raise OrchestrationError("notification-input-invalid") from None
+
+
+def command_notify(args, root, *, native=False):
+    if native:
+        request = notification_input()
+        if set(request) != {"identity", "message", "priority"}:
+            raise OrchestrationError("notification-input-invalid")
+        state = read_state(root)
+        actor = authorize_native_actor(state, request["identity"])
+        if notification_actor(state)["id"] != actor["id"]:
+            raise OrchestrationError("notification-identity-unverified")
+    else:
+        request = {"message": args.message, "priority": args.priority}
+        notification_actor(read_state(root))
+    message = notification_text(request["message"])
+    if not isinstance(request["priority"], str) or request["priority"] not in {"normal", "urgent"}:
+        raise OrchestrationError("notification-input-invalid")
+    # The installed helper's provenance selects its containing app, never a caller path.
+    helper = Path(identity_helper_path("agent notifications"))
+    contents = helper.parent.parent
+    try:
+        import plistlib
+        with (contents / "Info.plist").open("rb") as stream:
+            info = plistlib.load(stream)
+        if (helper.parent.name != "Helpers" or contents.name != "Contents"
+                or info["CFBundleIdentifier"] != "com.jdylanmc.CMUXMaestroPreview"
+                or "/" in info["CFBundleExecutable"]):
+            raise ValueError()
+        executable = trusted_executable(str(contents / "MacOS" / info["CFBundleExecutable"]))
+        process = subprocess.Popen(
+            [executable, "--maestro-notify"], stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        )
+        try:
+            output, _ = process.communicate(json.dumps({"message": message, "priority": request["priority"]}), timeout=50)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            raise OrchestrationError("notification-unavailable") from None
+        response = json.loads(output)
+        if process.returncode or response.get("ok") is not True:
+            reason = response.get("error")
+            if reason in {"muted", "rate-limited", "notifications-not-authorized", "notification-identity-unverified",
+                          "notification-settings-unavailable", "notification-capacity-unavailable"}:
+                raise OrchestrationError(reason)
+            raise OrchestrationError("notification-unavailable")
+        return {"submitted": True, "delivery": "unconfirmed"}
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+        raise OrchestrationError("notification-unavailable") from None
 
 
 def authorize_native_spawn(state, identity):
@@ -7356,6 +7624,13 @@ def parser():
     commands.add_parser("accounts", help="List configured GitHub account names without credentials")
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
+    commands.add_parser("native-notify", help=argparse.SUPPRESS)
+    commands.add_parser("notification-authorize", help=argparse.SUPPRESS)
+    commands.add_parser("notification-focus", help=argparse.SUPPRESS)
+    commands.add_parser("notification-confirm", help=argparse.SUPPRESS)
+    notify = commands.add_parser("notify", help="Notify the human from this verified session; no automatic retries")
+    notify.add_argument("--message", required=True)
+    notify.add_argument("--priority", choices=("normal", "urgent"), default="normal")
     commands.add_parser("native-observe", help=argparse.SUPPRESS)
     commands.add_parser("native-enroll", help="Private born-managed enrollment ingress; used by the native adapter")
     ended = commands.add_parser("archive-ended", help="Archive born-managed runs whose processes all ended")
@@ -7522,6 +7797,28 @@ def main(argv=None):
             print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
             return 0
         root = default_root()
+        if args.command in {"notify", "native-notify", "notification-authorize", "notification-focus", "notification-confirm"}:
+            root = notification_home() / "Library/Application Support/CMUXMaestroPreview/Orchestration"
+            try:
+                if args.command in {"notify", "native-notify"}:
+                    output = command_notify(args, root, native=args.command == "native-notify")
+                elif args.command == "notification-authorize":
+                    output = command_notification_authorize(root, Cmux())
+                elif args.command == "notification-confirm":
+                    output = command_notification_confirm(root, Cmux())
+                else:
+                    output = command_notification_focus(root)
+                print(json.dumps({"ok": True, **output}))
+                return 0
+            except (OrchestrationError, OSError) as error:
+                reason = str(error)
+                allowed = {"muted", "rate-limited", "notifications-not-authorized",
+                           "notification-input-invalid", "notification-identity-unverified",
+                           "notification-settings-unavailable", "notification-capacity-unavailable",
+                           "notification-ledger-unavailable", "notification-target-unavailable"}
+                print(json.dumps({"ok": False, "error": reason if reason in allowed else "notification-unavailable"}),
+                      file=sys.stderr)
+                return 2
         if args.command == "resume":
             # Runs in the restored tab: one plain line on refusal, and the shell stays.
             try:

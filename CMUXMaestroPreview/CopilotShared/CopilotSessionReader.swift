@@ -716,6 +716,13 @@ actor CopilotSessionReader {
         }
     }
 
+    /// Exact authored appearance only; does not open session names or event files.
+    func sessionAppearance(for sessionID: UUID) throws -> CopilotSessionAppearance? {
+        let directory = try CopilotFileAccess.openDirectory(roots().bindings, owner: verifier.uid)
+        defer { close(directory) }
+        return try appearance(for: sessionID, bindings: directory)
+    }
+
     private func appearance(for sessionID: UUID, bindings: Int32) throws -> CopilotSessionAppearance? {
         let data: Data
         do {

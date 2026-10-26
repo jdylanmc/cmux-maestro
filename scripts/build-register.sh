@@ -7,13 +7,20 @@ APP="$DERIVED_DATA/Build/Products/Debug/CMUX Maestro Preview.app"
 APPEX="$APP/Contents/Extensions/CMUX Maestro Preview Extension.appex"
 export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
 
+if [[ $# -lt 2 || "${1:-}" != "--provisioning-profile" || "${2:-}" != /* ]]; then
+    echo "Usage: build-register.sh --provisioning-profile /absolute/profile [--copilot-executable /absolute/copilot]" >&2
+    exit 2
+fi
+PROFILE="$2"
+shift 2
 if [[ $# -ne 0 ]]; then
     if [[ $# -ne 2 || "${1:-}" != "--copilot-executable" || "${2:-}" != /* ]]; then
-        echo "Usage: build-register.sh [--copilot-executable /absolute/path/to/copilot]" >&2
+        echo "Expected optional --copilot-executable /absolute/path/to/copilot" >&2
         exit 2
     fi
 fi
 
+python3 "$ROOT/scripts/production-signing.py" preflight --provisioning-profile "$PROFILE"
 "$ROOT/scripts/fetch-sdk.sh"
 mkdir -p "$DERIVED_DATA"
 SETTINGS=(
@@ -50,6 +57,7 @@ if [[ ! -d "$APPEX" ]]; then
     exit 1
 fi
 
+python3 "$ROOT/scripts/production-signing.py" sign --provisioning-profile "$PROFILE" --app "$APP"
 python3 "$ROOT/scripts/verify-build-metadata.py" --mode production --app "$APP"
 python3 "$ROOT/scripts/local-preview.py" install --source "$APP" \
     --retire-development-registration "$@"

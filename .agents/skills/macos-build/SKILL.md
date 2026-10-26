@@ -12,7 +12,8 @@ description: >
 Use CMUX Maestro's checked-in scripts as the authority. Do not replace them with
 ad hoc `xcodebuild` commands: the scripts select full Xcode, fetch the pinned
 CMUX ExtensionKit Software Development Kit (SDK), isolate derived data, and
-apply the repository's signing policy.
+apply the repository's signing policy. Production requires an explicit matching
+development provisioning profile; validation stays unsigned.
 
 Run commands from the repository root.
 
@@ -37,11 +38,13 @@ test target with derived data beneath `.build/tests`.
 ## Explicit Alpha Installation
 
 ```bash
-./scripts/build-register.sh
+./scripts/build-register.sh --provisioning-profile /absolute/path/to/development.provisionprofile
 ```
 
-Run only with explicit, current installation authority. It performs an ad hoc
-signed build and invokes the coordinated stable-app/Copilot installer, including
+Run only with explicit, current installation authority and a verified production
+Communication Notifications profile. It prepares a local build, signs all native
+code using the profile's single usable existing identity, embeds/verifies the
+containing-app profile, and invokes the coordinated stable-app/Copilot installer, including
 official provider plugin operations. It is not a validation-only registration
 probe and must not run incidentally after code changes.
 

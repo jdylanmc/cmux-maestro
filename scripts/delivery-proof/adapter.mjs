@@ -6,6 +6,7 @@ import { TextDecoder } from "node:util";
 import { execFile } from "node:child_process";
 import os from "node:os";
 import { MODEL_ID, CONTEXT_TIERS, PREFERENCES, validatePreferences, modelCapabilities } from "./models.mjs";
+import { notificationSpec, notificationTool } from "./notifications.mjs";
 
 const PEERS = ["a", "b"];
 const MANAGED_PEER = /^[0-9a-f]{16}$/;
@@ -258,6 +259,7 @@ function toolSpecs(managed) {
         type: "object", properties: { includeModel: { type: "boolean" } }, additionalProperties: false,
       },
     },
+    maestro_notify: notificationSpec,
     maestro_close: {
       name: "maestro_close",
       description: "Request an explicitly authorized owned direct-child close, or a fixed descendant-first subtree pass with scope: subtree. Selects stock CMUX's documented noninteractive route on the initial admitted request; host refusals stay explicit. Acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
@@ -301,16 +303,16 @@ function toolSpecs(managed) {
       },
     },
   };
-  if (!managed) for (const key of ["maestro_identity", "maestro_close", "maestro_spawn"]) delete specs[key];
+  if (!managed) for (const key of ["maestro_identity", "maestro_close", "maestro_spawn", "maestro_notify"]) delete specs[key];
   return specs;
 }
 
-// Born-managed sessions declare these before enrollment; keep one definition.
 export function managedToolSpecs() {
   return Object.values(toolSpecs(true));
 }
 
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
+  notify = (request, controller) => invokeController("native-notify", request, controller),
   closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
   endSession, endGate = sessionEndGate, observe, signal, onListener, custody, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
@@ -451,6 +453,9 @@ export async function start({ root, peer, joinSession, managed = false, expected
       }
     },
   });
+  if (managed) tools.push(notificationTool({
+    own, ownAddress, session: () => session, currentBinding, notify, controller: expected.controller,
+  }));
   if (managed) tools.push({
     ...specs.maestro_close,
     handler: async (args, invocation) => {

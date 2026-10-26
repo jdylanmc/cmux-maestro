@@ -274,6 +274,38 @@ async function managedFixture(t, { owners = [0, 0, 0, 1], nativeSend = async () 
 
 const managedAddress = (binding) => ({ ...addr(binding), generation: binding.generation });
 
+test("notification tool binds the invoking session and never echoes private message failures", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tool;
+  const calls = [];
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: { ...own, controller: "/synthetic/controller" },
+    notify: async (request) => { calls.push(request); throw new Error("rate-limited"); },
+    joinSession: async ({ tools }) => {
+      tool = tools.find(item => item.name === "maestro_notify");
+      return { sessionId: own.sessionId };
+    },
+  });
+  f.adapters.push(adapter);
+  for (const [args, invocation] of [
+    [{ message: "secret" }, { sessionId: randomUUID() }],
+    [{ message: "secret", surfaceId: randomUUID() }, { sessionId: own.sessionId }],
+    [{ message: "secret", priority: "critical" }, { sessionId: own.sessionId }],
+  ]) {
+    const result = await tool.handler(args, invocation);
+    assert.equal(result.resultType, "failure");
+    assert.equal(JSON.stringify(result).includes("secret"), false);
+  }
+  assert.equal(calls.length, 0);
+  const result = await tool.handler({ message: "secret", priority: "urgent" }, { sessionId: own.sessionId });
+  assert.match(result.textResultForLlm, /rate-limited/);
+  assert.equal(JSON.stringify(result).includes("secret"), false);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].identity, { nodeId: own.nodeId, ...managedAddress(own), capability: own.capability });
+  assert.equal(calls[0].priority, "urgent");
+});
+
 test("workspace peers and replies survive another workspace's 128 route/socket pairs", async (t) => {
   const f = await managedFixture(t, { owners: [...Array(128).fill(0), 1, 1] });
   for (const binding of f.bindings.slice(0, 128)) {
@@ -853,7 +885,7 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
     destination: managedAddress(f.bindings[3]), body: "different workspace",
   })).resultType, "failure");
   assert.deepEqual(Object.keys(f.tools[0]),
-    ["maestro_peers", "maestro_send", "maestro_identity", "maestro_close", "maestro_spawn"]);
+    ["maestro_peers", "maestro_send", "maestro_identity", "maestro_notify", "maestro_close", "maestro_spawn"]);
 });
 
 const beatSession = randomUUID();
@@ -1665,7 +1697,7 @@ test("direct loader uses precreated bindings and observes only its joined CLI se
     joinSession: async options => {
       order.push("join");
       assert.deepEqual(options.tools.map(tool => tool.name),
-        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_close", "maestro_spawn"]);
+        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_notify", "maestro_close", "maestro_spawn"]);
       return { sessionId: own.sessionId };
     },
     observe: async (request, controller) => {
@@ -2973,7 +3005,7 @@ test("born managed: custody loss is latched; its end does not restore stale auth
 
 test("each installed module fits setup's resource bound", async () => {
   for (const [name, limit] of [["adapter.mjs", 65_536], ["extension.mjs", 8192],
-    ["processes.mjs", 16_384], ["models.mjs", 16_384]]) {
+    ["processes.mjs", 16_384], ["models.mjs", 16_384], ["notifications.mjs", 16_384]]) {
     const size = (await fs.stat(fileURLToPath(new URL(`./delivery-proof/${name}`, import.meta.url)))).size;
     assert.ok(size <= limit, `${name} is ${size} bytes`);
   }
