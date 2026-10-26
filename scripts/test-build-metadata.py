@@ -2259,7 +2259,20 @@ class ProductionSigningTests(unittest.TestCase):
         self.profile["Entitlements"]["keychain-access-groups"] = ["SYNTHETIC1.*"]
         actual = self.policy(self.profile)
         self.assertEqual(set(actual), {self.signing.APP_ID, self.signing.TEAM_ID,
-                                     self.signing.COMMUNICATION, self.signing.DEBUG})
+                                     self.signing.COMMUNICATION})
+
+    def test_macos_profile_debug_is_optional_and_never_claimed(self):
+        for debug in ("absent", False, True):
+            with self.subTest(debug=debug):
+                profile = copy.deepcopy(self.profile)
+                profile["Entitlements"].pop(self.signing.DEBUG)
+                profile["Entitlements"]["keychain-access-groups"] = ["SYNTHETIC1.*"]
+                if debug != "absent":
+                    profile["Entitlements"][self.signing.DEBUG] = debug
+                self.assertEqual(self.policy(profile), {
+                    self.signing.APP_ID: "SYNTHETIC1." + metadata.BASE_ID,
+                    self.signing.TEAM_ID: "SYNTHETIC1", self.signing.COMMUNICATION: True,
+                })
 
     def test_profile_mismatch_expiry_device_and_extra_capabilities_refuse(self):
         changes = [
@@ -2278,7 +2291,8 @@ class ProductionSigningTests(unittest.TestCase):
                     self.policy(profile)
         for key, value in [(self.signing.APP_ID, "SYNTHETIC1.*"),
                            (self.signing.TEAM_ID, "OTHERTEAM1"), (self.signing.COMMUNICATION, 1),
-                           (self.signing.COMMUNICATION, False), (self.signing.DEBUG, False),
+                           (self.signing.COMMUNICATION, False), (self.signing.DEBUG, 1),
+                           (self.signing.DEBUG, "true"), (self.signing.DEBUG, None),
                            ("com.apple.developer.siri", True)]:
             with self.subTest(entitlement=key, value=value):
                 profile = copy.deepcopy(self.profile)

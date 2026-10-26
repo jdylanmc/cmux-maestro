@@ -42,6 +42,7 @@ class SyntheticMac(preview.MacOperations):
         signing = metadata.production_signing()
         verify = signing.verify
         with patch.object(signing.profile_reader, "decode_verified", side_effect=lambda data, **_: plistlib.loads(data)), \
+             patch.object(signing, "metadata_module", return_value=metadata), \
              patch.object(signing, "verify", side_effect=lambda app, **kwargs: verify(
                  app, now=datetime(2030, 1, 1, tzinfo=timezone.utc), **kwargs)):
             return super().verify(app, current=current)
@@ -1186,7 +1187,7 @@ with installer.locked():
         signing = metadata.production_signing()
         app_entitlements = {
             signing.APP_ID: "SYNTHETIC1." + metadata.BASE_ID, signing.TEAM_ID: "SYNTHETIC1",
-            signing.DEBUG: True, signing.COMMUNICATION: True,
+            signing.COMMUNICATION: True,
         }
         (app / "Contents/embedded.provisionprofile").write_bytes(plistlib.dumps({
             "TeamIdentifier": ["SYNTHETIC1"], "ApplicationIdentifierPrefix": ["SYNTHETIC1"],
@@ -1245,6 +1246,20 @@ with installer.locked():
         profile_file.write_bytes(plistlib.dumps(profile))
         self.change_signature(self.new, "helper", "certificate", "synthetic-alternate")
         with self.assertRaisesRegex(ValueError, "different signing certificates"):
+            self.operation("install", self.new)
+        self.assertFalse(self.app.exists())
+        self.assertIsNone(self.receipt()["transaction"])
+
+    def test_published_app_cannot_claim_unneeded_debug_even_if_profile_allows_it(self):
+        signing = metadata.production_signing()
+        file = self.new / "Contents/embedded.provisionprofile"
+        profile = plistlib.loads(file.read_bytes())
+        profile["Entitlements"][signing.DEBUG] = True
+        file.write_bytes(plistlib.dumps(profile))
+        self.assertEqual(self.ops.verify(self.new, current=True), "2")
+        entitlements = {**profile["Entitlements"]}
+        self.change_signature(self.new, "app", "entitlements", entitlements)
+        with self.assertRaisesRegex(ValueError, "slice entitlements"):
             self.operation("install", self.new)
         self.assertFalse(self.app.exists())
         self.assertIsNone(self.receipt()["transaction"])
