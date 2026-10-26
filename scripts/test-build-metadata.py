@@ -8,6 +8,7 @@ from pathlib import Path
 import plistlib
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import unittest
@@ -1962,6 +1963,86 @@ class BuildMetadataTests(unittest.TestCase):
                      if objects[key]["path"] == "CMUXMaestroPreview")
         exclusions = [objects[key] for key in group["exceptions"] if objects[key]["target"] == target_id]
         self.assertTrue(any("Info.plist" in item["membershipExceptions"] for item in exclusions))
+
+    def test_app_icon_compiles_native_appearances_and_light_legacy_fallback(self):
+        catalog = ROOT / "CMUXMaestroPreview/Assets.xcassets"
+        icon = ROOT / "CMUXMaestroPreview/AppIcon.icon"
+        compiled = self.directory / "compiled-icon"
+        compiled.mkdir()
+        partial = self.directory / "icon-info.plist"
+        result = subprocess.run([
+            "/usr/bin/xcrun", "actool", str(catalog), str(icon), "--compile", str(compiled),
+            "--platform", "macosx", "--minimum-deployment-target", "14.0",
+            "--app-icon", "AppIcon", "--output-partial-info-plist", str(partial),
+        ], env={**os.environ, "DEVELOPER_DIR": "/Applications/Xcode.app/Contents/Developer"},
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        info = plistlib.loads(partial.read_bytes())
+        self.assertEqual(info["CFBundleIconName"], "AppIcon")
+        self.assertEqual(info["CFBundleIconFile"], "AppIcon")
+        assets = json.loads(subprocess.check_output([
+            "/usr/bin/assetutil", "--info", str(compiled / "Assets.car"),
+        ]))
+        appearances = {asset.get("Appearance") for asset in assets
+                       if asset.get("Name") == "AppIcon" and asset.get("AssetType") == "IconImageStack"}
+        self.assertTrue({"NSAppearanceNameAqua", "NSAppearanceNameDarkAqua"} <= appearances, appearances)
+        sources = {asset["Name"]: asset for asset in assets
+                   if asset.get("Name") in {"AppIcon_Assets/Glacier-light", "AppIcon_Assets/Glacier-dark"}}
+        self.assertEqual(len(sources), 2, sources)
+        for source in sources.values():
+            self.assertEqual((source["PixelWidth"], source["PixelHeight"]), (1024, 1024))
+            self.assertTrue(source["Opaque"], "The system, not the artwork, supplies the icon mask")
+        self.assertNotEqual(sources["AppIcon_Assets/Glacier-light"]["SHA1Digest"],
+                            sources["AppIcon_Assets/Glacier-dark"]["SHA1Digest"])
+        sizes = {asset["PixelWidth"] for asset in assets
+                 if asset.get("Name") == "AppIcon" and asset.get("AssetType") == "Icon Image"}
+        self.assertTrue({32, 64, 128, 256, 512, 1024} <= sizes, sizes)
+        extracted = self.directory / "AppIcon.iconset"
+        subprocess.run([
+            "/usr/bin/iconutil", "--convert", "iconset", str(compiled / "AppIcon.icns"),
+            "--output", str(extracted),
+        ], check=True, capture_output=True)
+        fallback_sizes = {struct.unpack(">II", path.read_bytes()[16:24]) for path in extracted.glob("*.png")}
+        self.assertTrue({(16, 16), (32, 32), (128, 128), (256, 256)} <= fallback_sizes, fallback_sizes)
+
+        def pixel(path, x, y):
+            bitmap = path.with_suffix(".bmp")
+            subprocess.run(["/usr/bin/sips", "-s", "format", "bmp", str(path), "--out", str(bitmap)],
+                           check=True, capture_output=True)
+            data = bitmap.read_bytes()
+            self.assertEqual(data[:2], b"BM")
+            offset = struct.unpack_from("<I", data, 10)[0]
+            width, height = struct.unpack_from("<ii", data, 18)
+            bits = struct.unpack_from("<H", data, 28)[0]
+            self.assertIn(bits, (24, 32))
+            encoding = struct.unpack_from("<I", data, 30)[0]
+            self.assertIn(encoding, (0, 3), "Expected RGB or uncompressed bitfields")
+            if encoding == 3:
+                self.assertEqual(bits, 32)
+                self.assertEqual(struct.unpack_from("<III", data, 54), (0xFF0000, 0xFF00, 0xFF))
+            stride = ((width * bits + 31) // 32) * 4
+            row = height - 1 - y if height > 0 else y
+            start = offset + row * stride + x * (bits // 8)
+            blue, green, red = data[start:start + 3]
+            return red, green, blue
+
+        renderer = Path("/Applications/Xcode.app/Contents/Applications/Icon Composer.app/Contents/Executables/ictool")
+        for appearance in ("Default", "Dark"):
+            rendered = self.directory / f"{appearance}.png"
+            result = subprocess.run([
+                str(renderer), str(icon), "--export-image", "--output-file", str(rendered),
+                "--platform", "macOS", "--rendition", appearance,
+                "--width", "256", "--height", "256", "--scale", "1",
+            ], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            background, signature = pixel(rendered, 128, 38), pixel(rendered, 68, 160)
+            if appearance == "Default":
+                self.assertGreater(min(background), 140, background)
+                self.assertLess(max(signature), 160, signature)
+            else:
+                self.assertLess(max(background), 130, background)
+                self.assertGreater(min(signature), 140, signature)
+        self.assertGreater(min(pixel(extracted / "icon_128x128@2x.png", 128, 45)), 140)
 
     def test_production_preview_disables_profile_output_without_disabling_test_coverage(self):
         production = (ROOT / "scripts/build-register.sh").read_text()
