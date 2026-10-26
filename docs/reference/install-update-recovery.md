@@ -50,7 +50,9 @@ no credential/profile configuration is saved.
 Before building, the script verifies the CMS signature against system Apple
 roots and the macOS provisioning authority, dates, app/team, device, capabilities
 and existing identity. Verification does not import CMS certificates or permit
-network trust fetching. Keychain signing permission/unlock prompts remain human
+network trust fetching. Profile opens are nonblocking and descriptor-validated;
+special files such as writerless FIFOs refuse rather than blocking before validation.
+Keychain signing permission/unlock prompts remain human
 actions; the signing writer is not force-terminated by a timeout.
 The original signed profile is embedded only in the
 containing app. App, sidebar, helper and debug libraries share one certificate;
@@ -60,8 +62,10 @@ communication, app/team identity and development debugging entitlements.
 Unsigned/test namespaces remain separate.
 
 Ad-hoc signing is only an intermediate build step, never an accepted new
-publication or fallback. Post-sign and staged-copy checks require exact app
-entitlements, authorized same-certificate native code (all architectures) and
+publication or fallback. Post-sign and staged-copy checks enumerate each native
+component's architectures and enforce its role's entitlements on every slice:
+exact app profile, approved sidebar sandbox/grants, none for helper/libraries.
+They also require authorized same-certificate native code (all architectures) and
 the embedded profile. A failed step stops before installation; no automatic retry.
 Never commit profiles, private keys or certificate exports. The existing
 `.build/adhoc` path is retained solely for exact source-registration ownership.

@@ -324,6 +324,24 @@ def verify_ad_hoc_identity(target, identifier, runner):
             "Local preview requires the existing ad-hoc signing policy.")
 
 
+def verify_sidebar_profile(profile, *, current, app):
+    require(isinstance(profile, dict), "Invalid effective entitlements.")
+    require("com.apple.security.get-task-allow" not in profile
+            or type(profile["com.apple.security.get-task-allow"]) is bool, "Invalid debugging entitlement.")
+    if current:
+        verify_profile(profile)
+    else:
+        require(profile.get(SANDBOX_KEY) is True, "Rollback sidebar must remain sandboxed.")
+        paths = profile.get(READ_KEY, [])
+        require(isinstance(paths, list) and all(isinstance(path, str) for path in paths)
+                and set(paths) <= set(READ_PATHS), "Rollback expands approved read-only access.")
+        if ORCHESTRATION_READ_PATH in paths:
+            verify_orchestration_resources(app)
+        require(profile.get(WRITE_KEY, WRITE_PATHS) == WRITE_PATHS, "Rollback expands approved read-write access.")
+        require(set(profile) <= {SANDBOX_KEY, READ_KEY, WRITE_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
+                "Unknown rollback sidebar entitlement.")
+
+
 def verify_local_preview(app, *, current=True, runner=subprocess.run):
     """Local receipts may restore an older, no-more-privileged signed preview.
 
@@ -338,7 +356,7 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
     provisioned = (app / "Contents/embedded.provisionprofile").exists()
     require(provisioned or not current, "New publication requires a communication provisioning profile.")
     if provisioned:
-        production_signing().verify(app, runner=runner)
+        production_signing().verify(app, runner=runner, current=current)
     helper = app / "Contents/Helpers/CMUXMaestroCopilotHook"
     require(helper.is_file() and os.access(helper, os.X_OK), "Bundled identity helper is missing or not executable.")
     for bundle, info in ((app, plist(app / "Contents/Info.plist")), (extension, child)):
@@ -362,18 +380,7 @@ def verify_local_preview(app, *, current=True, runner=subprocess.run):
                 or type(profile["com.apple.security.get-task-allow"]) is bool,
                 "Invalid debugging entitlement.")
         if target == extension:
-            if current:
-                verify_profile(profile)
-            else:
-                require(profile.get(SANDBOX_KEY) is True, "Rollback sidebar must remain sandboxed.")
-                paths = profile.get(READ_KEY, [])
-                require(isinstance(paths, list) and all(isinstance(path, str) for path in paths)
-                        and set(paths) <= set(READ_PATHS), "Rollback expands approved read-only access.")
-                if ORCHESTRATION_READ_PATH in paths:
-                    verify_orchestration_resources(app)
-                require(profile.get(WRITE_KEY, WRITE_PATHS) == WRITE_PATHS, "Rollback expands approved read-write access.")
-                require(set(profile) <= {SANDBOX_KEY, READ_KEY, WRITE_KEY, USER_SELECTED_KEY, "com.apple.security.get-task-allow"},
-                        "Unknown rollback sidebar entitlement.")
+            verify_sidebar_profile(profile, current=current, app=app)
         elif not provisioned:
             allowed = {"com.apple.security.get-task-allow"}
             if target == helper and "com.apple.application-identifier" in profile:

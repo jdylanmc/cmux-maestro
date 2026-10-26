@@ -28,7 +28,7 @@ def read_private(path):
             info = os.fstat(directory)
             require(info.st_uid in (0, os.getuid()) and not info.st_mode & 0o022,
                     "Profile ancestor ownership or permissions are unsafe.")
-        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
+        fd = os.open(path.name, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=directory)
         try:
             before = os.fstat(fd)
             require(stat.S_ISREG(before.st_mode) and before.st_uid in (0, os.getuid())

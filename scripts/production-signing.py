@@ -11,6 +11,7 @@ from pathlib import Path
 import plistlib
 import re
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,56 @@ EXTENSION = Path("Contents/Extensions/CMUX Maestro Preview Extension.appex")
 MACHO = {b"\xfe\xed\xfa\xce", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xcf\xfa\xed\xfe",
          b"\xca\xfe\xba\xbe", b"\xbe\xba\xfe\xca", b"\xca\xfe\xba\xbf", b"\xbf\xba\xfe\xca"}
 require = profile_reader.require
+
+
+def mach_o_architectures(path):
+    """Read bounded Mach-O architecture headers; codesign validates the actual code."""
+    thin = {b"\xce\xfa\xed\xfe": "<", b"\xcf\xfa\xed\xfe": "<",
+            b"\xfe\xed\xfa\xce": ">", b"\xfe\xed\xfa\xcf": ">"}
+    fat = {b"\xca\xfe\xba\xbe": (">", False), b"\xbe\xba\xfe\xca": ("<", False),
+           b"\xca\xfe\xba\xbf": (">", True), b"\xbf\xba\xfe\xca": ("<", True)}
+    with path.open("rb") as stream:
+        header = stream.read(12)
+        magic = header[:4]
+        if magic in thin:
+            require(len(header) == 12, "Truncated native code header.")
+            cpu, subtype = struct.unpack(thin[magic] + "II", header[4:])
+            return [(cpu, subtype & 0x00ffffff)]
+        if magic not in fat:
+            return []
+        require(len(header) == 12, "Truncated universal code header.")
+        endian, wide = fat[magic]
+        count = struct.unpack(endian + "I", header[4:8])[0]
+        require(0 < count <= 32, "Unsupported universal architecture count.")
+        entry_size = 32 if wide else 20
+        stream.seek(8)
+        table = stream.read(count * entry_size)
+        require(len(table) == count * entry_size, "Truncated universal architecture table.")
+        total = os.fstat(stream.fileno()).st_size
+        architectures, ranges = [], []
+        for index in range(count):
+            entry = table[index * entry_size:(index + 1) * entry_size]
+            cpu, subtype, offset, size = struct.unpack(endian + ("IIQQII" if wide else "IIIII"), entry)[:4]
+            require(offset >= 8 + len(table) and size >= 12 and offset + size <= total,
+                    "Invalid universal code range.")
+            require(all(offset + size <= start or offset >= end for start, end in ranges),
+                    "Overlapping universal code ranges.")
+            ranges.append((offset, offset + size))
+            stream.seek(offset)
+            image = stream.read(12)
+            require(image[:4] in thin and struct.unpack(thin[image[:4]] + "II", image[4:]) == (cpu, subtype),
+                    "Universal architecture does not match its code header.")
+            architecture = (cpu, subtype & 0x00ffffff)
+            require(architecture not in architectures, "Ambiguous universal architecture.")
+            architectures.append(architecture)
+        return architectures
+
+
+def metadata_module():
+    spec = importlib.util.spec_from_file_location("signing_metadata", Path(__file__).with_name("verify-build-metadata.py"))
+    metadata = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(metadata)
+    return metadata
 
 
 def profile_policy(profile, *, now, device):
@@ -180,7 +231,7 @@ def signed_details(target, identifier, team, certificates, runner, now):
     return matching[0]
 
 
-def verify(app, *, runner=subprocess.run, now=None):
+def verify(app, *, runner=subprocess.run, now=None, current=True):
     app = Path(app)
     now = now or datetime.now(timezone.utc)
     plan = load_plan(app / "Contents/embedded.provisionprofile", runner=runner, now=now, need_identity=False)
@@ -191,23 +242,31 @@ def verify(app, *, runner=subprocess.run, now=None):
     require(plistlib.loads((app / "Contents/Info.plist").read_bytes()).get("NSUserActivityTypes")
             == ["INSendMessageIntent"], "Communication intent declaration missing or expanded.")
     signers = set()
+    metadata = metadata_module()
     for target, identifier in [*bundles, (helper, BASE_ID + ".CopilotHook"),
                                *((path, None) for path in dylibs)]:
         runner(["/usr/bin/codesign", "--verify", "--strict", "--deep", str(target)],
                check=True, capture_output=True, timeout=30)
         signers.add(signed_details(target, identifier, entitlements[TEAM_ID],
                                    plan["profile"]["DeveloperCertificates"], runner, now))
-        output = runner(["/usr/bin/codesign", "-d", "--entitlements", ":-", str(target)],
-                        check=True, capture_output=True, timeout=30).stdout
-        actual = plistlib.loads(output) if output.strip() else {}
-        if target == app:
-            require(actual == entitlements, "Containing-app effective entitlements differ from approved profile.")
-        elif target == app / EXTENSION:
-            # The metadata verifier separately checks the exact sidebar sandbox grants.
-            require(COMMUNICATION not in actual and APP_ID not in actual and TEAM_ID not in actual,
-                    "Sidebar has an unauthorized restricted entitlement.")
-        else:
-            require(actual == {}, "Helper/dylib unexpectedly carries entitlements.")
+        binary = target
+        if target in (app, app / EXTENSION):
+            info = plistlib.loads((target / "Contents/Info.plist").read_bytes())
+            binary = target / "Contents/MacOS" / info["CFBundleExecutable"]
+        architectures = mach_o_architectures(binary)
+        require(architectures, "Native component has no verifiable architecture.")
+        for cpu, subtype in architectures:
+            output = runner(["/usr/bin/codesign", "-d", "--architecture", f"{cpu},{subtype}",
+                             "--entitlements", ":-", str(target)],
+                            check=True, capture_output=True, timeout=30).stdout
+            actual = plistlib.loads(output) if output.strip() else {}
+            require(isinstance(actual, dict), "Invalid effective entitlements.")
+            if target == app:
+                require(actual == entitlements, "Containing-app slice entitlements differ from approved profile.")
+            elif target == app / EXTENSION:
+                metadata.verify_sidebar_profile(actual, current=current, app=app)
+            else:
+                require(actual == {}, "Helper/dylib slice unexpectedly carries entitlements.")
     require(len(signers) == 1, "Embedded components have different signing certificates.")
     return plan
 
@@ -221,9 +280,7 @@ def sign(app, path, *, runner=subprocess.run):
                     check=True, capture_output=True, timeout=30)
     sidebar = plistlib.loads(result.stdout)
     sidebar.pop(DEBUG, None)
-    spec = importlib.util.spec_from_file_location("signing_metadata", Path(__file__).with_name("verify-build-metadata.py"))
-    metadata = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(metadata)
+    metadata = metadata_module()
     metadata.verify_metadata(app, "production")
     metadata.verify_profile(sidebar)
     # Snapshot only the approved public profile, never certificates' private keys.
