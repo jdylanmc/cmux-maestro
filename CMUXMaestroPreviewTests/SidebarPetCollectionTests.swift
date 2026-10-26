@@ -5,6 +5,37 @@ import Testing
 
 @MainActor
 struct SidebarPetCollectionTests {
+    @Test(SidebarAppKitTestScope(), arguments: [false, true])
+    func petLabelReceivesMouseClick(animated: Bool) throws {
+        let stores = SidebarStoreFixture()
+        var clicks = 0
+        let host = NSHostingView(rootView: Button { clicks += 1 } label: {
+            SidebarPetView(store: stores.pets, petID: SidebarPetStore.defaultID, state: .idle, width: 46,
+                           animated: animated)
+        }.buttonStyle(.plain))
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 60, height: 60),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.orderBack(nil)
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        #expect(descendants(host).contains { $0 is SidebarPetAnimationView } == animated)
+        let point = NSPoint(x: 30, y: 30)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 0
+        ))
+        window.sendEvent(down)
+        window.sendEvent(up)
+        #expect(clicks == 1, "The animated and static pet labels must both activate their enclosing button")
+    }
+
     private func pngSheet() throws -> Data {
         let rep = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: 1536, pixelsHigh: 1872, bitsPerSample: 8, samplesPerPixel: 4,
