@@ -35,6 +35,8 @@ struct SidebarPetView: View {
         }
         .frame(width: width, height: height)
         .frame(width: width, height: height * (1 - topTrim), alignment: .bottom)
+        // The compositor-backed NSView supplies no SwiftUI hit region for enclosing buttons.
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder private func cell(_ frame: CGImage?) -> some View {
