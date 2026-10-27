@@ -35,6 +35,8 @@ struct SidebarPetView: View {
         }
         .frame(width: width, height: height)
         .frame(width: width, height: height * (1 - topTrim), alignment: .bottom)
+        // The compositor-backed NSView supplies no SwiftUI hit region for enclosing buttons.
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder private func cell(_ frame: CGImage?) -> some View {
@@ -71,6 +73,22 @@ enum SidebarFooterPetSize {
 
 /// The active/hovered agent's pet. Click to choose a different pet for this agent session.
 struct SidebarPetButton: View {
+    enum Badge {
+        case none, save, edit
+
+        static func resolve(source: SidebarPetDescriptor.Source?, hasSession: Bool, hidden: Bool,
+                            hovering: Bool, captured: Bool) -> Self {
+            guard hasSession, !hidden else { return .none }
+            if captured { return .save }
+            guard hovering else { return .none }
+            switch source {
+            case .session: return .save
+            case .uploaded, .bundled: return .edit
+            case nil: return .none
+            }
+        }
+    }
+
     let store: SidebarPetStore
     let content: SidebarDetailContent
     var width: CGFloat = SidebarFooterPetSize.baselineWidth
@@ -84,9 +102,10 @@ struct SidebarPetButton: View {
         let state = SidebarPetState.resolve(visual: content.visual, needsInput: content.needsInput)
         let descriptor = store.descriptor(petID, session: content.petSessionID)
         let name = descriptor?.displayName ?? "Maestro"
-        // An agent-made pet in use can be captured into the shared collection.
-        let capturable = descriptor?.source == .session && content.petSessionID != nil
         let hidden = content.petSessionID.map(store.isHidden) ?? false
+        let badge = Badge.resolve(source: descriptor?.source, hasSession: content.petSessionID != nil,
+                                  hidden: hidden, hovering: hovering, captured: captured)
+        let changePet = String(localized: "pet.change", defaultValue: "Change pet")
         Button { showingPicker = true } label: {
             if hidden {
                 Image(systemName: "sparkles").foregroundStyle(.secondary)
@@ -102,22 +121,25 @@ struct SidebarPetButton: View {
         .accessibilityHint("Opens the pet picker")
         .accessibilityIdentifier("sidebar-pet-button")
         .overlay(alignment: .center) {
-            if !hidden, (capturable && hovering) || captured, let session = content.petSessionID {
+            if badge != .none, let session = content.petSessionID {
                 Button {
-                    if store.saveToRepository(petID, session: session) != nil {
+                    if badge == .edit {
+                        showingPicker = true
+                    } else if store.saveToRepository(petID, session: session) != nil {
                         captured = true
                         Task { try? await Task.sleep(nanoseconds: 1_500_000_000); captured = false }
                     }
                 } label: {
-                    Image(systemName: captured ? "checkmark.circle.fill" : "plus.circle.fill")
+                    Image(systemName: captured ? "checkmark.circle.fill"
+                          : badge == .edit ? "pencil.circle.fill" : "plus.circle.fill")
                         .font(.system(size: 20, weight: .bold)).symbolRenderingMode(.palette)
                         .foregroundStyle(.white, captured ? SidebarTone.green.color : SidebarQuestionGlow.lightBlue)
                         .background(Circle().fill(Color.black.opacity(0.35)).padding(1))
                 }
                 .buttonStyle(.plain)
-                .help("Save \(name) to my pets so every agent can use it.")
-                .accessibilityLabel("Save \(name) to my pets")
-                .accessibilityIdentifier("sidebar-pet-capture")
+                .help(badge == .edit ? changePet : "Save \(name) to my pets so every agent can use it.")
+                .accessibilityLabel(badge == .edit ? changePet : "Save \(name) to my pets")
+                .accessibilityIdentifier(badge == .edit ? "sidebar-pet-edit" : "sidebar-pet-capture")
             }
         }
         // Hover is tracked on the whole pet including the badge, or the badge would steal it and flicker.

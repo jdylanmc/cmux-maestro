@@ -5,6 +5,77 @@ import Testing
 
 @MainActor
 struct SidebarPetCollectionTests {
+    @Test func hoverBadgeOffersSaveForSessionPetsAndEditForSavedPets() {
+        let cases: [(SidebarPetDescriptor.Source?, SidebarPetButton.Badge)] = [
+            (.session, .save), (.uploaded, .edit), (.bundled, .edit), (nil, .none)
+        ]
+        for (source, expected) in cases {
+            #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: true, hidden: false,
+                                                 hovering: true, captured: false) == expected)
+            #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: true, hidden: false,
+                                                 hovering: false, captured: false) == .none)
+        }
+    }
+
+    @Test func hiddenPetsAndMissingSessionsNeverShowBadges() {
+        let sources: [SidebarPetDescriptor.Source?] = [.session, .uploaded, .bundled, nil]
+        for source in sources {
+            for captured in [false, true] {
+                for hovering in [false, true] {
+                    #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: true, hidden: true,
+                                                         hovering: hovering, captured: captured) == .none)
+                    #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: false, hidden: false,
+                                                         hovering: hovering, captured: captured) == .none)
+                }
+            }
+        }
+    }
+
+    @Test func saveConfirmationTakesPriorityUntilTheFlashEnds() {
+        for hovering in [false, true] {
+            #expect(SidebarPetButton.Badge.resolve(source: .uploaded, hasSession: true, hidden: false,
+                                                 hovering: hovering, captured: true) == .save)
+            #expect(SidebarPetButton.Badge.resolve(source: .uploaded, hasSession: true, hidden: false,
+                                                 hovering: hovering, captured: false) == (hovering ? .edit : .none))
+        }
+    }
+
+    @Test(SidebarAppKitTestScope(), arguments: [false, true], [false, true])
+    func petLabelReceivesMouseClick(animated: Bool, reduceMotion: Bool) throws {
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        for index in 0..<SidebarPetState.idle.frameCount {
+            _ = try #require(stores.pets.frame(
+                petID: SidebarPetStore.defaultID, session: nil, state: .idle, index: index))
+        }
+        var clicks = 0
+        let host = NSHostingView(rootView: Button { clicks += 1 } label: {
+            SidebarPetView(store: stores.pets, petID: SidebarPetStore.defaultID, state: .idle, width: 46,
+                           animated: animated)
+        }.buttonStyle(.plain).environment(\._accessibilityReduceMotion, reduceMotion))
+        let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 60, height: 60),
+                              styleMask: .borderless, backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = host
+        defer { window.contentView = nil; window.close() }
+        window.orderBack(nil)
+        host.layoutSubtreeIfNeeded()
+        func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
+        try #require(descendants(host).contains { $0 is SidebarPetAnimationView } == (animated && !reduceMotion))
+        let point = NSPoint(x: 30, y: 30)
+        let down = try #require(NSEvent.mouseEvent(
+            with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+        let up = try #require(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: point, modifierFlags: [], timestamp: 0,
+            windowNumber: window.windowNumber, context: nil, eventNumber: 1, clickCount: 1, pressure: 0
+        ))
+        window.sendEvent(down)
+        window.sendEvent(up)
+        #expect(clicks == 1, "The animated and static pet labels must both activate their enclosing button")
+    }
+
     private func pngSheet() throws -> Data {
         let rep = try #require(NSBitmapImageRep(
             bitmapDataPlanes: nil, pixelsWide: 1536, pixelsHigh: 1872, bitsPerSample: 8, samplesPerPixel: 4,
