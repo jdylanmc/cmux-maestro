@@ -1,6 +1,17 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "pet.change" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Change pet"}},
+      "ja": {"stringUnit":{"state":"translated","value":"ペットを変更"}},
+      "de": {"stringUnit":{"state":"translated","value":"Haustier ändern"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Changer de compagnon"}},
+      "es": {"stringUnit":{"state":"translated","value":"Cambiar mascota"}},
+      "ar": {"stringUnit":{"state":"translated","value":"تغيير الحيوان الأليف"}},
+      "ko": {"stringUnit":{"state":"translated","value":"펫 변경"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"更换宠物"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"更換寵物"}}
+    }},
     "notifications.sender" : { "extractionState": "manual", "localizations": {
       "en": {"stringUnit":{"state":"translated","value":"Maestro agent"}},
       "ja": {"stringUnit":{"state":"translated","value":"Maestro エージェント"}},

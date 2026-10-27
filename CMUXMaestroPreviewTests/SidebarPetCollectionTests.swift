@@ -5,6 +5,41 @@ import Testing
 
 @MainActor
 struct SidebarPetCollectionTests {
+    @Test func hoverBadgeOffersSaveForSessionPetsAndEditForSavedPets() {
+        let cases: [(SidebarPetDescriptor.Source?, SidebarPetButton.Badge)] = [
+            (.session, .save), (.uploaded, .edit), (.bundled, .edit), (nil, .none)
+        ]
+        for (source, expected) in cases {
+            #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: true, hidden: false,
+                                                 hovering: true, captured: false) == expected)
+            #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: true, hidden: false,
+                                                 hovering: false, captured: false) == .none)
+        }
+    }
+
+    @Test func hiddenPetsAndMissingSessionsNeverShowBadges() {
+        let sources: [SidebarPetDescriptor.Source?] = [.session, .uploaded, .bundled, nil]
+        for source in sources {
+            for captured in [false, true] {
+                for hovering in [false, true] {
+                    #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: true, hidden: true,
+                                                         hovering: hovering, captured: captured) == .none)
+                    #expect(SidebarPetButton.Badge.resolve(source: source, hasSession: false, hidden: false,
+                                                         hovering: hovering, captured: captured) == .none)
+                }
+            }
+        }
+    }
+
+    @Test func saveConfirmationTakesPriorityUntilTheFlashEnds() {
+        for hovering in [false, true] {
+            #expect(SidebarPetButton.Badge.resolve(source: .uploaded, hasSession: true, hidden: false,
+                                                 hovering: hovering, captured: true) == .save)
+            #expect(SidebarPetButton.Badge.resolve(source: .uploaded, hasSession: true, hidden: false,
+                                                 hovering: hovering, captured: false) == (hovering ? .edit : .none))
+        }
+    }
+
     @Test(SidebarAppKitTestScope(), arguments: [false, true], [false, true])
     func petLabelReceivesMouseClick(animated: Bool, reduceMotion: Bool) throws {
         let stores = SidebarStoreFixture()
