@@ -517,8 +517,10 @@ enum SidebarPresentation {
         )
         // Browser and other native surfaces cannot inherit an old terminal's agent.
         guard [.terminal, .agentSession].contains(surface.kind) else { return result }
+        let replaced = replacedSessionIDs(tree, managed: managed.nodes, now: now)
         let sessions = tree.sessions.filter {
             $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && $0.liveness != .dead
+                && !replaced.contains($0.id)
         }
         guard sessions.count == 1, let session = sessions.first,
               tree.sessions.filter({ $0.id == session.id }).count == 1,
