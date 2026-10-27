@@ -5,14 +5,19 @@ import Testing
 
 @MainActor
 struct SidebarPetCollectionTests {
-    @Test(SidebarAppKitTestScope(), arguments: [false, true])
-    func petLabelReceivesMouseClick(animated: Bool) throws {
+    @Test(SidebarAppKitTestScope(), arguments: [false, true], [false, true])
+    func petLabelReceivesMouseClick(animated: Bool, reduceMotion: Bool) throws {
         let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        for index in 0..<SidebarPetState.idle.frameCount {
+            _ = try #require(stores.pets.frame(
+                petID: SidebarPetStore.defaultID, session: nil, state: .idle, index: index))
+        }
         var clicks = 0
         let host = NSHostingView(rootView: Button { clicks += 1 } label: {
             SidebarPetView(store: stores.pets, petID: SidebarPetStore.defaultID, state: .idle, width: 46,
                            animated: animated)
-        }.buttonStyle(.plain))
+        }.buttonStyle(.plain).environment(\._accessibilityReduceMotion, reduceMotion))
         let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 60, height: 60),
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
@@ -21,7 +26,7 @@ struct SidebarPetCollectionTests {
         window.orderBack(nil)
         host.layoutSubtreeIfNeeded()
         func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(descendants) }
-        #expect(descendants(host).contains { $0 is SidebarPetAnimationView } == animated)
+        try #require(descendants(host).contains { $0 is SidebarPetAnimationView } == (animated && !reduceMotion))
         let point = NSPoint(x: 30, y: 30)
         let down = try #require(NSEvent.mouseEvent(
             with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0,
