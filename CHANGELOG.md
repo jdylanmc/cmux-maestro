@@ -36,6 +36,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Saved footer pets, including Maestro, show a pencil badge on hover to open
+  the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph
   and a short "Maestro agent" sender title, not a session filename or pet.
   Communication notifications use the system app-icon badge and incoming Siri
