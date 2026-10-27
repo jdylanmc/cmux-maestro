@@ -270,6 +270,55 @@ struct SidebarPinnedDetailsTests {
         #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice == nil)
     }
 
+    @Test(arguments: ["matching", "different-process", "missing-process", "two-alive",
+                      "protected-previous", "unrelated-occupant", "stale-previous",
+                      "stale-current", "stale-tree", "denied"])
+    func pinnedReplacementDetailsRequirePositiveDisplacement(_ scenario: String) {
+        let process = AgentBindingProcess(pid: 42, startSeconds: 100, startMicroseconds: 7)
+        let owner = managed(sessionID: fixtures.otherSessionID)
+        var current = session(observedAt: scenario == "stale-current" ? now.addingTimeInterval(-9) : now)
+        current.bindingProcess = scenario == "different-process"
+            ? .init(pid: 42, startSeconds: 100, startMicroseconds: 8) : process
+        current.sessionName = "Synthetic replacement"
+        current.petId = "synthetic-pet"
+        var previous = SidebarCopilotSession(
+            bindingProcess: scenario == "missing-process" ? nil : process,
+            id: fixtures.otherSessionID, workspaceID: fixtures.workspaceA, surfaceID: fixtures.surfaceA,
+            liveness: scenario == "two-alive" ? .alive : .unknown,
+            state: .unknown, model: nil,
+            observedAt: scenario == "stale-previous" ? now.addingTimeInterval(-9) : now,
+            nodes: [], childrenComplete: false, treeDegraded: true,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0
+        )
+        if scenario == "protected-previous" {
+            previous.attention = [.init(
+                kind: .error, evidence: .init(source: "copilot.events", eventID: fixtures.otherSessionID),
+                occurredAt: now
+            )]
+        }
+        var observed = tree([previous, current],
+                            generatedAt: scenario == "stale-tree" ? now.addingTimeInterval(-9) : now)
+        if scenario == "unrelated-occupant" { observed.sessions.append(session(id: UUID(), liveness: .unknown)) }
+        if scenario == "denied" { observed.issues = [.permissionDenied] }
+        let content = SidebarPresentation.pinnedDetails(
+            hierarchy: hierarchy(), connected: true, tree: observed,
+            managed: snapshot([owner]), availability: .ready, now: now
+        )
+        #expect(content.isAgent == (scenario == "matching"))
+        if scenario == "matching" {
+            #expect(content.title == current.sessionName)
+            #expect(content.petSessionID == current.id && content.petChoice == current.petId)
+            #expect(content.inspection?.sessionID == current.id)
+            #expect(content.lines.contains(.init(title: "Model", value: "verified-model")))
+            #expect(content.lines.filter { $0.copyableSessionID != nil } == [.sessionID(current.id)])
+            #expect(!content.lines.contains { $0.title == "Branch" },
+                    "The replaced managed node must not lend its assigned-directory evidence")
+        } else {
+            #expect(content.visual?.title == "Terminal")
+            #expect(!content.lines.contains { $0.copyableSessionID != nil || $0.title == "Model" })
+        }
+    }
+
     @Test func freshDeadRootInspectorQualifiesItsOwnModelAsLastReported() throws {
         let ended = session(liveness: .dead)
         let subject = try #require(SidebarPresentation.inspection(
