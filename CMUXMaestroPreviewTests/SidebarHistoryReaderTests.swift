@@ -288,7 +288,12 @@ struct SidebarHistoryReaderTests {
         clock.advance(30)
         let unsafe = try await reader.read(surfaceIDs: [fixture.surface])
         #expect(unsafe.issues.contains(.malformedData))
-        #expect(unsafe.sessions == complete.sessions)
+        var retained = complete.sessions
+        #expect(retained.first?.presentation?.primaryTurnOpen == false)
+        for index in retained.indices {
+            retained[index].presentation = AgentPresentationInputs()
+        }
+        #expect(unsafe.sessions == retained)
         #expect(try project(unsafe, fixture: fixture, attention: attention).acknowledgeableOutcomes.isEmpty)
         #expect(try project(unsafe, fixture: fixture, attention: attention).sessions.isEmpty)
 
