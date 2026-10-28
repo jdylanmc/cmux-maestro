@@ -19,8 +19,8 @@ struct SidebarPetSheetTests {
 
     @Test func scaleIsRelativeToTheStandardWidthAndPlaybackStaysInTheFirstNineRows() {
         #expect(SidebarPetSheet.scale(width: 3072) == 2)
-        for state in [SidebarPetState.idle, .working, .needsInput, .finished, .failed] {
-            #expect(state.row < SidebarPetSheet.rows)
+        for mood in SidebarPetSheet.Mood.allCases {
+            #expect((SidebarPetSheet.playback(for: mood, width: 1536, height: 1872)?.row ?? 99) < SidebarPetSheet.rows)
         }
     }
 

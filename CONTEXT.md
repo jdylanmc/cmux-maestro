@@ -222,10 +222,16 @@ Short canonical slug on an agent session, assigned by the human, by the agent fo
 _Avoid_: label, category
 
 **Pet**:
-Animated Codex-format sprite sheet. Maps Maestro states to rows 0, 7, 6, 3, 5.
-Optional 20-row mood atlas adds expression rows with explicit legacy fallbacks;
-format support alone does not change state selection.
+Animated Codex-format sprite sheet. Shows a presentation-only mood for its exact
+session. Optional 20-row mood atlases add expression rows with explicit legacy
+fallbacks.
 _Avoid_: mascot
+
+**Mood**:
+Pet expression derived from sanitized observations, optionally overlaid by a
+self-reported mood. Art holds briefly then snaps to current; urgent attention,
+failure and Gone preempt. Never work, attention, liveness or completion evidence.
+_Avoid_: sentiment, status
 
 **Self-reported mood**:
 Optional `happy`, `celebrating` or `confused` an agent reports for its own exact session; `clear` withdraws it. Authored presentation metadata, never work, success or completion evidence (ADR 0031).

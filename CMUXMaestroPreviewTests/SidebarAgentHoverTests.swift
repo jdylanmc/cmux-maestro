@@ -534,7 +534,9 @@ struct SidebarAgentHoverTests {
                                state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)]
         let sessions = [active, hovered]
         let pet = try #require(card(.session(hovered.id), sessions: sessions)?.pet)
-        #expect(pet == .init(session: hovered.id, choice: "hovered-pet", state: .working))
+        #expect(pet.session == hovered.id)
+        #expect(pet.choice == "hovered-pet")
+        #expect(pet.input.session?.id == hovered.id)
         #expect(card(.session(active.id), sessions: sessions)?.pet?.session == active.id)
         #expect(card(.child(sessionID: hovered.id, childID: "child"), sessions: sessions)?.pet == nil)
 

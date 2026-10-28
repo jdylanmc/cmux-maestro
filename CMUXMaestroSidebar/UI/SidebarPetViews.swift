@@ -7,7 +7,7 @@ struct SidebarPetView: View {
     let store: SidebarPetStore
     let petID: String
     var session: UUID? = nil
-    let state: SidebarPetState
+    let mood: SidebarPetSheet.Mood
     var width: CGFloat = 46
     var animated = true
     /// Transparent top band (fraction of cell height) excluded from layout; only empty pixels overflow.
@@ -21,16 +21,17 @@ struct SidebarPetView: View {
     var body: some View {
         Group {
             if Self.animates(animated, reduceMotion: reduceMotion) {
-                let frames = (0..<state.frameCount).compactMap {
-                    store.frame(petID: petID, session: session, state: state, index: $0)
+                let count = store.playback(petID: petID, session: session, mood: mood)?.frameCount ?? 0
+                let frames = (0..<count).compactMap {
+                    store.frame(petID: petID, session: session, mood: mood, index: $0)
                 }
-                if frames.count == state.frameCount {
+                if count > 0, frames.count == count {
                     SidebarPetAnimation(frames: frames)
                 } else {
                     cell(frames.first)
                 }
             } else {
-                cell(store.frame(petID: petID, session: session, state: state, index: 0))
+                cell(store.frame(petID: petID, session: session, mood: mood, index: 0))
             }
         }
         .frame(width: width, height: height)
@@ -96,10 +97,13 @@ struct SidebarPetButton: View {
     @State private var showingPicker = false
     @State private var hovering = false
     @State private var captured = false
+    @State private var moodDisplay = SidebarPetMoodDisplay()
 
     var body: some View {
         let petID = store.resolvedID(session: content.petSessionID, agentChoice: content.petChoice)
-        let state = SidebarPetState.resolve(visual: content.visual, needsInput: content.needsInput)
+        let mood = moodDisplay.current ?? SidebarPetMood.resolve(content.petMood, now: Date())
+        let shown = moodDisplay.shown ?? mood
+        let moodDescription = SidebarPetMoodDisplay.description(shown: shown, current: mood)
         let descriptor = store.descriptor(petID, session: content.petSessionID)
         let name = descriptor?.displayName ?? "Maestro"
         let hidden = content.petSessionID.map(store.isHidden) ?? false
@@ -111,13 +115,15 @@ struct SidebarPetButton: View {
                 Image(systemName: "sparkles").foregroundStyle(.secondary)
                     .frame(width: width, height: SidebarFooterPetSize.height(forWidth: width, topInset: topInset))
             } else {
-                SidebarPetView(store: store, petID: petID, session: content.petSessionID, state: state, width: width,
-                               topTrim: topInset)
+                SidebarPetView(store: store, petID: petID, session: content.petSessionID,
+                               mood: shown.mood, width: width, topTrim: topInset)
             }
         }
         .buttonStyle(.plain)
-        .help(hidden ? "Choose pet" : "\(name) · \(state.title). Click to choose a pet.")
-        .accessibilityLabel(hidden ? "Pet hidden" : "Pet \(name), \(state.title)")
+        .help(hidden ? String(localized: "pet.choose", defaultValue: "Choose pet")
+              : String(localized: "pet.mood.help", defaultValue: "\(name) · \(moodDescription). Click to choose a pet."))
+        .accessibilityLabel(hidden ? String(localized: "pet.hidden", defaultValue: "Pet hidden")
+                            : String(localized: "pet.mood.label", defaultValue: "Pet \(name), \(moodDescription)"))
         .accessibilityHint("Opens the pet picker")
         .accessibilityIdentifier("sidebar-pet-button")
         .overlay(alignment: .center) {
@@ -145,8 +151,10 @@ struct SidebarPetButton: View {
         // Hover is tracked on the whole pet including the badge, or the badge would steal it and flicker.
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        .onChange(of: content.petMood, initial: true) { _, value in moodDisplay.update(value) }
+        .onDisappear { moodDisplay.stop() }
         .popover(isPresented: $showingPicker, arrowEdge: .trailing) {
-            SidebarPetPicker(store: store, sessionID: content.petSessionID, agentChoice: content.petChoice, state: state) {
+            SidebarPetPicker(store: store, sessionID: content.petSessionID, agentChoice: content.petChoice, mood: mood.mood) {
                 showingPicker = false
             }
         }
@@ -157,7 +165,7 @@ struct SidebarPetPicker: View {
     let store: SidebarPetStore
     let sessionID: UUID?
     let agentChoice: String?
-    let state: SidebarPetState
+    let mood: SidebarPetSheet.Mood
     let close: () -> Void
     @State private var refreshToken = 0
     @State private var pendingRemoval: SidebarPetDescriptor?
@@ -179,7 +187,7 @@ struct SidebarPetPicker: View {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 84), spacing: 8)], spacing: 8) {
                     ForEach(store.available(for: sessionID)) { pet in
                         SidebarPetCell(
-                            store: store, pet: pet, session: sessionID, selected: current == pet.id, state: state,
+                            store: store, pet: pet, session: sessionID, selected: current == pet.id, mood: mood,
                             choose: { if let sessionID { store.choose(pet.id, session: sessionID) } },
                             save: pet.source == .session && sessionID != nil
                                 ? { if let sessionID { store.saveToRepository(pet.id, session: sessionID); refreshToken += 1 } } : nil,
@@ -272,7 +280,7 @@ private struct SidebarPetCell: View {
     let pet: SidebarPetDescriptor
     let session: UUID?
     let selected: Bool
-    let state: SidebarPetState
+    let mood: SidebarPetSheet.Mood
     let choose: () -> Void
     var save: (() -> Void)? = nil
     var remove: (() -> Void)? = nil
@@ -308,7 +316,7 @@ private struct SidebarPetCell: View {
 
     private var content: some View {
         VStack(spacing: 2) {
-            SidebarPetView(store: store, petID: pet.id, session: session, state: selected ? state : .idle, width: 56)
+            SidebarPetView(store: store, petID: pet.id, session: session, mood: selected ? mood : .idle, width: 56)
             Text(pet.displayName).font(.caption2).lineLimit(1).truncationMode(.tail)
             if pet.source != .bundled {
                 Text(pet.source == .session ? "agent-made · not saved" : "collected")
@@ -338,7 +346,7 @@ extension EnvironmentValues {
 struct SidebarHoverPet: Equatable {
     let session: UUID
     var choice: String? = nil
-    var state: SidebarPetState = .idle
+    var input: SidebarPetMoodInput = .unavailable
 }
 
 /// A hover card's pet: the hovered session's own preference, including its hidden state.
@@ -348,11 +356,8 @@ struct SidebarHoverPetView: View {
 
     var body: some View {
         if let id = store.visibleID(session: pet.session, agentChoice: pet.choice) {
-            let name = store.descriptor(id, session: pet.session)?.displayName ?? "Maestro"
-            SidebarPetView(store: store, petID: id, session: pet.session, state: pet.state, width: 36,
-                           topTrim: store.topInset(petID: id, session: pet.session))
-                .accessibilityElement()
-                .accessibilityLabel("Pet \(name), \(pet.state.title)")
+            SidebarMoodPetView(store: store, petID: id, session: pet.session, input: pet.input, width: 36,
+                               topTrim: store.topInset(petID: id, session: pet.session))
                 .accessibilityIdentifier("hover-pet")
         }
     }
@@ -368,7 +373,7 @@ private struct SidebarRowPetPicker: ViewModifier {
         content.popover(isPresented: Binding(get: { session != nil && store != nil },
                                              set: { if !$0 { session = nil } }), arrowEdge: .trailing) {
             if let store, let session {
-                SidebarPetPicker(store: store, sessionID: session, agentChoice: agentChoice, state: .idle) {
+                SidebarPetPicker(store: store, sessionID: session, agentChoice: agentChoice, mood: .idle) {
                     self.session = nil
                 }
             }

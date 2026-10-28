@@ -58,8 +58,8 @@ enum SidebarAgentHoverContent {
                 lines: lines,
                 notice: current ? nil : availability == .stale ? "Observation: Stale" : "Observation: Unavailable",
                 pet: SidebarPresentation.managedPet(node, tree: tree, now: now).map {
-                    .init(session: $0.session, choice: $0.choice, state: .resolve(
-                        visual: state, needsInput: SidebarPresentation.managedNeedsInput(node, tree: tree, now: now)))
+                    .init(session: $0.session, choice: $0.choice, input: .project(
+                        session: nil, node: node, tree: tree, managed: managed, availability: availability, now: now))
                 }
             )
         case .session(let id):
@@ -67,7 +67,7 @@ enum SidebarAgentHoverContent {
                   topology.workspaceBySurface[session.surfaceID] == session.workspaceID,
                   !SidebarPresentation.rowlessSessionIDs(tree, managed: managed.nodes, now: now).contains(id)
             else { return nil }
-            return sessionCard(session, hierarchy: hierarchy, tree: tree, now: now)
+            return sessionCard(session, hierarchy: hierarchy, tree: tree, managed: managed, availability: availability, now: now)
         case .child(let sessionID, let childID):
             guard let session = uniqueSession(sessionID, in: tree),
                   topology.workspaceBySurface[session.surfaceID] == session.workspaceID,
@@ -108,7 +108,8 @@ enum SidebarAgentHoverContent {
     }
 
     private static func sessionCard(
-        _ session: SidebarCopilotSession, hierarchy: HierarchySnapshot, tree: SidebarCopilotTree, now: Date
+        _ session: SidebarCopilotSession, hierarchy: HierarchySnapshot, tree: SidebarCopilotTree,
+        managed: SidebarOrchestrationSnapshot, availability: SidebarOrchestrationAvailability, now: Date
     ) -> SidebarHoverCardData {
         let unfocusable = session.statusOnly
         let title = SidebarPresentation.agentTitle(for: session, in: hierarchy)
@@ -127,8 +128,8 @@ enum SidebarAgentHoverContent {
             id: "session-\(session.id)", category: "Agent preview", title: title,
             subtitle: state.title,
             lines: lines, notice: session.liveness == .alive ? nil : "Owner: Unconfirmed",
-            pet: unfocusable ? nil : .init(session: session.id, choice: session.petId, state: .resolve(
-                visual: state, needsInput: SidebarPresentation.needsInput(session.attention)))
+            pet: unfocusable ? nil : .init(session: session.id, choice: session.petId, input: .project(
+                session: session, tree: tree, managed: managed, availability: availability, now: now))
         )
     }
 }
