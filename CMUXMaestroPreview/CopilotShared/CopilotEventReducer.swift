@@ -1189,13 +1189,17 @@ nonisolated struct CopilotEventReducer: Sendable {
     }
 
     private mutating func observeModelCall(_ event: CopilotEventProjection) {
-        guard event.agentID == nil, !ended,
-              let turn = turns[Owner(agentID: nil)] else { return }
+        guard event.agentID == nil else { return }
+        if event.kind == .modelCallFailure, event.modelCallIsPrimary != true { return }
+        // Observed root identities remain replay evidence even without a matching active turn.
+        guard admitPresentationReplayMatch(modelReplay.match(event.id)) else { return }
+        guard modelReplay.remember(event.id) else { exhaustPresentationReplay(); return }
+        guard !ended, let turn = turns[Owner(agentID: nil)] else { return }
         let trouble: Bool
         if event.kind == .modelCallFailure {
             // This schema has no turn tags. Only the current owner's causal
             // chain can attribute it; agentId or wall-clock order alone cannot.
-            guard event.modelCallIsPrimary == true, isCausallyLinked(event, to: turn) else { return }
+            guard isCausallyLinked(event, to: turn) else { return }
             trouble = true
         } else {
             guard event.turnID == turn.id, event.interactionID == turn.interactionID else { return }
@@ -1208,8 +1212,6 @@ nonisolated struct CopilotEventReducer: Sendable {
             case .cancelled, nil: return
             }
         }
-        guard admitPresentationReplayMatch(modelReplay.match(event.id)) else { return }
-        guard modelReplay.remember(event.id) else { exhaustPresentationReplay(); return }
         presentation.modelTrouble = trouble
         if trouble, presentation.turnClean != nil { presentation.turnClean = false }
     }
