@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Generate the original bundled Maestro pet sprite sheet.
 
-Output follows the Codex pet contract: a 1536x1872 transparent WebP, 8 columns
-by 9 rows of 192x208 cells. The artwork is original to this project. Requires
-Pillow (development-time only; the generated asset is committed).
+Output is a 1536x4160 transparent WebP, 8 columns by 20 rows of 192x208
+cells. Requires Pillow 11.3.0 (development-time only). Legacy drawing and
+its lossless WebP roundtrip preserve the original decoded rows exactly.
 
     python3 scripts/generate-maestro-pet.py [output-directory]
 """
+import argparse
+import hashlib
+import io
 import json
 import math
 import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
+from maestro_pet_art import mood_frame
+from pet_kit import PetSheet, STATES, MOOD_STATES
 
 CELL_W, CELL_H, COLS, ROWS = 192, 208, 8, 9
 SS = 4  # supersampling
@@ -127,22 +132,50 @@ def frame(row, i, n):
     return img.resize((CELL_W, CELL_H), Image.LANCZOS)
 
 
-def main():
-    out = Path(sys.argv[1] if len(sys.argv) > 1 else "CMUXMaestroSidebar/Pets")
-    out.mkdir(parents=True, exist_ok=True)
+def legacy_sheet():
     sheet = Image.new("RGBA", (CELL_W * COLS, CELL_H * ROWS), (0, 0, 0, 0))
     for r in range(ROWS):
         for c in range(FRAMES[r]):
             sheet.paste(frame(r, c, FRAMES[r]), (c * CELL_W, r * CELL_H))
+    # Original WebP discarded RGB under zero alpha. Preserve that decoded contract.
+    encoded = io.BytesIO()
+    sheet.save(encoded, "WEBP", lossless=True, quality=100, method=6)
+    return Image.open(io.BytesIO(encoded.getvalue())).convert("RGBA")
+
+
+def generate():
+    legacy = legacy_sheet()
+    sheet = PetSheet(moods=True)
+    for row, (state, count) in enumerate(STATES):
+        for index in range(count):
+            cell = legacy.crop((index * 192, row * 208, (index + 1) * 192, (row + 1) * 208))
+            sheet.frame(state, index).pixels[:] = cell.tobytes()
+    for state, count in MOOD_STATES:
+        for index in range(count):
+            sheet.frames[state, index] = mood_frame(state, index, count)
+    atlas = sheet.render()
+    return Image.frombytes("RGBA", (atlas.width, atlas.height), bytes(atlas.pixels)), legacy
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("output", nargs="?", type=Path, default=Path("CMUXMaestroSidebar/Pets"))
+    args = parser.parse_args()
+    out = args.output
+    out.mkdir(parents=True, exist_ok=True)
+    sheet, legacy = generate()
     sheet.save(out / "maestro-pet.webp", "WEBP", lossless=True, quality=100, method=6)
+    decoded = Image.open(out / "maestro-pet.webp").convert("RGBA")
+    if decoded.crop((0, 0, 1536, 1872)).tobytes() != legacy.tobytes():
+        raise ValueError("Legacy decoded pixels changed.")
     (out / "maestro-pet.json").write_text(json.dumps({
         "id": "maestro",
         "displayName": "Maestro",
-        "description": "An original AI robot head that tracks agent state. Created for CMUX Maestro.",
+        "description": "An original robot head with 15 authored moods. Created for CMUX Maestro.",
         "spritesheetPath": "maestro-pet.webp",
     }, indent=2) + "\n")
-    if "--preview" in sys.argv:
-        sheet.save(Path("/tmp/maestro-pet-preview.png"))
+    print(json.dumps({"size": list(decoded.size), "legacyRGBA_SHA256": hashlib.sha256(legacy.tobytes()).hexdigest(),
+                      "webpSHA256": hashlib.sha256((out / "maestro-pet.webp").read_bytes()).hexdigest()}))
 
 
 if __name__ == "__main__":
