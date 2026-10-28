@@ -5,7 +5,12 @@ Codex pets, session icon CLI, appearance security. Short version: [README](../..
 ## Pets: `/cmux-maestro-native:maestro-pet`
 
 Active agent's pinned details show animated Codex-format pet (1536×1872 PNG/WebP,
-8×9 cells of 192×208). Sheets are accepted flexibly: 8 columns, at least nine rows, 192:208 cells at any whole-pixel scale (width a multiple of 8, 512 to 4096). A v2 pet (1536×2288) works. Extra rows are ignored. Every agent starts with bundled, original **Maestro** robot-head
+8×9 cells of 192×208). Legacy sheets have width a multiple of 8, 512-4096,
+and height from `ceil(9 * 208 * width / 1536)` through `2 * width`.
+A v2 pet (1536×2288) works; legacy tails are ignored. A fixed 20-row mood atlas
+also works, with width 512-1536, a multiple of 8, and height exactly
+`ceil(20 * 208 * width / 1536)` (standard 1536×4160).
+Every agent starts with bundled, original **Maestro** robot-head
 pet. Animation follows state: idle, working, needs input, turn finished, blocked/failed.
 Collect pets: while an agent uses an agent-made pet, hover its footer pet and click the centered **+** to
 save it to your shared pets (the picker has the same **+** on agent-made cells and a confirmed **×**
@@ -38,6 +43,50 @@ Pet playback uses a bounded render-server frame sequence at seven frames per sec
 not a SwiftUI timeline. Working rings and input glows also animate in layers.
 Hidden or detached native views remove their animations; changing the pet or state
 replaces its sequence. No frame tick publishes evidence or requests sidebar layout.
+
+### Mood atlas contract
+
+The 20-row format preserves rows 0-8. Row 9 is Startled; row 10 is reserved.
+Partial extensions are refused. No manifest version bump or companion asset:
+new Maestro reads legacy pets, but older Maestro rejects mood atlases.
+Bundled Maestro remains nine rows; this format does not change today's state selection.
+
+| Mood ID | Row | Frames | Legacy fallback row / frames |
+| --- | --- | --- | --- |
+| `idle` | 0 | 6 | 0 / 6 |
+| `working` | 7 | 6 | 7 / 6 |
+| `question` | 6 | 6 | 6 / 6 |
+| `content` | 3 | 4 | 3 / 4 |
+| `sad` | 5 | 8 | 5 / 8 |
+| `startled` | 9 | 5 | 4 / 5 |
+| `thinking` | 11 | 6 | 8 / 6 |
+| `delegating` | 12 | 8 | 1 / 8 |
+| `needs-permission` | 13 | 6 | 6 / 6 |
+| `confused` | 14 | 6 | 8 / 6 |
+| `compacting` | 15 | 6 | 2 / 8 |
+| `sleepy` | 16 | 6 | 0 / 6 |
+| `gone` | 17 | 6 | 0 / 6 |
+| `proud` | 18 | 4 | 3 / 4 |
+| `celebrating` | 19 | 5 | 4 / 5 |
+
+Resolver seam: `SidebarPetSheet.Mood(rawValue:)` parses these IDs;
+`SidebarPetSheet.playback(for:width:height:) -> SidebarPetSheet.Playback?`
+returns `row` and `frameCount`, or `nil` for invalid geometry.
+`SidebarPetStore.playback(petID:session:mood:)` resolves against the decoded sheet,
+and `frame(petID:session:mood:index:)` crops it using that loop length.
+Existing `state:` playback is unchanged. No mood/evidence resolver lives here.
+
+Both formats retain the 10 MiB compressed limit. Extended width is capped before
+native decoding, bounding the standard RGBA bitmap at 25,559,040 bytes, excluding
+ImageIO overhead and cached crops. Legacy geometry retains its existing maximum
+4096×8192 for compatibility; the new format does not increase that bound.
+Top trim scans every playable mood or fallback cell, excluding reserved row 10.
+Scaled cell origins round cumulatively, matching crop coordinates.
+
+The kit's `PetSheet(moods=True)` generates all 20 rows and a 15-row preview.
+Wholly undrawn mood rows copy the map's fallback; partly drawn rows fail.
+Row 10 stays transparent. Native imports validate geometry and decoding, not
+art quality or blank-row content. Draw distinct mood art when authoring a full atlas.
 
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 

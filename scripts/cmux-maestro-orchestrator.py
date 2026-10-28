@@ -6199,15 +6199,17 @@ def command_self_icon(args):
 
 
 PET_SIZE = (1536, 1872)
+PET_MOOD_ROWS = 20
+PET_MOOD_MAX_WIDTH = 1536
 
 
 def pet_sheet_ok(width, height):
-    """Eight columns of 192:208 cells at any whole-pixel scale, with at least nine rows.
-    Extra rows (Codex v2 adds look-direction rows, 1536x2288) are ignored; only rows 0-8 play."""
+    """Preserve legacy geometry; only the exact, width-bounded twenty-row atlas adds moods."""
     if width % 8 or not 512 <= width <= 4096:
         return False
     minimum = -(-9 * 208 * width // 1536)
-    return minimum <= height <= 2 * width
+    extended = width <= PET_MOOD_MAX_WIDTH and height == -(-PET_MOOD_ROWS * 208 * width // 1536)
+    return minimum <= height <= 2 * width or extended
 PET_MAX_BYTES = 10 * 1024 * 1024
 PET_MAX_PER_SESSION = 8
 PET_DEFAULT_ID = "maestro"
@@ -6386,9 +6388,10 @@ def read_pet_source(source, requested_id):
         raise OrchestrationError("The spritesheet is not a readable PNG or WebP image.")
     if not pet_sheet_ok(*size):
         raise OrchestrationError(
-            "The spritesheet needs 8 columns of 192:208 cells and at least 9 rows "
-            f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}; larger scales and extra rows such as Codex v2's "
-            "1536x2288 are fine). Width must be a multiple of 8 between 512 and 4096.")
+            "The spritesheet needs 8 columns of 192:208 cells: a legacy Codex sheet "
+            f"(standard {PET_SIZE[0]}x{PET_SIZE[1]}, including v2) or a 20-row mood sheet "
+            "(standard 1536x4160). Width must be a multiple of 8: 512-4096 for legacy "
+            "sheets, 512-1536 for mood sheets.")
     if (not (png_complete(data) if data[:4] == b"\x89PNG" else webp_complete(data))
             or decoded_size(data, sheet.suffix.lower()) != size):
         raise OrchestrationError("The spritesheet is corrupt or truncated.")
@@ -6523,7 +6526,7 @@ def list_session_pets(session):
 def command_pets(args):
     session = canonical_uuid(args.session_id, "current session ID") if args.session_id else None
     return {"default": PET_DEFAULT_ID, "contract": f"{PET_SIZE[0]}x{PET_SIZE[1]} PNG/WebP, 8x9 cells of 192x208 "
-                "(any scale; extra rows such as v2 look-direction rows are ignored)",
+                "(legacy width 512-4096, or 20-row mood atlas width 512-1536; multiple of 8)",
             "sessionPets": list_session_pets(session) if session else []}
 
 
