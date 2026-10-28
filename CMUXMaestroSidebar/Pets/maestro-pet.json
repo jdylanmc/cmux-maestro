@@ -1,6 +1,6 @@
 {
   "id": "maestro",
   "displayName": "Maestro",
-  "description": "An original AI robot head that tracks agent state. Created for CMUX Maestro.",
+  "description": "An original robot head with 15 authored moods. Created for CMUX Maestro.",
   "spritesheetPath": "maestro-pet.webp"
 }

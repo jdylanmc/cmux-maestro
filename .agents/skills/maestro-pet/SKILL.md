@@ -66,8 +66,8 @@ is needed.
 
 This skill ships `pet_kit.py` next to this file (Python 3.9+ standard library only).
 Set `SKILL_DIR` to the **loaded skill's base directory**; do not assume a source
-checkout. Write your drawing script and output in your **session artifacts or a temp
-directory**, never inside `SKILL_DIR`, Maestro's files or the human's pet collection.
+checkout. Write your drawing script and output in your **session artifacts**,
+never inside `SKILL_DIR`, Maestro's files or the human's pet collection.
 
 ```python
 import sys
@@ -124,7 +124,24 @@ Imported 20-row sheets must contain usable art; the reader does not detect blank
 
 Rows 0-8 remain unchanged. The fallback uses the old row's full frame count,
 not the extended row's count. Mood playback is a format capability; today's
-sidebar still selects only the five existing states. Bundled Maestro stays nine rows.
+sidebar still selects only the five existing states. Bundled Maestro now authors all
+15 moods in a 20-row sheet; that art does not introduce a mood/evidence resolver.
+
+For expressive art, draw every `MOOD_STATES` frame rather than relying on fallback.
+Use face and pose changes, not UI badges: Startled can use wide white eyes, an O
+mouth and a lifted pose; Thinking can hold its chin; Needs permission can raise a
+stop palm, distinct from Question's upward glance; Confused can use asymmetric
+eyes; Compacting can squeeze inward; Sleepy can close its eyes; Gone can use a
+vacant silhouette; Proud and Celebrating should differ in pose. Keep each loop's
+first frame recognizable at **38pt and 46pt in both light and dark**, including
+Reduce Motion's still frame. Inspect bare frames without labels too.
+
+Existing supplied pets are not automatically rewritten. The source checkout's
+`scripts/upgrade-pet-moods.py` is an explicit offline **copy** upgrade, documented
+in `docs/reference/pets-and-icons.md`. It preserves originals/backups and uses
+generic fallback poses, not inferred facial expressions. Never scan or rewrite
+the human's collection, select the copy, or replace a human choice without their
+separate direction.
 
 ## Add and choose
 

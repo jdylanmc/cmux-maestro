@@ -3,7 +3,7 @@ import Testing
 
 struct SidebarFooterPetSizeTests {
     private let baseline = SidebarFooterPetSize.baselineWidth
-    /// The bundled sheet's measured inset.
+    /// The maximum permitted inset; individual sheets may trim less.
     private let inset = SidebarPetSheet.maximumTopInset
     /// Laid-out height per point of width: the 208:192 cell less its trimmed top band.
     private let layoutAspect: CGFloat = 189 / 192
