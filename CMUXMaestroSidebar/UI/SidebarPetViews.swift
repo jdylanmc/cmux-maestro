@@ -260,7 +260,7 @@ struct SidebarPetPicker: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.folder, .png, .webP]
         panel.prompt = "Upload"
-        panel.message = "Choose a Codex pet folder or a PNG/WebP spritesheet (8 columns × 9+ rows; standard 1536×1872)"
+        panel.message = "Choose a pet folder or PNG/WebP sheet: legacy Codex (standard 1536×1872) or 20-row moods (1536×4160)"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         if let id = store.upload(from: url), let sessionID { store.choose(id, session: sessionID) }
         refreshToken += 1

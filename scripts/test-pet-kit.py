@@ -121,6 +121,55 @@ class PetKitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sheet.frame("sleeping", 0)
 
+    def test_extended_atlas_import_preview_and_explicit_fallbacks(self):
+        sheet = kit.PetSheet(moods=True)
+        draw_complete(sheet, kit.STATES)
+        # Make each old row recognizable independently of the kit's fallback table.
+        for row, (state, count) in enumerate(kit.STATES):
+            for column in range(count):
+                sheet.frame(state, column).rect(0, 0, 1, 1, (20 * row, 20 * column, 80))
+        result = sheet.save(self.root / "moods", "mood-blob", "Mood Blob")
+        self.assertEqual(result["size"], [1536, 4160])
+        *_, data, _ = orchestrator.read_pet_source(str(self.root / "moods"), None)
+        width, height, pixels = decode_png(data)
+        self.assertEqual((width, height), (1536, 4160))
+        expected = [(9, 5, 4, 5), (11, 6, 8, 6), (12, 8, 1, 8), (13, 6, 6, 6),
+                    (14, 6, 8, 6), (15, 6, 2, 8), (16, 6, 0, 6), (17, 6, 0, 6),
+                    (18, 4, 3, 4), (19, 5, 4, 5)]
+        for row, count, fallback, fallback_count in expected:
+            for column in range(count):
+                offset = (row * 208 * width + column * 192) * 4
+                self.assertEqual(tuple(pixels[offset:offset + 4]),
+                                 (20 * fallback, 20 * (column % fallback_count), 80, 255))
+        reserved = pixels[10 * 208 * width * 4:11 * 208 * width * 4]
+        self.assertFalse(any(reserved), "Row 10 stays reserved and transparent")
+        preview_width, preview_height, preview = decode_png((self.root / "moods/preview.png").read_bytes())
+        self.assertEqual((preview_width, preview_height), (1536, 15 * 208))
+        for out_row, (row, count, fallback, fallback_count) in enumerate(expected, start=5):
+            for column in range(count):
+                offset = (out_row * 208 * width + column * 192) * 4
+                self.assertEqual(tuple(preview[offset:offset + 4]),
+                                 (20 * fallback, 20 * (column % fallback_count), 80, 255))
+        self.assertTrue(all(value == 255 for value in preview[3::4]))
+        self.assertNotIn("spriteVersionNumber", json.loads((self.root / "moods/pet.json").read_text()))
+
+    def test_authored_mood_rows_override_fallback_and_reject_partial_art(self):
+        sheet = kit.PetSheet(moods=True)
+        draw_complete(sheet)
+        sheet.frame("startled", 0).rect(0, 0, 3, 3, "#f00")
+        with self.assertRaisesRegex(ValueError, "startled"):
+            sheet.render()
+        draw_complete(sheet, kit.MOOD_STATES)
+        atlas = sheet.render()
+        self.assertEqual(atlas.get(0, 9 * 208), (255, 0, 0, 255))
+        for state, count in kit.MOOD_STATES:
+            with self.assertRaises(ValueError):
+                sheet.frame(state, count)
+            with self.assertRaises(ValueError):
+                kit.PetSheet().frame(state, 0)
+        with self.assertRaises(ValueError):
+            sheet.frame("reserved", 0)
+
     def test_source_over_blending_and_clipping(self):
         canvas = kit.Canvas(4, 4)
         canvas.rect(0, 0, 4, 4, "#0000ff")

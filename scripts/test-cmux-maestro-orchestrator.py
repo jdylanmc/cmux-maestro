@@ -7187,7 +7187,7 @@ class OwnPetPublicationTests(unittest.TestCase):
 
 
 class PetSheetSizeTests(unittest.TestCase):
-    """Pet sheets are flexible: 8 columns of 192:208 cells, any scale, nine or more rows."""
+    """Legacy sheets and the fixed, bounded twenty-row mood atlas fully decode."""
 
     @staticmethod
     def png(width, height, rows=None, *, color=6, depth=8, method=0, row_filter=0, palette=None):
@@ -7304,16 +7304,34 @@ class PetSheetSizeTests(unittest.TestCase):
 
     def test_standard_v2_and_scaled_sheets_are_accepted(self):
         read = CONTROLLER_API["read_pet_source"]
-        for width, height in ((1536, 1872), (1536, 2288), (3072, 3744), (768, 936), (1536, 2000)):
+        for width, height in ((1536, 1872), (1536, 2288), (3072, 3744), (768, 936), (1536, 2000),
+                              (512, 1387), (776, 2102), (1536, 4160)):
             identifier, display, description, data, extension = read(str(self.pet_folder(width, height)), None)
             self.assertEqual((identifier, extension), ("duck", ".png"))
             self.assertEqual(CONTROLLER_API["image_size"](data), (width, height))
 
     def test_sheets_without_the_grid_are_rejected(self):
         read = CONTROLLER_API["read_pet_source"]
-        for width, height in ((1536, 1800), (1537, 1872), (400, 468), (5000, 6000), (1536, 4000), (1536, 800)):
+        for width, height in ((1536, 1800), (1537, 1872), (400, 468), (5000, 6000), (1536, 4000), (1536, 800),
+                              (1536, 4159), (1536, 4161), (1544, 4182), (3072, 8320)):
             with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], r"8 columns"):
                 read(str(self.pet_folder(width, height)), None)
+
+    def test_extended_corruption_and_compressed_byte_limit_are_rejected(self):
+        read = CONTROLLER_API["read_pet_source"]
+        for data in (self.png(1536, 4160)[:-20], self.png(1536, 4160, rows=4159)):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "corrupt or truncated"):
+                read(str(self.sheet_folder(data, ".png")), None)
+        data = self.png(1536, 4160)
+        oversized = data + bytes(CONTROLLER_API["PET_MAX_BYTES"] + 1 - len(data))
+        with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "under 10 MB"):
+            read(str(self.sheet_folder(oversized, ".png")), None)
+
+    def test_extended_width_bound_refuses_before_decoder(self):
+        read = CONTROLLER_API["read_pet_source"]
+        with patch.dict(read.__globals__, {"decoded_size": lambda *_: self.fail("Oversize atlas reached decoder")}):
+            with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "512-1536"):
+                read(str(self.pet_folder(1544, 4182)), None)
 
 
 
