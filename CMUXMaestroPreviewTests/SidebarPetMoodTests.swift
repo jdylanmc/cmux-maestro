@@ -306,7 +306,9 @@ struct SidebarPetMoodTests {
         acknowledged.acknowledged.insert(.init(sessionID: fixture.sessionID, ownerID: nil,
                                               evidence: fixture.attention[0].evidence))
         #expect(acknowledged.isValid)
-        fixture.attention.removeAll { acknowledged.contains($0, sessionID: fixture.sessionID, ownerID: nil) }
+        fixture.attention = fixture.attention.filter {
+            !acknowledged.contains($0, sessionID: fixture.sessionID, ownerID: nil)
+        }
         display.update(fixture.input)
         await clock.registered()
         #expect(display.current?.mood == .idle)
