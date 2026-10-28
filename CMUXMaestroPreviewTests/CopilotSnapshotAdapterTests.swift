@@ -92,8 +92,8 @@ struct CopilotSnapshotAdapterTests {
             copilotTestEvent("tool.execution_complete", data: ["toolCallId": "tool", "success": false]),
             copilotTestEvent("session.compaction_start", data: ["compactionAttemptId": "attempt"])
         ])
-        let date = now
-        let reader = fixture.reader(clock: { date })
+        let clock = CopilotReaderTestClock(now)
+        let reader = fixture.reader(clock: { clock.now() })
         let cache = CopilotSnapshotAdapterCache()
         let sessionCache = SidebarSessionProjectionCache()
         let initial = try await reader.read(surfaceIDs: [fixtures.surfaceA])
@@ -111,9 +111,10 @@ struct CopilotSnapshotAdapterTests {
             try fixture.append(event)
         }
         for _ in 0..<2 {
+            clock.advance(by: 1)
             let source = try await reader.read(surfaceIDs: [fixtures.surfaceA])
             let observation = try #require(source.sessions.first)
-            #expect(observation.sessionIssues?.contains(.malformedData) == true)
+            #expect(source.issues.contains(.malformedData))
             #expect(observation.presentation == AgentPresentationInputs())
             #expect(observation.state == before.state)
             #expect(observation.model == before.model)
@@ -124,7 +125,7 @@ struct CopilotSnapshotAdapterTests {
             let updated = await cache.snapshot(source, workspaceBySurface: fixtures.topology().workspaceBySurface)
             #expect(updated.sessions.first?.presentation == AgentPresentationInputs())
             let updatedTree = SidebarCopilotTree.project(
-                updated, onto: fixtures.topology(), now: now, sessionCache: sessionCache
+                updated, onto: fixtures.topology(), now: clock.now(), sessionCache: sessionCache
             )
             #expect(updatedTree.sessions.first?.presentation == AgentPresentationInputs())
         }
