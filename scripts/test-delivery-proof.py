@@ -4320,7 +4320,7 @@ class RootCustodyTests(unittest.TestCase):
                     "concrete current duty", "retention reason and exit condition",
                     "Turn end, process exit, idle UI and a sent result are not accepted completion",
                     "separately authorized", "serialized native maestro_close",
-                    "exact owned direct child", "explicit subtree authorization",
+                    "exact owned strict descendant", "explicit subtree authorization",
                     "Preserve every refusal or unknown outcome", "no automatic retry",
                     "removal wait", "capacity release", "self-close",
                     "branches, worktrees, dirty patches, review receipts and session artifacts",

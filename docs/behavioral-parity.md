@@ -118,10 +118,11 @@ commands remain unchanged. Full xcresult bundles are not included in this
 diagnostic artifact.
 All eleven workflow commands remain required.
 
-### Explicit owned-child and subtree close (#90, #91)
+### Explicit owned-descendant and subtree close (#90, #91, #377)
 
 The native adapter's `maestro_close` and controller's private `native-close`
-ingress admit one exact, currently owned direct interactive child, then request
+ingress admit one exact, currently owned strict-descendant interactive session
+(#377 widened this from direct children only), then request
 stock `surface.close` once with the documented initial Boolean `force: true`.
 This selects the noninteractive host route while retaining last-terminal
 refusal, not UI confirmation/pinning parity. Earlier CMUX 0.65 requests omitted
@@ -149,7 +150,7 @@ in-flight cancellation and already-aborted refusal without retry. These are
 synthetic source/transport proofs, not real-host survivor or partial-failure proof.
 
 `NativeCloseTests` in `scripts/test-delivery-proof.py` exercise private
-actor/invoker authority, direct-child scope, stale target fields, process/source
+actor/invoker authority, strict-descendant scope, stale target fields, process/source
 anchors, workspace movement, launch leases, preflight changes, real store-lock
 exclusion, existing RPC error/timeout behavior and byte-preserved records/routes.
 An owned real subprocess also exits without being reaped while retaining its

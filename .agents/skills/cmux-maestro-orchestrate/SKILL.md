@@ -8,7 +8,7 @@ description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs
 Installed invocation: `/cmux-maestro-native:cmux-maestro-orchestrate`.
 
 Use this skill when the user explicitly delegates work to another Copilot
-session, requests closure of an owned child terminal, or needs an own-session
+session, requests closure of an owned descendant terminal, or needs an own-session
 human notification. Each worker receives a
 real terminal tab in the coordinator's current CMUX pane and workspace. Never
 create a window or split.
@@ -447,15 +447,15 @@ daemon, scheduler, completion tracker or cleanup engine follows from this
 guidance. Missing live/native acceptance must remain explicit; disposable
 fixtures and policy walkthroughs are not live operational proof.
 
-## Request an owned child or explicit subtree close
+## Request an owned descendant or explicit subtree close
 
 Only for an explicitly authorized close, call native `maestro_close` with the
-exact identity from that child's launch result:
+exact identity from that descendant's launch result:
 
 ```json
 {
   "target": {
-    "workerId": "<exact owned child UUID>",
+    "workerId": "<exact owned descendant UUID>",
     "workspaceId": "<exact bound workspace UUID>",
     "surfaceId": "<exact created surface UUID>",
     "sessionId": "<exact Copilot session UUID>",
@@ -497,7 +497,7 @@ cancellation, overflow
 or loss can still leave the entire request uncertain; never retry automatically.
 
 The controller checks its private actor capability/control identity, invoking
-provider ancestry, exact child session/generation/surface, current workspace
+provider ancestry, exact target session/generation/surface, current workspace
 membership and live provider anchors. Both exact sessions must have one matching,
 safe `inuse.PID.lock` in the standard `~/.copilot/session-state/<sessionId>`
 source directory. Its live same-user owner must be the recorded launch PID or

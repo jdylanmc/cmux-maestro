@@ -5098,7 +5098,7 @@ def maestro_task(task, coordinator=None):
         "with responsible owner, retention reason and exit condition. Turn end, process exit, "
         "idle UI and a sent result are not accepted completion.\n"
         "After accepted custody, the owning parent uses separately authorized, serialized native "
-        "maestro_close for its exact owned direct child; only explicit subtree authorization "
+        "maestro_close for its exact owned strict descendant; only explicit subtree authorization "
         "permits the fixed descendant-first pass. No self-close or closing parents, siblings or "
         "peers. Preserve every refusal or unknown outcome with owner and next action; no automatic "
         "retry, removal wait, provider shutdown, terminal input or force-kill fallback. Close "
@@ -7626,7 +7626,7 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("accounts", help="List configured GitHub account names without credentials")
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
-    commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
+    commands.add_parser("native-close", help="Private owned-descendant close ingress; use the native maestro_close tool")
     commands.add_parser("native-notify", help=argparse.SUPPRESS)
     commands.add_parser("notification-authorize", help=argparse.SUPPRESS)
     commands.add_parser("notification-focus", help=argparse.SUPPRESS)
