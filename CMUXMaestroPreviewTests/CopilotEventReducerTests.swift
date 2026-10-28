@@ -200,6 +200,71 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value().presentation.modelTrouble == nil)
     }
 
+    @Test(arguments: ["error", "success", "failure"], ["cold", "gap", "ended", "mismatched-turn"])
+    func observedModelEventsCannotMutateLaterTurns(_ outcome: String, _ boundary: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        reducer.omitUnseenHistory()
+        if boundary == "ended" {
+            try feed(&reducer, "session.shutdown", ["shutdownType": "routine"])
+        } else if boundary == "mismatched-turn" {
+            try feed(&reducer, "assistant.turn_start", ["turnId": "other"])
+        }
+        let nextStart = UUID()
+        let old = try event(
+            outcome == "failure" ? "model.call_failure" : "model.call_finished",
+            id: UUID(), timestamp: nil,
+            outcome == "failure" ? ["source": "top_level"] : ["turnId": "1", "outcome": outcome],
+            parent: outcome == "failure" ? nextStart : nil
+        )
+        let unmatched = reducer.value()
+        reducer.consume(old)
+        #expect(reducer.value() == unmatched)
+        if boundary == "gap" { reducer.omitUnseenHistory() }
+        if boundary == "ended" { try feed(&reducer, "session.resume", [:]) }
+        reducer.consume(try event("assistant.turn_start", id: nextStart, timestamp: nil, ["turnId": "1"]))
+        if outcome == "success" {
+            try feed(&reducer, "model.call_finished", ["turnId": "1", "outcome": "error"])
+        }
+        let beforeReplay = reducer.value()
+        #expect(beforeReplay.presentation.modelTrouble == (outcome == "success" ? true : nil))
+        #expect(beforeReplay.presentation.turnClean == (outcome != "success"))
+        reducer.consume(old)
+        #expect(reducer.value() == beforeReplay)
+        try feed(&reducer, "model.call_finished", ["turnId": "1", "outcome": "error"])
+        #expect(reducer.value().presentation.modelTrouble == true)
+        try feed(&reducer, "model.call_finished", ["turnId": "1", "outcome": "success"])
+        #expect(reducer.value().presentation.modelTrouble == false)
+        #expect(reducer.value().presentation.turnClean == false)
+    }
+
+    @Test(arguments: ["root", "foreign-owner", "subagent", "mcp_sampling", "unknown-source"])
+    func unmatchedModelIdentityPressureIsRootOnlyAndPresentationScoped(_ source: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: 1, maximumReplayFilterWords: 1)
+        for index in 0..<128 {
+            reducer.consume(try copilotTestEvent(
+                ["root", "foreign-owner"].contains(source) ? "model.call_finished" : "model.call_failure",
+                agent: source == "foreign-owner" ? "child" : nil,
+                data: ["turnId": "1", "outcome": "error", "source": source],
+                id: String(format: "F3790000-0000-0000-0000-%012X", 100 + index)
+            ))
+        }
+        #expect(reducer.issues == (source == "root" ? [.readLimitReached] : []))
+        let start = try copilotTestEvent("assistant.turn_start", data: ["turnId": "1"],
+                                        id: "F3790000-0000-0000-0000-000000000001")
+        reducer.consume(start)
+        #expect(reducer.value().state == .working)
+        #expect(reducer.value().presentation.turnClean == (source == "root" ? nil : true))
+        reducer.consume(try copilotTestEvent("assistant.turn_end", data: ["turnId": "1"],
+                                             id: "F3790000-0000-0000-0000-000000000500"))
+        #expect(reducer.value().state == .idle)
+        #expect(reducer.value().attention.map(\.kind) == [.turnFinished])
+        reducer.consume(try copilotTestEvent("session.error", data: ["errorType": "quota"],
+                                             id: "F3790000-0000-0000-0000-000000000501"))
+        #expect(reducer.value().state == .failed)
+        #expect(reducer.value().attention.contains { $0.kind == .error })
+        if source == "root" { #expect(reducer.value().presentation == AgentPresentationInputs()) }
+    }
+
     @Test(arguments: ["model", "compaction", "completion-only"])
     func presentationReplayExhaustionPreservesSubsequentLifecycle(_ source: String) throws {
         let sessionID = UUID()
