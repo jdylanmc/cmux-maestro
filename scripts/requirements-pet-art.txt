@@ -1,0 +1,2 @@
+# Development-only generation and explicit offline copy-upgrade tooling.
+Pillow==11.3.0
