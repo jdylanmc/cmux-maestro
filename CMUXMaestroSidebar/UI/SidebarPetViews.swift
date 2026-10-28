@@ -151,10 +151,12 @@ struct SidebarPetButton: View {
         // Hover is tracked on the whole pet including the badge, or the badge would steal it and flicker.
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onChange(of: content.petMood, initial: true) { _, value in moodDisplay.update(value) }
+        .onChange(of: hidden ? .unavailable : content.petMood, initial: true) { _, value in
+            if hidden { moodDisplay.stop() } else { moodDisplay.update(value) }
+        }
         .onDisappear { moodDisplay.stop() }
         .popover(isPresented: $showingPicker, arrowEdge: .trailing) {
-            SidebarPetPicker(store: store, sessionID: content.petSessionID, agentChoice: content.petChoice, mood: mood.mood) {
+            SidebarPetPicker(store: store, sessionID: content.petSessionID, agentChoice: content.petChoice, mood: shown.mood) {
                 showingPicker = false
             }
         }

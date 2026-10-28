@@ -64,7 +64,7 @@ struct SidebarPetMoodTests {
         }
 
         func signal(_ kind: AgentAttentionKind, at date: Date? = nil) -> AgentAttention {
-            .init(kind: kind, evidence: .init(source: "synthetic", eventID: UUID()), occurredAt: date ?? now)
+            .init(kind: kind, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: date ?? now)
         }
     }
 
@@ -237,20 +237,56 @@ struct SidebarPetMoodTests {
         #expect(display.shown?.preemptsHold == true)
     }
 
-    @Test func exactIdentityAndGenerationResetHold() {
+    @Test(arguments: ["session", "workspace", "surface", "node", "run", "generation", "process"])
+    func exactIdentityAndGenerationResetHold(_ field: String) {
         let clock = SidebarMoodTestClock(now: epoch)
         let display = SidebarPetMoodDisplay(clock: clock.clock)
         defer { display.stop(); clock.finish() }
         var fixture = Fixture(now: epoch)
         fixture.add("thinking")
         display.update(fixture.input)
-        fixture.generation += 1
+        clock.now = epoch.addingTimeInterval(1)
         fixture.add("working")
-        display.update(fixture.input)
+        var changed = fixture.input
+        changed.identity = .init(
+            session: field == "session" ? UUID() : fixture.sessionID,
+            workspace: field == "workspace" ? UUID() : fixture.workspace,
+            surface: field == "surface" ? UUID() : fixture.surface,
+            node: field == "node" ? UUID() : nil,
+            run: field == "run" ? UUID() : nil,
+            generation: field == "generation" ? 2 : 1,
+            process: field == "process" ? .init(pid: 100, startSeconds: 100, startMicroseconds: 1) : nil)
+        display.update(changed)
         #expect(display.shown?.mood == .working)
         let other = Fixture(now: epoch)
         display.update(other.input)
         #expect(display.shown?.mood == .idle)
+    }
+
+    @Test func outstandingInternalFailureBeatsUserAbortButAcknowledgementClearsIt() {
+        var fixture = Fixture(now: epoch)
+        fixture.add("startled")
+        var task = SidebarCopilotNode(id: "failed", parentID: nil, depth: 0, kind: .subagent,
+                                       name: "Synthetic task", state: .failed, model: nil,
+                                       ancestryUnresolved: false, hasChildren: false)
+        task.observedParent = .session(.init(providerID: CopilotSnapshotAdapter.providerID,
+                                            sessionID: fixture.sessionID.uuidString))
+        task.attention = [fixture.signal(.error)]
+        fixture.nodes = [task]
+        #expect(SidebarPetMood.resolve(fixture.input, now: epoch).mood == .sad)
+        fixture.nodes[0].attention = []
+        #expect(SidebarPetMood.resolve(fixture.input, now: epoch).mood == .startled)
+    }
+
+    @Test func sleepyRequiresTimestampAndNeverOverridesCurrentWork() {
+        var fixture = Fixture(now: epoch)
+        fixture.attention = [.init(kind: .turnFinished, evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: nil)]
+        #expect(SidebarPetMood.resolve(fixture.input, now: epoch.addingTimeInterval(1000)).mood == .idle)
+        fixture.attention = [fixture.signal(.turnFinished, at: epoch.addingTimeInterval(100))]
+        #expect(SidebarPetMood.resolve(fixture.input, now: epoch).mood == .idle)
+        fixture.add("sleepy")
+        fixture.add("working")
+        #expect(SidebarPetMood.resolve(fixture.input, now: epoch).mood == .working)
     }
 
     @Test func sleepyDeadlineAndAcknowledgementArePresentationOnly() async {
@@ -266,7 +302,11 @@ struct SidebarPetMoodTests {
         await clock.advance(to: epoch.addingTimeInterval(SidebarPetMood.sleepyAfter), observing: display)
         #expect(display.shown?.mood == .sleepy)
         #expect(original.session?.attention.count == 1)
-        fixture.attention = [] // Existing acknowledgement projection removes only this notice.
+        var acknowledged = SidebarAttentionSettings()
+        acknowledged.acknowledged.insert(.init(sessionID: fixture.sessionID, ownerID: nil,
+                                              evidence: fixture.attention[0].evidence))
+        #expect(acknowledged.isValid)
+        fixture.attention.removeAll { acknowledged.contains($0, sessionID: fixture.sessionID, ownerID: nil) }
         display.update(fixture.input)
         await clock.registered()
         #expect(display.current?.mood == .idle)

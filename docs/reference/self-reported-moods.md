@@ -2,7 +2,8 @@
 
 Optional enum-only authored expressions for managed sessions (#380, part of
 #376). Decision: [ADR 0031](../adr/0031-agents-self-report-enum-only-moods.md).
-This path supplies data, not pet art or a resolver.
+This path supplies data, not pet art. The [pet mood resolver](pet-moods.md)
+consumes eligible claims after higher-priority derived facts.
 
 ## Agent interface
 

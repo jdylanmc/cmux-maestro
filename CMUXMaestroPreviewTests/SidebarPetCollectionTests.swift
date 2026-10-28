@@ -373,7 +373,8 @@ struct SidebarPetCollectionTests {
                     (UInt8(20 + row * 10), UInt8(30 + column * 25), UInt8(220 - row * 8), 255)
             }
         }
-        let (store, root, session, _) = try makeStore(sheet: #require(rep.representation(using: .png, properties: [:])))
+        let data = try #require(rep.representation(using: .png, properties: [:]))
+        let (store, root, session, _) = try makeStore(sheet: data)
         defer { try? FileManager.default.removeItem(at: root) }
         var frames: [Data] = []
         for mood in SidebarPetSheet.Mood.allCases {

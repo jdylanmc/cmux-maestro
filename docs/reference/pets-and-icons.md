@@ -11,7 +11,8 @@ A v2 pet (1536×2288) works; legacy tails are ignored. A fixed 20-row mood atlas
 also works, with width 512-1536, a multiple of 8, and height exactly
 `ceil(20 * 208 * width / 1536)` (standard 1536×4160).
 Every agent starts with bundled, original **Maestro** robot-head
-pet. Animation follows state: idle, working, needs input, turn finished, blocked/failed.
+pet. Animation follows the [pet mood resolver](pet-moods.md): thirteen derived
+moods plus optional exact-session self-reports. Legacy sheets use explicit fallback rows.
 Collect pets: while an agent uses an agent-made pet, hover its footer pet and click the centered **+** to
 save it to your shared pets (the picker has the same **+** on agent-made cells and a confirmed **×**
 on collected ones). Every agent's picker lists the whole collection. Removing a collected pet makes
@@ -22,7 +23,7 @@ spritesheet) or bare sheet. Picker also links to online Codex pet galleries.
 Bundled `maestro-pet` skill ships `pet_kit.py`: a Python standard-library drawing kit
 (shapes, alpha, PNG writer). Any Copilot session in CMUX with Maestro's integration
 draws its own original pet with no image provider, API key, network or package
-install. Kit requires every frame of the five rows Maestro plays, fills unused Codex
+install. Kit requires every frame of the five original rows, fills other Codex
 rows from idle, and writes `pet.json`, `spritesheet.png` and `preview.png` to a new
 folder. It never selects a pet. Agent adds pet with
 `cmux-maestro-orchestrator pet --self --session-id … --add <folder>`. Command validates
@@ -49,7 +50,7 @@ replaces its sequence. No frame tick publishes evidence or requests sidebar layo
 The 20-row format preserves rows 0-8. Row 9 is Startled; row 10 is reserved.
 Partial extensions are refused. No manifest version bump or companion asset:
 new Maestro reads legacy pets, but older Maestro rejects mood atlases.
-Bundled Maestro remains nine rows; this format does not change today's state selection.
+Bundled Maestro remains nine rows until the separate art update (#383).
 
 | Mood ID | Row | Frames | Legacy fallback row / frames |
 | --- | --- | --- | --- |
@@ -74,7 +75,8 @@ Resolver seam: `SidebarPetSheet.Mood(rawValue:)` parses these IDs;
 returns `row` and `frameCount`, or `nil` for invalid geometry.
 `SidebarPetStore.playback(petID:session:mood:)` resolves against the decoded sheet,
 and `frame(petID:session:mood:index:)` crops it using that loop length.
-Existing `state:` playback is unchanged. No mood/evidence resolver lives here.
+All playback uses `mood:`. `SidebarPetMood` selects the expression; the sheet
+and store only choose and crop authored rows.
 
 Both formats retain the 10 MiB compressed limit. Extended width is capped before
 native decoding, bounding the standard RGBA bitmap at 25,559,040 bytes, excluding

@@ -9,9 +9,16 @@ final class SidebarPetMoodDisplay {
         var sleepUntil: (Date) async throws -> Void
 
         static var continuous: Self {
-            .init(now: Date.init, sleepUntil: { deadline in
+            let clock = ContinuousClock()
+            let origin = clock.now
+            let wallOrigin = Date()
+            let now = {
+                let elapsed = origin.duration(to: clock.now).components
+                return wallOrigin.addingTimeInterval(Double(elapsed.seconds) + Double(elapsed.attoseconds) / 1e18)
+            }
+            return .init(now: now, sleepUntil: { deadline in
                 // This delay is the intended minimum display duration, never observation polling.
-                try await Task.sleep(for: .seconds(max(0, deadline.timeIntervalSinceNow)))
+                try await clock.sleep(for: .seconds(max(0, deadline.timeIntervalSince(now()))))
             })
         }
     }
