@@ -4711,7 +4711,7 @@ def native_close_request(root, cmux, request):
     target_identity = request["target"]
     subtree = request.get("scope") == "subtree"
 
-    def owned(state, identity=target_identity, *, direct=True, selecting=False):
+    def owned(state, identity=target_identity, *, selecting=False):
         native_identity = request["identity"]
         node_id = native_identity.get("nodeId") if isinstance(native_identity, dict) else None
         stored_actor = state["nodes"].get(node_id) if isinstance(node_id, str) else None
@@ -4733,7 +4733,9 @@ def native_close_request(root, cmux, request):
                 raise OrchestrationError("Close does not match the invoking native session.")
             authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
         require_current_surface(actor["workspaceId"], actor["surfaceId"])
-        target = ensure_owned(state, actor, identity["workerId"], direct=direct)
+        target = ensure_owned(state, actor, identity["workerId"])
+        if target["id"] == actor["id"]:
+            raise OrchestrationError("Target is outside the actor's owned orchestration tree.")
         if any(target.get(field) != identity[key] for key, field in (
             ("workspaceId", "workspaceId"), ("surfaceId", "surfaceId"),
             ("sessionId", "copilotSessionId"), ("generation", "generation"),
@@ -4775,7 +4777,7 @@ def native_close_request(root, cmux, request):
     def send_once(store, selected_identity=target_identity, *, direct=True):
         nonlocal attempted
         state = store.read()
-        current, child = owned(state, selected_identity, direct=direct)
+        current, child = owned(state, selected_identity)
         ancestors = [snapshot["nodes"][selected_identity["workerId"]]]
         while ancestors[-1]["id"] != actor["id"]:
             ancestors.append(snapshot["nodes"][ancestors[-1]["parentId"]])
@@ -5104,7 +5106,7 @@ def maestro_task(task, coordinator=None):
         "with responsible owner, retention reason and exit condition. Turn end, process exit, "
         "idle UI and a sent result are not accepted completion.\n"
         "After accepted custody, the owning parent uses separately authorized, serialized native "
-        "maestro_close for its exact owned direct child; only explicit subtree authorization "
+        "maestro_close for its exact owned strict descendant; only explicit subtree authorization "
         "permits the fixed descendant-first pass. No self-close or closing parents, siblings or "
         "peers. Preserve every refusal or unknown outcome with owner and next action; no automatic "
         "retry, removal wait, provider shutdown, terminal input or force-kill fallback. Close "
@@ -5115,8 +5117,9 @@ def maestro_task(task, coordinator=None):
     )
     if coordinator is not None:
         context += "Coordinator return address: " + json.dumps(coordinator, separators=(",", ":")) + "\n"
-        context += ("That address is exact for the coordinator's current generation; if a send to it "
-                    "fails after a CMUX relaunch, find the coordinator's current address with maestro_peers.\n")
+        context += ("This is your direct parent's return address, exact for its current generation; "
+                    "if a send to it fails after a CMUX relaunch, find that parent's current address "
+                    "with maestro_peers. Nested reports go to that parent, not automatically to the run root.\n")
     return context + "\nOriginal task (verbatim):\n" + task
 
 
@@ -5161,22 +5164,22 @@ def recorded_launch_flags(node):
 
 def prepare_direct_launch(root, node, token):
     snapshot = read_state(root)
-    coordinator = next((item for item in snapshot["nodes"].values()
-                        if item["runId"] == node["runId"] and item["role"] == "coordinator"
-                        and item["id"] != node["id"] and item.get("messaging")), None)
+    parent = snapshot["nodes"].get(node["parentId"])
     address = None
-    if coordinator is not None:
+    if parent is not None and parent.get("messaging"):
+        if parent["runId"] != node["runId"] or parent["workspaceId"] != node["workspaceId"]:
+            raise OrchestrationError("Parent messaging ownership changed before launch.")
         try:
-            binding = message_json(Path(coordinator["messaging"]["routes"]) / f"{message_peer(coordinator)}.json")
+            binding = message_json(Path(parent["messaging"]["routes"]) / f"{message_peer(parent)}.json")
         except FileNotFoundError:
-            binding = None  # A retired coordinator has no genuine return route.
+            binding = None  # A retired parent has no genuine return route.
         if binding is not None:
             if not isinstance(binding, dict) or (
                 binding.get("nodeId"), binding.get("sessionId"), binding.get("workspaceId"), binding.get("generation")
             ) != (
-                coordinator["id"], coordinator["copilotSessionId"], node["workspaceId"], coordinator["generation"],
+                parent["id"], parent["copilotSessionId"], node["workspaceId"], parent["generation"],
             ):
-                raise OrchestrationError("Coordinator messaging identity changed before launch.")
+                raise OrchestrationError("Parent messaging identity changed before launch.")
             address = {key: binding[key] for key in ("workspaceId", "sessionId", "generation")}
     arguments = interactive_arguments(node, maestro_task(node["task"], address))
     environment = worker_environment(node["id"], token, node, credentials=False)
@@ -7788,7 +7791,7 @@ def parser():
     commands = result.add_subparsers(dest="command", required=True)
     commands.add_parser("accounts", help="List configured GitHub account names without credentials")
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
-    commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
+    commands.add_parser("native-close", help="Private owned-descendant close ingress; use the native maestro_close tool")
     commands.add_parser("native-notify", help=argparse.SUPPRESS)
     commands.add_parser("native-mood", help=argparse.SUPPRESS)
     commands.add_parser("notification-authorize", help=argparse.SUPPRESS)

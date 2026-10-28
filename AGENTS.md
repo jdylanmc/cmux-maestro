@@ -77,7 +77,7 @@ do not copy its source or history, modify it, or make this project depend on it.
   session resume. Archive/recovery must never guess ownership, kill a process,
   delete a terminal, or bypass the still-live resource bound.
   Explicit authorized `maestro_close` is separate: default one exact owned
-  direct-child stock host close, or explicitly authorized fixed descendant-first
+  descendant stock host close, or explicitly authorized fixed descendant-first
   subtree scope under the actual actor. Report every selected target within
   bounded time/output, retaining host refusals and uncertain outcomes. Select
   the documented noninteractive stock route on the initial admitted request;

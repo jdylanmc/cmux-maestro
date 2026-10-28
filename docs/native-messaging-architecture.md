@@ -303,22 +303,22 @@ host discovery or availability in an already-running chat. Applying an updated
 loader requires the existing separately authorized setup/update path; this
 source change does not authorize installation or reload.
 
-### Explicit owned-child close
+### Explicit owned-descendant close
 
 `maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}, scope?})`
 uses the CLI-owned adapter and existing controller, not the peer socket or the
-sidebar. The model supplies only one explicit child identity. The adapter binds
+sidebar. The model supplies only one explicit descendant identity. The adapter binds
 the actual invoking session and private capability; controller admission also
 requires that session's inherited actor/control token, run, generation, current
 surface and provider ancestry. Public peer discovery grants no close rights.
 Omitted scope and explicit `target-only` preserve the flat single-target receipt.
 Explicit `subtree` captures a fixed bounded private root/descendant selection
 and uses the actual actor, not impersonated intermediate parents. The exact root
-must remain a direct child; selected descendants are separately admitted in that
+must remain a strict descendant; selected descendants are separately admitted in that
 captured tree. Descendants precede parents, at most once each. An ended root can
 still identify owned live descendants without itself passing close admission.
 
-The controller rechecks exact direct-child ownership against the initial
+The controller rechecks exact descendant ownership against the initial
 snapshot under its existing exclusive state lock. Active run launch leases,
 unresolved/changed identities, moved/missing workspace surfaces, and absent or
 changed provider anchors refuse. Close admission positively checks non-zombie

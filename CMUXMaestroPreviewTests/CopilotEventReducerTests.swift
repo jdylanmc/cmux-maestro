@@ -412,6 +412,29 @@ nonisolated struct CopilotEventReducerTests {
         #expect(reducer.value().attention == initial.attention)
     }
 
+    @Test(arguments: [false, true])
+    func failedIdleCompactionPreservesCompletedTurnCleanliness(_ legacy: Bool) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        try feed(&reducer, "assistant.turn_end", ["turnId": "primary"])
+        var expected = reducer.value()
+        #expect(expected.presentation.primaryTurnOpen == false)
+        #expect(expected.presentation.turnClean == true)
+        let start = UUID()
+        reducer.consume(try event(
+            "session.compaction_start", id: start, timestamp: nil,
+            legacy ? [:] : ["compactionAttemptId": "idle"]
+        ))
+        #expect(reducer.value().presentation.compactionActive == true)
+        reducer.consume(try event(
+            "session.compaction_complete", id: UUID(), timestamp: nil,
+            legacy ? ["success": false] : ["compactionAttemptId": "idle", "success": false],
+            parent: start
+        ))
+        expected.presentation.compactionActive = false
+        #expect(reducer.value() == expected)
+    }
+
     @Test func overlappingAndRetiredCompactionsCannotFabricateAClosedInterval() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])

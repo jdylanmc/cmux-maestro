@@ -8,7 +8,7 @@ description: Launch chat-ready interactive Copilot workers in CMUX terminal tabs
 Installed invocation: `/cmux-maestro-native:cmux-maestro-orchestrate`.
 
 Use this skill when the user explicitly delegates work to another Copilot
-session, requests closure of an owned child terminal, or needs an own-session
+session, requests closure of an owned descendant terminal, or needs an own-session
 human notification. Each worker receives a
 real terminal tab in the coordinator's current CMUX pane and workspace. Never
 create a window or split.
@@ -259,8 +259,11 @@ are obtained through the bounded resolver into the process environment, never
 the prompt, host command, or persistent launch files.
 The canonical Maestro-context wrapper preserves task bytes, explains native
 peer discovery/send and genuine envelope-sender replies, human-interactive chat,
-uncertainty and no input fallback. A genuine available coordinator address is
-included; no slash skill or startup acknowledgement is required.
+uncertainty and no input fallback. The direct parent's genuine available return
+address is included, even when that parent is a worker. An unavailable parent
+route is omitted, never replaced with the run root. The root remains a peer;
+reports are not automatically copied to it. No slash skill or startup
+acknowledgement is required.
 
 Both coordinator and worker launch assignments receive milestone-only handoff
 guidance: candidate ready, review complete, blocking failure, or decision needed.
@@ -456,15 +459,15 @@ daemon, scheduler, completion tracker or cleanup engine follows from this
 guidance. Missing live/native acceptance must remain explicit; disposable
 fixtures and policy walkthroughs are not live operational proof.
 
-## Request an owned child or explicit subtree close
+## Request an owned descendant or explicit subtree close
 
 Only for an explicitly authorized close, call native `maestro_close` with the
-exact identity from that child's launch result:
+exact identity from that descendant's launch result:
 
 ```json
 {
   "target": {
-    "workerId": "<exact owned child UUID>",
+    "workerId": "<exact owned descendant UUID>",
     "workspaceId": "<exact bound workspace UUID>",
     "surfaceId": "<exact created surface UUID>",
     "sessionId": "<exact Copilot session UUID>",
@@ -477,7 +480,7 @@ Use the actual generation, not the illustrative `1`. The adapter supplies the
 invoking native identity privately. Do not inspect tokens, construct a private
 `native-close` request, or substitute a peer address, name, current focus or
 worktree. Peer participation is not close authority. The exact selected root must
-be a direct child in the same run/workspace: never self, parent, sibling or an
+be a strict descendant in the same run/workspace: never self, parent, sibling or an
 unrelated peer. Omitted `scope` (or `"scope": "target-only"`) keeps the existing
 single-target receipt and leaves descendants owned and untouched.
 
@@ -506,7 +509,7 @@ cancellation, overflow
 or loss can still leave the entire request uncertain; never retry automatically.
 
 The controller checks its private actor capability/control identity, invoking
-provider ancestry, exact child session/generation/surface, current workspace
+provider ancestry, exact target session/generation/surface, current workspace
 membership and live provider anchors. Both exact sessions must have one matching,
 safe `inuse.PID.lock` in the standard `~/.copilot/session-state/<sessionId>`
 source directory. Its live same-user owner must be the recorded launch PID or
