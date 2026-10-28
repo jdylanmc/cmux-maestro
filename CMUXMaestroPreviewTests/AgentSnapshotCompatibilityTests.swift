@@ -31,12 +31,13 @@ struct AgentSnapshotCompatibilityTests {
         let fixtures = SidebarTreeFixtures()
         let now = Date(timeIntervalSince1970: 1_800_000_000)
         let states: [CopilotWorkState] = [.working, .idle, .blocked, .completed, .failed, .cancelled, .unknown]
-        let observations = states.enumerated().map { index, state in
+        var observations = states.enumerated().map { index, state in
             fixtures.session(id: UUID(), state: state, children: [
                 .init(id: "child-\(index)", parentID: nil, kind: .subagent, name: "Synthetic",
                       state: state, model: "child-model", terminalEvent: .init(id: UUID(), timestamp: now))
             ], now: now)
         }
+        observations[0].presentation = .init(primaryTurnOpen: true, turnClean: true, consecutiveToolFailures: 0)
         let current = CopilotSnapshotAdapter.snapshot(
             fixtures.snapshot(sessions: observations, issues: [.loadingHistory], complete: false, now: now),
             workspaceBySurface: fixtures.topology().workspaceBySurface
@@ -44,6 +45,7 @@ struct AgentSnapshotCompatibilityTests {
         try current.validate()
         let encoded = try AgentSessionSnapshotJSONCodec.encode(current)
         let legacy = try LegacyV1Snapshot.decode(encoded)
+        #expect(legacy.schemaVersion == 1)
         #expect(legacy.sessions.count == 7)
         #expect(legacy.sessions.map(\.state.value?.rawValue) == ["working", nil, "blocked", "done", nil, nil, nil])
         #expect(legacy.sessions.map(\.childWork.first?.state.value?.rawValue) == ["working", nil, "blocked", "done", nil, nil, nil])

@@ -1,7 +1,7 @@
 import Foundation
 
 // Projection from Copilot 1.0.84-4, with 1.0.88 multi-turn attribution. This decoder
-// deliberately has no keys for prompts, arguments, results, errors, paths or questions.
+// deliberately has no keys for prompts, arguments, results, raw errors, paths or questions.
 nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let id: String
     let type: String
@@ -26,6 +26,16 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
     let parentEventID: String?
     let multiTurn: Bool?
     let messageHasTurnMetadata: Bool
+    let abortReason: AgentPresentationInputs.AbortReason?
+    let errorCategory: AgentPresentationInputs.ErrorCategory?
+    let modelCallOutcome: ModelCallOutcome?
+    let modelCallIsPrimary: Bool?
+    let compactionAttemptID: String?
+    let presentationMetadataIsValid: Bool
+
+    enum ModelCallOutcome: String, Decodable, Sendable {
+        case success, error, cancelled, rejected
+    }
 
     private static let knownTypes: Set<String> = [
         "session.start", "session.resume", "session.idle", "session.model_change", "session.shutdown",
@@ -48,6 +58,7 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         case toolCallId, parentId, toolName, agentDisplayName, name, model
         case selectedModel, newModel, currentModel, requestId, success, cancelled
         case shutdownType, sessionId, version, turnId, interactionId, trigger, kind, resolvedByHook, multiTurn
+        case reason, errorType, outcome, compactionAttemptId, source
     }
     enum NotificationFields: String, CodingKey { case type, shellId, exitCode }
 
@@ -84,6 +95,12 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         var session: UUID?, format: Int?
         var shell: String?, exitCode: Int?
         var hookResolved: Bool?, turn: String?, interaction: String?, acceptsFollowUps: Bool?
+        var abort: AgentPresentationInputs.AbortReason?
+        var category: AgentPresentationInputs.ErrorCategory?
+        var modelOutcome: ModelCallOutcome?
+        var modelIsPrimary: Bool?
+        var compactionAttempt: String?
+        var presentationValid = true
         var messageHasTags = false
         if type == "assistant.message" {
             // Message payloads remain opaque. Unusable advisory tags must neither
@@ -113,6 +130,14 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
                 shutdown = try data.decode(String.self, forKey: .shutdownType)
                 guard ["routine", "error"].contains(shutdown!) else { throw Self.invalid(decoder) }
                 selectedModel = try data.decodeIfPresent(String.self, forKey: .currentModel)
+            case "abort":
+                if let reason = try? data.decode(String.self, forKey: .reason) {
+                    abort = AgentPresentationInputs.AbortReason(rawValue: reason) ?? .other
+                }
+            case "session.error":
+                if let errorType = try? data.decode(String.self, forKey: .errorType) {
+                    category = AgentPresentationInputs.ErrorCategory(rawValue: errorType) ?? .other
+                }
             case "assistant.turn_start", "assistant.turn_end":
                 turn = try data.decode(String.self, forKey: .turnId)
                 interaction = try data.decodeIfPresent(String.self, forKey: .interactionId)
@@ -160,11 +185,43 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
                 }
             default: break
             }
+        } else if ["model.call_failure", "model.call_finished",
+                   "session.compaction_start", "session.compaction_complete"].contains(type) {
+            // Optional presentation metadata must not make a formerly opaque
+            // event invalidate lifecycle publication. Bad metadata stays unknown.
+            do {
+                let data = try outer.nestedContainer(keyedBy: Fields.self, forKey: .data)
+                if type == "model.call_failure" {
+                    switch try data.decode(String.self, forKey: .source) {
+                    case "top_level": modelIsPrimary = true
+                    case "subagent", "mcp_sampling": modelIsPrimary = false
+                    default: modelIsPrimary = nil
+                    }
+                } else if type == "model.call_finished" {
+                    turn = try data.decode(String.self, forKey: .turnId)
+                    interaction = try data.decodeIfPresent(String.self, forKey: .interactionId)
+                    modelOutcome = try data.decode(ModelCallOutcome.self, forKey: .outcome)
+                } else if type.hasPrefix("session.compaction_") {
+                    compactionAttempt = try data.decodeIfPresent(String.self, forKey: .compactionAttemptId)
+                    if type == "session.compaction_complete" {
+                        didSucceed = try data.decode(Bool.self, forKey: .success)
+                    }
+                }
+                guard [turn, compactionAttempt].compactMap({ $0 }).allSatisfy(Self.validID),
+                      interaction.map(Self.validInteractionID) != false else { throw Self.invalid(decoder) }
+            } catch {
+                presentationValid = false
+                turn = nil
+                interaction = nil
+                modelOutcome = nil
+                compactionAttempt = nil
+                didSucceed = nil
+            }
         }
         if let interaction {
             guard Self.validInteractionID(interaction) else { throw Self.invalid(decoder) }
         }
-        for identifier in [tool, parent, request, shell, turn].compactMap({ $0 }) {
+        for identifier in [tool, parent, request, shell, turn, compactionAttempt].compactMap({ $0 }) {
             guard Self.validID(identifier) else { throw Self.invalid(decoder) }
         }
         toolCallID = tool
@@ -185,6 +242,12 @@ nonisolated struct CopilotEventProjection: Decodable, Sendable {
         interactionID = interaction
         multiTurn = acceptsFollowUps
         messageHasTurnMetadata = messageHasTags
+        abortReason = abort
+        errorCategory = category
+        modelCallOutcome = modelOutcome
+        modelCallIsPrimary = modelIsPrimary
+        compactionAttemptID = compactionAttempt
+        presentationMetadataIsValid = presentationValid
     }
 
     private static func validInteractionID(_ value: String) -> Bool {
@@ -225,6 +288,7 @@ nonisolated struct CopilotReducedState: Equatable, Sendable {
     let children: [CopilotChildWork]
     let attention: [AgentAttention]
     let activity: AgentActivity?
+    var presentation = AgentPresentationInputs()
 
     init(
         state: CopilotWorkState = .unknown, model: String? = nil, children: [CopilotChildWork] = [],
@@ -313,6 +377,7 @@ private nonisolated enum CopilotEventKind: Sendable {
     case subagentStarted, subagentCompleted, subagentFailed, subagentConfigured, subagentSelected, skillInvoked
     case permissionRequested, permissionCompleted, userInputRequested, userInputCompleted
     case systemNotification, other
+    case modelCallFailure, modelCallFinished, compactionStart, compactionComplete
 
     init(_ type: String) {
         switch type {
@@ -340,6 +405,10 @@ private nonisolated enum CopilotEventKind: Sendable {
         case "user_input.requested": self = .userInputRequested
         case "user_input.completed": self = .userInputCompleted
         case "system.notification": self = .systemNotification
+        case "model.call_failure": self = .modelCallFailure
+        case "model.call_finished": self = .modelCallFinished
+        case "session.compaction_start": self = .compactionStart
+        case "session.compaction_complete": self = .compactionComplete
         default: self = .other
         }
     }
@@ -394,6 +463,12 @@ nonisolated struct CopilotEventReducer: Sendable {
         let turnID: String
         let interactionID: String?
     }
+    private struct Compaction: Sendable {
+        let attemptID: String?
+        let turnEventID: String?
+        var envelopeTip: String
+        var ambiguous = false
+    }
     private struct Tool: Sendable {
         let agentID: String?
         let name: String?
@@ -435,6 +510,12 @@ nonisolated struct CopilotEventReducer: Sendable {
     // Start, retired-work/tool and resolved-request keys share `replay`.
     // Both ledgers retain bounded exact windows and never clear spilled bits.
     private var unsupportedSession = false
+    private var presentation = AgentPresentationInputs()
+    private var compaction: Compaction?
+    // Presentation pressure must not spend lifecycle or relationship admission.
+    private var modelReplay: CopilotReplayGuard
+    private var compactionReplay: CopilotReplayGuard
+    private var presentationReplayExhausted = false
 
     var canPublishProjection: Bool {
         !unsupportedSession && issues.allSatisfy {
@@ -453,6 +534,8 @@ nonisolated struct CopilotEventReducer: Sendable {
         self.maximumDepth = maximumDepth
         seenLifecycleEvents = CopilotReplayGuard(capacity: maximumLifecycleEvents, wordCount: maximumReplayFilterWords)
         replay = CopilotReplayGuard(capacity: maximumRelationships, wordCount: maximumReplayFilterWords)
+        modelReplay = CopilotReplayGuard(capacity: maximumLifecycleEvents, wordCount: maximumReplayFilterWords)
+        compactionReplay = CopilotReplayGuard(capacity: maximumRelationships, wordCount: maximumReplayFilterWords)
     }
 
     // Read time must never decide lifecycle acceptance, so none is accepted.
@@ -461,6 +544,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             let event = try JSONDecoder().decode(CopilotEventProjection.self, from: line)
             apply(event)
         } catch {
+            clearPresentation()
             addIssue(.malformedData)
         }
     }
@@ -469,6 +553,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         do {
             let event = try JSONDecoder().decode(CopilotEventProjection.self, from: line)
             guard event.kind == .sessionStart else {
+                clearPresentation()
                 unsupportedSession = true
                 addIssue(.unsupportedFormat)
                 addIssue(.ambiguousIdentity)
@@ -476,12 +561,13 @@ nonisolated struct CopilotEventReducer: Sendable {
             }
             _ = admitSource(event)
         } catch {
+            clearPresentation()
             addIssue(.malformedData)
         }
     }
 
-    mutating func markMalformed() { addIssue(.malformedData) }
-    mutating func markLimited() { addIssue(.readLimitReached) }
+    mutating func markMalformed() { clearPresentation(); addIssue(.malformedData) }
+    mutating func markLimited() { clearPresentation(); addIssue(.readLimitReached) }
 
     /// A skipped gap invalidates projected state, never observed replay or source failures.
     mutating func omitUnseenHistory() {
@@ -503,6 +589,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         outcomes.removeAll()
         primaryCompletion = nil
         lastToolActivity.removeAll()
+        clearPresentation()
         ended = false
     }
 
@@ -552,10 +639,12 @@ nonisolated struct CopilotEventReducer: Sendable {
                 terminalEvent: item.terminalEvent, attention: attention, activity: activity(for: id)
             ))
         }
-        return .init(
+        var result = CopilotReducedState(
             state: pending.keys.contains(where: { $0.owner.agentID == nil }) && !ended ? .blocked : rootState,
             model: rootModel, children: children, attention: attention(for: nil), activity: activity(for: nil)
         )
+        result.presentation = presentationReplayExhausted ? AgentPresentationInputs() : presentation
+        return result
     }
 
     private mutating func apply(_ event: CopilotEventProjection) {
@@ -567,6 +656,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         if kind == .toolPartialResult {
             observeToolCausality(event)
             observeEnvelopeContinuity(event)
+            observeCompactionContinuity(event)
             return
         }
         guard targetsCurrentInvocation(event, kind: kind) else { return }
@@ -576,6 +666,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         defer {
             observeCausalEvent(event)
             observeEnvelopeContinuity(event)
+            observeCompactionContinuity(event)
         }
         dispatch(event, kind: kind)
     }
@@ -583,9 +674,14 @@ nonisolated struct CopilotEventReducer: Sendable {
     // MARK: Admission
 
     private mutating func admitSource(_ event: CopilotEventProjection) -> Bool {
-        guard event.sessionID == sessionID else { addIssue(.identityChanged); return false }
+        guard event.sessionID == sessionID else {
+            clearPresentation()
+            addIssue(.identityChanged)
+            return false
+        }
         // The installed schema specifies a positive integer, not a closed version enum.
         guard let version = event.version, version > 0 else {
+            clearPresentation()
             unsupportedSession = true
             addIssue(.unsupportedFormat)
             addIssue(.ambiguousIdentity)
@@ -643,11 +739,13 @@ nonisolated struct CopilotEventReducer: Sendable {
         // A cold match may be a fresh start's false positive. Terminal history
         // must fail open, but a possible old A replay cannot change live B.
         if startMatch == .uncertain {
+            invalidatePresentation(affectedBy: event)
             addIssue(.readLimitReached)
             demoteTerminalForColdStart(event)
             return false
         }
         if eventMatch == .uncertain {
+            invalidatePresentation(affectedBy: event)
             if startIdentity(for: event) != nil { limitLifecycle(event) } else { addIssue(.readLimitReached) }
             return false
         }
@@ -668,6 +766,10 @@ nonisolated struct CopilotEventReducer: Sendable {
     // MARK: Dispatch
 
     private mutating func dispatch(_ event: CopilotEventProjection, kind: CopilotEventKind) {
+        if !event.presentationMetadataIsValid {
+            if event.agentID == nil { clearPresentation() }
+            return
+        }
         switch kind {
         case .sessionStart:
             if let model = event.model { rootModel = model }
@@ -707,6 +809,12 @@ nonisolated struct CopilotEventReducer: Sendable {
         case .subagentSelected:
             // Profile selection is not a new instance, spawn name or task outcome.
             break
+        case .modelCallFailure, .modelCallFinished:
+            observeModelCall(event)
+        case .compactionStart:
+            startCompaction(event)
+        case .compactionComplete:
+            completeCompaction(event)
         case .skillInvoked:
             insert(Work(
                 id: "skill:\(event.id)", parent: event.agentID, kind: .skill,
@@ -740,10 +848,17 @@ nonisolated struct CopilotEventReducer: Sendable {
         rootTurnID = nil
         retireRequests()
         demoteNonterminalChildren()
+        clearPresentation()
     }
 
     private mutating func shutDownSession(_ event: CopilotEventProjection) {
         guard !isStale(event, owner: nil) else { return }
+        if event.shutdownType == "error" {
+            presentation.turnClean = turns[Owner(agentID: nil)] != nil && presentation.turnClean != nil ? false : nil
+        }
+        presentation.primaryTurnOpen = false
+        presentation.compactionActive = nil
+        compaction = nil
         retireInteractions()
         if event.shutdownType == "error" {
             if rootState != .failed { recordOutcome(.error, owner: nil, event: event) }
@@ -768,6 +883,12 @@ nonisolated struct CopilotEventReducer: Sendable {
         guard !isStale(event, owner: nil),
               rootState != .failed,
               rootState != .cancelled || state == .failed else { return }
+        presentation.primaryTurnOpen = false
+        presentation.turnClean = turns[Owner(agentID: nil)] != nil && presentation.turnClean != nil ? false : nil
+        if state == .failed { presentation.errorCategory = event.errorCategory }
+        else { presentation.abortReason = event.abortReason }
+        presentation.compactionActive = nil
+        compaction = nil
         rootState = state
         recordOutcome(state == .failed ? .error : .aborted, owner: nil, event: event)
         // A primary-turn abort/error is not evidence that background children ended.
@@ -853,6 +974,10 @@ nonisolated struct CopilotEventReducer: Sendable {
             // A new primary turn bounds outcomes, not background requests or history.
             outcomes.removeAll()
             primaryCompletion = nil
+            presentation = AgentPresentationInputs(
+                primaryTurnOpen: true, turnClean: true, consecutiveToolFailures: 0
+            )
+            compaction = nil
         } else {
             outcomes.removeValue(forKey: owner)
         }
@@ -878,6 +1003,9 @@ nonisolated struct CopilotEventReducer: Sendable {
         }
         turns.removeValue(forKey: owner)
         guard settleEndedTurn(event, turn: turn, activeTurn: activeTurn) else { return }
+        if event.agentID == nil, activeTurn != nil {
+            presentation.primaryTurnOpen = false
+        }
         setModel(event.model, agent: event.agentID)
     }
 
@@ -962,6 +1090,10 @@ nonisolated struct CopilotEventReducer: Sendable {
             }),
                   remember("tool:\(retired)") else {
                 addIssue(.readLimitReached)
+                if event.agentID == nil, turns[Owner(agentID: nil)] != nil {
+                    presentation.turnClean = nil
+                    presentation.consecutiveToolFailures = nil
+                }
                 demoteTerminalForColdStart(event)
                 return false
             }
@@ -1011,6 +1143,7 @@ nonisolated struct CopilotEventReducer: Sendable {
             return
         }
         guard invocation.agentID == event.agentID, !invocation.completed else { return }
+        observeToolResult(event, invocation: invocation)
         let evidence = completionEvidence(event, startedAt: invocation.startedAt)
         observeToolCausality(event)
         toolOwners[tool]?.completed = true
@@ -1031,6 +1164,134 @@ nonisolated struct CopilotEventReducer: Sendable {
         if remember("tool:\(tool)") {
             toolOwners[tool]?.completed = true
             if work["shell:\(tool)"] != nil { removeTool(tool) }
+        }
+    }
+
+    // MARK: Presentation-only evidence
+
+    private mutating func observeToolResult(_ event: CopilotEventProjection, invocation: Tool) {
+        guard event.agentID == nil, invocation.executing,
+              let turn = turns[Owner(agentID: nil)] else { return }
+        guard let origin = invocation.turnOrigin else {
+            presentation.turnClean = nil
+            presentation.consecutiveToolFailures = nil
+            return
+        }
+        guard origin.eventID == turn.eventID else { return }
+        if event.success == true {
+            presentation.consecutiveToolFailures = 0
+        } else {
+            if presentation.turnClean != nil { presentation.turnClean = false }
+            if let count = presentation.consecutiveToolFailures {
+                presentation.consecutiveToolFailures = count == .max ? count : count + 1
+            }
+        }
+    }
+
+    private mutating func observeModelCall(_ event: CopilotEventProjection) {
+        guard event.agentID == nil else { return }
+        if event.kind == .modelCallFailure, event.modelCallIsPrimary != true { return }
+        // Observed root identities remain replay evidence even without a matching active turn.
+        guard admitPresentationReplayMatch(modelReplay.match(event.id)) else { return }
+        guard modelReplay.remember(event.id) else { exhaustPresentationReplay(); return }
+        guard !ended, let turn = turns[Owner(agentID: nil)] else { return }
+        let trouble: Bool
+        if event.kind == .modelCallFailure {
+            // This schema has no turn tags. Only the current owner's causal
+            // chain can attribute it; agentId or wall-clock order alone cannot.
+            guard isCausallyLinked(event, to: turn) else { return }
+            trouble = true
+        } else {
+            guard event.turnID == turn.id, event.interactionID == turn.interactionID else { return }
+            if turn.requiresOccurrenceProof || (event.interactionID == nil && turn.requiresCausalProof) {
+                guard isCausallyLinked(event, to: turn) else { return }
+            }
+            switch event.modelCallOutcome {
+            case .success: trouble = false
+            case .error, .rejected: trouble = true
+            case .cancelled, nil: return
+            }
+        }
+        presentation.modelTrouble = trouble
+        if trouble, presentation.turnClean != nil { presentation.turnClean = false }
+    }
+
+    private mutating func startCompaction(_ event: CopilotEventProjection) {
+        guard event.agentID == nil, !ended, !presentationReplayExhausted,
+              !isStale(event, owner: nil) else { return }
+        if let attempt = event.compactionAttemptID {
+            guard compaction?.attemptID != attempt,
+                  admitPresentationReplayMatch(compactionReplay.match(attempt)) else { return }
+            guard compactionReplay.remember(attempt) else { exhaustPresentationReplay(); return }
+        }
+        guard compaction == nil else {
+            presentation.compactionActive = nil
+            presentation.turnClean = nil
+            compaction?.ambiguous = true
+            return
+        }
+        compaction = Compaction(
+            attemptID: event.compactionAttemptID,
+            turnEventID: turns[Owner(agentID: nil)]?.eventID,
+            envelopeTip: event.id
+        )
+        presentation.compactionActive = true
+    }
+
+    private mutating func completeCompaction(_ event: CopilotEventProjection) {
+        guard event.agentID == nil, !presentationReplayExhausted else { return }
+        // A completion retires its exact attempt even when its start was outside the tail.
+        if let attempt = event.compactionAttemptID {
+            guard compactionReplay.remember(attempt) else { exhaustPresentationReplay(); return }
+        }
+        guard let active = compaction, !active.ambiguous else { return }
+        if active.attemptID != nil || event.compactionAttemptID != nil {
+            guard active.attemptID == event.compactionAttemptID else { return }
+        } else {
+            // Older schemas have no attempt key. Require an unbroken observed
+            // envelope chain from the start, never just the most recent owner.
+            guard event.parentEventID == active.envelopeTip else { return }
+        }
+        presentation.compactionActive = false
+        if event.success == false, let attempted = active.turnEventID,
+           attempted == turns[Owner(agentID: nil)]?.eventID,
+           presentation.turnClean != nil { presentation.turnClean = false }
+        compaction = nil
+    }
+
+    private mutating func admitPresentationReplayMatch(_ match: CopilotReplayGuard.Match) -> Bool {
+        guard !presentationReplayExhausted else { return false }
+        switch match {
+        case .absent: return true
+        case .exact: return false
+        case .uncertain:
+            clearPresentation()
+            addIssue(.readLimitReached)
+            return false
+        }
+    }
+
+    private mutating func exhaustPresentationReplay() {
+        // Gaps and turn changes cannot restore replay capacity; a new reducer generation can.
+        presentationReplayExhausted = true
+        clearPresentation()
+        addIssue(.readLimitReached)
+    }
+
+    private mutating func observeCompactionContinuity(_ event: CopilotEventProjection) {
+        if let active = compaction, event.parentEventID == active.envelopeTip {
+            compaction?.envelopeTip = event.id
+        }
+    }
+
+    private mutating func clearPresentation() {
+        presentation = AgentPresentationInputs()
+        compaction = nil
+    }
+
+    private mutating func invalidatePresentation(affectedBy event: CopilotEventProjection) {
+        if event.agentID == nil, !event.type.hasPrefix("subagent."), event.kind != .skillInvoked {
+            clearPresentation()
         }
     }
 
@@ -1464,6 +1725,7 @@ nonisolated struct CopilotEventReducer: Sendable {
         turns[owner]?.hasOccurrenceProof = true
     }
     private mutating func markTurnUnknown(owner: String?) {
+        if owner == nil { clearPresentation() }
         if let owner {
             if work[owner]?.state.isTerminal == false { work[owner]?.state = .unknown }
             work[owner]?.configurationStart = nil
@@ -1625,6 +1887,7 @@ nonisolated struct CopilotEventReducer: Sendable {
     }
 
     private mutating func clearActivity(owner: Owner) {
+        if owner.agentID == nil { clearPresentation() }
         turns.removeValue(forKey: owner)
         lastToolActivity.removeValue(forKey: owner)
         stopTools(owner: owner)
@@ -1637,6 +1900,7 @@ nonisolated struct CopilotEventReducer: Sendable {
     }
 
     private mutating func clearActivities() {
+        clearPresentation()
         turns.removeAll()
         lastToolActivity.removeAll()
         stopTools()

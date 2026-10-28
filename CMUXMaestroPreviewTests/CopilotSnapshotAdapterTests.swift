@@ -7,6 +7,177 @@ struct CopilotSnapshotAdapterTests {
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
     private let eventID = UUID(uuidString: "10000000-1000-1000-1000-000000000010")!
 
+    @Test func presentationFlowsFromSyntheticDiskThroughBothCachesAndVersionedSnapshot() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeRecord(.init(
+            sessionID: fixture.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            ownerPID: fixture.process.pid, ownerStartSeconds: fixture.process.startSeconds,
+            ownerStartMicroseconds: fixture.process.startMicroseconds, recordedAt: fixture.record.recordedAt
+        ))
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "primary"]),
+            copilotTestEvent("tool.execution_start", data: ["toolCallId": "tool", "toolName": "view"]),
+            copilotTestEvent("tool.execution_complete", data: ["toolCallId": "tool", "success": false]),
+            copilotTestEvent("model.call_finished", data: ["turnId": "primary", "outcome": "error"]),
+            copilotTestEvent("session.compaction_start", data: ["compactionAttemptId": "attempt"])
+        ])
+        let date = now
+        let reader = fixture.reader(clock: { date })
+        let cache = CopilotSnapshotAdapterCache()
+        let sessionCache = SidebarSessionProjectionCache()
+        var expected = AgentPresentationInputs(
+            primaryTurnOpen: true, turnClean: false, modelTrouble: true,
+            consecutiveToolFailures: 1, compactionActive: true
+        )
+        for stage in 0..<4 {
+            if stage == 1 {
+                var event = try copilotTestEvent("model.call_finished", data: ["turnId": "primary", "outcome": "success"])
+                event.append(10)
+                try fixture.append(event)
+                expected.modelTrouble = false
+            } else if stage == 2 {
+                var event = try copilotTestEvent("abort", data: ["reason": "user_abort"])
+                event.append(10)
+                try fixture.append(event)
+                expected.primaryTurnOpen = false
+                expected.abortReason = .userAbort
+                expected.compactionActive = nil
+            } else if stage == 3 {
+                var event = try copilotTestEvent("session.error", data: ["errorType": "quota", "message": "private prose"])
+                event.append(10)
+                try fixture.append(event)
+                expected.errorCategory = .quota
+                expected.turnClean = nil
+            }
+            let source = try await reader.read(surfaceIDs: [fixtures.surfaceA])
+            let observation = try #require(source.sessions.first)
+            #expect(observation.presentation == expected)
+            let observationRoundTrip = try JSONDecoder().decode(
+                CopilotSessionObservation.self, from: JSONEncoder().encode(observation)
+            )
+            #expect(observationRoundTrip.presentation == expected)
+            let snapshot = await cache.snapshot(source, workspaceBySurface: fixtures.topology().workspaceBySurface)
+            #expect(snapshot.schemaVersion.rawValue == 1)
+            let encoded = try AgentSessionSnapshotJSONCodec.encode(snapshot)
+            #expect(!String(decoding: encoded, as: UTF8.self).contains("private prose"))
+            let decoded = try AgentSessionSnapshotJSONCodec.decode(encoded)
+            try decoded.validate()
+            #expect(decoded.sessions.first?.presentation == expected)
+            let tree = SidebarCopilotTree.project(decoded, onto: fixtures.topology(), now: now, sessionCache: sessionCache)
+            let session = try #require(tree.sessions.first)
+            #expect(session.presentation == expected)
+            #expect(session.state.rawValue == observation.state.rawValue)
+            #expect(session.attention == observation.attention)
+            #expect(SidebarCopilotTree.statusOnly(session, retainingStatus: true).presentation == nil)
+        }
+        #expect(await cache.sessionBuildCount == 4)
+        #expect(sessionCache.computationCount == 4)
+    }
+
+    @Test(arguments: [false, true])
+    func malformedHistoryClearsCachedPresentationWithoutRefreshingLifecycle(_ appendFreshTurn: Bool) async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeRecord(.init(
+            sessionID: fixture.sessionID, surfaceID: fixtures.surfaceA, launchWorkspaceID: fixtures.workspaceA,
+            ownerPID: fixture.process.pid, ownerStartSeconds: fixture.process.startSeconds,
+            ownerStartMicroseconds: fixture.process.startMicroseconds, recordedAt: fixture.record.recordedAt
+        ))
+        try fixture.writeEvents([
+            copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1]),
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "primary"]),
+            copilotTestEvent("tool.execution_start", data: ["toolCallId": "tool", "toolName": "view"]),
+            copilotTestEvent("tool.execution_complete", data: ["toolCallId": "tool", "success": false]),
+            copilotTestEvent("session.compaction_start", data: ["compactionAttemptId": "attempt"])
+        ])
+        let clock = CopilotReaderTestClock(now)
+        let reader = fixture.reader(clock: { clock.now() })
+        let cache = CopilotSnapshotAdapterCache()
+        let sessionCache = SidebarSessionProjectionCache()
+        let initial = try await reader.read(surfaceIDs: [fixtures.surfaceA])
+        let before = try #require(initial.sessions.first)
+        #expect(before.presentation == AgentPresentationInputs(
+            primaryTurnOpen: true, turnClean: false, consecutiveToolFailures: 1, compactionActive: true
+        ))
+        let snapshot = await cache.snapshot(initial, workspaceBySurface: fixtures.topology().workspaceBySurface)
+        let tree = SidebarCopilotTree.project(snapshot, onto: fixtures.topology(), now: now, sessionCache: sessionCache)
+        #expect(tree.sessions.first?.presentation == before.presentation)
+        try fixture.append(Data("{malformed}\n".utf8))
+        if appendFreshTurn {
+            var event = try copilotTestEvent("assistant.turn_start", data: ["turnId": "later"])
+            event.append(10)
+            try fixture.append(event)
+        }
+        for _ in 0..<2 {
+            clock.advance(by: 1)
+            let source = try await reader.read(surfaceIDs: [fixtures.surfaceA])
+            let observation = try #require(source.sessions.first)
+            #expect(source.issues.contains(.malformedData))
+            #expect(observation.presentation == AgentPresentationInputs())
+            #expect(observation.state == before.state)
+            #expect(observation.model == before.model)
+            #expect(observation.children == before.children)
+            #expect(observation.attention == before.attention)
+            #expect(observation.activity == before.activity)
+            #expect(observation.observedAt == before.observedAt)
+            let updated = await cache.snapshot(source, workspaceBySurface: fixtures.topology().workspaceBySurface)
+            #expect(updated.sessions.first?.presentation == AgentPresentationInputs())
+            let updatedTree = SidebarCopilotTree.project(
+                updated, onto: fixtures.topology(), now: clock.now(), sessionCache: sessionCache
+            )
+            #expect(updatedTree.sessions.first?.presentation == AgentPresentationInputs())
+        }
+    }
+
+    @Test func oldSnapshotPresentationIsUnknownAndNewPayloadIsStrictlyTyped() throws {
+        var source = fixtures.session(now: now)
+        source.presentation = .init(primaryTurnOpen: true, turnClean: true, consecutiveToolFailures: 0)
+        let snapshot = adapt(fixtures.snapshot(sessions: [source], now: now))
+        var object = try #require(JSONSerialization.jsonObject(
+            with: AgentSessionSnapshotJSONCodec.encode(snapshot)
+        ) as? [String: Any])
+        var sessions = try #require(object["sessions"] as? [[String: Any]])
+        sessions[0].removeValue(forKey: "presentation")
+        object["sessions"] = sessions
+        object["schemaVersion"] = 1
+        let legacy = try AgentSessionSnapshotJSONCodec.decode(JSONSerialization.data(withJSONObject: object))
+        try legacy.validate()
+        #expect(legacy.sessions.first?.presentation == nil)
+        #expect(SidebarCopilotTree.project(legacy, onto: fixtures.topology(), now: now).sessions.first?.presentation == nil)
+        object["schemaVersion"] = 1
+        for invalid: [String: Any] in [
+            ["consecutiveToolFailures": -1], ["consecutiveToolFailures": 256],
+            ["primaryTurnOpen": "true"], ["abortReason": "private prose"], ["errorCategory": "private prose"]
+        ] {
+            sessions[0]["presentation"] = invalid
+            object["sessions"] = sessions
+            #expect(throws: (any Error).self) {
+                try AgentSessionSnapshotJSONCodec.decode(JSONSerialization.data(withJSONObject: object))
+            }
+        }
+    }
+
+    @Test func presentationCannotCrossReaderFileGenerationReplacement() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let header = try copilotTestEvent("session.start", data: ["sessionId": fixture.sessionID.uuidString, "version": 1])
+        try fixture.writeEvents([
+            header,
+            copilotTestEvent("assistant.turn_start", data: ["turnId": "primary"]),
+            copilotTestEvent("tool.execution_start", data: ["toolCallId": "tool", "toolName": "view"]),
+            copilotTestEvent("tool.execution_complete", data: ["toolCallId": "tool", "success": false])
+        ])
+        let reader = fixture.reader()
+        let before = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(before.sessions.first?.presentation?.consecutiveToolFailures == 1)
+        try fixture.writeEvents([header, copilotTestEvent("session.resume")], atomic: true)
+        let after = try await reader.read(surfaceIDs: [fixture.surface])
+        #expect(after.sessions.first?.presentation == AgentPresentationInputs())
+        #expect(after.sessions.first?.state == .unknown)
+    }
+
     @Test func cachedConversionReusesUnchangedSessionsWithoutReplacingEvidenceTimes() async {
         let cache = CopilotSnapshotAdapterCache()
         let placements = fixtures.topology().workspaceBySurface

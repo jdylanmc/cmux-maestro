@@ -39,6 +39,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Session snapshots expose sanitized turn, cancellation, technical-error,
+  tool-failure and compaction inputs for richer pet presentation. Unknown
+  evidence and existing work and attention semantics stay unchanged (#379).
 - Pets accept a bounded 20-row mood atlas with explicit nine-row fallbacks.
   The drawing kit previews the new rows; current state selection stays
   unchanged (#381).
