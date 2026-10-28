@@ -1253,7 +1253,8 @@ nonisolated struct CopilotEventReducer: Sendable {
             guard event.parentEventID == active.envelopeTip else { return }
         }
         presentation.compactionActive = false
-        if event.success == false, active.turnEventID == turns[Owner(agentID: nil)]?.eventID,
+        if event.success == false, let attempted = active.turnEventID,
+           attempted == turns[Owner(agentID: nil)]?.eventID,
            presentation.turnClean != nil { presentation.turnClean = false }
         compaction = nil
     }
