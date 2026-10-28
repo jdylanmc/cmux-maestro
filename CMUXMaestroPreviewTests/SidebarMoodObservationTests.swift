@@ -167,6 +167,7 @@ struct SidebarMoodObservationTests {
         let base = snapshot(owner)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
         let lifecycle = try encoder.encode(base)
         var cache = SidebarOrchestrationReader.Cache()
         func read(_ sequence: Int, mood: String = "happy", at date: Date) throws -> SidebarOrchestrationSnapshot {
