@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import Foundation
 import SwiftUI
 import Testing
@@ -295,8 +296,91 @@ struct SidebarPetCollectionTests {
         let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
         let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
         let decoded = try #require(SidebarPetStore.decoded(image))
-        // Startled's legacy jumping fallback reaches 2 pixels below the cell top.
-        #expect(abs(decoded.topInset - 2.0 / 208) < 0.0001)
+        // The authored Startled sparks, not the unused legacy jump, bound the trim.
+        #expect(abs(decoded.topInset - 11.0 / 208) < 0.0001)
+        #expect(image.width == 1536 && image.height == 4160)
+        #expect(SidebarFooterPetSize.height(forWidth: 192, topInset: decoded.topInset) == 197)
+    }
+
+    @Test(arguments: [38, 46], [false, true])
+    func bundledMoodsHaveDistinctNativeFrameZeroReferences(width: Int, dark: Bool) throws {
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let folder = root.appendingPathComponent(".build/layout-validation/offscreen/pet-moods")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let source = try #require(CGImageSourceCreateWithURL(
+            root.appendingPathComponent("CMUXMaestroSidebar/Pets/maestro-pet.webp") as CFURL, nil))
+        let sourceImage = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
+        let decoded = try #require(SidebarPetStore.decoded(sourceImage))
+        // Independent, explicit art contract: never derive the oracle from playback().
+        let cases: [(SidebarPetSheet.Mood, Int)] = [
+            (.idle, 0), (.thinking, 11), (.working, 7), (.delegating, 12), (.question, 6),
+            (.needsPermission, 13), (.confused, 14), (.content, 3), (.startled, 9), (.sad, 5),
+            (.compacting, 15), (.sleepy, 16), (.gone, 17), (.proud, 18), (.celebrating, 19)
+        ]
+        let theme = dark ? "dark" : "light"
+        let contact = try petContext(width: 960, height: 900, dark: dark)
+        let bareContact = try petContext(width: 960, height: 900, dark: dark)
+        var barePixels = Set<Data>()
+        for (index, item) in cases.enumerated() {
+            let (mood, row) = item
+            let actual = try #require(stores.pets.frame(petID: "maestro", session: nil, mood: mood, index: 0))
+            let reference = try #require(decoded.image.cropping(to: CGRect(x: 0, y: row * 208, width: 192, height: 208)))
+            let actualRender = try petFrame(actual, width: width, dark: dark)
+            let expectedRender = try petFrame(reference, width: width, dark: dark)
+            let pixels = try petPixels(actualRender)
+            #expect(pixels == (try petPixels(expectedRender)), "\(mood.rawValue): exact native 2x pixels")
+            #expect(barePixels.insert(pixels).inserted, "\(mood.rawValue): duplicate bare frame")
+            let name = "\(mood.rawValue)-\(theme)-\(width)"
+            try petPNG(actualRender, at: folder.appendingPathComponent("\(name).png"))
+            try petPNG(expectedRender, at: folder.appendingPathComponent("\(name)-reference.png"))
+            let x = (index % 3) * 320
+            let y = 900 - (index / 3 + 1) * 180
+            let rect = CGRect(x: x + 110, y: y + 26, width: actualRender.width, height: actualRender.height)
+            contact.draw(actualRender, in: rect)
+            bareContact.draw(actualRender, in: rect)
+            let label = NSAttributedString(string: "\(index + 1). \(mood.rawValue)", attributes: [
+                .font: NSFont.systemFont(ofSize: 20),
+                .foregroundColor: dark ? NSColor.white : NSColor.black
+            ])
+            contact.textPosition = CGPoint(x: x + 18, y: y + 150)
+            CTLineDraw(CTLineCreateWithAttributedString(label), contact)
+        }
+        #expect(barePixels.count == 15)
+        try petPNG(try #require(contact.makeImage()),
+                   at: folder.appendingPathComponent("contact-\(theme)-\(width).png"))
+        try petPNG(try #require(bareContact.makeImage()),
+                   at: folder.appendingPathComponent("contact-\(theme)-\(width)-bare.png"))
+    }
+
+    private func petContext(width: Int, height: Int, dark: Bool) throws -> CGContext {
+        let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+        let context = try #require(CGContext(
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(gray: dark ? 0.12 : 0.96, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        return context
+    }
+
+    private func petFrame(_ image: CGImage, width: Int, dark: Bool) throws -> CGImage {
+        let pixels = width * 2
+        let height = Int((Double(pixels) * 208 / 192).rounded())
+        let context = try petContext(width: pixels, height: height, dark: dark)
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: pixels, height: height))
+        return try #require(context.makeImage())
+    }
+
+    private func petPixels(_ image: CGImage) throws -> Data {
+        try #require(image.dataProvider?.data) as Data
+    }
+
+    private func petPNG(_ image: CGImage, at url: URL) throws {
+        let bitmap = NSBitmapImageRep(cgImage: image)
+        try #require(bitmap.representation(using: .png, properties: [:])).write(to: url)
     }
 
     @Test func decodedMoodFramesSelectActualRowsAndFallbackLoopLengths() throws {

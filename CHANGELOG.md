@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Bundled Maestro has 15 original mood expressions, including a distinct
+  Startled face, while preserving all legacy poses. Mood art does not change
+  state selection (#383).
 - Collapsed workspace headers stack compactly without margins reserved for
   expanded content. Dividers, control targets and expanded layout stay unchanged
   in both densities (#319).
@@ -37,8 +40,11 @@ Notable changes are recorded using Keep a Changelog categories.
 ### Added
 
 - Pets accept a bounded 20-row mood atlas with explicit nine-row fallbacks.
-  The drawing kit previews the new rows; bundled art and current state selection
-  stay unchanged (#381).
+  The drawing kit previews the new rows; current state selection stays
+  unchanged (#381).
+- An explicit offline pet-copy upgrade preserves the supplied original and
+  backups while filling the 20-row format with generic fallbacks. It never
+  updates or selects installed pets (#383).
 - Saved footer pets, including Maestro, show a pencil badge on hover to open
   the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph
