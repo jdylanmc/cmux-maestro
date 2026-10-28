@@ -47,10 +47,15 @@ The response lists the default (`maestro`) and any pets this session already add
 A valid Codex pet is a folder with `pet.json` and a transparent PNG or WebP
 spritesheet of **1536x1872** pixels: 8 columns x 9 rows of 192x208 cells. Rows
 in order: idle, running-right, running-left, waving, jumping, failed, waiting, running,
-review. Maestro is flexible: any sheet with 8 columns and at least nine rows of 192:208
-cells at any whole-pixel scale works (width a multiple of 8, 512-4096). A **v2** pet
+review. Legacy sheets use 8 columns of 192:208 cells (width a multiple of 8,
+512-4096; height from `ceil(9 * 208 * width / 1536)` through `2 * width`). A **v2** pet
 (`spriteVersionNumber` 2, 1536x2288, 11 rows) adds look-direction rows below those; the
-extra rows are ignored and only the first nine play.
+extra rows are ignored. A **20-row mood atlas** uses exactly
+`ceil(20 * 208 * width / 1536)` pixels of height, with width a multiple of 8,
+512-1536 (standard **1536x4160**). Other tall or partial extensions are refused.
+The mood width cap bounds decoded pixels; both formats retain the 10 MB file limit.
+No `pet.json` version change or companion asset is needed. New Maestro reads old
+sheets; older Maestro cannot read the 20-row format.
 `--add` refuses a sheet that does not fully decode with macOS ImageIO (`sips`), even when its header is valid.
 Maestro shows `idle`, `running` (working), `waiting` (needs input), `waving`
 (turn finished) and `failed` (blocked or failed).
@@ -93,6 +98,33 @@ print(sheet.save("<new-output-folder>", "<pet-id>", "<Display Name>", "<short de
 - `save` refuses an existing folder, invalid IDs and the reserved `maestro` ID. It
   writes `pet.json`, `spritesheet.png` and an opaque `preview.png` of the five rows.
   **View `preview.png`** and fix anything clipped, blank or unreadable before adding.
+
+### Optional mood rows
+
+Use `PetSheet(moods=True)` for a 20-row atlas. Draw the same five required
+`MAESTRO_STATES`, then optionally draw every frame of each extra state in
+`MOOD_STATES` (imported from `pet_kit`). The preview includes all 15 state/mood
+rows, in `MAESTRO_STATES + MOOD_STATES` order. Row 10 is reserved, not drawable.
+Wholly undrawn mood rows copy their explicit fallback below; partially drawn rows
+are refused. Fallbacks may look alike: draw distinct art when expressing moods.
+Imported 20-row sheets must contain usable art; the reader does not detect blank rows.
+
+| State passed to `frame` | Row | Frames | Nine-row fallback |
+| --- | --- | --- | --- |
+| `startled` | 9 | 5 | 4 jumping |
+| `thinking` | 11 | 6 | 8 review |
+| `delegating` | 12 | 8 | 1 running-right |
+| `needs-permission` | 13 | 6 | 6 waiting |
+| `confused` | 14 | 6 | 8 review |
+| `compacting` | 15 | 6 | 2 running-left (8 frames) |
+| `sleepy` | 16 | 6 | 0 idle |
+| `gone` | 17 | 6 | 0 idle |
+| `proud` | 18 | 4 | 3 waving |
+| `celebrating` | 19 | 5 | 4 jumping |
+
+Rows 0-8 remain unchanged. The fallback uses the old row's full frame count,
+not the extended row's count. Mood playback is a format capability; today's
+sidebar still selects only the five existing states. Bundled Maestro stays nine rows.
 
 ## Add and choose
 

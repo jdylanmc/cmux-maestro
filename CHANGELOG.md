@@ -36,6 +36,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Pets accept a bounded 20-row mood atlas with explicit nine-row fallbacks.
+  The drawing kit previews the new rows; bundled art and current state selection
+  stay unchanged (#381).
 - Saved footer pets, including Maestro, show a pencil badge on hover to open
   the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph
@@ -299,6 +302,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Notification channel registration releases its short-lived lock before
+  closing the descriptor, avoiding false contention during concurrent process
+  launches. Live window leases and busy senders retain their existing locks.
 - Restored click targets for animated sidebar pets.
 - Active window details follow a positively verified replacement session without
   treating its retained unknown predecessor as a competing occupant. Ambiguous

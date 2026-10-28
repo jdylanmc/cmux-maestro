@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dependency-free kit for drawing a Codex-compatible Maestro pet.
+"""Dependency-free kit for drawing a legacy Codex or extended Maestro mood pet.
 
 Python 3.9+ standard library only: no Pillow, network, image provider or API key.
 Import it from your own drawing script, draw each frame, then save the pet folder:
@@ -35,9 +35,18 @@ STATES = (
 MAESTRO_STATES = tuple((name, count) for name, count in STATES
                        if name in ("idle", "waving", "failed", "waiting", "running"))
 SHEET_WIDTH, SHEET_HEIGHT = COLUMNS * CELL_WIDTH, len(STATES) * CELL_HEIGHT
+MOOD_STATES = (
+    ("startled", 5), ("thinking", 6), ("delegating", 8), ("needs-permission", 6),
+    ("confused", 6), ("compacting", 6), ("sleepy", 6), ("gone", 6), ("proud", 4),
+    ("celebrating", 5),
+)
+MOOD_FALLBACKS = {
+    "startled": "jumping", "thinking": "review", "delegating": "running-right",
+    "needs-permission": "waiting", "confused": "review", "compacting": "running-left",
+    "sleepy": "idle", "gone": "idle", "proud": "waving", "celebrating": "jumping",
+}
+EXTENDED_STATES = STATES + MOOD_STATES[:1] + (("reserved", 0),) + MOOD_STATES[1:]
 PET_ID = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-_COUNTS = dict(STATES)
-_ROWS = {name: row for row, (name, _) in enumerate(STATES)}
 
 
 def rgba(color):
@@ -169,28 +178,32 @@ class Canvas:
 
 
 class PetSheet:
-    """Frames keyed by Codex state; renders the 1536x1872 nine-row atlas."""
+    """Nine-row Codex atlas by default; moods=True opts into the twenty-row format."""
 
-    def __init__(self):
+    def __init__(self, moods=False):
         self.frames = {}
+        self.states = EXTENDED_STATES if moods else STATES
+        self.counts = dict(self.states)
+        self.rows = {name: row for row, (name, _) in enumerate(self.states)}
+        self.shown = MAESTRO_STATES + MOOD_STATES if moods else MAESTRO_STATES
 
     def frame(self, state, index):
         """Return the (lazily created) transparent 192x208 canvas for one frame."""
-        if state not in _COUNTS:
-            raise ValueError(f"Unknown state {state!r}; use one of {', '.join(_COUNTS)}.")
-        if not 0 <= index < _COUNTS[state]:
-            raise ValueError(f"{state} has frames 0-{_COUNTS[state] - 1}.")
+        if state not in self.counts:
+            raise ValueError(f"Unknown state {state!r}; use one of {', '.join(self.counts)}.")
+        if not 0 <= index < self.counts[state]:
+            raise ValueError(f"{state} has {self.counts[state]} drawable frames.")
         return self.frames.setdefault((state, index), Canvas())
 
     def _row(self, state):
-        drawn = [self.frames.get((state, index)) for index in range(_COUNTS[state])]
+        drawn = [self.frames.get((state, index)) for index in range(self.counts[state])]
         drawn = [None if frame is None or frame.is_empty() else frame for frame in drawn]
         return drawn
 
     def validate(self):
         """Every Maestro-shown frame must be drawn; other rows are all-or-nothing."""
         problems = []
-        for state, count in STATES:
+        for state, count in self.states:
             row = self._row(state)
             missing = [index for index, frame in enumerate(row) if frame is None]
             shown = state in dict(MAESTRO_STATES)
@@ -200,14 +213,17 @@ class PetSheet:
             raise ValueError("Pet frames are incomplete: " + "; ".join(problems) + ".")
 
     def render(self):
-        """Compose the atlas; undrawn Codex-only rows reuse the idle loop."""
+        """Fill undrawn mood rows from their fallback; unused Codex rows reuse idle."""
         self.validate()
         idle = self._row("idle")
-        atlas = Canvas(SHEET_WIDTH, SHEET_HEIGHT)
-        for row, (state, count) in enumerate(STATES):
+        atlas = Canvas(SHEET_WIDTH, len(self.states) * CELL_HEIGHT)
+        resolved = {}
+        for row, (state, count) in enumerate(self.states):
             frames = self._row(state)
             if all(frame is None for frame in frames):
-                frames = [idle[index % len(idle)] for index in range(count)]
+                fallback = resolved[MOOD_FALLBACKS.get(state, "idle")] if row else idle
+                frames = [fallback[index % len(fallback)] for index in range(count)]
+            resolved[state] = frames
             for column, frame in enumerate(frames):
                 # Cells never overlap, so an exact byte copy equals compositing onto clear pixels.
                 for y in range(CELL_HEIGHT):
@@ -217,11 +233,11 @@ class PetSheet:
         return atlas
 
     def preview(self, atlas=None):
-        """Opaque contact sheet of the rows Maestro plays, for visual review only."""
+        """Opaque contact sheet of the five current states and any authored mood rows."""
         atlas = atlas or self.render()
-        sheet = Canvas(SHEET_WIDTH, len(MAESTRO_STATES) * CELL_HEIGHT, background="#202735")
-        for out_row, (state, count) in enumerate(MAESTRO_STATES):
-            source_top = _ROWS[state] * CELL_HEIGHT
+        sheet = Canvas(SHEET_WIDTH, len(self.shown) * CELL_HEIGHT, background="#202735")
+        for out_row, (state, count) in enumerate(self.shown):
+            source_top = self.rows[state] * CELL_HEIGHT
             for x in range(count * CELL_WIDTH):
                 for y in range(CELL_HEIGHT):
                     pixel = atlas.get(x, source_top + y)
@@ -250,7 +266,7 @@ class PetSheet:
         (folder / "pet.json").write_text(json.dumps(manifest, indent=2) + "\n")
         return {"ok": True, "petId": pet_id, "folder": str(folder),
                 "preview": str(folder / "preview.png"),
-                "size": [SHEET_WIDTH, SHEET_HEIGHT]}
+                "size": [atlas.width, atlas.height]}
 
 
 if __name__ == "__main__":
