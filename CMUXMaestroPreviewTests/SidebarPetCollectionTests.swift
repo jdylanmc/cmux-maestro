@@ -295,7 +295,66 @@ struct SidebarPetCollectionTests {
         let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil))
         let image = try #require(CGImageSourceCreateImageAtIndex(source, 0, nil))
         let decoded = try #require(SidebarPetStore.decoded(image))
-        // The working row's art starts 17 fully transparent cell pixels down; the cap is 19.
-        #expect(abs(decoded.topInset - 17.0 / 208) < 0.0001)
+        // Startled's legacy jumping fallback reaches 2 pixels below the cell top.
+        #expect(abs(decoded.topInset - 2.0 / 208) < 0.0001)
+    }
+
+    @Test func decodedMoodFramesSelectActualRowsAndFallbackLoopLengths() throws {
+        for rows in [9, 11, 20] {
+            let width = 776
+            let cellHeight = 208.0 * Double(width) / 1536
+            let height = Int((Double(rows) * cellHeight).rounded(.up))
+            let rep = try #require(NSBitmapImageRep(
+                bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+                hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+            let pixels = try #require(rep.bitmapData)
+            for y in 0..<height {
+                let row = min(rows - 1, Int(Double(y) / cellHeight))
+                for x in 0..<width {
+                    let offset = y * rep.bytesPerRow + x * 4
+                    (pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]) =
+                        (UInt8(row * 10), UInt8((x / 97) * 20), 80, 255)
+                }
+            }
+            let data = try #require(rep.representation(using: .png, properties: [:]))
+            let (store, root, session, _) = try makeStore(sheet: data)
+            defer { try? FileManager.default.removeItem(at: root) }
+            for mood in SidebarPetSheet.Mood.allCases {
+                let playback = try #require(store.playback(petID: "blob", session: session, mood: mood))
+                for index in [-1, 0, playback.frameCount, Int.min, Int.max] {
+                    let image = try #require(store.frame(petID: "blob", session: session, mood: mood, index: index))
+                    let bitmap = NSBitmapImageRep(cgImage: image)
+                    let color = try #require(bitmap.colorAt(x: image.width / 2, y: image.height / 2))
+                    let column = ((index % playback.frameCount) + playback.frameCount) % playback.frameCount
+                    #expect(Int((color.redComponent * 255).rounded()) == playback.row * 10)
+                    #expect(Int((color.greenComponent * 255).rounded()) == column * 20)
+                    #expect(image === store.frame(petID: "blob", session: session, mood: mood, index: column))
+                }
+            }
+            #expect(store.playback(petID: "blob", session: session, mood: .compacting)?.frameCount == (rows == 20 ? 6 : 8))
+            let old = try #require(store.frame(petID: "blob", session: session, state: .working, index: 0))
+            #expect(old === store.frame(petID: "blob", session: session, mood: .working, index: 0))
+        }
+    }
+
+    @Test func standardExtendedBitmapIsBoundedAndOversizedImportIsRefused() throws {
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1536, pixelsHigh: 4160, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let image = try #require(rep.cgImage)
+        let decoded = try #require(SidebarPetStore.decoded(image))
+        #expect(decoded.image.bytesPerRow * decoded.image.height <= 26 * 1024 * 1024)
+
+        let oversized = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: 1544, pixelsHigh: 4182, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let oversizedImage = try #require(oversized.cgImage)
+        #expect(SidebarPetStore.decoded(oversizedImage) == nil)
+        let (store, root, _, _) = try makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let source = root.appendingPathComponent("oversized.png")
+        try #require(oversized.representation(using: .png, properties: [:])).write(to: source)
+        #expect(store.upload(from: source) == nil)
+        #expect(store.notice?.contains("512–1536") == true)
     }
 }

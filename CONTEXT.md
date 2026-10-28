@@ -223,6 +223,8 @@ _Avoid_: label, category
 
 **Pet**:
 Animated Codex-format sprite sheet. Maps Maestro states to rows 0, 7, 6, 3, 5.
+Optional 20-row mood atlas adds expression rows with explicit legacy fallbacks;
+format support alone does not change state selection.
 _Avoid_: mascot
 
 **Host footer clearance**:

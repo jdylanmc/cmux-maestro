@@ -36,6 +36,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Pets accept a bounded 20-row mood atlas with explicit nine-row fallbacks.
+  The drawing kit previews the new rows; bundled art and current state selection
+  stay unchanged (#381).
 - Saved footer pets, including Maestro, show a pencil badge on hover to open
   the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph
