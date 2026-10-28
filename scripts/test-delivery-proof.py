@@ -2622,6 +2622,38 @@ finally:
         self.assertEqual(state["nodes"][self.sibling["id"]]["launchError"], "launch-failed")
         self.assertEqual([node["id"] for node in retired], [self.sibling["id"]])
 
+    def test_unverified_close_caller_cannot_release_a_releasable_failed_lease(self):
+        self.sibling.update(launchError="launch-failed",
+                            providerProcess={"pid": 12399, "start": "Thu Jan  1 00:00:00 2026"})
+        self.sibling.pop("launchAccepted")
+        self.lease(self.sibling, state="attaching")
+        self.persist()
+        self.cmux.surface_exists.return_value = False
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+        close = CONTROLLER["command_native_close"]
+        lost = mock.Mock(side_effect=CONTROLLER["OrchestrationError"](CONTROLLER["CUSTODY_LOST"]))
+        for case in ("wrong-token", "born-custody-lost"):
+            with self.subTest(case=case):
+                environment, globals_patch = dict(self.environment), {}
+                if case == "wrong-token":
+                    environment["CMUX_MAESTRO_CONTROL_TOKEN"] = "0" * 64
+                else:
+                    # A second tab resumed the same session: the binding is valid, custody is not.
+                    self.actor["enrollment"] = "born"
+                    self.persist()
+                    before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+                    environment["COPILOT_EXTENSION_PARENT_PID"] = "12345"
+                    globals_patch["require_born_custody"] = lost
+                with mock.patch.dict(self.environment, environment), \
+                        mock.patch.dict(close.__globals__, globals_patch), \
+                        self.assertRaises(CONTROLLER["OrchestrationError"]):
+                    self.invoke(retire=mock.Mock(side_effect=AssertionError("route retired")))
+                self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()},
+                                 before)
+                self.cmux.surface_exists.assert_not_called()
+        self.assertTrue(lost.called)
+        self.cmux.run.assert_not_called()
+
     def test_failed_sibling_launch_lease_does_not_block_closing_an_unrelated_child(self):
         # A refused attach keeps its lease while execution is uncertain; it fences only itself.
         self.sibling.update(launchError="launch-failed", providerProcess=None)

@@ -6923,6 +6923,27 @@ class ReservationAndLeaseTests(unittest.TestCase):
         refused = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
         self.assertNotEqual(refused["returncode"], 0)
 
+    def test_native_spawn_releases_a_failed_lease_only_for_the_verified_invoking_session(self):
+        node = self.failed_attach()
+        self.h.change_state(lambda state: state["nodes"][node["id"]].update(providerProcess=self.dead_process()))
+        self.h.remove_surface(node["surfaceId"])
+        actor = self.h.state()["nodes"][self.h.node]
+        session = {
+            **self.h.env, "CMUX_MAESTRO_WORKER_ID": actor["id"], "SESSION_ID": actor["copilotSessionId"],
+            "CMUX_MAESTRO_RUN_ID": actor["runId"], "CMUX_MAESTRO_GENERATION": str(actor["generation"]),
+            "CMUX_MAESTRO_CONTROL_TOKEN": self.h.token,
+        }
+        for label, env in (("No session", self.h.env),
+                           ("Wrong token", {**session, "CMUX_MAESTRO_CONTROL_TOKEN": "0" * 64})):
+            with self.subTest(label=label):
+                self.h.spawn_native(task="Unverified", label=label, cwd=self.h.path, env=env, check=False)
+                self.assertIn(node["id"], self.h.state()["launches"])
+                self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "launching")
+        self.h.spawn_native(task="Verified", label="Verified", cwd=self.h.path, env=session, check=False)
+        self.assertNotIn(node["id"], self.h.state()["launches"])
+        # With the lease gone, the same spawn's admission reconciliation retires the proven-ended node.
+        self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "resource-retired")
+
     def test_attach_finds_a_new_surface_the_pane_tab_listing_omits(self):
         receipt = self.h.spawn_native(task="Listed late", label="Lagging tab", cwd=self.h.path,
                                       env={**self.h.env, "FAKE_UNLISTED_TAB": "1"})

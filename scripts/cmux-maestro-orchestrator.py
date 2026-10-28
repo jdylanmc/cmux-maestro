@@ -2678,15 +2678,17 @@ def release_failed_launch_lease(state, node, retiring):
     retiring.append(node)
 
 
-def reconcile_failed_launch_leases(root, cmux, identity):
+def reconcile_failed_launch_leases(root, cmux, verify_actor):
     """Native-path counterpart of status's proven-absence lease release for the caller's tree.
 
-    Probes run outside the lock; only identity- and lease-unchanged records are released.
+    verify_actor(state) is the entry point's full actor authorization, custody included. It runs
+    before any probe and again under the lock, so a caller without authority changes nothing.
+    Probes run outside the lock; only actor-, identity- and lease-unchanged records are released.
     Anything unproven, unauthorized or unreadable is left for the caller's own guards.
     """
     try:
         snapshot = read_state(root, wait=0)
-        actor = authorize_native_actor(snapshot, identity)
+        actor = verify_actor(snapshot)
     except (OrchestrationError, OSError):
         return
     proven = []
@@ -2703,6 +2705,8 @@ def reconcile_failed_launch_leases(root, cmux, identity):
         return
 
     def release(state, retiring):
+        if verify_actor(state)["id"] != actor["id"] or not observation_matches(snapshot, state, actor["id"]):
+            raise OrchestrationError("Lease reconciliation actor changed.")
         for identifier in proven:
             node = state["nodes"].get(identifier)
             if (observation_matches(snapshot, state, identifier)
@@ -3127,6 +3131,31 @@ def authorize_native_spawn(state, identity):
     return actor
 
 
+def require_invoking_native_session(state, actor, operation):
+    """The invoking process is the actor's own live session: born custody, or launcher token."""
+    if actor.get("enrollment") == "born":
+        # A born root has no launcher token: its exact session and provider are its authority.
+        if (actor["copilotSessionId"] != os.environ.get("SESSION_ID")
+                or str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
+                or not process_matches(actor)):
+            raise OrchestrationError(f"{operation} does not match the invoking native session.")
+        require_born_custody(actor)
+    else:
+        if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
+                or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
+                or actor["runId"] != os.environ.get("CMUX_MAESTRO_RUN_ID")
+                or str(actor["generation"]) != os.environ.get("CMUX_MAESTRO_GENERATION")):
+            raise OrchestrationError(f"{operation} does not match the invoking native session.")
+        authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
+
+
+def verified_native_spawn_actor(state, identity):
+    """Spawn's actor authorization plus the invoking-session proof, for lease reconciliation."""
+    actor = authorize_native_spawn(state, identity)
+    require_invoking_native_session(state, actor, "Spawn")
+    return actor
+
+
 def command_native_spawn(root, cmux):
     try:
         raw = sys.stdin.buffer.read(65_537)
@@ -3164,10 +3193,8 @@ def command_native_spawn(root, cmux):
         model=assignment.get("model"), context_tier=assignment.get("contextTier"),
         reasoning_effort=assignment.get("reasoningEffort"), launch_capabilities=request.get("launchCapabilities"),
     )
-    if isinstance(request["identity"], dict):
-        reconcile_failed_launch_leases(root, cmux, {
-            key: value for key, value in request["identity"].items() if key not in {"login", "host"}
-        })
+    reconcile_failed_launch_leases(root, cmux, lambda state: verified_native_spawn_actor(
+        state, request["identity"]))
     return command_spawn(args, root, cmux, native_identity=request["identity"])
 
 
@@ -4757,28 +4784,20 @@ def native_close_request(root, cmux, request):
     target_identity = request["target"]
     subtree = request.get("scope") == "subtree"
 
-    def owned(state, identity=target_identity, *, direct=True, selecting=False):
+    def verified_actor(state):
+        """The invoking session's full close authority: identity, session, custody and token."""
         native_identity = request["identity"]
         node_id = native_identity.get("nodeId") if isinstance(native_identity, dict) else None
         stored_actor = state["nodes"].get(node_id) if isinstance(node_id, str) else None
         if stored_actor and not stored_actor.get("copilotSessionId"):
             raise OrchestrationError("Native session identity changed.")
         actor = authorize_native_actor(state, request["identity"])
-        if actor.get("enrollment") == "born":
-            # A born root has no launcher token: its exact session and provider are its authority.
-            if (actor["copilotSessionId"] != os.environ.get("SESSION_ID")
-                    or str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
-                    or not process_matches(actor)):
-                raise OrchestrationError("Close does not match the invoking native session.")
-            require_born_custody(actor)
-        else:
-            if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
-                    or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
-                    or actor["runId"] != os.environ.get("CMUX_MAESTRO_RUN_ID")
-                    or str(actor["generation"]) != os.environ.get("CMUX_MAESTRO_GENERATION")):
-                raise OrchestrationError("Close does not match the invoking native session.")
-            authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
+        require_invoking_native_session(state, actor, "Close")
         require_current_surface(actor["workspaceId"], actor["surfaceId"])
+        return actor
+
+    def owned(state, identity=target_identity, *, direct=True, selecting=False):
+        actor = verified_actor(state)
         target = ensure_owned(state, actor, identity["workerId"], direct=direct)
         if any(target.get(field) != identity[key] for key, field in (
             ("workspaceId", "workspaceId"), ("surfaceId", "surfaceId"),
@@ -4802,7 +4821,7 @@ def native_close_request(root, cmux, request):
             raise OrchestrationError("Close refuses an active launch lease in the target subtree.")
         return actor, target
 
-    reconcile_failed_launch_leases(root, cmux, request["identity"])
+    reconcile_failed_launch_leases(root, cmux, verified_actor)
 
     snapshot = read_state(root, wait=0) if subtree else read_state(root)
     actor, target = owned(snapshot, selecting=request.get("scope") == "subtree")
