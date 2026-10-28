@@ -247,8 +247,11 @@ are obtained through the bounded resolver into the process environment, never
 the prompt, host command, or persistent launch files.
 The canonical Maestro-context wrapper preserves task bytes, explains native
 peer discovery/send and genuine envelope-sender replies, human-interactive chat,
-uncertainty and no input fallback. A genuine available coordinator address is
-included; no slash skill or startup acknowledgement is required.
+uncertainty and no input fallback. The direct parent's genuine available return
+address is included, even when that parent is a worker. An unavailable parent
+route is omitted, never replaced with the run root. The root remains a peer;
+reports are not automatically copied to it. No slash skill or startup
+acknowledgement is required.
 
 Both coordinator and worker launch assignments receive milestone-only handoff
 guidance: candidate ready, review complete, blocking failure, or decision needed.
@@ -465,7 +468,7 @@ Use the actual generation, not the illustrative `1`. The adapter supplies the
 invoking native identity privately. Do not inspect tokens, construct a private
 `native-close` request, or substitute a peer address, name, current focus or
 worktree. Peer participation is not close authority. The exact selected root must
-be a direct child in the same run/workspace: never self, parent, sibling or an
+be a strict descendant in the same run/workspace: never self, parent, sibling or an
 unrelated peer. Omitted `scope` (or `"scope": "target-only"`) keeps the existing
 single-target receipt and leaves descendants owned and untouched.
 

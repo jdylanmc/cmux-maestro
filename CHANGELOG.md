@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Explicitly authorized close requests may target any exact owned descendant,
+  not only immediate children. Self, ancestors and unrelated sessions remain
+  excluded; target-only never closes the selected session's descendants (#377).
 - Collapsed workspace headers stack compactly without margins reserved for
   expanded content. Dividers, control targets and expanded layout stay unchanged
   in both densities (#319).
@@ -299,6 +302,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Nested sessions receive their direct parent's return address instead of the
+  run root's. Missing parent routes stay unavailable rather than misrouting
+  reports (#377).
 - Restored click targets for animated sidebar pets.
 - Active window details follow a positively verified replacement session without
   treating its retained unknown predecessor as a competing occupant. Ambiguous

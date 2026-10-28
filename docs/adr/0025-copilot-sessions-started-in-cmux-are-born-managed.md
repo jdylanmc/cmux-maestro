@@ -88,3 +88,21 @@ observations. Deterministic synthetic controller/extension scenarios establish
 the repaired ordering cases. Actual interactive `/resume` callback ordering
 is still unverified; if the provider delivers no authoritative end, enrollment
 continues to refuse. No existing session is probed, reloaded or controlled.
+
+## Amendment (2026-10-27, #377): exact descendant close
+
+An actor may request an explicitly authorized close of any strict descendant
+in its own run and workspace, not only an immediate child. Both target-only and
+subtree selection use the recorded parent chain. Self, ancestors, siblings and
+foreign runs remain excluded. Target-only still attempts exactly one surface;
+subtree still requires separate explicit authorization and a fixed selection.
+
+The earlier direct-child-only restriction rejected an exact grandchild despite
+its recorded ownership. The controller now uses its existing transitive
+ownership check and revalidates every captured ancestor before dispatch.
+Actor and target identity, current generation, custody, provider/source anchors,
+workspace membership, launch leases and stock host refusals remain unchanged.
+Re-enrollment does not detach children from their recorded root.
+
+This does not authorize peer-message bodies, grant provider permissions, adopt
+other workspace roots, close sessions automatically or infer completion.
