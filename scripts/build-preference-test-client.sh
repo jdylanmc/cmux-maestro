@@ -16,6 +16,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotPaths.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotEventReducer.swift" \
     "$ROOT/CMUXMaestroPreview/Domain/AgentSignals.swift" \
+    "$ROOT/CMUXMaestroPreview/Domain/AgentPresentationInputs.swift" \
     "$ROOT/CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift" \
     "$ROOT/CMUXMaestroSidebar/Hierarchy/HierarchySnapshot.swift" \

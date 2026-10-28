@@ -1176,6 +1176,7 @@ actor CopilotSessionReader {
             state: value.state, model: value.model, children: value.children, observedAt: now,
             attention: value.attention, activity: value.activity
         )
+        result.presentation = value.presentation
         if includeBindingProcess {
             result.bindingProcess = .init(
                 pid: record.ownerPID, startSeconds: record.ownerStartSeconds,

@@ -5,6 +5,264 @@ import Testing
 // Run large synchronous replay fixtures individually, not across every executor worker.
 @Suite(.serialized)
 nonisolated struct CopilotEventReducerTests {
+    @Test(arguments: ["model.call_failure", "model.call_finished", "session.compaction_start", "session.compaction_complete"])
+    func presentationMetadataSurvivesBoundedProjectionWithoutRetainingPayload(_ type: String) throws {
+        let row = try copilotTestEvent(type, data: [
+            "turnId": "primary", "outcome": "error", "success": false, "compactionAttemptId": "attempt", "source": "top_level",
+            "errorMessage": String(repeating: "private prose", count: 1_000),
+            "summary": ["content": "private prose"]
+        ])
+        var envelope = CopilotAssetEnvelope(maximumBytes: 1_024)
+        envelope.consume(row)
+        let projected = try #require(envelope.projectedEvent)
+        #expect(projected.count < 1_024)
+        #expect(!String(decoding: projected, as: UTF8.self).contains("private prose"))
+        let metadata = try JSONDecoder().decode(CopilotEventProjection.self, from: projected)
+        #expect(metadata.presentationMetadataIsValid)
+        #expect(metadata.type == type)
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        reducer.consume(projected)
+        #expect(reducer.canPublishProjection)
+        #expect(reducer.value().state == .working)
+        if type == "model.call_finished" { #expect(reducer.value().presentation.modelTrouble == true) }
+        if type == "session.compaction_start" { #expect(reducer.value().presentation.compactionActive == true) }
+    }
+
+    @Test(arguments: ["model.call_finished", "session.compaction_start", "session.compaction_complete"])
+    func malformedPresentationMetadataOnlyInvalidatesPresentation(_ type: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        try feed(&reducer, "permission.requested", ["requestId": "request"])
+        let before = reducer.value()
+        try feed(&reducer, type, ["turnId": [], "compactionAttemptId": [], "success": "not-a-boolean"])
+        let after = reducer.value()
+        #expect(after.presentation == AgentPresentationInputs())
+        #expect(after.state == before.state)
+        #expect(after.attention == before.attention)
+        #expect(reducer.canPublishProjection)
+        #expect(reducer.issues.isEmpty)
+    }
+
+    @Test func presentationTurnAndToolEvidenceIsScopedDeduplicatedAndBounded() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        #expect(reducer.value().presentation == AgentPresentationInputs())
+        try feed(&reducer, "assistant.turn_end", ["turnId": "unseen"])
+        #expect(reducer.value().presentation.turnClean == nil)
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        #expect(reducer.value().presentation.primaryTurnOpen == true)
+        #expect(reducer.value().presentation.turnClean == true)
+        #expect(reducer.value().presentation.modelTrouble == nil)
+        try feed(&reducer, "assistant.turn_start", agent: "child", ["turnId": "child"])
+        try feed(&reducer, "tool.execution_start", agent: "child", ["toolCallId": "child-tool", "toolName": "view"])
+        try feed(&reducer, "tool.execution_complete", agent: "child", ["toolCallId": "child-tool", "success": false])
+        #expect(reducer.value().presentation.turnClean == true)
+        #expect(reducer.value().presentation.consecutiveToolFailures == 0)
+        for index in 0..<260 {
+            let tool = "tool-\(index)"
+            try feed(&reducer, "tool.execution_start", ["toolCallId": tool, "toolName": "view"])
+            let complete = try copilotTestEvent("tool.execution_complete", data: ["toolCallId": tool, "success": false])
+            reducer.consume(complete)
+            reducer.consume(complete)
+            try feed(&reducer, "tool.execution_complete", ["toolCallId": tool, "success": false])
+            #expect(reducer.value().presentation.consecutiveToolFailures == UInt8(min(index + 1, 255)))
+        }
+        #expect(reducer.value().presentation.turnClean == false)
+        #expect(reducer.value().state == .working)
+        #expect(reducer.value().attention.isEmpty)
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "success", "toolName": "view"])
+        try feed(&reducer, "tool.execution_complete", ["toolCallId": "success", "success": true])
+        #expect(reducer.value().presentation.consecutiveToolFailures == 0)
+        #expect(reducer.value().presentation.turnClean == false)
+        try feed(&reducer, "assistant.turn_end", ["turnId": "primary"])
+        #expect(reducer.value().presentation.primaryTurnOpen == false)
+        #expect(reducer.value().attention.map(\.kind) == [.turnFinished])
+        try feed(&reducer, "assistant.turn_start", ["turnId": "next"])
+        #expect(reducer.value().presentation.turnClean == true)
+        #expect(reducer.value().presentation.consecutiveToolFailures == 0)
+    }
+
+    @Test func oldForeignAndUnmatchedToolsCannotContaminateNewTurnPresentation() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "old"])
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "old-tool", "toolName": "view"])
+        try feed(&reducer, "assistant.turn_start", ["turnId": "new"])
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "new-tool", "toolName": "view"])
+        let initial = reducer.value().presentation
+        for (tool, agent) in [("old-tool", nil), ("missing", nil), ("new-tool", "foreign")] {
+            try feed(&reducer, "tool.execution_complete", agent: agent, ["toolCallId": tool, "success": false])
+        }
+        #expect(reducer.value().presentation == initial)
+        try feed(&reducer, "tool.execution_complete", ["toolCallId": "new-tool", "success": false])
+        #expect(reducer.value().presentation.consecutiveToolFailures == 1)
+    }
+
+    @Test(arguments: ["omitted", "limited", "malformed", "resume", "generation"])
+    func presentationGapsAndGenerationBoundariesStayUnknownUntilNewEvidence(_ boundary: String) throws {
+        let sessionID = UUID()
+        var reducer = CopilotEventReducer(sessionID: sessionID)
+        let start = try copilotTestEvent("assistant.turn_start", data: ["turnId": "old"])
+        reducer.consume(start)
+        try feed(&reducer, "session.compaction_start", ["compactionAttemptId": "attempt"])
+        try feed(&reducer, "tool.execution_start", ["toolCallId": "failed", "toolName": "view"])
+        try feed(&reducer, "tool.execution_complete", ["toolCallId": "failed", "success": false])
+        switch boundary {
+        case "omitted": reducer.omitUnseenHistory()
+        case "limited": reducer.markLimited()
+        case "malformed": reducer.consume(Data("not-json".utf8))
+        case "resume": try feed(&reducer, "session.resume", [:])
+        default: reducer = CopilotEventReducer(sessionID: sessionID)
+        }
+        #expect(reducer.value().presentation == AgentPresentationInputs())
+        if boundary != "generation" {
+            reducer.consume(start)
+            #expect(reducer.value().presentation == AgentPresentationInputs())
+        }
+        try feed(&reducer, "assistant.turn_end", ["turnId": "old"])
+        #expect(reducer.value().presentation.turnClean == nil)
+        #expect(reducer.value().presentation.consecutiveToolFailures == nil)
+        try feed(&reducer, "assistant.turn_start", ["turnId": "fresh"])
+        try feed(&reducer, "assistant.turn_end", ["turnId": "fresh"])
+        #expect(reducer.value().presentation.primaryTurnOpen == false)
+        #expect(reducer.value().presentation.turnClean == true)
+        #expect(reducer.value().presentation.modelTrouble == nil)
+        #expect(reducer.value().presentation.compactionActive == nil)
+    }
+
+    @Test(arguments: ["user_abort", "user_exit", "streaming_error", "user_initiated", "private prose"])
+    func abortReasonsAreAllowlistedWithoutChangingCancellation(_ reason: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        try feed(&reducer, "abort", ["reason": reason, "message": "private prose"])
+        let value = reducer.value()
+        #expect(value.state == .cancelled)
+        #expect(value.attention.map(\.kind) == [.aborted])
+        #expect(value.presentation.abortReason == AgentPresentationInputs.AbortReason(rawValue: reason) ?? .other)
+        #expect(value.presentation.primaryTurnOpen == false)
+        #expect(value.presentation.turnClean == false)
+        let data = try JSONEncoder().encode(value.presentation)
+        #expect(!String(decoding: data, as: UTF8.self).contains("private prose"))
+    }
+
+    @Test(arguments: ["quota", "authorization", "execution", "query", "private prose"])
+    func errorCategoriesAreAllowlistedAndStillFailTheSession(_ category: String) throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        try feed(&reducer, "session.error", agent: "child", ["errorType": category, "message": "private prose"])
+        #expect(reducer.value().presentation.errorCategory == nil)
+        #expect(reducer.value().presentation.turnClean == true)
+        try feed(&reducer, "session.error", ["errorType": category, "message": "private prose"])
+        let value = reducer.value()
+        #expect(value.state == .failed)
+        #expect(value.attention.map(\.kind) == [.error])
+        #expect(value.presentation.errorCategory == AgentPresentationInputs.ErrorCategory(rawValue: category) ?? .other)
+        #expect(value.presentation.turnClean == false)
+        #expect(!String(decoding: try JSONEncoder().encode(value.presentation), as: UTF8.self).contains("private prose"))
+        try feed(&reducer, "session.resume", [:])
+        #expect(reducer.value().presentation == AgentPresentationInputs())
+    }
+
+    @Test func modelTroubleUsesVerifiedNamesExactTurnProofAndSuccessClearing() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        let startID = UUID()
+        reducer.consume(try event("assistant.turn_start", id: startID, timestamp: nil,
+                                 ["turnId": "1", "interactionId": "current"]))
+        for type in ["model.model_call_failure", "model.model_call_retry", "model.turn_failed"] {
+            try feed(&reducer, type, [:])
+        }
+        try feed(&reducer, "model.call_failure", ["source": "top_level", "errorMessage": "private prose"])
+        #expect(reducer.value().presentation.modelTrouble == nil)
+        for source in ["subagent", "mcp_sampling", "unknown-source"] {
+            reducer.consume(try event("model.call_failure", id: UUID(), timestamp: nil,
+                                      ["source": source], parent: startID))
+            #expect(reducer.value().presentation.modelTrouble == nil)
+        }
+        let failure = try event("model.call_failure", id: UUID(), timestamp: nil,
+                                ["source": "top_level", "errorMessage": "private prose"], parent: startID)
+        reducer.consume(failure)
+        #expect(reducer.value().presentation.modelTrouble == true)
+        #expect(reducer.value().state == .working)
+        #expect(reducer.value().attention.isEmpty)
+        for (turn, interaction, agent) in [("old", "current", nil), ("1", "old", nil), ("1", "current", "child")] {
+            try feed(&reducer, "model.call_finished", agent: agent,
+                     ["turnId": turn, "interactionId": interaction, "outcome": "success"])
+            #expect(reducer.value().presentation.modelTrouble == true)
+        }
+        try feed(&reducer, "model.call_finished", ["turnId": "1", "interactionId": "current", "outcome": "cancelled"])
+        #expect(reducer.value().presentation.modelTrouble == true)
+        try feed(&reducer, "model.call_finished", ["turnId": "1", "interactionId": "current", "outcome": "success"])
+        #expect(reducer.value().presentation.modelTrouble == false)
+        reducer.consume(failure)
+        #expect(reducer.value().presentation.modelTrouble == false)
+        try feed(&reducer, "model.call_finished", ["turnId": "1", "interactionId": "current", "outcome": "rejected"])
+        #expect(reducer.value().presentation.modelTrouble == true)
+        try feed(&reducer, "assistant.turn_start", ["turnId": "2", "interactionId": "current"])
+        #expect(reducer.value().presentation.modelTrouble == nil)
+    }
+
+    @Test func modelReplayExhaustionInvalidatesPresentationWithoutInventingLifecycleState() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID(), maximumLifecycleEvents: 1, maximumReplayFilterWords: 1)
+        reducer.consume(try copilotTestEvent("assistant.turn_start", data: ["turnId": "primary"],
+                                            id: "00000000-0000-0000-0000-000000000001"))
+        for index in 0..<128 {
+            reducer.consume(try copilotTestEvent(
+                "model.call_finished", data: ["turnId": "primary", "outcome": "error"],
+                id: String(format: "F3790000-0000-0000-0000-%012X", index)
+            ))
+        }
+        #expect(reducer.issues == [.readLimitReached])
+        #expect(reducer.value().presentation == AgentPresentationInputs())
+        #expect(reducer.value().state == .working)
+        #expect(reducer.value().attention.isEmpty)
+        #expect(reducer.canPublishProjection)
+    }
+
+    @Test func compactionRequiresExactAttemptOrLegacyContinuityAndNeverChangesWorkState() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        let initial = reducer.value()
+        try feed(&reducer, "session.compaction_start", ["compactionAttemptId": "current"])
+        #expect(reducer.value().presentation.compactionActive == true)
+        try feed(&reducer, "session.compaction_complete", ["compactionAttemptId": "old", "success": true])
+        try feed(&reducer, "session.compaction_complete", agent: "child", ["compactionAttemptId": "current", "success": true])
+        #expect(reducer.value().presentation.compactionActive == true)
+        try feed(&reducer, "session.compaction_complete", ["compactionAttemptId": "current", "success": false])
+        #expect(reducer.value().presentation.compactionActive == false)
+        #expect(reducer.value().presentation.turnClean == false)
+        try feed(&reducer, "session.compaction_start", ["compactionAttemptId": "current"])
+        #expect(reducer.value().presentation.compactionActive == false)
+        let legacyStart = UUID()
+        reducer.consume(try event("session.compaction_start", id: legacyStart, timestamp: nil, [:]))
+        try feed(&reducer, "session.compaction_complete", ["success": true])
+        #expect(reducer.value().presentation.compactionActive == true)
+        let bridge = UUID()
+        reducer.consume(try event("opaque.metadata", id: bridge, timestamp: nil, [:], parent: legacyStart))
+        reducer.consume(try event("session.compaction_complete", id: UUID(), timestamp: nil, ["success": true], parent: bridge))
+        #expect(reducer.value().presentation.compactionActive == false)
+        #expect(reducer.value().state == initial.state)
+        #expect(reducer.value().attention == initial.attention)
+    }
+
+    @Test func overlappingAndRetiredCompactionsCannotFabricateAClosedInterval() throws {
+        var reducer = CopilotEventReducer(sessionID: UUID())
+        try feed(&reducer, "assistant.turn_start", ["turnId": "primary"])
+        for attempt in ["first", "second"] {
+            try feed(&reducer, "session.compaction_start", ["compactionAttemptId": attempt])
+        }
+        #expect(reducer.value().presentation.compactionActive == nil)
+        #expect(reducer.value().presentation.turnClean == nil)
+        for attempt in ["first", "second"] {
+            try feed(&reducer, "session.compaction_complete", ["compactionAttemptId": attempt, "success": true])
+        }
+        try feed(&reducer, "session.compaction_start", ["compactionAttemptId": "third"])
+        try feed(&reducer, "session.compaction_complete", ["compactionAttemptId": "third", "success": true])
+        #expect(reducer.value().presentation.compactionActive == nil)
+        try feed(&reducer, "session.resume", [:])
+        try feed(&reducer, "session.compaction_start", ["compactionAttemptId": "first"])
+        #expect(reducer.value().presentation.compactionActive == nil)
+        #expect(reducer.value().state == .unknown)
+    }
+
     @Test func acceptedCompletionCarriesDurableEvidenceNotObservationTime() throws {
         var reducer = CopilotEventReducer(sessionID: UUID())
         try feed(&reducer, "subagent.started", agent: "child", [
@@ -304,11 +562,12 @@ nonisolated struct CopilotEventReducerTests {
     }
 
     private func event(
-        _ type: String, id: UUID, timestamp: Any?, _ data: [String: Any], agent: String? = nil
+        _ type: String, id: UUID, timestamp: Any?, _ data: [String: Any], agent: String? = nil, parent: UUID? = nil
     ) throws -> Data {
         var event: [String: Any] = ["id": id.uuidString, "type": type, "data": data]
         if let timestamp { event["timestamp"] = timestamp }
         if let agent { event["agentId"] = agent }
+        if let parent { event["parentId"] = parent.uuidString }
         return try JSONSerialization.data(withJSONObject: event)
     }
 
