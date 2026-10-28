@@ -36,6 +36,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Session snapshots expose sanitized turn, cancellation, technical-error,
+  tool-failure and compaction inputs for richer pet presentation. Unknown
+  evidence and existing work and attention semantics stay unchanged (#379).
 - Saved footer pets, including Maestro, show a pencil badge on hover to open
   the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph
