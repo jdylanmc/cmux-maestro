@@ -3,7 +3,7 @@ import Foundation
 import Observation
 import UniformTypeIdentifiers
 
-/// Codex pet sheet contract: 8 columns x 9 rows of 192x208 cells (1536x1872).
+/// Nine-row Codex sheets and the fixed twenty-row Maestro mood atlas.
 enum SidebarPetSheet {
     static let columns = 8
     static let rows = 9
@@ -11,35 +11,87 @@ enum SidebarPetSheet {
     static let cellHeight = 208
     static let width = columns * cellWidth
     static let height = rows * cellHeight
-    /// Eight columns of 192:208 cells at any whole-pixel scale with at least nine rows. Extra rows
-    /// (Codex v2 adds look-direction rows, 1536x2288) are ignored: Maestro plays only rows 0-8.
+    static let moodRows = 20
+    /// A standard extended atlas is 25,559,040 RGBA bytes, before decoder/cache overhead.
+    static let maximumMoodWidth = 1536
+
+    enum Mood: String, CaseIterable {
+        case idle, thinking, working, delegating, question
+        case needsPermission = "needs-permission"
+        case confused, content, startled, sad, compacting, sleepy, gone, proud, celebrating
+
+        fileprivate var rows: (preferred: Int, fallback: Int) {
+            switch self {
+            case .idle: (0, 0)
+            case .thinking: (11, 8)
+            case .working: (7, 7)
+            case .delegating: (12, 1)
+            case .question: (6, 6)
+            case .needsPermission: (13, 6)
+            case .confused: (14, 8)
+            case .content: (3, 3)
+            case .startled: (9, 4)
+            case .sad: (5, 5)
+            case .compacting: (15, 2)
+            case .sleepy: (16, 0)
+            case .gone: (17, 0)
+            case .proud: (18, 3)
+            case .celebrating: (19, 4)
+            }
+        }
+    }
+
+    struct Playback: Equatable {
+        let row: Int
+        let frameCount: Int
+    }
+
+    static func hasMoods(width: Int, height: Int) -> Bool {
+        width % columns == 0 && (512...maximumMoodWidth).contains(width)
+            && height == (moodRows * cellHeight * width + Self.width - 1) / Self.width
+    }
+
+    /// Only exact twenty-row geometry opts in; legacy tails (including Codex v2) stay legacy.
     static func accepts(width: Int, height: Int) -> Bool {
         guard width % columns == 0, (512...4096).contains(width) else { return false }
         let minimum = (rows * cellHeight * width + Self.width - 1) / Self.width
-        return height >= minimum && height <= 2 * width
+        return (height >= minimum && height <= 2 * width) || hasMoods(width: width, height: height)
+    }
+
+    /// Select the authored mood row or its legacy fallback, including that row's loop length.
+    static func playback(for mood: Mood, width: Int, height: Int) -> Playback? {
+        guard accepts(width: width, height: height) else { return nil }
+        let row = hasMoods(width: width, height: height) ? mood.rows.preferred : mood.rows.fallback
+        let count: Int
+        switch row {
+        case 9, 19: count = 5
+        case 12: count = 8
+        case 11, 13...17: count = 6
+        case 18: count = 4
+        default: count = frameCounts[row]
+        }
+        return Playback(row: row, frameCount: count)
     }
 
     /// Pixel scale of a sheet relative to the 1536-wide standard.
     static func scale(width: Int) -> CGFloat { CGFloat(width) / CGFloat(Self.width) }
     static let maximumBytes = 10 * 1024 * 1024
     static let frameCounts = [6, 8, 8, 4, 5, 8, 6, 6, 6]
-    /// Largest transparent top band trimmed from layout, as a fraction of cell height: the bundled
-    /// sheet's tallest played row (working) starts 19 of 208 cell pixels down.
+    /// Maximum trim, independent of the alpha measured across playable frames.
     static let maximumTopInset: CGFloat = 19 / 208
-    /// Rows the sidebar actually plays.
-    static let playedRows = Set(SidebarPetState.allCases.map(\.row)).sorted()
 
     /// Fully transparent top rows shared by every played cell, as a fraction of cell height, capped at
     /// `maximumTopInset`. `pixels` is a top-down premultiplied RGBA bitmap of the whole sheet.
     static func topInset(pixels: UnsafePointer<UInt8>, width: Int, height: Int, bytesPerRow: Int) -> CGFloat {
         let scale = Self.scale(width: width)
         let cellWidth = Int((CGFloat(Self.cellWidth) * scale).rounded())
-        let cellHeight = (CGFloat(Self.cellHeight) * scale).rounded()
+        let cellHeight = CGFloat(Self.cellHeight) * scale
         let limit = Int((cellHeight * maximumTopInset).rounded(.down))
         var inset = limit
-        for row in playedRows {
-            let top = Int((CGFloat(row) * cellHeight).rounded())
-            for column in 0..<frameCounts[row] {
+        for mood in Mood.allCases {
+            guard let playback = playback(for: mood, width: width, height: height) else { return 0 }
+            let top = Int((CGFloat(playback.row) * cellHeight).rounded())
+            for column in 0..<playback.frameCount {
                 let left = column * cellWidth
                 var clear = 0
                 scan: while clear < inset, top + clear < height {
@@ -365,15 +417,29 @@ final class SidebarPetStore {
     }
 
     func frame(petID: String, session: UUID?, state: SidebarPetState, index: Int) -> CGImage? {
+        guard let sheet = sheet(for: petID, session: session) ?? sheet(for: Self.defaultID, session: nil) else { return nil }
+        return frame(sheet: sheet, playback: .init(row: state.row, frameCount: state.frameCount), index: index)
+    }
+
+    func playback(petID: String, session: UUID?, mood: SidebarPetSheet.Mood) -> SidebarPetSheet.Playback? {
+        guard let sheet = sheet(for: petID, session: session) ?? sheet(for: Self.defaultID, session: nil) else { return nil }
+        return SidebarPetSheet.playback(for: mood, width: sheet.width, height: sheet.height)
+    }
+
+    func frame(petID: String, session: UUID?, mood: SidebarPetSheet.Mood, index: Int) -> CGImage? {
         guard let sheet = sheet(for: petID, session: session) ?? sheet(for: Self.defaultID, session: nil),
-              state.frameCount > 0 else { return nil }
-        let column = ((index % state.frameCount) + state.frameCount) % state.frameCount
-        let key = "\(ObjectIdentifier(sheet).hashValue)/\(state.row)/\(column)"
+              let playback = SidebarPetSheet.playback(for: mood, width: sheet.width, height: sheet.height) else { return nil }
+        return frame(sheet: sheet, playback: playback, index: index)
+    }
+
+    private func frame(sheet: CGImage, playback: SidebarPetSheet.Playback, index: Int) -> CGImage? {
+        let column = ((index % playback.frameCount) + playback.frameCount) % playback.frameCount
+        let key = "\(ObjectIdentifier(sheet).hashValue)/\(playback.row)/\(column)"
         if let cached = frames[key] { return cached }
         let scale = SidebarPetSheet.scale(width: sheet.width)
         let cellWidth = CGFloat(SidebarPetSheet.cellWidth) * scale, cellHeight = CGFloat(SidebarPetSheet.cellHeight) * scale
         let cell = sheet.cropping(to: CGRect(
-            x: (CGFloat(column) * cellWidth).rounded(), y: (CGFloat(state.row) * cellHeight).rounded(),
+            x: (CGFloat(column) * cellWidth).rounded(), y: (CGFloat(playback.row) * cellHeight).rounded(),
             width: cellWidth.rounded(), height: cellHeight.rounded()))
         if let cell { frames[key] = cell }
         return cell
@@ -422,7 +488,13 @@ final class SidebarPetStore {
         #if DEBUG
         decodeLock.withLock { decodes[url.standardizedFileURL.path, default: 0] += 1 }
         #endif
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size > 0, size <= SidebarPetSheet.maximumBytes,
+              let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = properties[kCGImagePropertyPixelWidth] as? Int,
+              let height = properties[kCGImagePropertyPixelHeight] as? Int,
+              SidebarPetSheet.accepts(width: width, height: height),
               let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
               SidebarPetSheet.accepts(width: image.width, height: image.height) else { return nil }
         return decoded(image)
@@ -431,7 +503,8 @@ final class SidebarPetStore {
     /// Lazy WebP/PNG images re-decode the whole sheet on every render; draw once into a bitmap.
     /// The same pass measures the played cells' transparent top band.
     nonisolated static func decoded(_ image: CGImage) -> DecodedSheet? {
-        guard let context = CGContext(
+        guard SidebarPetSheet.accepts(width: image.width, height: image.height),
+              let context = CGContext(
             data: nil, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: 0,
             space: CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
@@ -475,7 +548,7 @@ final class SidebarPetStore {
             throw PetError(message: "The spritesheet must be smaller than 10 MB.")
         }
         guard image(sheetURL) != nil, let data = try? Data(contentsOf: sheetURL) else {
-            throw PetError(message: "The spritesheet must be \(SidebarPetSheet.width)×\(SidebarPetSheet.height) pixels or larger: 8 columns and at least 9 rows of 192:208 cells at any scale (extra rows are ignored).")
+            throw PetError(message: "Use a legacy Codex sheet (standard 1536×1872, including v2) or a 20-row mood sheet (standard 1536×4160). Width must be a multiple of 8: 512–4096 for legacy sheets, 512–1536 for mood sheets.")
         }
         if id.isEmpty { id = "pet" }
         if id == defaultID { id = "maestro-custom" }

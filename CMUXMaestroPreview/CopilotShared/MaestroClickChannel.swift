@@ -40,7 +40,7 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
                 throw CopilotFileError.unsafePath
             }
             let directory = directory, name = lockName
-            lock = try Self.withRegistry(at: directory) {
+            lock = try Self.withRegistry(at: directory) { _ in
                 try Self.reclaimRetired(at: directory)
                 return try Self.acquire(at: directory, name: name, create: true)
             }
@@ -53,7 +53,7 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
     deinit {
         defer { close(lock); close(directory) }
         do {
-            try Self.withRegistry(at: directory) {
+            try Self.withRegistry(at: directory) { _ in
                 try Self.reclaim(window: window, at: directory, owned: (lockName, lock))
             }
         } catch {
@@ -63,10 +63,16 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
     }
 
     /// This permanent inode serializes lock-name creation and removal across processes.
-    private static func withRegistry<T>(at directory: Int32, _ operation: () throws -> T) throws -> T {
+    static func withRegistry<T>(at directory: Int32, _ operation: (Int32) throws -> T) throws -> T {
         let descriptor = try acquire(at: directory, name: ".registry", create: true)
-        defer { close(descriptor) }
-        return try operation()
+        defer {
+            // A concurrent process launch can retain a duplicate until exec.
+            if flock(descriptor, LOCK_UN) != 0 {
+                fputs("Maestro notification registry unlock unavailable.\n", stderr)
+            }
+            close(descriptor)
+        }
+        return try operation(descriptor)
     }
 
     private static func acquire(at directory: Int32, name: String, create: Bool) throws -> Int32 {
@@ -165,7 +171,7 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
         let directory = try CopilotFileAccess.openDirectory(root, owner: getuid())
         defer { close(directory) }
         guard try CopilotFileAccess.statFile(directory).permissions == 0o700 else { throw CopilotFileError.unsafePath }
-        return try withRegistry(at: directory) {
+        return try withRegistry(at: directory) { _ in
             try reclaimRetired(at: directory)
             let entries = try CopilotFileAccess.names(at: directory, limit: 256)
             guard !entries.limited else { throw CopilotFileError.tooLarge }
