@@ -302,6 +302,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Notification channel registration releases its short-lived lock before
+  closing the descriptor, avoiding false contention during concurrent process
+  launches. Live window leases and busy senders retain their existing locks.
 - Restored click targets for animated sidebar pets.
 - Active window details follow a positively verified replacement session without
   treating its retained unknown predecessor as a competing occupant. Ambiguous

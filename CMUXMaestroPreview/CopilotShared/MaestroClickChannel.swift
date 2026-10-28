@@ -65,7 +65,13 @@ nonisolated final class MaestroClickChannel: @unchecked Sendable {
     /// This permanent inode serializes lock-name creation and removal across processes.
     static func withRegistry<T>(at directory: Int32, _ operation: (Int32) throws -> T) throws -> T {
         let descriptor = try acquire(at: directory, name: ".registry", create: true)
-        defer { close(descriptor) }
+        defer {
+            // A concurrent process launch can retain a duplicate until exec.
+            if flock(descriptor, LOCK_UN) != 0 {
+                fputs("Maestro notification registry unlock unavailable.\n", stderr)
+            }
+            close(descriptor)
+        }
         return try operation(descriptor)
     }
 
