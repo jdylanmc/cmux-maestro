@@ -92,7 +92,7 @@ art quality or blank-row content. Draw distinct mood art when authoring a full a
 
 Agents may self-report an enum-only mood for their own session
 ([self-reported moods](self-reported-moods.md), ADR 0031). The sidebar reads it
-as labelled metadata only; pet rows for moods are separate work (#382, #383).
+as labelled presentation metadata; bundled mood art is separate work (#383).
 
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
