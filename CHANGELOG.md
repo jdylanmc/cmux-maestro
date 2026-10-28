@@ -36,6 +36,10 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Managed sessions can optionally self-report happy, celebrating or confused,
+  or clear a report, through an exact-self `maestro_mood` tool or
+  `mood --self`. Bounded storage and cold-start suppression keep these claims
+  separate from work and attention; pet rendering follows separately (#380).
 - Saved footer pets, including Maestro, show a pencil badge on hover to open
   the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph

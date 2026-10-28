@@ -225,6 +225,10 @@ _Avoid_: label, category
 Animated Codex-format sprite sheet. Maps Maestro states to rows 0, 7, 6, 3, 5.
 _Avoid_: mascot
 
+**Self-reported mood**:
+Optional `happy`, `celebrating` or `confused` an agent reports for its own exact session; `clear` withdraws it. Authored presentation metadata, never work, success or completion evidence (ADR 0031).
+_Avoid_: emotion, feeling
+
 **Host footer clearance**:
 Fixed 50-point strip reserved for CMUX's overlaid footer.
 _Avoid_: footer inset

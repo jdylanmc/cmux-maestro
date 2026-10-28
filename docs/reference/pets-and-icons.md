@@ -39,6 +39,10 @@ not a SwiftUI timeline. Working rings and input glows also animate in layers.
 Hidden or detached native views remove their animations; changing the pet or state
 replaces its sequence. No frame tick publishes evidence or requests sidebar layout.
 
+Agents may self-report an enum-only mood for their own session
+([self-reported moods](self-reported-moods.md), ADR 0031). The sidebar reads it
+as labelled metadata only; pet rows for moods are separate work (#382, #383).
+
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
 Bundled `/cmux-maestro-native:maestro-icon` skill searches local Nerd Fonts catalog. It saves

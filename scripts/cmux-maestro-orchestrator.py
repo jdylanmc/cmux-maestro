@@ -189,7 +189,8 @@ def messaging_configuration(root):
             raise OrchestrationError("Messaging socket path is too long.")
         # extension.mjs imports both modules; a missing one stops the whole native extension.
         for name, maximum in (("extension.mjs", 65_536), ("adapter.mjs", 65_536),
-                              ("processes.mjs", 16_384), ("models.mjs", 16_384), ("notifications.mjs", 16_384)):
+                              ("processes.mjs", 16_384), ("models.mjs", 16_384), ("notifications.mjs", 16_384),
+                              ("moods.mjs", 16_384)):
             descriptor = os.open(extension / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
             try:
                 info = os.fstat(descriptor)
@@ -2847,14 +2848,14 @@ def notification_muted(path=None):
         raise OrchestrationError("notification-settings-unavailable") from None
 
 
-def notification_actor(state):
+def exact_self_actor(state):
     try:
         workspace = canonical_uuid(os.environ.get("CMUX_WORKSPACE_ID"), "current workspace ID")
         surface = canonical_uuid(os.environ.get("CMUX_SURFACE_ID"), "current surface ID")
         hints = {canonical_uuid(os.environ[key], "current session ID")
                  for key in ("SESSION_ID", "CMUX_MAESTRO_SESSION_ID") if key in os.environ}
         if len(hints) > 1:
-            raise OrchestrationError("notification-identity-unverified")
+            raise OrchestrationError("self-identity-unverified")
         candidates = [n for n in state["nodes"].values()
                       if n.get("executionMode") == "interactive" and n.get("providerProcess")
                       and n.get("surfaceId") and not n.get("archiving") and not session_ended_in_place(n)
@@ -2862,18 +2863,25 @@ def notification_actor(state):
                       and canonical_uuid(n.get("surfaceId"), "stored surface ID") == surface
                       and (not hints or canonical_uuid(n["copilotSessionId"], "stored session ID") in hints)]
         if len(candidates) != 1:
-            raise OrchestrationError("notification-identity-unverified")
+            raise OrchestrationError("self-identity-unverified")
         actor = candidates[0]
         session = canonical_uuid(actor["copilotSessionId"], "stored session ID")
         # Shells need not expose a session UUID. Surface selection is only a
         # candidate: exact provider ancestry and sole session custody authorize it.
         provider = actor["providerProcess"]
         if direct_process_identity(provider["pid"]) != provider:
-            raise OrchestrationError("notification-identity-unverified")
+            raise OrchestrationError("self-identity-unverified")
         require_session_custody(session, provider)
     except OrchestrationError:
-        raise OrchestrationError("notification-identity-unverified") from None
+        raise OrchestrationError("self-identity-unverified") from None
     return actor
+
+
+def notification_actor(state):
+    try:
+        return exact_self_actor(state)
+    except OrchestrationError:
+        raise OrchestrationError("notification-identity-unverified") from None
 
 
 def notification_consume(ledger, session, stamp):
@@ -6195,6 +6203,160 @@ def command_self_icon(args):
     return {key: value[key] for key in ("sessionId", "iconId", "iconColor") if key in value}
 
 
+MOOD_VALUES = ("happy", "celebrating", "confused", "clear")
+MOOD_MAX_BYTES = 1024 * 1024
+MOOD_MAX_RECORD_BYTES = 1024
+MOOD_MAX_NODES = 1024
+MOOD_MAX_WORKSPACE_NODES = 128
+MOOD_MAX_INTEGER = (1 << 53) - 1
+MOOD_CHANGE_INTERVAL_MS = 3000
+MOOD_ID_FIELDS = ("nodeId", "runId", "sessionId", "workspaceId", "surfaceId", "generation")
+MOOD_FIELDS = frozenset((*MOOD_ID_FIELDS, "sequence", "source", "mood", "lastChangedAt"))
+
+
+def mood_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+
+
+def moods_decode(raw):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError()
+            result[key] = value
+        return result
+
+    try:
+        if not 0 < len(raw) <= MOOD_MAX_BYTES:
+            raise ValueError()
+        value = json.loads(raw.decode("utf-8"), object_pairs_hook=unique)
+        if (not isinstance(value, dict) or set(value) != {"version", "moods"}
+                or type(value["version"]) is not int or value["version"] != 1
+                or not isinstance(value["moods"], list) or len(value["moods"]) > MOOD_MAX_NODES):
+            raise ValueError()
+        nodes, workspaces = set(), {}
+        for record in value["moods"]:
+            if (not isinstance(record, dict) or set(record) != MOOD_FIELDS
+                    or len(mood_bytes(record)) > MOOD_MAX_RECORD_BYTES
+                    or record["source"] != "self-report"
+                    or not isinstance(record["mood"], str) or record["mood"] not in MOOD_VALUES):
+                raise ValueError()
+            for field in MOOD_ID_FIELDS[:-1]:
+                if canonical_uuid(record[field], "mood identity") != record[field]:
+                    raise ValueError()
+            for field in ("generation", "sequence", "lastChangedAt"):
+                if type(record[field]) is not int or not 1 <= record[field] <= MOOD_MAX_INTEGER:
+                    raise ValueError()
+            if record["nodeId"] in nodes:
+                raise ValueError()
+            nodes.add(record["nodeId"])
+            workspace = record["workspaceId"]
+            workspaces[workspace] = workspaces.get(workspace, 0) + 1
+            if workspaces[workspace] > MOOD_MAX_WORKSPACE_NODES:
+                raise ValueError()
+        return value
+    except (ValueError, TypeError, KeyError, RecursionError, OrchestrationError):
+        raise OrchestrationError("mood-store-unavailable") from None
+
+
+def read_moods(store):
+    try:
+        descriptor = os.open("moods.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+                             dir_fd=store.observer_fd)
+    except FileNotFoundError:
+        return {"version": 1, "moods": []}
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.getuid()
+                or stat.S_IMODE(before.st_mode) != 0o600 or not 0 < before.st_size <= MOOD_MAX_BYTES):
+            raise OrchestrationError("mood-store-unavailable")
+        raw = os.read(descriptor, MOOD_MAX_BYTES + 1)
+        after = os.fstat(descriptor)
+        entry = os.stat("moods.json", dir_fd=store.observer_fd, follow_symlinks=False)
+        stamp = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+        if stamp(before) != stamp(after) or stamp(before) != stamp(entry):
+            raise OrchestrationError("mood-store-unavailable")
+        return moods_decode(raw)
+    finally:
+        os.close(descriptor)
+
+
+def write_mood(store, actor, mood, *, clock=time.time):
+    value = read_moods(store)
+    identity = dict(zip(MOOD_ID_FIELDS, (
+        actor["id"], actor["runId"], actor["copilotSessionId"],
+        actor["workspaceId"], actor["surfaceId"], actor["generation"],
+    )))
+    previous = next((r for r in value["moods"] if r["nodeId"] == actor["id"]), None)
+    same_identity = previous is not None and all(previous[k] == identity[k] for k in MOOD_ID_FIELDS)
+    # A newer verified generation supersedes the node's older claim; never an equal or older one.
+    if previous is not None and not same_identity and (
+        previous["generation"] >= identity["generation"]
+        or any(previous[k] != identity[k] for k in MOOD_ID_FIELDS[:-1])
+    ):
+        raise OrchestrationError("mood-identity-unverified")
+    if same_identity and previous["mood"] == mood:
+        return {"changed": False, "sequence": previous["sequence"], "mood": mood}
+    stamp = int(clock() * 1000)
+    if same_identity and mood != "clear" and stamp - previous["lastChangedAt"] < MOOD_CHANGE_INTERVAL_MS:
+        raise OrchestrationError("mood-rate-limited")
+    record = {**identity, "source": "self-report", "mood": mood,
+              "sequence": previous["sequence"] + 1 if previous else 1,
+              # Clear cannot refill the rate bucket or make clear/report spam possible.
+              "lastChangedAt": (previous["lastChangedAt"] if same_identity else 1) if mood == "clear" else stamp}
+    records = [record if r["nodeId"] == actor["id"] else r for r in value["moods"]]
+    if previous is None:
+        records.append(record)
+
+    def full(items):
+        return (len(items) > MOOD_MAX_NODES
+                or sum(r["workspaceId"] == record["workspaceId"] for r in items) > MOOD_MAX_WORKSPACE_NODES)
+
+    if full(records) or record["sequence"] > MOOD_MAX_INTEGER:
+        raise OrchestrationError("mood-capacity-unavailable")
+    candidate = mood_bytes({"version": 1, "moods": records})
+    if len(candidate) > MOOD_MAX_BYTES or len(mood_bytes(record)) > MOOD_MAX_RECORD_BYTES:
+        raise OrchestrationError("mood-capacity-unavailable")
+    moods_decode(candidate)
+    store._atomic(store.observer_fd, "moods.json", candidate)
+    return {"changed": True, "sequence": record["sequence"], "mood": mood}
+
+
+def command_self_mood(args, root, cmux, *, native_identity=None, clock=time.time):
+    if not args.own_session or not isinstance(args.mood, str) or args.mood not in MOOD_VALUES:
+        raise OrchestrationError("mood-input-invalid")
+    session = canonical_uuid(args.session_id, "current session ID")
+    # The same side-effect-free native proof used by icons/pets and tags.
+    prove_own_session(session, feature="self-reported moods", subject="mood")
+    with Store(root) as store:
+        state = store.read()
+        actor = exact_self_actor(state)
+        if actor["copilotSessionId"] != session:
+            raise OrchestrationError("mood-identity-unverified")
+        if native_identity is not None and authorize_native_actor(state, native_identity)["id"] != actor["id"]:
+            raise OrchestrationError("mood-identity-unverified")
+        cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+        prove_own_session(session, feature="self-reported moods", subject="mood")
+        return {**write_mood(store, actor, args.mood, clock=clock),
+                "sessionId": session}
+
+
+def command_native_mood(root, cmux):
+    try:
+        raw = sys.stdin.buffer.read(8193)
+        request = json.loads(raw)
+        if len(raw) > 8192 or not isinstance(request, dict) or set(request) != {"identity", "mood"}:
+            raise ValueError()
+        identity = request["identity"]
+        if not isinstance(identity, dict):
+            raise ValueError()
+        args = argparse.Namespace(own_session=True, session_id=identity.get("sessionId"), mood=request["mood"])
+    except (ValueError, TypeError, RecursionError):
+        raise OrchestrationError("mood-input-invalid") from None
+    return command_self_mood(args, root, cmux, native_identity=identity)
+
+
 PET_SIZE = (1536, 1872)
 
 
@@ -7625,6 +7787,7 @@ def parser():
     commands.add_parser("native-spawn", help="Private session-bound launch ingress; use the native maestro_spawn tool")
     commands.add_parser("native-close", help="Private owned-child close ingress; use the native maestro_close tool")
     commands.add_parser("native-notify", help=argparse.SUPPRESS)
+    commands.add_parser("native-mood", help=argparse.SUPPRESS)
     commands.add_parser("notification-authorize", help=argparse.SUPPRESS)
     commands.add_parser("notification-focus", help=argparse.SUPPRESS)
     commands.add_parser("notification-confirm", help=argparse.SUPPRESS)
@@ -7708,6 +7871,10 @@ def parser():
     icon.add_argument("--session-id")
     icon.add_argument("--icon")
     icon.add_argument("--color", choices=ICON_COLORS)
+    mood = commands.add_parser("mood", help="Report an optional expression for your exact managed session")
+    mood.add_argument("--self", action="store_true", dest="own_session")
+    mood.add_argument("--session-id", required=True)
+    mood.add_argument("--mood", required=True, choices=MOOD_VALUES)
     pets = commands.add_parser("pets", help="List the default pet and this session's own pets")
     pets.add_argument("--session-id")
     pet = commands.add_parser("pet", help="Add and/or choose a Codex pet for your own session")
@@ -7797,6 +7964,19 @@ def main(argv=None):
             print(json.dumps({"ok": True, **command_self_icon(args)}, sort_keys=True))
             return 0
         root = default_root()
+        if args.command in {"mood", "native-mood"}:
+            try:
+                output = (command_native_mood(root, Cmux()) if args.command == "native-mood"
+                          else command_self_mood(args, root, Cmux()))
+                print(json.dumps({"ok": True, **output}, sort_keys=True))
+                return 0
+            except (OrchestrationError, OSError) as error:
+                reason = str(error)
+                allowed = {"mood-input-invalid", "mood-identity-unverified", "mood-rate-limited", "mood-capacity-unavailable",
+                           "mood-store-unavailable"}
+                print(json.dumps({"ok": False, "error": reason if reason in allowed else "mood-unavailable"}),
+                      file=sys.stderr)
+                return 2
         if args.command in {"notify", "native-notify", "notification-authorize", "notification-focus", "notification-confirm"}:
             root = notification_home() / "Library/Application Support/CMUXMaestroPreview/Orchestration"
             try:
