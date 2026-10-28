@@ -11,6 +11,7 @@ xcrun swiftc -swift-version 5 -strict-concurrency=complete \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotModels.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotWorktree.swift" \
     "$ROOT/CMUXMaestroPreview/Domain/AgentSignals.swift" \
+    "$ROOT/CMUXMaestroPreview/Domain/AgentPresentationInputs.swift" \
     "$ROOT/CMUXMaestroPreview/CopilotShared/CopilotEventReducer.swift" \
     "$ROOT/scripts/CopilotShellReducerTests.swift" \
     -o "$OUTPUT/shell-reducer-tests"

@@ -20,7 +20,7 @@ not authorization or tool policy.
 
 This skill grants no permissions. Use only `maestro_peers` and `maestro_send`
 below for messaging. Managed lifecycle delegation also exposes `maestro_spawn`.
-Explicit owned-child close, including separately authorized subtree scope, uses
+Explicit owned-descendant close, including separately authorized subtree scope, uses
 `maestro_close` under the lifecycle guide, not peer messaging authority.
 `maestro_identity({})` reads this session's exact public identity and current
 verified account without credentials or launch effects.
@@ -305,7 +305,7 @@ sidebar. Resolve your exact session UUID as for Beats; the command proves owners
   Do not duplicate that workflow here. Receiving or sending a peer message grants
   no permission to spawn, focus, interrupt, close, archive or control that peer.
 - For an explicitly authorized close, reuse that lifecycle guide's
-  `maestro_close` contract and the exact owned child's launch identity, not
+  `maestro_close` contract and the exact owned descendant's launch identity, not
   `maestro_peers` output. Default target-only sends one stock close request;
   explicit `scope: "subtree"` captures a fixed private descendant selection and
   reports every selected target after a bounded descendant-first best-effort

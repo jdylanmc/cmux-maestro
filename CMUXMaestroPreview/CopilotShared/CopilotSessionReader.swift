@@ -1117,6 +1117,10 @@ actor CopilotSessionReader {
         var issues = tail.reducer.issues
         let reachedBoundary = tail.offset >= targetSize
         if reachedBoundary {
+            if !tail.reducer.canPublishProjection {
+                // Retained lifecycle evidence cannot retain presentation proof after invalid history.
+                tail.lastComplete?.presentation = AgentPresentationInputs()
+            }
             if tail.partial.isEmpty && !tail.droppingOversizedLine && !tail.discardingInitialLine
                 && tail.reducer.canPublishProjection {
                 // A verified boundary can publish conservative semantic limits,
@@ -1176,6 +1180,7 @@ actor CopilotSessionReader {
             state: value.state, model: value.model, children: value.children, observedAt: now,
             attention: value.attention, activity: value.activity
         )
+        result.presentation = value.presentation
         if includeBindingProcess {
             result.bindingProcess = .init(
                 pid: record.ownerPID, startSeconds: record.ownerStartSeconds,

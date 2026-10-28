@@ -66,10 +66,12 @@ nonisolated struct CopilotSessionObservation: Codable, Equatable, Sendable {
     var observedAt: Date
     let attention: [AgentAttention]?
     let activity: AgentActivity?
+    var presentation: AgentPresentationInputs? = nil
 
     private enum CodingKeys: String, CodingKey {
         case iconId, iconColor, petId, branch, worktree, currentWorktree, sessionName, sessionIssues
         case sessionID, surfaceID, launchWorkspaceID, liveness, state, model, children, observedAt, attention, activity
+        case presentation
     }
 
     init(

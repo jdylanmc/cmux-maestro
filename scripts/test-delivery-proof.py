@@ -1573,6 +1573,50 @@ finally:
         self.assertTrue(self.invoke()["closeAccepted"])
         self.cmux.run.assert_called_once()
 
+    def test_target_only_closes_exact_grandchild_after_actor_generation_change(self):
+        descendant = self.add_close_descendant(self.child, 12348)
+        self.actor["generation"] = 4
+        self.environment["CMUX_MAESTRO_GENERATION"] = "4"
+        CONTROLLER["bind_messaging"](self.actor)
+        binding = json.loads((self.routes / f'{CONTROLLER["message_peer"](self.actor)}.json').read_text())
+        self.identity = {key: binding[key] for key in self.identity}
+        self.persist()
+        target = {
+            "workerId": descendant["id"], "workspaceId": descendant["workspaceId"],
+            "surfaceId": descendant["surfaceId"], "sessionId": descendant["copilotSessionId"],
+            "generation": descendant["generation"],
+        }
+        self.cmux.workspace_surfaces.return_value.add(descendant["surfaceId"])
+        self.cmux.run.return_value = {
+            "workspace_id": descendant["workspaceId"], "surface_id": descendant["surfaceId"],
+        }
+        before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
+
+        result = self.invoke({"identity": self.identity, "target": target, "scope": "target-only"})
+
+        self.assertEqual(result, {**target, "closeAccepted": True, "removal": "unconfirmed"})
+        self.cmux.run.assert_called_once_with("rpc", "surface.close", json.dumps({
+            "workspace_id": descendant["workspaceId"], "surface_id": descendant["surfaceId"], "force": True,
+        }))
+        self.assertEqual({file: file.read_bytes() for file in before}, before)
+
+    def test_target_only_refuses_changed_intermediate_ancestor_before_dispatch(self):
+        descendant = self.add_close_descendant(self.child, 12348)
+        self.persist()
+        target = {
+            "workerId": descendant["id"], "workspaceId": descendant["workspaceId"],
+            "surfaceId": descendant["surfaceId"], "sessionId": descendant["copilotSessionId"],
+            "generation": descendant["generation"],
+        }
+        def change_parent(_pid):
+            self.child["generation"] += 1
+            self.persist()
+            return dict(self.actor["providerProcess"])
+
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "changed during preflight"):
+            self.invoke({"identity": self.identity, "target": target}, anchor=change_parent)
+        self.cmux.run.assert_not_called()
+
     def test_subtree_closes_cross_worktree_descendant_before_root_without_touching_survivors(self):
         self.child["workingDirectory"] = str(self.home / "parent-worktree")
         self.grandchild["workingDirectory"] = str(self.home / "descendant-worktree")
@@ -2500,12 +2544,12 @@ finally:
                     self.invoke({"identity": self.identity, "target": {**self.target, key: value}})
         self.cmux.run.assert_not_called()
 
-    def test_close_rejects_self_grandchild_and_unrelated_target(self):
+    def test_close_rejects_self_and_unrelated_target(self):
         foreign = {**copy.deepcopy(self.actor), "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()),
                    "surfaceId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4())}
         self.state["nodes"][foreign["id"]] = foreign
         self.persist()
-        for node in (self.actor, self.grandchild, foreign):
+        for node in (self.actor, foreign):
             with self.subTest(node=node["id"]):
                 target = {
                     "workerId": node["id"], "workspaceId": node["workspaceId"],
@@ -4353,7 +4397,7 @@ class RootCustodyTests(unittest.TestCase):
                     "concrete current duty", "retention reason and exit condition",
                     "Turn end, process exit, idle UI and a sent result are not accepted completion",
                     "separately authorized", "serialized native maestro_close",
-                    "exact owned direct child", "explicit subtree authorization",
+                    "exact owned strict descendant", "explicit subtree authorization",
                     "Preserve every refusal or unknown outcome", "no automatic retry",
                     "removal wait", "capacity release", "self-close",
                     "branches, worktrees, dirty patches, review receipts and session artifacts",
@@ -4366,7 +4410,7 @@ class RootCustodyTests(unittest.TestCase):
                     self.assertNotIn("Coordinator return address:", context)
                 else:
                     address = context.split("Coordinator return address: ", 1)[1].split("\n", 1)[0]
-                    self.assertIn("find the coordinator's current address with maestro_peers", context)
+                    self.assertIn("find that parent's current address with maestro_peers", context)
                     self.assertEqual(json.loads(address), {
                         key: identity[key] for key in ("workspaceId", "sessionId", "generation")
                     })

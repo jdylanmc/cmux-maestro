@@ -6575,6 +6575,37 @@ class DirectLaunchTests(unittest.TestCase):
         self.assertNotIn("--login", command)
         self.assertIn("exec ", command)
 
+    def test_nested_launch_return_address_is_current_parent_not_run_root(self):
+        receipt = self.h.spawn_native("Launch a nested worker.", "Parent")
+        parent = self.h.state()["nodes"][receipt["workerId"]]
+        routes = Path(tempfile.mkdtemp(prefix="m377-", dir="/tmp")).resolve()
+        self.addCleanup(shutil.rmtree, routes)
+        parent.update(messaging={**self.h.state()["nodes"][self.h.node]["messaging"],
+                                 "routes": str(routes)}, generation=4)
+        self.h.change_state(lambda state: state["nodes"].update({parent["id"]: parent}))
+        CONTROLLER_API["bind_messaging"](parent)
+        child = {**parent, "id": str(uuid.uuid4()), "parentId": parent["id"],
+                 "copilotSessionId": str(uuid.uuid4()), "generation": 1, "messaging": None,
+                 "task": "Return only to the launching parent."}
+        prepare = CONTROLLER_API["prepare_direct_launch"]
+        route = Path(parent["messaging"]["routes"]) / f'{CONTROLLER_API["message_peer"](parent)}.json'
+        for available in (True, False):
+            with self.subTest(parent_route_available=available):
+                if not available:
+                    route.unlink()
+                with patch.dict(os.environ, self.h.env):
+                    prepare(self.h.root, child, "synthetic-token")
+                script = (self.h.root / "control" / f'direct-{child["id"]}-1.sh').read_text()
+                prompt = next(part.split("=", 1)[1] for part in shlex.split(script)
+                              if part.startswith("CMUX_MAESTRO_INITIAL_TASK="))
+                addresses = [json.loads(line.split(": ", 1)[1]) for line in prompt.splitlines()
+                             if line.startswith("Coordinator return address: ")]
+                expected = [{"workspaceId": parent["workspaceId"], "sessionId": parent["copilotSessionId"],
+                             "generation": 4}] if available else []
+                self.assertEqual(addresses, expected)
+                self.assertNotIn(self.h.identity["sessionId"], prompt)
+                self.assertTrue(prompt.endswith(child["task"]))
+
     def test_late_native_observation_is_not_a_launch_gate(self):
         self.h.env.pop("FAKE_NO_OBSERVATION")
         barrier = self.h.path / "provider"
