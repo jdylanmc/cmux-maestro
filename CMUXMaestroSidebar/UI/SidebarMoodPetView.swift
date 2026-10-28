@@ -14,10 +14,11 @@ struct SidebarMoodPetView: View {
         let current = display.current ?? SidebarPetMood.resolve(input, now: Date())
         let shown = display.shown ?? current
         let description = SidebarPetMoodDisplay.description(shown: shown, current: current)
+        let name = store.descriptor(petID, session: session)?.displayName ?? "Maestro"
         SidebarPetView(store: store, petID: petID, session: session, mood: shown.mood, width: width,
                        topTrim: topTrim)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(description)
+            .accessibilityLabel(String(localized: "pet.mood.label", defaultValue: "Pet \(name), \(description)"))
             .help(description)
             .onChange(of: input, initial: true) { _, value in display.update(value) }
             .onDisappear { display.stop() }

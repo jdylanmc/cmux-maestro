@@ -57,7 +57,7 @@ struct SidebarPetMoodTests {
             case "thinking": facts.primaryTurnOpen = true
             case "sleepy":
                 attention.removeAll { $0.kind == .turnFinished }
-                attention.append(signal(.turnFinished, at: now.addingTimeInterval(-SidebarPetMood.sleepyAfter)))
+                attention.append(signal(.turnFinished, at: now.addingTimeInterval(-SidebarPetMood.sleepyAfter - 1)))
             case "content": facts.turnClean = true; attention.append(signal(.turnFinished))
             default: break
             }
@@ -289,7 +289,7 @@ struct SidebarPetMoodTests {
         #expect(SidebarPetMood.resolve(fixture.input, now: epoch).mood == .working)
     }
 
-    @Test func sleepyDeadlineAndAcknowledgementArePresentationOnly() async {
+    @Test func sleepyDeadlineAndAcknowledgementArePresentationOnly() async throws {
         let clock = SidebarMoodTestClock(now: epoch)
         let display = SidebarPetMoodDisplay(clock: clock.clock)
         defer { display.stop(); clock.finish() }
@@ -299,7 +299,11 @@ struct SidebarPetMoodTests {
         display.update(original)
         await clock.registered()
         #expect(display.shown?.mood == .content)
-        await clock.advance(to: epoch.addingTimeInterval(SidebarPetMood.sleepyAfter), observing: display)
+        let boundary = epoch.addingTimeInterval(SidebarPetMood.sleepyAfter)
+        #expect(SidebarPetMood.resolve(original, now: boundary).mood == .content)
+        let deadline = try #require(SidebarPetMood.sleepyDeadline(original))
+        #expect(deadline > boundary)
+        await clock.advance(to: deadline, observing: display)
         #expect(display.shown?.mood == .sleepy)
         #expect(original.session?.attention.count == 1)
         var acknowledged = SidebarAttentionSettings()

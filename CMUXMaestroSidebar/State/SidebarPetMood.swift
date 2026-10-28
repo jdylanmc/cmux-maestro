@@ -84,6 +84,10 @@ struct SidebarPetMood: Equatable {
 
     static func sleepyDeadline(_ input: SidebarPetMoodInput) -> Date? {
         input.session?.attention.filter { $0.kind == .turnFinished }.compactMap(\.occurredAt).max()
-            .map { $0.addingTimeInterval(sleepyAfter) }
+            .map {
+                // "Older than" excludes the boundary; wake at the first representable instant after it.
+                let boundary = $0.addingTimeInterval(sleepyAfter).timeIntervalSinceReferenceDate
+                return Date(timeIntervalSinceReferenceDate: boundary.nextUp)
+            }
     }
 }

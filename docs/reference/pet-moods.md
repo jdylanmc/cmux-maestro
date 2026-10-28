@@ -22,7 +22,7 @@ First matching rule wins:
     shells and skills do not count.
 11. Executing tool → **Working**.
 12. Open primary turn → **Thinking**.
-13. Unacknowledged Turn finished at least 60 seconds old → **Sleepy**; otherwise,
+13. Unacknowledged Turn finished older than 60 seconds → **Sleepy**; otherwise,
     positively observed clean turn → **Content**, never proof of a good outcome.
 14. Otherwise → **Idle**, with an explicit observed-idle or neutral basis.
 
