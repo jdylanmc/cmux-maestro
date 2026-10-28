@@ -278,7 +278,9 @@ nonisolated struct CopilotAttentionRetentionTests {
         #expect(fresh.state == .blocked)
         #expect(fresh.attention?.map(\.kind) == [.permission])
         #expect(fresh.terminalEvent == nil)
-        let accepted = reducer.value()
+        var expected = reducer.value()
+        #expect(expected.presentation.turnClean == true)
+        expected.presentation = AgentPresentationInputs()
         for row in try [
             attentionEvent("tool.execution_start", data: ["toolCallId": "spawn-0", "toolName": "task"]),
             attentionEvent("permission.requested", agent: "worker-0", data: ["requestId": "request-0"]),
@@ -286,7 +288,7 @@ nonisolated struct CopilotAttentionRetentionTests {
                 "toolCallId": "spawn-0", "agentDisplayName": "Worker"
             ])
         ] { reducer.consume(row) }
-        #expect(reducer.value() == accepted)
+        #expect(reducer.value() == expected)
         #expect(reducer.issues == [.readLimitReached])
     }
 

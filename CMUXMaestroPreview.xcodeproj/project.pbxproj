@@ -102,6 +102,8 @@
 		C0307B000000000000000004 /* SidebarStatusAnimationView.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C0307B000000000000000014; };
 		C08100000000000000000001 /* AgentSignals.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
 		C08100000000000000000002 /* AgentSignals.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C08100000000000000000003; };
+		C37900000000000000000001 /* AgentPresentationInputs.swift in Sidebar Sources */ = {isa = PBXBuildFile; fileRef = C37900000000000000000003; };
+		C37900000000000000000002 /* AgentPresentationInputs.swift in Test Sources */ = {isa = PBXBuildFile; fileRef = C37900000000000000000003; };
 		C06100000000000000000001 /* Helper in Embed Helpers */ = {isa = PBXBuildFile; fileRef = C06100000000000000000002; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		C06100000000000000000010 /* CopilotHookRecorder.swift in App Sources */ = {isa = PBXBuildFile; fileRef = C06100000000000000000011; };
 		C03360000000000000000001 /* CopilotBindingRetirement.swift in App Sources */ = {isa = PBXBuildFile; fileRef = C03360000000000000000002; };
@@ -288,6 +290,7 @@
 		C0307B000000000000000013 /* SidebarStatusAnimation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarStatusAnimation.swift; sourceTree = SOURCE_ROOT; };
 		C0307B000000000000000014 /* SidebarStatusAnimationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarStatusAnimationView.swift; sourceTree = SOURCE_ROOT; };
 		C08100000000000000000003 /* AgentSignals.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentSignals.swift; sourceTree = SOURCE_ROOT; };
+		C37900000000000000000003 /* AgentPresentationInputs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/Domain/AgentPresentationInputs.swift; sourceTree = SOURCE_ROOT; };
 		C06100000000000000000002 /* CMUXMaestroCopilotHook */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = CMUXMaestroCopilotHook; sourceTree = BUILT_PRODUCTS_DIR; };
 		C06100000000000000000011 /* CopilotHookRecorder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotHookRecorder.swift; sourceTree = SOURCE_ROOT; };
 		C03360000000000000000002 /* CopilotBindingRetirement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroCopilotHook/CopilotBindingRetirement.swift; sourceTree = SOURCE_ROOT; };
@@ -512,6 +515,7 @@
 				C0307B000000000000000013 /* SidebarStatusAnimation.swift */,
 				C0307B000000000000000014 /* SidebarStatusAnimationView.swift */,
 				C08100000000000000000003 /* AgentSignals.swift */,
+				C37900000000000000000003 /* AgentPresentationInputs.swift */,
 				D10400000000000000000003 /* SidebarPreferences.swift */,
 				C37000000000000000000011,
 				C37100000000000000000011,
@@ -824,6 +828,7 @@
 				C37100000000000000000007,
 				C37100000000000000000008,
 				C01000000000000000000002 /* AgentSessionSnapshot.swift in Test Sources */,
+				C37900000000000000000002 /* AgentPresentationInputs.swift in Test Sources */,
 				C01000000000000000000004 /* CopilotSnapshotAdapter.swift in Test Sources */,
 				C35600000000000000000002 /* CopilotSnapshotAdapterCache.swift in Test Sources */,
 				C09100000000000000000005 /* SidebarView.swift in Test Sources */,
@@ -904,6 +909,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C01000000000000000000001 /* AgentSessionSnapshot.swift in Sidebar Sources */,
+				C37900000000000000000001 /* AgentPresentationInputs.swift in Sidebar Sources */,
 				C01000000000000000000003 /* CopilotSnapshotAdapter.swift in Sidebar Sources */,
 				C35600000000000000000001 /* CopilotSnapshotAdapterCache.swift in Sidebar Sources */,
 				C06100000000000000000101,

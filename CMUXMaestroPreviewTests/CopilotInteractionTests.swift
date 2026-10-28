@@ -1280,11 +1280,13 @@ nonisolated struct CopilotInteractionTests {
                 reducer.consume(try interactionEvent("assistant.turn_start", id: start, turn: "0", interaction: "A"))
                 reducer.consume(try interactionEvent("tool.execution_start", parent: start,
                                                      data: ["toolCallId": "tool", "toolName": "view"]))
-                let before = reducer.value()
+                var expected = reducer.value()
+                #expect(expected.presentation.turnClean == true)
+                expected.presentation = AgentPresentationInputs()
                 reducer.consume(try interactionEvent("tool.execution_complete", data: [
                     "toolCallId": "tool", "success": true, field: invalid
                 ]))
-                #expect(reducer.value() == before)
+                #expect(reducer.value() == expected)
                 #expect(reducer.issues == [.malformedData])
                 #expect(!reducer.canPublishProjection)
             }
@@ -1546,11 +1548,13 @@ nonisolated struct CopilotInteractionTests {
         for invalid: Any in ["", String(repeating: "x", count: 257), "bad\nid", 12, ["value"]] {
             var reducer = CopilotEventReducer(sessionID: UUID())
             reducer.consume(try interactionEvent("assistant.turn_start", turn: "legacy"))
-            let before = reducer.value()
+            var expected = reducer.value()
+            #expect(expected.presentation.turnClean == true)
+            expected.presentation = AgentPresentationInputs()
             reducer.consume(try interactionEvent("assistant.turn_start", data: [
                 "turnId": "0", "interactionId": invalid, "model": "unproven"
             ]))
-            #expect(reducer.value() == before)
+            #expect(reducer.value() == expected)
             #expect(reducer.issues == [.malformedData])
             #expect(!reducer.canPublishProjection)
         }

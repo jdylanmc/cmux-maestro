@@ -108,6 +108,7 @@ struct SidebarCopilotSession: Identifiable, Equatable {
     var statusOwnerID: UUID? = nil
     var statusOwnerRunID: UUID? = nil
     var statusOwnerGeneration: Int? = nil
+    var presentation: AgentPresentationInputs? = nil
 
     var knownRunningChildren: Int { nodes.filter { $0.state == .working }.count }
     var retainedHistoryCount: Int { nodes.filter { $0.state.isTerminal && !$0.historyAncestor }.count }
@@ -447,7 +448,8 @@ struct SidebarCopilotTree: Equatable {
                 internalTaskCountsIncomplete: validated.contains {
                     $0.isInternalTask && (trustworthyState($0.workState, liveness: liveness) == .unknown
                         || assessment.invalidChildren.contains($0.id))
-                }
+                },
+                presentation: assessment.sessionStateIsValid ? observation.presentation : nil
             )
             sessions.append(projected)
             if let deadline = sessionExpiry { nextExpiry = min(nextExpiry ?? deadline, deadline) }
