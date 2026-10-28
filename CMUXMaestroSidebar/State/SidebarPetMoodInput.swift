@@ -51,9 +51,12 @@ struct SidebarPetMoodInput: Equatable {
                 && [.alive, .dead].contains($0.liveness)
         } ?? false
         let ownerCurrent = owner.map { owner in
-            [.ready, .partial].contains(availability)
-                && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(managed.generatedAt))
-                && (-1...SidebarOrchestrationReader.staleInterval).contains(now.timeIntervalSince(owner.updatedAt))
+            // Native sessions do not heartbeat lifecycle timestamps. Fresh exact Copilot
+            // evidence confirms the binding; the reader has already fenced the claim's generation.
+            [.ready, .partial, .stale].contains(availability)
+                && managed.generatedAt <= now.addingTimeInterval(1)
+                && owner.updatedAt <= now.addingTimeInterval(1)
+                && tree.exactLiveSession(id: id, workspaceID: workspace, surfaceID: surface, now: now) == exactSession
                 && owner.copilotSessionId == id && owner.workspaceId == workspace && owner.surfaceId == surface
                 && managed.nodes.filter { $0.id == owner.id }.count == 1
                 && managed.nodes.contains(owner)

@@ -33,6 +33,8 @@ struct SidebarDetailContent: Equatable {
     var petSessionID: UUID? = nil
     var petChoice: String? = nil
     var petMood: SidebarPetMoodInput = .unavailable
+    /// An exact ended session may retain its pet without live-agent metadata or controls.
+    var showsPet: Bool { isAgent || petSessionID != nil }
     var gitChanges: SidebarGitChanges? { lines.compactMap(\.gitChanges).first }
     var inspection: SidebarInspection? = nil
     var otherActivity: [SidebarCopilotNode] = []
@@ -519,9 +521,24 @@ enum SidebarPresentation {
         // Browser and other native surfaces cannot inherit an old terminal's agent.
         guard [.terminal, .agentSession].contains(surface.kind) else { return result }
         let replaced = replacedSessionIDs(tree, managed: managed.nodes, now: now)
-        let sessions = tree.sessions.filter {
-            $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && $0.liveness != .dead
-                && !replaced.contains($0.id)
+        let occupants = tree.sessions.filter {
+            $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && !replaced.contains($0.id)
+        }
+        let sessions = occupants.filter { $0.liveness != .dead }
+        if sessions.isEmpty, occupants.count == 1, let ended = occupants.first,
+           ended.liveness == .dead, !ended.statusOnly, !tree.hasGlobalPermissionDenial,
+           tree.isCurrent(ended, now: now),
+           tree.generatedAt.map({ ended.observedAt <= $0.addingTimeInterval(1) }) == true,
+           tree.sessions.filter({ $0.id == ended.id }).count == 1,
+           !managed.nodes.contains(where: {
+               $0.workspaceId == workspaceID && $0.surfaceId == surfaceID
+                   && $0.copilotSessionId != nil && $0.copilotSessionId != ended.id
+           }) {
+            result.petSessionID = ended.id
+            result.petChoice = ended.petId
+            result.petMood = .project(session: ended, tree: tree, managed: managed, availability: availability, now: now)
+            result.visual = sessionState(ended)
+            return result
         }
         guard sessions.count == 1, let session = sessions.first,
               tree.sessions.filter({ $0.id == session.id }).count == 1,
