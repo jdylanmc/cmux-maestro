@@ -211,8 +211,11 @@ struct SidebarMoodObservationTests {
         #expect(SidebarPetMood.resolve(afterClear, now: muchLater).mood == .content)
         #expect(project(try read(2, at: muchLater), session: observed(at: muchLater), at: muchLater).selfReport == nil)
 
-        var resumed = base
-        resumed.nodes[0].generation += 1
+        let resumed = snapshot(.init(
+            id: owner.id, runId: owner.runId, parentId: nil, role: owner.role, label: owner.label,
+            workspaceId: owner.workspaceId, surfaceId: owner.surfaceId, generation: owner.generation + 1,
+            phase: owner.phase, availability: owner.availability, copilotSessionId: owner.copilotSessionId,
+            executionMode: .interactive, createdAt: now, updatedAt: now))
         let wrongGeneration = try SidebarOrchestrationReader.resolve(
             current: encoder.encode(resumed), icons: nil, processes: nil,
             moods: data([record(owner, sequence: 4)]), cache: &cache, now: muchLater)
