@@ -16,10 +16,14 @@ import {
 import { createProcessObserver, runProcessObserve, sessionNeedsWatching } from "./delivery-proof/processes.mjs";
 import { modelCapabilities } from "./delivery-proof/models.mjs";
 
-const base = await fs.realpath("/tmp");
+const base = await fs.realpath(process.env.MAESTRO_TEST_ROOT ?? "/tmp");
+
+function fixtureDirectory(prefix) {
+  return fs.mkdtemp(path.join(base, process.env.MAESTRO_TEST_ROOT ? "m-" : prefix));
+}
 
 async function fixture(t) {
-  const root = await fs.mkdtemp(path.join(base, "m61-"));
+  const root = await fixtureDirectory("m61-");
   const workspaceId = randomUUID();
   const bindings = Object.fromEntries(["a", "b"].map((peer, i) => [peer, {
     peer, workspaceId, sessionId: randomUUID(), capability: `${i + 1}`.repeat(64),
@@ -225,7 +229,7 @@ test("malformed and fragmented wire input never uses terminal or readiness APIs"
 });
 
 async function managedFixture(t, { owners = [0, 0, 0, 1], nativeSend = async () => {} } = {}) {
-  const root = await fs.mkdtemp(path.join(base, "m61-"));
+  const root = await fixtureDirectory("m61-");
   const workspaces = new Map(owners.map((owner) => [owner, randomUUID()]));
   const bindings = owners.map((owner, index) => ({
     peer: index.toString(16).padStart(16, "0"), nodeId: randomUUID(), name: `Participant ${index}`,
@@ -273,6 +277,73 @@ async function managedFixture(t, { owners = [0, 0, 0, 1], nativeSend = async () 
 }
 
 const managedAddress = (binding) => ({ ...addr(binding), generation: binding.generation });
+
+test("mood tool accepts only exact-self enums and fences stale routes without retry", async (t) => {
+  const f = await managedFixture(t);
+  const own = f.bindings[0];
+  let tool;
+  let failure;
+  let response;
+  const calls = [];
+  const abort = new AbortController();
+  const adapter = await start({
+    root: f.root, peer: own.peer, managed: true, expected: { ...own, controller: "/synthetic/controller" },
+    signal: abort.signal,
+    reportMood: async (request, controller, signal) => {
+      assert.equal(controller, "/synthetic/controller");
+      assert.equal(signal, abort.signal);
+      calls.push(request);
+      if (failure) throw new Error(failure);
+      return response ?? { ok: true, sessionId: own.sessionId, mood: request.mood, sequence: calls.length, changed: true };
+    },
+    joinSession: async ({ tools }) => {
+      tool = tools.find(item => item.name === "maestro_mood");
+      return { sessionId: own.sessionId };
+    },
+  });
+  f.adapters.push(adapter);
+  for (const [args, invocation] of [
+    [{ mood: "happy" }, { sessionId: randomUUID() }],
+    [{ mood: "happy", sessionId: randomUUID() }, { sessionId: own.sessionId }],
+    [{ mood: "thinking" }, { sessionId: own.sessionId }],
+    [{ mood: null }, { sessionId: own.sessionId }],
+    [{ mood: {} }, { sessionId: own.sessionId }],
+    [{}, { sessionId: own.sessionId }],
+  ]) assert.equal((await tool.handler(args, invocation)).resultType, "failure");
+  assert.equal(calls.length, 0);
+  for (const mood of ["happy", "celebrating", "confused", "clear"]) {
+    const result = JSON.parse(await tool.handler({ mood }, { sessionId: own.sessionId }));
+    assert.equal(result.mood, mood);
+    assert.deepEqual(calls.at(-1), {
+      identity: { nodeId: own.nodeId, ...managedAddress(own), capability: own.capability }, mood,
+    });
+  }
+  failure = "mood-rate-limited";
+  assert.match((await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).textResultForLlm, /mood-rate-limited/);
+  assert.equal(calls.length, 5);
+  failure = "private controller diagnostic";
+  assert.equal(JSON.stringify(await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).includes("private"), false);
+  await fs.writeFile(path.join(f.root, `${own.peer}.json`), JSON.stringify({ ...own, generation: 2 }), { mode: 0o600 });
+  assert.equal((await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).resultType, "failure");
+  assert.equal(calls.length, 6);
+  await fs.writeFile(path.join(f.root, `${own.peer}.json`), JSON.stringify(own), { mode: 0o600 });
+  failure = undefined;
+  response = { ok: true, sessionId: own.sessionId, mood: "happy", sequence: 6, changed: false };
+  assert.deepEqual(JSON.parse(await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })), response);
+  for (const invalid of [
+    { ...response, sequence: 0 }, { ...response, sequence: 1.5 },
+    { ...response, sessionId: randomUUID() }, { ...response, diagnostic: "private" },
+  ]) {
+    response = invalid;
+    const result = await tool.handler({ mood: "happy" }, { sessionId: own.sessionId });
+    assert.equal(result.resultType, "failure");
+    assert.equal(JSON.stringify(result).includes("private"), false);
+  }
+  const count = calls.length;
+  abort.abort();
+  assert.equal((await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).resultType, "failure");
+  assert.equal(calls.length, count);
+});
 
 test("notification tool binds the invoking session and never echoes private message failures", async (t) => {
   const f = await managedFixture(t);
@@ -365,7 +436,7 @@ test("managed route scan keeps separate workspace and host safety bounds", async
 });
 
 async function loaderFixture(t) {
-  const root = await fs.mkdtemp(path.join(base, "m61-loader-"));
+  const root = await fixtureDirectory("m61-loader-");
   const surfaceId = randomUUID();
   const binding = {
     peer: "1111111111111111", nodeId: randomUUID(), name: "Synthetic lifecycle",
@@ -885,7 +956,7 @@ test("installed mode discovers arbitrary same-workspace participants and peer re
     destination: managedAddress(f.bindings[3]), body: "different workspace",
   })).resultType, "failure");
   assert.deepEqual(Object.keys(f.tools[0]),
-    ["maestro_peers", "maestro_send", "maestro_identity", "maestro_notify", "maestro_close", "maestro_spawn"]);
+    ["maestro_peers", "maestro_send", "maestro_identity", "maestro_notify", "maestro_mood", "maestro_close", "maestro_spawn"]);
 });
 
 const beatSession = randomUUID();
@@ -1008,7 +1079,7 @@ test("an add whose ID cannot be recorded is stopped again", async (t) => {
 });
 
 test("the file ledger is private, durable, round-trips, and refuses invalid content", async (t) => {
-  const directory = await fs.mkdtemp(path.join(base, "lg-"));
+  const directory = await fixtureDirectory("lg-");
   t.after(() => fs.rm(directory, { recursive: true }));
   const file = path.join(directory, "BeatSchedules", `${beatSession}.json`);
   const ledger = fileLedger(file);
@@ -1141,7 +1212,7 @@ test("an unrecorded schedule that cannot be stopped is reported, never duplicate
 });
 
 test("the file ledger's lock lets one process own a session and reclaims a dead owner's lock", async (t) => {
-  const directory = await fs.mkdtemp(path.join(base, "lk-"));
+  const directory = await fixtureDirectory("lk-");
   t.after(() => fs.rm(directory, { recursive: true }));
   const file = path.join(directory, "BeatSchedules", `${beatSession}.json`);
   const ledger = fileLedger(file);
@@ -1505,7 +1576,7 @@ test("closing Beats during a sync starts no schedule change", async (t) => {
 });
 
 test("currentTimeZone prefers TZ, then follows the /etc/localtime link, then falls back to Intl", async (t) => {
-  const directory = await fs.mkdtemp(path.join(base, "tz-"));
+  const directory = await fixtureDirectory("tz-");
   t.after(() => fs.rm(directory, { recursive: true }));
   const link = path.join(directory, "localtime");
   const zoneOf = (target, environment = {}) => fs.rm(link, { force: true })
@@ -1557,7 +1628,7 @@ test("a time zone change re-registers each Beat in the new zone; an unchanged zo
 });
 
 async function beatsController(t, home) {
-  const directory = await fs.mkdtemp(path.join(base, "bc-"));
+  const directory = await fixtureDirectory("bc-");
   t.after(() => fs.rm(directory, { recursive: true }));
   const controller = path.join(directory, "cmux-maestro-orchestrator");
   await fs.copyFile(fileURLToPath(new URL("./cmux-maestro-orchestrator.py", import.meta.url)), controller);
@@ -1569,7 +1640,7 @@ async function beatsController(t, home) {
 }
 
 test("readBeats takes this session's runnable Beats from the real controller and refuses invalid stores", async (t) => {
-  const home = await fs.mkdtemp(path.join(base, "bh-"));
+  const home = await fixtureDirectory("bh-");
   t.after(() => fs.rm(home, { recursive: true }));
   const controller = await beatsController(t, home);
   assert.deepEqual(await readBeats(beatSession, controller), []);
@@ -1594,7 +1665,7 @@ test("readBeats takes this session's runnable Beats from the real controller and
 });
 
 test("startBeats finds the controller through CMUX_MAESTRO_ORCHESTRATOR without an injected reader", async (t) => {
-  const home = await fs.mkdtemp(path.join(base, "bh-"));
+  const home = await fixtureDirectory("bh-");
   t.after(() => fs.rm(home, { recursive: true }));
   const controller = await beatsController(t, home);
   const saved = process.env.CMUX_MAESTRO_ORCHESTRATOR;
@@ -1697,7 +1768,7 @@ test("direct loader uses precreated bindings and observes only its joined CLI se
     joinSession: async options => {
       order.push("join");
       assert.deepEqual(options.tools.map(tool => tool.name),
-        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_notify", "maestro_close", "maestro_spawn"]);
+        ["maestro_peers", "maestro_send", "maestro_identity", "maestro_notify", "maestro_mood", "maestro_close", "maestro_spawn"]);
       return { sessionId: own.sessionId };
     },
     observe: async (request, controller) => {
@@ -3005,7 +3076,7 @@ test("born managed: custody loss is latched; its end does not restore stale auth
 
 test("each installed module fits setup's resource bound", async () => {
   for (const [name, limit] of [["adapter.mjs", 65_536], ["extension.mjs", 8192],
-    ["processes.mjs", 16_384], ["models.mjs", 16_384], ["notifications.mjs", 16_384]]) {
+    ["processes.mjs", 16_384], ["models.mjs", 16_384], ["notifications.mjs", 16_384], ["moods.mjs", 16_384]]) {
     const size = (await fs.stat(fileURLToPath(new URL(`./delivery-proof/${name}`, import.meta.url)))).size;
     assert.ok(size <= limit, `${name} is ${size} bytes`);
   }
@@ -3160,7 +3231,7 @@ test("owned-process hooks keep existing handlers and their results", async () =>
 });
 
 test("an owned-process pass invokes only the controller's process-observe command", async (t) => {
-  const root = await fs.mkdtemp(path.join(base, "maestro-processes-"));
+  const root = await fixtureDirectory("maestro-processes-");
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const log = path.join(root, "calls");
   const controller = path.join(root, "controller");
@@ -3392,7 +3463,7 @@ test("born managed: outside CMUX or with launcher inputs the path is inert", asy
 });
 
 test("born managed: the controller transport keeps only known refusal reasons", async (t) => {
-  const directory = await fs.mkdtemp(path.join(base, "born-"));
+  const directory = await fixtureDirectory("born-");
   t.after(() => fs.rm(directory, { recursive: true }));
   for (const [error, reason] of [
     ["enrollment refused: surface-owned", "surface-owned"],

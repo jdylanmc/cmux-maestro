@@ -29,6 +29,9 @@ do not copy its source or history, modify it, or make this project depend on it.
 - `scripts/delivery-proof/notifications.mjs`: explicit agent-authored human
   notifications through the containing app (ADR 0030). Messages are transient,
   never observer evidence or Maestro logs; macOS retains delivered content.
+- `scripts/delivery-proof/moods.mjs`: optional enum-only self-reported moods
+  for the exact calling session (ADR 0031). Presentation metadata only, never
+  work, success or completion evidence.
 - `vendor/CmuxExtensionKit/`: ignored local SDK checkout created by the fetch
   script. Never commit it.
 

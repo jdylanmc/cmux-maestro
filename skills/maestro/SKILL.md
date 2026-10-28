@@ -27,6 +27,30 @@ verified account without credentials or launch effects.
 Never inspect private binding files, capabilities, control
 tokens, credentials, or transcripts to construct a route or bypass a missing tool.
 
+## Optional self-reported expression
+
+`maestro_mood({ "mood": "happy" })` reports only this exact managed session's
+expression. The alternatives are `celebrating`, `confused`, and `clear`.
+Use **happy** after a verified good outcome, **celebrating** for a significant
+win, and **confused** for missing or conflicting meaning. Report once per
+meaningful change, not for ordinary tool errors or routine activity. Reporting
+is optional; never replace a precise question, failure report, or necessary
+human decision with a mood. Use **clear** to withdraw a report.
+
+This is authored presentation metadata, not an emotion measurement or evidence
+of progress, success, completion, permission, or availability. Question,
+permission, failure and ended-session presentation must win over a self-report.
+The tool does not send a human notification or change work/attention state.
+Art and mood priority are separate presentation features; acceptance of a report
+does not mean it is displayed.
+
+Distinct changes are limited to one per three seconds for the exact identity;
+unchanged reports are no-ops and clear is exempt. A refusal is not queued:
+do not retry automatically. Existing claims are suppressed when the reader
+starts; do not spam a report to make it animate. Never inspect the private
+store, forge identity fields, trigger enrollment/reload, or widen permissions
+when the tool is absent or refuses.
+
 ## Participation and availability
 
 After the human explicitly enables Maestro integration, newly Maestro-spawned

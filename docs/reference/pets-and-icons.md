@@ -88,6 +88,10 @@ Wholly undrawn mood rows copy the map's fallback; partly drawn rows fail.
 Row 10 stays transparent. Native imports validate geometry and decoding, not
 art quality or blank-row content. Draw distinct mood art when authoring a full atlas.
 
+Agents may self-report an enum-only mood for their own session
+([self-reported moods](self-reported-moods.md), ADR 0031). The sidebar reads it
+as labelled metadata only; pet rows for moods are separate work (#382, #383).
+
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
 Bundled `/cmux-maestro-native:maestro-icon` skill searches local Nerd Fonts catalog. It saves

@@ -221,7 +221,7 @@ struct SidebarOrchestrationTests {
         )
         let snapshot = SidebarOrchestrationSnapshot(
             version: 1, generatedAt: Date(), complete: true, omittedCount: 0,
-            nodes: [root, child, omitted]
+            nodes: [root, child, omitted], moodsUnavailable: true
         )
         let published = AsyncStream<Void>.makeStream()
         let poll = SidebarOrchestrationPolling(
@@ -246,6 +246,7 @@ struct SidebarOrchestrationTests {
         try #require(await publicationArrived(published.stream))
 
         #expect(poll.availability == .ready)
+        #expect(poll.snapshot.moodsUnavailable)
         #expect(poll.snapshot.nodes.map(\.id) == [root.id, child.id])
         #expect(poll.snapshot.omittedCount == 0)
         #expect(poll.roots.map(\.id) == [root.id])

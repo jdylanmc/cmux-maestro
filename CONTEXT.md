@@ -227,6 +227,10 @@ Optional 20-row mood atlas adds expression rows with explicit legacy fallbacks;
 format support alone does not change state selection.
 _Avoid_: mascot
 
+**Self-reported mood**:
+Optional `happy`, `celebrating` or `confused` an agent reports for its own exact session; `clear` withdraws it. Authored presentation metadata, never work, success or completion evidence (ADR 0031).
+_Avoid_: emotion, feeling
+
 **Host footer clearance**:
 Fixed 50-point strip reserved for CMUX's overlaid footer.
 _Avoid_: footer inset

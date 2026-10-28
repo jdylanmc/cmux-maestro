@@ -1429,7 +1429,7 @@ struct CopilotSetupTests {
             at: repository.appendingPathComponent(".agents/skills/maestro-pet/pet_kit.py"),
             to: petKit
         )
-        for name in ["adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"] {
+        for name in ["adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"] {
             try FileManager.default.copyItem(
                 at: repository.appendingPathComponent("scripts/delivery-proof/\(name)"),
                 to: directory.appendingPathComponent(name)
