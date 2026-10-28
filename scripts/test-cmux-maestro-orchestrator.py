@@ -347,7 +347,7 @@ try:
         if state.get("inventoryUnavailable"):
             raise SystemExit("synthetic host inventory unavailable")
         result = {"workspace_id": workspace, "surfaces": [
-            {"id": item, "render_health": "not_started"} for item in state["surfaces"]
+            {"id": item, "pane_id": state["pane"], "render_health": "not_started"} for item in state["surfaces"]
         ]}
     elif command == "rpc" and args[args.index("rpc") + 1] == "surface.close":
         closing = json.loads(args[args.index("rpc") + 2])
@@ -364,6 +364,9 @@ try:
         state["surfaces"].append(surface)
         state["buffers"][surface] = ""
         state.setdefault("attaching", {})[surface] = os.getppid()
+        if os.environ.get("FAKE_UNLISTED_TAB"):
+            # The pane's tab listing lags the host's surface inventory for this surface.
+            state.setdefault("unlistedTabs", []).append(surface)
         result = {"surface_id": surface, "pane_id": state["pane"], "workspace_id": workspace}
         bootstrap = creation.get("initial_command")
         if bootstrap:
@@ -425,7 +428,8 @@ os.execv(sys.argv[1], sys.argv[1:])
     elif command == "list-pane-surfaces":
         if value("--pane") != state["pane"]:
             raise SystemExit("wrong pane")
-        result = {"surfaces": [{"surface_id": item} for item in state["surfaces"]]}
+        result = {"surfaces": [{"surface_id": item} for item in state["surfaces"]
+                               if item not in state.get("unlistedTabs", [])]}
     elif command == "rename-tab":
         if value("--surface") not in state["surfaces"] or "--" not in args:
             raise SystemExit("invalid rename")
@@ -6918,6 +6922,16 @@ class ReservationAndLeaseTests(unittest.TestCase):
         self.assertIn(node["id"], self.h.state()["launches"])
         refused = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
         self.assertNotEqual(refused["returncode"], 0)
+
+    def test_attach_finds_a_new_surface_the_pane_tab_listing_omits(self):
+        receipt = self.h.spawn_native(task="Listed late", label="Lagging tab", cwd=self.h.path,
+                                      env={**self.h.env, "FAKE_UNLISTED_TAB": "1"})
+        self.assertTrue(receipt["launchAccepted"])
+        self.assertIn(receipt["surfaceId"], self.h.cmux_data()["unlistedTabs"])
+        node = self.h.state()["nodes"][receipt["workerId"]]
+        self.assertEqual(node["paneId"], self.h.pane)
+        self.assertNotIn("launchError", node)
+        self.assertEqual(self.h.state()["launches"], {})
 
 
 class RoutePublicationTests(unittest.TestCase):

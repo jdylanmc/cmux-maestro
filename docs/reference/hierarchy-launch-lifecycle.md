@@ -86,7 +86,9 @@ visible Maestro roles when startup fails.
 Native `maestro_close` requests closure of one explicitly authorized, currently
 owned direct child. It uses exact `workerId`, `workspaceId`, `surfaceId`,
 `sessionId` and `generation`. It validates private native authority, process and
-session-source anchors, current workspace membership and launch fences. Then it
+session-source anchors, current workspace membership and launch fences. A launch
+lease fences its own node: one on the target, a target descendant, the actor, or
+either closing surface refuses; an unrelated sibling's lease does not. Then it
 sends one initial stock CMUX `surface.close` with documented Boolean
 `force: true`, selecting its noninteractive route. This is not public toggle or
 escalation after refusal. No sidebar control or host change involved.
@@ -183,7 +185,11 @@ receipt is turn-completion boundary.
 these phases. Inventory/probe errors remain unknown, not death. Confirmed
 missing surface can cancel unchanged **legacy** unclaimed lease. Direct
 launches cannot infer Copilot never ran: unresolved leases stay retained,
-and missing process anchor blocks reclamation. Status captures process and host
+and missing process anchor blocks reclamation. A failed direct attach releases
+its lease only with exact provider exit and confirmed surface absence; status,
+native close and native spawn run that same release for the caller's tree. Attach
+confirms pane membership from the atomic `surface.list` snapshot, not per-pane
+tab reads. Status captures process and host
 probes outside global write lock. Then it applies only identity/lease-matched
 evidence under lock. Launch receipts revalidate current ownership and
 lease at attachment, without startup probes. Changed identities reset status

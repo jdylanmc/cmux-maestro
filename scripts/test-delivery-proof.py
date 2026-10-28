@@ -1504,7 +1504,7 @@ finally:
         return marker
 
     def invoke(self, request=None, *, anchor=None, kill_error=ProcessLookupError, real_pids=(),
-               before_process=None, clock=None, cli=False):
+               before_process=None, clock=None, cli=False, retire=None):
         close = CONTROLLER["command_native_close"]
         process_start = CONTROLLER["process_start"]
         run = subprocess.run
@@ -1536,7 +1536,7 @@ finally:
                 mock.patch.dict(close.__globals__, {
                     "process_start": lambda pid: process_start(pid) if pid in real_pids else self.starts.get(pid),
                     "direct_process_identity": anchor or (lambda _: dict(self.actor["providerProcess"])),
-                    "retire_messaging": mock.Mock(side_effect=AssertionError("close must preserve routes")),
+                    "retire_messaging": retire or mock.Mock(side_effect=AssertionError("close must preserve routes")),
                     "reconcile_resources": mock.Mock(side_effect=AssertionError("close must not reconcile")),
                     "time": clock or mock.Mock(
                         wraps=time, sleep=mock.Mock(side_effect=AssertionError("close must not wait")),
@@ -1825,7 +1825,7 @@ finally:
         self.assertEqual([item["attempted"] for item in result["results"]], [True, False])
         self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}, before)
 
-    def test_subtree_rechecks_new_run_lease_between_targets_without_releasing_resources(self):
+    def test_subtree_rechecks_new_subtree_lease_between_targets_without_releasing_resources(self):
         self.state["nodes"].pop(self.grandchild["id"])
         left = self.add_close_descendant(self.child, 12347)
         right = self.add_close_descendant(self.child, 12348)
@@ -1842,13 +1842,10 @@ finally:
             result = acquire(root, operation, **kwargs)
             if self.cmux.run.call_count == 1 and not injected:
                 injected = True
-                self.sibling["phase"] = "launching"
-                self.state["launches"][self.sibling["id"]] = {
-                    "workerId": self.sibling["id"], "runId": self.actor["runId"],
-                    "workspaceId": self.actor["workspaceId"], "sessionId": self.sibling["copilotSessionId"],
-                    "generation": 1, "surfaceId": self.sibling["surfaceId"], "state": "starting",
-                    "createdAt": CONTROLLER["now"](), "updatedAt": CONTROLLER["now"](),
-                }
+                # A new launch under the still-selected leaf joins that target's subtree.
+                closed = json.loads(self.cmux.run.call_args.args[2])["surface_id"]
+                self.sibling.update(parentId=(right if closed == left["surfaceId"] else left)["id"])
+                self.lease(self.sibling)
                 self.persist()
                 after_change.update({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()})
             return result
@@ -2582,17 +2579,65 @@ finally:
             self.invoke()
         self.child.update(surfaceId=self.target["surfaceId"], launchAccepted=True)
         self.child.pop("surfaceUnknown")
-        self.state["launches"][self.sibling["id"]] = {
-            "workerId": self.sibling["id"], "runId": self.actor["runId"],
-            "workspaceId": self.actor["workspaceId"], "sessionId": self.sibling["copilotSessionId"],
-            "generation": 1, "surfaceId": self.sibling["surfaceId"], "state": "starting",
-            "createdAt": CONTROLLER["now"](), "updatedAt": CONTROLLER["now"](),
-        }
-        self.sibling["phase"] = "launching"
+        self.lease(self.grandchild)
         self.persist()
         with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "launch lease"):
             self.invoke()
         self.cmux.run.assert_not_called()
+
+    def lease(self, node, **fields):
+        node["phase"] = "launching"
+        self.state["launches"][node["id"]] = {
+            "workerId": node["id"], "runId": self.actor["runId"],
+            "workspaceId": self.actor["workspaceId"], "sessionId": node["copilotSessionId"],
+            "generation": 1, "surfaceId": node["surfaceId"], "state": "starting",
+            "createdAt": CONTROLLER["now"](), "updatedAt": CONTROLLER["now"](), **fields,
+        }
+
+    def test_native_close_releases_a_failed_lease_only_after_proven_exit_and_surface_loss(self):
+        self.sibling.update(launchError="launch-failed",
+                            providerProcess={"pid": 12399, "start": "Thu Jan  1 00:00:00 2026"})
+        self.sibling.pop("launchAccepted")
+        self.lease(self.sibling, state="attaching")
+        self.persist()
+        present = {self.sibling["surfaceId"]}
+        self.cmux.surface_exists.side_effect = lambda _workspace, surface: surface in present
+        retired = []
+        for exited, surface_present in ((False, False), (True, True)):
+            with self.subTest(exited=exited, surface_present=surface_present), mock.patch.dict(
+                self.starts, {12399: None if exited else self.sibling["providerProcess"]["start"]},
+            ):
+                if not surface_present:
+                    present.clear()
+                else:
+                    present.add(self.sibling["surfaceId"])
+                self.invoke()
+                self.assertIn(self.sibling["id"], CONTROLLER["read_state"](self.root)["launches"])
+        present.clear()
+        result = self.invoke(retire=retired.append)
+        self.assertTrue(result["closeAccepted"])
+        state = CONTROLLER["read_state"](self.root)
+        self.assertEqual(state["launches"], {})
+        self.assertEqual(state["nodes"][self.sibling["id"]]["phase"], "terminal-disappeared")
+        self.assertEqual(state["nodes"][self.sibling["id"]]["launchError"], "launch-failed")
+        self.assertEqual([node["id"] for node in retired], [self.sibling["id"]])
+
+    def test_failed_sibling_launch_lease_does_not_block_closing_an_unrelated_child(self):
+        # A refused attach keeps its lease while execution is uncertain; it fences only itself.
+        self.sibling.update(launchError="launch-failed", providerProcess=None)
+        self.sibling.pop("launchAccepted")
+        self.lease(self.sibling, state="attaching")
+        self.persist()
+        before = copy.deepcopy(self.state["launches"])
+        result = self.invoke()
+        self.assertEqual(result, {**self.target, "closeAccepted": True, "removal": "unconfirmed"})
+        self.assertEqual(CONTROLLER["read_state"](self.root)["launches"], before)
+        # A lease inside the closing subtree still refuses before any host request.
+        self.lease(self.grandchild)
+        self.persist()
+        with self.assertRaisesRegex(CONTROLLER["OrchestrationError"], "launch lease"):
+            self.invoke()
+        self.cmux.run.assert_called_once()
 
     def test_close_rejects_moved_or_missing_actor_and_child_without_following_them(self):
         for node in (self.actor, self.child):

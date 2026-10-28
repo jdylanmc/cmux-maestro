@@ -299,6 +299,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- A failed native spawn's launch lease no longer blocks closing unrelated
+  children in its run; it still fences its own node, subtree and surfaces. Native
+  close/spawn release a failed lease once provider exit and surface absence are
+  proven; unanchored leases stay retained. Attach confirms pane membership from
+  CMUX's atomic surface inventory (#387).
 - Restored click targets for animated sidebar pets.
 - Active window details follow a positively verified replacement session without
   treating its retained unknown predecessor as a competing occupant. Ambiguous
