@@ -365,6 +365,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
         let processesData = try boundedResource(resources.appendingPathComponent("processes.mjs"), maximum: 16_384)
         let modelsData = try boundedResource(resources.appendingPathComponent("models.mjs"), maximum: 16_384)
         let notificationsData = try boundedResource(resources.appendingPathComponent("notifications.mjs"), maximum: 16_384)
+        let moodsData = try boundedResource(resources.appendingPathComponent("moods.mjs"), maximum: 16_384)
         guard FileManager.default.isExecutableFile(atPath: (helperExecutable ?? helper).path),
               FileManager.default.isReadableFile(atPath: controller.path),
               FileManager.default.isReadableFile(atPath: skill.path),
@@ -409,6 +410,7 @@ nonisolated struct LocalCopilotSetupFiles: CopilotSetupFileSystem {
             // Publish required static imports before their importer, including on upgrades.
             .init(file: nativeRoot.appendingPathComponent("models.mjs"), data: modelsData),
             .init(file: nativeRoot.appendingPathComponent("notifications.mjs"), data: notificationsData),
+            .init(file: nativeRoot.appendingPathComponent("moods.mjs"), data: moodsData),
             .init(file: nativeRoot.appendingPathComponent("adapter.mjs"), data: adapterData),
             .init(file: nativeRoot.appendingPathComponent("extension.mjs"), data: loaderData),
             .init(file: nativeRoot.appendingPathComponent("processes.mjs"), data: processesData),
