@@ -19,6 +19,33 @@ struct SidebarNotificationClickTests {
               surfaceId: fixtures.surfaceA, generation: 1)
     }
 
+    @Test(arguments: [false, true])
+    func registryReleaseDoesNotWaitForDuplicatedDescriptor(throwing: Bool) throws {
+        let root = try root()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let directory = try CopilotFileAccess.openDirectory(root, owner: getuid())
+        defer { close(directory) }
+        var duplicate: Int32 = -1
+        defer { if duplicate >= 0 { close(duplicate) } }
+        do {
+            try MaestroClickChannel.withRegistry(at: directory) { descriptor in
+                duplicate = fcntl(descriptor, F_DUPFD_CLOEXEC, 0)
+                try #require(duplicate >= 0)
+                #expect(throws: CopilotFileError.changed) {
+                    try MaestroClickChannel(root: root, window: UUID(), serving: true)
+                }
+                if throwing { throw CopilotFileError.io }
+            }
+            #expect(!throwing)
+        } catch CopilotFileError.io {
+            #expect(throwing)
+        }
+        let stamp = try CopilotFileAccess.statEntry(at: directory, name: ".registry")
+        let channel = try MaestroClickChannel(root: root, window: UUID(), serving: true)
+        #expect(try CopilotFileAccess.statEntry(at: directory, name: ".registry") == stamp)
+        withExtendedLifetime(channel) {}
+    }
+
     @Test func retiredWindowChurnPreservesLiveLeaseAndBusyInodes() throws {
         let root = try root()
         defer { try? FileManager.default.removeItem(at: root) }
