@@ -84,7 +84,7 @@ launched in headless mode. Never substitute invisible SDK tasks for
 visible Maestro roles when startup fails.
 
 Native `maestro_close` requests closure of one explicitly authorized, currently
-owned direct child. It uses exact `workerId`, `workspaceId`, `surfaceId`,
+owned strict descendant, including a grandchild. It uses exact `workerId`, `workspaceId`, `surfaceId`,
 `sessionId` and `generation`. It validates private native authority, process and
 session-source anchors, current workspace membership and launch fences. Then it
 sends one initial stock CMUX `surface.close` with documented Boolean
@@ -97,7 +97,7 @@ contract is corrected. Installed/live proof remains separate. No retry,
 force-after-refusal or confirmation fallback.
 
 Omitted `scope` or `"scope": "target-only"` keeps that single-target contract.
-Explicit `"scope": "subtree"` captures exact child's private descendants
+Explicit `"scope": "subtree"` captures the selected descendant's private descendants
 once. It attempts safely admitted targets descendants-first, at most once.
 Refused or unknown descendants do not block independently valid siblings or
 parents. Every selected identity appears in `results`, with `attempted`,
@@ -121,7 +121,7 @@ unselected descendants and resource accounting stay intact. Missing or changed
 provider/source evidence refuses, rather than closing possibly repurposed
 shell. Separate preflight and UUID-based host close are **not atomic
 session/generation fencing**. See the
-[installed lifecycle guide](../../.agents/skills/cmux-maestro-orchestrate/SKILL.md#request-an-owned-child-or-explicit-subtree-close)
+[installed lifecycle guide](../../.agents/skills/cmux-maestro-orchestrate/SKILL.md#request-an-owned-descendant-or-explicit-subtree-close)
 for exact tool shape and source limits.
 
 Interactive startup uses `surface.create` with `initial_command`, not

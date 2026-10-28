@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Explicitly authorized close requests may target any exact owned descendant,
+  not only immediate children. Self, ancestors and unrelated sessions remain
+  excluded; target-only never closes the selected session's descendants (#377).
 - Bundled Maestro has 15 original mood expressions, including a distinct
   Startled face, while preserving all legacy poses. Mood art does not change
   state selection (#383).
@@ -311,6 +314,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Nested sessions receive their direct parent's return address instead of the
+  run root's. Missing parent routes stay unavailable rather than misrouting
+  reports (#377).
 - Notification channel registration releases its short-lived lock before
   closing the descriptor, avoiding false contention during concurrent process
   launches. Live window leases and busy senders retain their existing locks.

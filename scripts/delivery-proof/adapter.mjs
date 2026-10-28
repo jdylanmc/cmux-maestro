@@ -262,7 +262,7 @@ function toolSpecs(managed) {
     maestro_notify: notificationSpec,
     maestro_close: {
       name: "maestro_close",
-      description: "Request an explicitly authorized owned direct-child close, or a fixed descendant-first subtree pass with scope: subtree. Selects stock CMUX's documented noninteractive route on the initial admitted request; host refusals stay explicit. Acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
+      description: "Request an explicitly authorized owned descendant close, or a fixed descendant-first subtree pass with scope: subtree. Selects stock CMUX's documented noninteractive route on the initial admitted request; host refusals stay explicit. Acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
       parameters: {
         type: "object",
         properties: {
