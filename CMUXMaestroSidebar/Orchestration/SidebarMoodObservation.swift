@@ -81,6 +81,11 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         private var eligible: Set<UUID> = []
         private var decoded = SidebarOrchestrationReader.Decoded<SidebarMoodObservation>()
 
+        mutating func resetForConnection() {
+            initialized = false
+            eligible.removeAll()
+        }
+
         mutating func applying(_ data: Data?, to base: SidebarOrchestrationSnapshot) -> SidebarOrchestrationSnapshot {
             var result = base
             result.nodes = result.nodes.map {

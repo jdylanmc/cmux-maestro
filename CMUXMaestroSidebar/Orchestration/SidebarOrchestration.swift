@@ -282,6 +282,10 @@ nonisolated enum SidebarOrchestrationReader {
         func read() throws -> SidebarOrchestrationSnapshot {
             try SidebarOrchestrationReader.read(cache: &cache)
         }
+
+        func resetMoodBaseline() {
+            cache.moods.resetForConnection()
+        }
     }
 
     struct Cache {
@@ -572,9 +576,11 @@ final class SidebarOrchestrationPolling {
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
+    private var needsMoodBaseline = false
     private var generation: UInt64 = 0
     private var worker: Task<Void, Never>?
     private let read: Read
+    private let resetMoodBaseline: @Sendable () async -> Void
     private let pause: Pause
     private let now: @Sendable () -> Date
     private let expiryPause: ExpiryPause
@@ -586,6 +592,7 @@ final class SidebarOrchestrationPolling {
 
     init(
         read: Read? = nil,
+        resetMoodBaseline: (@Sendable () async -> Void)? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
         expiryPause: @escaping ExpiryPause = { try await Task.sleep(for: .seconds($0)) },
         changes: Changes? = nil,
@@ -595,6 +602,9 @@ final class SidebarOrchestrationPolling {
         let reader = SidebarOrchestrationReader.Cached()
         self.read = read ?? {
             try await reader.read()
+        }
+        self.resetMoodBaseline = resetMoodBaseline ?? {
+            await reader.resetMoodBaseline()
         }
         self.pause = pause
         self.now = now
@@ -631,6 +641,7 @@ final class SidebarOrchestrationPolling {
 
     func update(topology: SidebarTopology, connected: Bool) {
         guard self.topology != topology || self.connected != connected else { return }
+        if self.connected && !connected { needsMoodBaseline = true }
         self.topology = topology
         self.connected = connected
         invalidate()
@@ -660,8 +671,14 @@ final class SidebarOrchestrationPolling {
         let pause = pause
         let taskFinished = taskFinished
         let changes = changes
+        let resetMoodBaseline = resetMoodBaseline
+        let needsMoodBaseline = needsMoodBaseline
+        self.needsMoodBaseline = false
         worker = Task { [weak self] in
             defer { taskFinished(token) }
+            // Replacement workers start only after obsolete reads finish. Reset here, not in an
+            // unsequenced task, and even if cancelled before starting so the boundary is not lost.
+            if needsMoodBaseline { await resetMoodBaseline() }
             let refresh = await changes?()
             while !Task.isCancelled {
                 do {

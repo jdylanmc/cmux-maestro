@@ -329,6 +329,57 @@ struct SidebarOrchestrationTests {
         #expect(poll.snapshot.nodes == [root])
     }
 
+    @Test(arguments: [false, true])
+    func reconnectBaselinesMoodsAfterObsoleteReadQuiesces(cancelReplacementBeforeStart: Bool) async throws {
+        let workspace = UUID()
+        let root = node(run: UUID(), role: "coordinator", parent: nil, workspace: workspace)
+        let snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: Date(timeIntervalSince1970: 1_800_000_000),
+            complete: true, omittedCount: 0, nodes: [root]
+        )
+        let topology = topology(workspace: workspace, surfaces: [root.surfaceId])
+        let gate = OrchestrationReadGate()
+        var resets = 0
+        let poll = SidebarOrchestrationPolling(
+            read: { try await gate.read() },
+            resetMoodBaseline: { @MainActor in
+                #expect(gate.finished.count == 1, "The old read must finish before resetting its cache")
+                resets += 1
+            },
+            pause: { try await gate.pause() },
+            expiryPause: sidebarFrozenExpiry,
+            now: { snapshot.generatedAt },
+            taskFinished: { gate.finished.append($0) }
+        )
+        defer {
+            poll.setVisible(false)
+            gate.cancelPending()
+        }
+        poll.update(topology: topology, connected: true)
+        poll.setVisible(true)
+        await sidebarEventually { gate.readCount == 1 }
+        poll.update(topology: topology, connected: false)
+        if !cancelReplacementBeforeStart { poll.update(topology: topology, connected: true) }
+        #expect(resets == 0 && gate.readCount == 1)
+        try gate.resolve(1, with: .success(snapshot))
+        if cancelReplacementBeforeStart {
+            await sidebarEventually { gate.finished.count == 1 }
+            poll.update(topology: topology, connected: true)
+            // Cancel the replacement before its task can enter the reader actor.
+            poll.setVisible(false)
+            poll.setVisible(true)
+        }
+        await sidebarEventually { gate.readCount == 2 }
+        #expect(resets == 1, "The fresh baseline must precede the replacement read")
+        #expect(poll.snapshot.nodes.isEmpty, "A disconnected read cannot publish into the new connection")
+        try gate.resolve(2, with: .success(snapshot))
+        await sidebarEventually { gate.pauseCount == 1 }
+        #expect(poll.snapshot.nodes == [root])
+        poll.setVisible(false)
+        await sidebarEventually { gate.finished.count == (cancelReplacementBeforeStart ? 3 : 2) }
+        #expect(resets == 1)
+    }
+
     @Test(arguments: ["success", "missing", "unsafe"])
     func obsoleteReadCannotEraseCurrentStateOrDuplicatePolling(completion: String) async throws {
         let workspace = UUID()

@@ -1,3 +1,4 @@
+@_spi(CmuxHostTransport) @_spi(CmuxExtensionTransport) import CmuxExtensionKit
 import Foundation
 import Testing
 @testable import CMUXMaestroPreview
@@ -138,6 +139,122 @@ struct SidebarMoodObservationTests {
         _ = cache.applying(nil, to: base)
         #expect(cache.applying(try data([record(node)]), to: base).moodsUnavailable)
         #expect(cache.applying(try data([record(node)]), to: base).nodes[0].selfReportedMood == nil)
+        cache.resetForConnection()
+        #expect(cache.applying(try data([record(node)]), to: base).moodsUnavailable,
+                "A reconnect cannot free high-water capacity, even for absent lifecycle nodes")
+    }
+
+    @Test func reconnectRetainsHighWaterAndRequiresAValidBaseline() throws {
+        let node = node()
+        let base = snapshot(node)
+        var cache = SidebarMoodObservation.Cache()
+        _ = cache.applying(nil, to: base)
+        let eligible = try data([record(node, sequence: 10)])
+        #expect(cache.applying(eligible, to: base).nodes[0].selfReportedMood == .happy)
+        cache.resetForConnection()
+        #expect(cache.applying(Data("invalid".utf8), to: base).moodsUnavailable)
+        let offline = try data([record(node, sequence: 11, mood: "celebrating")])
+        #expect(cache.applying(offline, to: base).nodes[0].selfReportedMood == nil)
+        #expect(cache.applying(offline, to: base).nodes[0].selfReportedMoodSequence == 11)
+        let clear = try data([record(node, sequence: 12, mood: "clear")])
+        #expect(cache.applying(clear, to: base).nodes[0].selfReportedMood == nil)
+        cache.resetForConnection()
+        let staleBaseline = cache.applying(eligible, to: base)
+        #expect(staleBaseline.nodes[0].selfReportedMood == nil)
+        #expect(staleBaseline.nodes[0].selfReportedMoodSequence == 12)
+        #expect(cache.applying(offline, to: base).nodes[0].selfReportedMood == nil)
+        #expect(cache.applying(clear, to: base).nodes[0].selfReportedMood == nil)
+        let fresh = try data([record(node, sequence: 13, mood: "confused")])
+        #expect(cache.applying(fresh, to: base).nodes[0].selfReportedMood == .confused)
+        cache.resetForConnection()
+        #expect(cache.applying(fresh, to: base).nodes[0].selfReportedMood == nil)
+        #expect(cache.applying(fresh, to: base).nodes[0].selfReportedMoodSequence == 13)
+    }
+
+    @MainActor
+    @Test(arguments: ["rebind", "disconnect", "unpaired", "error"])
+    func connectionBoundaryRequiresFreshMoodButTopologyRefreshDoesNot(boundary: String) async throws {
+        let node = node()
+        let base = snapshot(node)
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        var cache = SidebarMoodObservation.Cache()
+        var bytes: Data?
+        var publications = 0
+        let poll = SidebarOrchestrationPolling(
+            read: { @MainActor in cache.applying(bytes, to: base) },
+            resetMoodBaseline: { @MainActor in cache.resetForConnection() },
+            pause: { @MainActor in
+                publications += 1
+                try await sidebarFrozenExpiry(0)
+            },
+            expiryPause: sidebarFrozenExpiry,
+            now: { base.generatedAt }
+        )
+        let model = SidebarConnectionModel(
+            copilot: SidebarCopilotPolling(read: { _ in throw CopilotFileError.missing }), orchestration: poll
+        )
+        let binding = SidebarWindowBinding(preferences: fixture.preferences(), model: model)
+        var connection = 1
+        var sequence: UInt64 = 1
+        func publishContext(extraSurface: Bool = false) {
+            let surfaces = [CmuxSidebarSurface(id: node.surfaceId, title: "Synthetic", kind: .terminal)]
+                + (extraSurface ? [CmuxSidebarSurface(id: UUID(), title: "Other", kind: .terminal)] : [])
+            let context = CmuxSidebarContext(
+                snapshot: CmuxSidebarSnapshot(
+                    sequence: sequence, windowID: node.workspaceId, selectedWorkspaceID: nil,
+                    grantedReadScopes: [.workspaceMetadata, .surfaceMetadata],
+                    workspaces: [CmuxSidebarWorkspace(id: node.workspaceId, title: "Synthetic", surfaces: surfaces)]
+                ),
+                host: CmuxSidebarHost(performAction: { _, _ in })
+            )
+            binding.apply(.bound(connection: .init(rawValue: UInt64(connection)), status: .connected, context: context))
+            sequence += 1
+        }
+        func refresh() async {
+            let previous = publications
+            poll.setVisible(false)
+            poll.setVisible(true)
+            await sidebarEventually { publications > previous }
+        }
+        func disconnect() {
+            switch boundary {
+            case "rebind":
+                connection += 1
+                binding.apply(.bound(connection: .init(rawValue: UInt64(connection)), status: .waitingForHost, context: nil))
+            case "unpaired": binding.apply(.unpaired)
+            case "error":
+                binding.apply(.bound(connection: .init(rawValue: UInt64(connection)), status: .error("Synthetic"), context: nil))
+            default: binding.apply(.waitingForHost)
+            }
+        }
+        publishContext()
+        poll.setVisible(true)
+        defer { model.setVisible(false) }
+        await sidebarEventually { publications == 1 }
+        bytes = try data([record(node)])
+        await refresh()
+        #expect(poll.snapshot.nodes.first?.selfReportedMood == .happy)
+        let previous = publications
+        publishContext(extraSurface: true)
+        await sidebarEventually { publications > previous }
+        #expect(poll.snapshot.nodes.first?.selfReportedMood == .happy,
+                "Ordinary topology refreshes must not suppress a current authored expression")
+        disconnect()
+        #expect(poll.snapshot.nodes.isEmpty)
+        publishContext()
+        await refresh()
+        #expect(poll.snapshot.nodes.first?.selfReportedMood == nil, "An unchanged eligible claim cannot replay")
+        #expect(poll.snapshot.nodes.first?.selfReportedMoodSequence == 1)
+        disconnect()
+        bytes = try data([record(node, sequence: 2, mood: "celebrating")])
+        publishContext()
+        await refresh()
+        #expect(poll.snapshot.nodes.first?.selfReportedMood == nil, "Offline reports become the new baseline")
+        #expect(poll.snapshot.nodes.first?.selfReportedMoodSequence == 2)
+        bytes = try data([record(node, sequence: 3, mood: "confused")])
+        await refresh()
+        #expect(poll.snapshot.nodes.first?.selfReportedMood == .confused)
     }
 
     @Test func orchestrationCacheResolvesChangedMoodsWithoutChangingLifecycleBytes() throws {
