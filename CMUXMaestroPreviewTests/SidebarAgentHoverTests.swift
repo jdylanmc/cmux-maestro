@@ -16,7 +16,6 @@ struct SidebarAgentHoverTests {
         var observed = session(
             surface: scenario == "wrong-placement" ? fixtures.surfaceB : nil,
             liveness: scenario == "ambiguous" ? .ambiguous : .alive)
-        observed.state = .idle
         observed.attention = scenario == "no-attention" ? [] : [
             .init(kind: scenario == "question" ? .answer : .permission,
                   evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
