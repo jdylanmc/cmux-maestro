@@ -253,7 +253,9 @@ struct SidebarPinnedDetailsTests {
         }
         let terminal = pinned(sessions: [], nodes: [managed()])
         #expect(!terminal.isAgent && terminal.notice == nil)
-        #expect(pinned(sessions: [session(liveness: .dead)], nodes: [managed()]) == terminal)
+        let ended = pinned(sessions: [session(liveness: .dead)], nodes: [managed()])
+        #expect(!ended.isAgent && ended.lines == terminal.lines && ended.inspection == terminal.inspection)
+        #expect(ended.title == terminal.title && ended.notice == nil)
         for sessions in [[session(), session()], [session(), session(id: UUID())],
                          [session(liveness: .ambiguous)], [session(liveness: .unknown)],
                          [session(), session(id: UUID(), liveness: .ambiguous)],
@@ -268,6 +270,85 @@ struct SidebarPinnedDetailsTests {
         #expect(!pinned(generatedAt: now.addingTimeInterval(-9)).isAgent)
         #expect(!pinned(sessions: [session(), session(id: fixtures.sessionID, other: true)]).isAgent)
         #expect(pinned(hierarchy(kind: .agentSession), sessions: []).notice == nil)
+    }
+
+    @Test func freshEndedFooterPetPreemptsHoldWithoutRevivingLiveMetadata() throws {
+        var date = now
+        let display = SidebarPetMoodDisplay(clock: .init(now: { date }, sleepUntil: { _ in
+            throw CancellationError()
+        }))
+        defer { display.stop() }
+        var subject = session()
+        subject.petId = SidebarPetStore.defaultID
+        subject.sessionName = "Synthetic live name"
+        subject.activity = .init(kind: .executing)
+        func content() -> SidebarDetailContent {
+            SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy(), connected: true, tree: tree([subject], generatedAt: date),
+                managed: snapshot([managed()]), availability: .ready, now: date)
+        }
+        let live = content()
+        #expect(live.isAgent)
+        display.update(live.petMood)
+        #expect(display.shown?.mood == .working)
+        date = now.addingTimeInterval(1)
+        subject.observedAt = date
+        subject.activity = nil
+        subject.presentation = .init(primaryTurnOpen: true)
+        display.update(content().petMood)
+        #expect(display.current?.mood == .thinking && display.shown?.mood == .working)
+        #expect(display.deadline == now.addingTimeInterval(SidebarPetMood.minimumMoodHold))
+
+        subject = session(liveness: .dead, observedAt: date)
+        subject.petId = SidebarPetStore.defaultID
+        subject.sessionName = "Synthetic live name"
+        let ended = content()
+        display.update(ended.petMood)
+        #expect(display.shown?.mood == .gone && display.shown == display.current)
+        #expect(display.deadline == nil)
+        #expect(ended.petSessionID == live.petSessionID && ended.petChoice == live.petChoice)
+        #expect(ended.petMood.identity == live.petMood.identity)
+        #expect(!ended.isAgent && !ended.titleIsSessionName && ended.title == "Same title")
+        #expect(ended.tagSessionID == nil)
+        #expect(ended.visual == SidebarPresentation.process(.dead))
+        #expect(ended.lines == pinned(sessions: []).lines)
+        #expect(!ended.lines.contains { $0.copyableValue != nil || ["Model", "Session ID", "Branch"].contains($0.title) })
+        let stores = SidebarStoreFixture()
+        defer { stores.cleanup() }
+        let hosting = NSHostingView(rootView: SidebarPinnedFooter(
+            content: ended, pets: stores.pets, inspect: { Issue.record("Rendering must not inspect") })
+            .environment(\._accessibilityReduceMotion, false))
+        hosting.frame = NSRect(x: 0, y: 0, width: 300, height: 400)
+        hosting.layoutSubtreeIfNeeded()
+        #expect(views(hosting).contains { $0 is SidebarPetAnimationView },
+                "The production footer must render the ended pet, not only compute Gone")
+    }
+
+    @Test func endedFooterPetRejectsAmbiguousReplacedAndUnavailableEvidence() {
+        for scenario in ["two-dead", "unknown-occupant", "duplicate-id", "stale-session",
+                         "stale-tree", "denied", "status-only", "managed-replacement", "browser"] {
+            var ended = session(liveness: .dead, observedAt: scenario == "stale-session" ? now.addingTimeInterval(-9) : now)
+            ended.statusOnly = scenario == "status-only"
+            var sessions = [ended]
+            if scenario == "two-dead" { sessions.append(session(id: UUID(), liveness: .dead)) }
+            if scenario == "unknown-occupant" { sessions.append(session(id: UUID(), liveness: .unknown)) }
+            if scenario == "duplicate-id" { sessions.append(session(id: ended.id, other: true, liveness: .dead)) }
+            var observed = tree(sessions, generatedAt: scenario == "stale-tree" ? now.addingTimeInterval(-9) : now)
+            if scenario == "denied" { observed.issues = [.permissionDenied] }
+            let content = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy(kind: scenario == "browser" ? .browser : .terminal),
+                connected: true, tree: observed,
+                managed: snapshot(scenario == "managed-replacement" ? [managed(sessionID: fixtures.otherSessionID)] : []),
+                availability: .ready, now: now)
+            #expect(content.petSessionID == nil && content.petMood == .unavailable, "\(scenario)")
+            #expect(!content.isAgent && !content.lines.contains { $0.title == "Model" }, "\(scenario)")
+        }
+        let replacement = session(id: fixtures.otherSessionID)
+        let content = pinned(sessions: [session(liveness: .dead), replacement], nodes: [managed()])
+        #expect(content.isAgent && content.petSessionID == replacement.id)
+        #expect(content.petMood.session?.liveness == .alive)
+        #expect(content.lines.contains(.init(title: "Model", value: "verified-model")))
+        #expect(!content.lines.contains { $0.title == "Branch" }, "Ended managed metadata cannot attach to a replacement")
     }
 
     @Test(arguments: ["matching", "different-process", "missing-process", "two-alive",

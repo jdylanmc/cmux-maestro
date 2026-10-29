@@ -187,7 +187,7 @@ struct SidebarHoverTests {
                               styleMask: .borderless, backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false
         let host = NSHostingView(rootView: HStack {
-            SidebarPetView(store: stores.pets, petID: petID, state: .idle)
+            SidebarPetView(store: stores.pets, petID: petID, mood: .idle)
             SidebarStateBadge(visual: SidebarPresentation.state(.working))
             SidebarStateBadge(visual: SidebarPresentation.state(.blocked), needsInput: true)
         }.background(SidebarActivityBackground(visual: SidebarPresentation.state(.blocked), needsInput: true))

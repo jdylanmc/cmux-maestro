@@ -7,3 +7,7 @@ Why: each signal lies on its own. A live process can be stuck, an exited process
 Rejected: stall detection, exit-code success, "quiet means done".
 
 Consequence: the UI shows more unknown and partial states, and says so.
+
+Amendment (#376 / #380): an agent may self-report an enum-only mood
+([ADR 0031](0031-agents-self-report-enum-only-moods.md)). It is authored
+presentation metadata, never evidence of work, success or completion.

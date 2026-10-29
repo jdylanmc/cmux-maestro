@@ -106,14 +106,88 @@ nonisolated struct SidebarAcknowledgedOutcome: Codable, Hashable, Sendable {
 }
 
 nonisolated struct SidebarAttentionSettings: Codable, Equatable, Sendable {
-    static let maximumAcknowledgements = 2048
-    static let maximumStoredBytes = 1_048_576
-    var version = 1
+    static let legacyMaximumAcknowledgements = 2048
+    static let legacyMaximumStoredBytes = 1_048_576
+    static let maximumAcknowledgements = 20_480
+    static let maximumStoredBytes = 4_194_304
+    var version = 2
     var acknowledged: Set<SidebarAcknowledgedOutcome> = []
 
+    var maximumEncodedBytes: Int {
+        version == 1 ? Self.legacyMaximumStoredBytes : Self.maximumStoredBytes
+    }
+
     var isValid: Bool {
-        version == 1 && acknowledged.count <= Self.maximumAcknowledgements
+        [1, 2].contains(version)
+            && acknowledged.count <= (version == 1 ? Self.legacyMaximumAcknowledgements : Self.maximumAcknowledgements)
             && acknowledged.allSatisfy(\.isValid)
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, acknowledged, archive }
+
+    init(version: Int = 2, acknowledged: Set<SidebarAcknowledgedOutcome> = []) {
+        self.version = version
+        self.acknowledged = acknowledged
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        switch version {
+        case 1:
+            guard !container.contains(.archive) else {
+                throw DecodingError.dataCorruptedError(forKey: .archive, in: container, debugDescription: "Unexpected archive")
+            }
+            acknowledged = try container.decode(Set<SidebarAcknowledgedOutcome>.self, forKey: .acknowledged)
+        case 2:
+            guard !container.contains(.acknowledged) else {
+                throw DecodingError.dataCorruptedError(forKey: .acknowledged, in: container, debugDescription: "Ambiguous archive")
+            }
+            // Group exact event UUIDs by session and owner; the empty owner denotes the primary owner.
+            let archive = try container.decode([String: [String: [UUID]]].self, forKey: .archive)
+            for (session, owners) in archive {
+                guard let sessionID = UUID(uuidString: session), !owners.isEmpty else {
+                    throw DecodingError.dataCorruptedError(forKey: .archive, in: container, debugDescription: "Invalid session")
+                }
+                for (owner, events) in owners {
+                    guard !events.isEmpty, events.count <= Self.maximumAcknowledgements - acknowledged.count else {
+                        throw DecodingError.dataCorruptedError(forKey: .archive, in: container, debugDescription: "Invalid event count")
+                    }
+                    for event in events {
+                        let key = SidebarAcknowledgedOutcome(
+                            sessionID: sessionID, ownerID: owner.isEmpty ? nil : owner,
+                            evidence: .init(source: "copilot.events", eventID: event)
+                        )
+                        guard key.isValid, acknowledged.insert(key).inserted else {
+                            throw DecodingError.dataCorruptedError(forKey: .archive, in: container, debugDescription: "Invalid or duplicate identity")
+                        }
+                    }
+                }
+            }
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .version, in: container, debugDescription: "Unsupported version")
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        if version == 1 {
+            try container.encode(acknowledged, forKey: .acknowledged)
+        } else {
+            guard acknowledged.allSatisfy(\.isValid) else {
+                throw EncodingError.invalidValue(acknowledged, .init(
+                    codingPath: encoder.codingPath, debugDescription: "Invalid acknowledgement identity"
+                ))
+            }
+            var archive: [String: [String: [UUID]]] = [:]
+            for key in acknowledged {
+                archive[key.sessionID.uuidString, default: [:]][key.ownerID ?? "", default: []].append(key.evidence.eventID)
+            }
+            try container.encode(archive, forKey: .archive)
+        }
     }
 
     func contains(_ signal: AgentAttention, sessionID: UUID, ownerID: String?) -> Bool {

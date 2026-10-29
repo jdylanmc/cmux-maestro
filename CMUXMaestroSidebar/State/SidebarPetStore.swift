@@ -107,43 +107,6 @@ enum SidebarPetSheet {
     }
 }
 
-enum SidebarPetState: Equatable, CaseIterable {
-    case idle, working, needsInput, finished, failed
-
-    var row: Int {
-        switch self {
-        case .idle: 0
-        case .finished: 3
-        case .failed: 5
-        case .needsInput: 6
-        case .working: 7
-        }
-    }
-
-    var frameCount: Int { SidebarPetSheet.frameCounts[row] }
-
-    var title: String {
-        switch self {
-        case .idle: "Idle"
-        case .working: "Working"
-        case .needsInput: "Needs input"
-        case .finished: "Turn finished"
-        case .failed: "Blocked or failed"
-        }
-    }
-
-    static func resolve(visual: SidebarVisual?, needsInput: Bool) -> SidebarPetState {
-        if needsInput { return .needsInput }
-        guard let visual else { return .idle }
-        if visual.tone == .green { return .working }
-        switch visual.symbol {
-        case "checkmark.circle": return .finished
-        case "exclamationmark.circle", "pause.circle", "xmark.circle": return .failed
-        default: return .idle
-        }
-    }
-}
-
 struct SidebarPetDescriptor: Identifiable, Equatable {
     enum Source: Equatable { case bundled, uploaded, session }
     let id: String
@@ -414,11 +377,6 @@ final class SidebarPetStore {
             failedSheets.insert(key)
         }
         return image
-    }
-
-    func frame(petID: String, session: UUID?, state: SidebarPetState, index: Int) -> CGImage? {
-        guard let sheet = sheet(for: petID, session: session) ?? sheet(for: Self.defaultID, session: nil) else { return nil }
-        return frame(sheet: sheet, playback: .init(row: state.row, frameCount: state.frameCount), index: index)
     }
 
     func playback(petID: String, session: UUID?, mood: SidebarPetSheet.Mood) -> SidebarPetSheet.Playback? {

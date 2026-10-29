@@ -22,6 +22,13 @@ from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
+
+
+def short_fixture_directory(prefix):
+    root = os.environ.get("MAESTRO_TEST_ROOT")
+    return tempfile.mkdtemp(prefix="m-" if root else prefix, dir=root or "/tmp")
+
+
 CONTROLLER = REPO / "scripts" / "cmux-maestro-orchestrator.py"
 CONTROLLER_API = runpy.run_path(str(CONTROLLER))
 MAX_LIVE_WORKERS = CONTROLLER_API["MAX_LIVE_WORKERS"]
@@ -37,6 +44,170 @@ configure_fixture_controller = _edges["configure_fixture_controller"]
 legacy_fixture_launcher = _edges["legacy_fixture_launcher"]
 # Fixture controller processes share one compiled-bytecode cache for the run.
 FIXTURE_BYTECODE = tempfile.TemporaryDirectory(prefix="cmux-maestro-fixture-bytecode-")
+
+
+class MoodTests(unittest.TestCase):
+    def setUp(self):
+        self.api = CONTROLLER_API
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name).resolve() / "Orchestration"
+        self.actor = {
+            "id": str(uuid.uuid4()), "runId": str(uuid.uuid4()), "copilotSessionId": str(uuid.uuid4()),
+            "workspaceId": str(uuid.uuid4()), "surfaceId": str(uuid.uuid4()), "generation": 1,
+        }
+        self.path = self.root / "observer/moods.json"
+
+    def write(self, mood, stamp=1000, actor=None):
+        with self.api["Store"](self.root) as store:
+            return self.api["write_mood"](store, actor or self.actor, mood, clock=lambda: stamp)
+
+    def test_changes_clear_noop_rate_limit_and_generation(self):
+        self.assertEqual(self.write("happy")["sequence"], 1)
+        before = self.path.stat()
+        self.assertFalse(self.write("happy", 1001)["changed"])
+        self.assertEqual(self.path.stat().st_ino, before.st_ino)
+        for stamp in (999, 1002.999):
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "mood-rate-limited"):
+                self.write("confused", stamp)
+        self.assertEqual(self.write("clear", 1001)["sequence"], 2)
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "mood-rate-limited"):
+            self.write("celebrating", 1002)
+        self.assertEqual(self.write("confused", 1003)["sequence"], 3)
+        self.assertEqual(self.write("happy", 1003, {**self.actor, "generation": 2})["sequence"], 4)
+        records = json.loads(self.path.read_bytes())["moods"]
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["generation"], 2)
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+        self.assertFalse((self.root / "control/state.json").exists())
+        self.assertFalse((self.root / "observer/current.json").exists())
+
+    def test_initial_clear_does_not_consume_rate_bucket(self):
+        self.write("clear")
+        self.assertEqual(self.write("happy", 1000)["sequence"], 2)
+
+    def test_malformed_or_unsafe_store_is_never_overwritten(self):
+        self.write("happy")
+        original = self.path.read_bytes()
+        record = json.loads(original)["moods"][0]
+        malformed = [
+            b'{"version":1,"version":1,"moods":[]}', b'{}', b'[]',
+            self.api["mood_bytes"]({"version": True, "moods": []}),
+            self.api["mood_bytes"]({"version": 1, "moods": [record, record]}),
+            b" " * (self.api["MOOD_MAX_BYTES"] + 1),
+        ]
+        for field, value in (
+            ("mood", "thinking"), ("mood", {}), ("source", "inferred"), ("sequence", True),
+            ("generation", 0), ("sequence", 1.0), ("sequence", 1 << 53), ("reason", "private"),
+            ("sessionId", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"), ("lastChangedAt", -1),
+        ):
+            malformed.append(self.api["mood_bytes"]({"version": 1, "moods": [{**record, field: value}]}))
+        for raw in malformed:
+            with self.subTest(raw=raw[:120]):
+                self.path.write_bytes(raw)
+                with self.assertRaises(self.api["OrchestrationError"]):
+                    self.write("clear")
+                self.assertEqual(self.path.read_bytes(), raw)
+        self.path.write_bytes(original)
+        self.path.chmod(0o644)
+        with self.assertRaises(self.api["OrchestrationError"]):
+            self.write("clear")
+        self.path.unlink()
+        self.path.symlink_to(self.root / "untouched")
+        with self.assertRaises(OSError):
+            self.write("clear")
+        self.assertFalse((self.root / "untouched").exists())
+        self.path.unlink()
+        os.mkfifo(self.path, 0o600)
+        with self.assertRaises(self.api["OrchestrationError"]):
+            self.write("clear")
+
+    def test_store_capacity_and_sequence_exhaustion_preserve_records(self):
+        self.write("happy")
+        record = json.loads(self.path.read_bytes())["moods"][0]
+        full = [{**record, "nodeId": str(uuid.uuid4())} for _ in range(128)]
+        self.path.write_bytes(self.api["mood_bytes"]({"version": 1, "moods": full}))
+        before = self.path.read_bytes()
+        with self.assertRaises(self.api["OrchestrationError"]):
+            self.write("happy")
+        self.assertEqual(self.path.read_bytes(), before)
+        full = [{**record, "nodeId": str(uuid.uuid4()), "workspaceId": str(uuid.uuid4())} for _ in range(1024)]
+        self.path.write_bytes(self.api["mood_bytes"]({"version": 1, "moods": full}))
+        before = self.path.read_bytes()
+        with self.assertRaises(self.api["OrchestrationError"]):
+            self.write("clear")
+        self.assertEqual(self.path.read_bytes(), before)
+        record["sequence"] = self.api["MOOD_MAX_INTEGER"]
+        self.path.write_bytes(self.api["mood_bytes"]({"version": 1, "moods": [record]}))
+        before = self.path.read_bytes()
+        with self.assertRaises(self.api["OrchestrationError"]):
+            self.write("clear")
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_only_a_newer_generation_supersedes_a_node_claim(self):
+        self.write("happy")
+        before = self.path.read_bytes()
+        for field in ("runId", "copilotSessionId", "workspaceId", "surfaceId"):
+            for generation in (0, 1, 2):
+                actor = {**self.actor, field: str(uuid.uuid4()), "generation": generation}
+                with self.subTest(field=field, generation=generation), \
+                        self.assertRaisesRegex(self.api["OrchestrationError"], "mood-identity-unverified"):
+                    self.write("confused", 5000, actor)
+        self.assertEqual(self.path.read_bytes(), before)
+        resumed = {**self.actor, "generation": 2}
+        self.assertEqual(self.write("confused", 1000, resumed)["sequence"], 2)
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "mood-identity-unverified"):
+            self.write("happy", 5000)
+        self.assertEqual(json.loads(self.path.read_bytes())["moods"][0]["surfaceId"], resumed["surfaceId"])
+
+    def test_full_store_never_evicts_records_missing_from_lifecycle_state(self):
+        self.write("happy")
+        record = json.loads(self.path.read_bytes())["moods"][0]
+        others = [{**record, "nodeId": str(uuid.uuid4())} for _ in range(128)]
+        self.path.write_bytes(self.api["mood_bytes"]({"version": 1, "moods": others}))
+        before = self.path.read_bytes()
+        fn = self.api["command_self_mood"]
+        args = self.api["argparse"].Namespace(own_session=True, session_id=self.actor["copilotSessionId"], mood="happy")
+        host = unittest.mock.Mock()
+        with patch.object(self.api["Store"], "read", return_value={"nodes": {self.actor["id"]: self.actor}}), \
+                patch.dict(fn.__globals__, {
+                    "prove_own_session": lambda *args, **kwargs: None,
+                    "exact_self_actor": lambda state: self.actor,
+                }):
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "mood-capacity-unavailable"):
+                fn(args, self.root, host, clock=lambda: 1000)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_exact_self_is_reproved_under_lock_and_foreign_native_actor_refuses(self):
+        fn = self.api["command_self_mood"]
+        args = self.api["argparse"].Namespace(own_session=True, session_id=self.actor["copilotSessionId"], mood="happy")
+        proofs, surfaces = [], []
+        actor = self.actor
+
+        class Host:
+            def validate_surface(self, workspace, surface):
+                surfaces.append((workspace, surface))
+
+        with patch.object(self.api["Store"], "read", return_value={"nodes": {actor["id"]: actor}}), \
+                patch.dict(fn.__globals__, {
+                    "prove_own_session": lambda session, **kwargs: proofs.append(session),
+                    "exact_self_actor": lambda state: actor,
+                    "authorize_native_actor": lambda state, identity: {"id": "foreign"},
+                }):
+            result = fn(args, self.root, Host(), clock=lambda: 1000)
+            self.assertEqual(result["sessionId"], actor["copilotSessionId"])
+            self.assertEqual(proofs, [actor["copilotSessionId"]] * 2)
+            self.assertEqual(surfaces, [(actor["workspaceId"], actor["surfaceId"])])
+            before = self.path.read_bytes()
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                fn(args, self.root, Host(), native_identity={})
+            args.session_id = str(uuid.uuid4())
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "identity-unverified"):
+                fn(args, self.root, Host())
+            self.assertEqual(self.path.read_bytes(), before)
+            args.own_session = False
+            with self.assertRaisesRegex(self.api["OrchestrationError"], "input-invalid"):
+                fn(args, self.root, Host())
 
 
 class NotificationTests(unittest.TestCase):
@@ -2447,11 +2618,11 @@ class BornFixture:
     def setUp(self):
         self.h = Harness()
         self.addCleanup(self.h.close)
-        self.routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        self.routes = Path(short_fixture_directory("m61-")).resolve()
         self.addCleanup(shutil.rmtree, self.routes, True)
         self.extension = self.h.path / "installed-extension"
         self.extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, self.extension / name)
             (self.extension / name).chmod(0o600)
         self.install(age=10)
@@ -2465,7 +2636,7 @@ class BornFixture:
         config.write_text(json.dumps({"version": 1, "routes": str(self.routes), "extension": str(self.extension)}))
         config.chmod(0o600)
         stamp = time.time() - age
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             os.utime(self.extension / name, (stamp, stamp))
 
     def enroll(self, surface=None, session=None, login="human-account", host="github.com",
@@ -3084,7 +3255,7 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
 
     def test_reload_after_an_update_reuses_the_enrolled_node(self):
         touch = ("import time\n"
-                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs', 'notifications.mjs'):\n"
+                 f"for name in ('adapter.mjs', 'extension.mjs', 'processes.mjs', 'models.mjs', 'notifications.mjs', 'moods.mjs'):\n"
                  f"    os.utime(os.path.join({str(self.extension)!r}, name), (time.time() + 5, time.time() + 5))")
         first, reload = self.enroll(repeat=2, env={"FAKE_BETWEEN": touch})
         self.assertTrue(first["ok"], first)
@@ -3664,11 +3835,11 @@ class ChildResumeTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness(interactive=True)
         self.addCleanup(self.h.close)
-        self.routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        self.routes = Path(short_fixture_directory("m61-")).resolve()
         self.addCleanup(shutil.rmtree, self.routes, True)
         extension = self.h.path / "installed-extension"
         extension.mkdir(mode=0o700)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (self.h.root / "bin").mkdir(mode=0o700, exist_ok=True)
@@ -4003,7 +4174,7 @@ class ChildResumeTests(unittest.TestCase):
     def test_changed_integration_refuses(self):
         _, child = self.ended_child()
         config = self.h.root / "bin" / "messaging.json"
-        other = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        other = Path(short_fixture_directory("m61-")).resolve()
         self.addCleanup(shutil.rmtree, other, True)
         config.write_text(json.dumps({**json.loads(config.read_text()), "routes": str(other)}))
         before = self.h.state()
@@ -4505,11 +4676,11 @@ class OrchestratorTests(unittest.TestCase):
 
     def test_managed_coordinator_launch_owns_native_session_and_preserves_caller(self):
         h = Harness(interactive=True)
-        routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        routes = Path(short_fixture_directory("m61-")).resolve()
         try:
             extension = h.root / "extension"
             extension.mkdir(mode=0o700)
-            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+            for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
                 shutil.copyfile(REPO / "scripts" / "delivery-proof" / name, extension / name)
                 (extension / name).chmod(0o600)
             (h.root / "bin").mkdir(mode=0o700)
@@ -5013,6 +5184,8 @@ class OrchestratorTests(unittest.TestCase):
     def test_only_successful_git_root_produces_worktree_label(self):
         non_git = self.h.path / "ordinary-directory"
         non_git.mkdir()
+        # A repository-local TMPDIR must not make this failed-Git fixture discover its checkout.
+        (non_git / ".git").write_text("gitdir: missing-repository\n")
         observed = self._register_with_cwd(
             non_git, "00000000-0000-4000-8000-000000000092"
         )
@@ -6776,11 +6949,11 @@ class DirectLaunchTests(unittest.TestCase):
     def test_native_parent_can_spawn_before_create_caller_returns_with_genuine_address(self):
         h = self.h
         h.env.pop("FAKE_NO_OBSERVATION")
-        routes = Path(tempfile.mkdtemp(prefix="m61-", dir="/tmp")).resolve()
+        routes = Path(short_fixture_directory("m61-")).resolve()
         self.addCleanup(shutil.rmtree, routes)
         extension = h.root / "extension"
         extension.mkdir(mode=0o700)
-        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("extension.mjs", "adapter.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         (h.root / "bin").mkdir(mode=0o700)
@@ -6909,8 +7082,8 @@ class ReservationAndLeaseTests(unittest.TestCase):
         self.assertTrue(archived["archived"])
 
     def test_prelaunch_preparation_failure_releases_lease_and_retires_its_route(self):
-        routes = self.h.path / "pr"
-        routes.mkdir(mode=0o700)
+        routes = Path(short_fixture_directory("pr-")).resolve()
+        self.addCleanup(shutil.rmtree, routes)
         published = []
         prepare = CONTROLLER_API["launch_direct_session"].__globals__["prepare_direct_launch"]
 
@@ -6931,8 +7104,8 @@ class ReservationAndLeaseTests(unittest.TestCase):
         self.assertFalse([call for call in self.h.cmux_data()["calls"] if "surface.create" in call])
 
     def test_failed_attach_keeps_its_route_while_execution_is_uncertain(self):
-        routes = self.h.path / "ur"
-        routes.mkdir(mode=0o700)
+        routes = Path(short_fixture_directory("ur-")).resolve()
+        self.addCleanup(shutil.rmtree, routes)
 
         def bind_then_continue_to_failure(root, node, token):
             node["messaging"] = {"version": 1, "routes": str(routes), "extension": "/synthetic/extension"}
@@ -6990,8 +7163,8 @@ class RoutePublicationTests(unittest.TestCase):
     def setUp(self):
         self.h = Harness()
         self.addCleanup(self.h.close)
-        self.routes = self.h.path / "routes"
-        self.routes.mkdir(mode=0o700)
+        self.routes = Path(short_fixture_directory("routes-")).resolve()
+        self.addCleanup(shutil.rmtree, self.routes)
         self.node = {
             "id": str(uuid.uuid4()), "workspaceId": self.h.workspace, "label": "Peer",
             "copilotSessionId": str(uuid.uuid4()), "generation": 1,
@@ -7251,7 +7424,7 @@ class PetSheetSizeTests(unittest.TestCase):
         return b"RIFF" + struct.pack("<I", len(body)) + body
 
     def sheet_folder(self, data, extension):
-        folder = Path(tempfile.mkdtemp(prefix="pet-", dir="/tmp")) / "duck"
+        folder = Path(short_fixture_directory("pet-")) / "duck"
         folder.mkdir(parents=True)
         self.addCleanup(shutil.rmtree, folder.parent, True)
         (folder / "pet.json").write_text(json.dumps({
@@ -7325,7 +7498,7 @@ class PetSheetSizeTests(unittest.TestCase):
                     read(str(folder), None)
 
     def pet_folder(self, width, height, name="duck"):
-        folder = Path(tempfile.mkdtemp(prefix="pet-", dir="/tmp")) / name
+        folder = Path(short_fixture_directory("pet-")) / name
         folder.mkdir(parents=True)
         self.addCleanup(shutil.rmtree, folder.parent, True)
         (folder / "pet.json").write_text(json.dumps({
@@ -7778,18 +7951,20 @@ class ProcessObservationTests(unittest.TestCase):
         home = tempfile.TemporaryDirectory()
         self.addCleanup(home.cleanup)
         root = Path(os.path.realpath(home.name))
-        extension, routes = root / "extension", root / "r"
-        for directory in (root / "bin", extension, routes):
+        extension = root / "extension"
+        routes = Path(short_fixture_directory("r-")).resolve()
+        self.addCleanup(shutil.rmtree, routes)
+        for directory in (root / "bin", extension):
             directory.mkdir(mode=0o700)
         (root / "bin/messaging.json").write_text(json.dumps(
             {"version": 1, "routes": str(routes), "extension": str(extension)}))
         (root / "bin/messaging.json").chmod(0o600)
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             shutil.copyfile(REPO / "scripts/delivery-proof" / name, extension / name)
             (extension / name).chmod(0o600)
         configuration = CONTROLLER_API["messaging_configuration"]
         self.assertEqual(configuration(root)["extension"], str(extension))
-        for name in ("processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             (extension / name).write_bytes(b"x" * 16_385)
             with self.assertRaisesRegex(CONTROLLER_API["OrchestrationError"], "adapter is unavailable"):
                 configuration(root)

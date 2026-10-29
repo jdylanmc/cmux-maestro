@@ -104,6 +104,9 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     let updatedAt: Date
     /// Presentation only, never decoded: a born root's exact session name (ADR 0022).
     var sessionTitle: String? = nil
+    /// Exact-generation authored metadata only; excluded from the lifecycle wire contract.
+    var selfReportedMood: SidebarMoodObservation.Mood? = nil
+    var selfReportedMoodSequence: Int? = nil
 
     /// The row title: a born root's eligible session name, otherwise its projected label.
     var title: String { sessionTitle ?? label }
@@ -178,10 +181,11 @@ nonisolated struct SidebarOrchestrationSnapshot: Codable, Equatable, Sendable {
     let generatedAt: Date
     let complete: Bool
     let omittedCount: Int
-    let nodes: [SidebarOrchestrationNode]
+    var nodes: [SidebarOrchestrationNode]
     /// Owned-process observations matched to exactly these node bindings (ADR 0029); never decoded
     /// from `current.json`.
     var processes: [UUID: SidebarProcessObservation.Node] = [:]
+    var moodsUnavailable = false
 
     private enum CodingKeys: String, CodingKey {
         case version, generatedAt, complete, omittedCount, nodes
@@ -210,7 +214,7 @@ extension SidebarOrchestrationSnapshot {
             return updated
         }
         return .init(version: version, generatedAt: generatedAt, complete: complete,
-                     omittedCount: omittedCount, nodes: named, processes: processes)
+                     omittedCount: omittedCount, nodes: named, processes: processes, moodsUnavailable: moodsUnavailable)
     }
 }
 
@@ -278,12 +282,17 @@ nonisolated enum SidebarOrchestrationReader {
         func read() throws -> SidebarOrchestrationSnapshot {
             try SidebarOrchestrationReader.read(cache: &cache)
         }
+
+        func resetMoodBaseline() {
+            cache.moods.resetForConnection()
+        }
     }
 
     struct Cache {
         var current = Decoded<SidebarOrchestrationSnapshot>()
         var icons = Decoded<SidebarIconOverrides>()
         var processes = Decoded<SidebarProcessObservation>()
+        var moods = SidebarMoodObservation.Cache()
         var base: (current: Data, icons: Data?, snapshot: SidebarOrchestrationSnapshot, validatedAt: Date)?
         var resolved: (
             processes: Data?, snapshot: SidebarOrchestrationSnapshot, resolvedAt: Date, revalidateAt: Date?
@@ -330,11 +339,31 @@ nonisolated enum SidebarOrchestrationReader {
             at: observer, filename: "processes.json", owner: owner,
             maximum: maximumBytes, permissions: 0o600
         )
+        let moodData: Data?
+        do {
+            moodData = try CopilotFileAccess.readStableRegular(
+                at: observer, filename: "moods.json", owner: owner,
+                maximum: SidebarMoodObservation.maximumBytes, permissions: 0o600
+            )
+        } catch CopilotFileError.missing {
+            moodData = nil
+        } catch {
+            // Invalid optional data disables only authored expressions, with a bounded diagnostic.
+            moodData = Data()
+        }
         // Still securely open and validate every file: metadata alone must not preserve revoked access.
-        return try resolve(current: data, icons: iconData, processes: processData, cache: &cache, now: Date())
+        return try resolve(current: data, icons: iconData, processes: processData, moods: moodData, cache: &cache, now: Date())
     }
 
     static func resolve(
+        current data: Data, icons iconData: Data?, processes processData: Data?, moods moodData: Data? = nil,
+        cache: inout Cache, now: Date
+    ) throws -> SidebarOrchestrationSnapshot {
+        let base = try resolveBase(current: data, icons: iconData, processes: processData, cache: &cache, now: now)
+        return cache.moods.applying(moodData, to: base)
+    }
+
+    private static func resolveBase(
         current data: Data, icons iconData: Data?, processes processData: Data?, cache: inout Cache, now: Date
     ) throws -> SidebarOrchestrationSnapshot {
         let base: SidebarOrchestrationSnapshot
@@ -547,9 +576,11 @@ final class SidebarOrchestrationPolling {
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
+    private var needsMoodBaseline = false
     private var generation: UInt64 = 0
     private var worker: Task<Void, Never>?
     private let read: Read
+    private let resetMoodBaseline: @Sendable () async -> Void
     private let pause: Pause
     private let now: @Sendable () -> Date
     private let expiryPause: ExpiryPause
@@ -561,6 +592,7 @@ final class SidebarOrchestrationPolling {
 
     init(
         read: Read? = nil,
+        resetMoodBaseline: (@Sendable () async -> Void)? = nil,
         pause: @escaping Pause = { try await Task.sleep(for: .seconds(2)) },
         expiryPause: @escaping ExpiryPause = { try await Task.sleep(for: .seconds($0)) },
         changes: Changes? = nil,
@@ -570,6 +602,9 @@ final class SidebarOrchestrationPolling {
         let reader = SidebarOrchestrationReader.Cached()
         self.read = read ?? {
             try await reader.read()
+        }
+        self.resetMoodBaseline = resetMoodBaseline ?? {
+            await reader.resetMoodBaseline()
         }
         self.pause = pause
         self.now = now
@@ -606,6 +641,7 @@ final class SidebarOrchestrationPolling {
 
     func update(topology: SidebarTopology, connected: Bool) {
         guard self.topology != topology || self.connected != connected else { return }
+        if self.connected && !connected { needsMoodBaseline = true }
         self.topology = topology
         self.connected = connected
         invalidate()
@@ -635,8 +671,14 @@ final class SidebarOrchestrationPolling {
         let pause = pause
         let taskFinished = taskFinished
         let changes = changes
+        let resetMoodBaseline = resetMoodBaseline
+        let needsMoodBaseline = needsMoodBaseline
+        self.needsMoodBaseline = false
         worker = Task { [weak self] in
             defer { taskFinished(token) }
+            // Replacement workers start only after obsolete reads finish. Reset here, not in an
+            // unsequenced task, and even if cancelled before starting so the boundary is not lost.
+            if needsMoodBaseline { await resetMoodBaseline() }
             let refresh = await changes?()
             while !Task.isCancelled {
                 do {
@@ -657,7 +699,7 @@ final class SidebarOrchestrationPolling {
                     self.projected = SidebarOrchestrationSnapshot(
                         version: raw.version, generatedAt: raw.generatedAt,
                         complete: raw.complete, omittedCount: raw.omittedCount,
-                        nodes: nodes, processes: raw.processes
+                        nodes: nodes, processes: raw.processes, moodsUnavailable: raw.moodsUnavailable
                     )
                     self.retitle(now: self.now())
                     self.availability = SidebarOrchestrationReader.isStale(raw, now: self.now())

@@ -32,6 +32,9 @@ struct SidebarDetailContent: Equatable {
     var needsInput = false
     var petSessionID: UUID? = nil
     var petChoice: String? = nil
+    var petMood: SidebarPetMoodInput = .unavailable
+    /// An exact ended session may retain its pet without live-agent metadata or controls.
+    var showsPet: Bool { isAgent || petSessionID != nil }
     var gitChanges: SidebarGitChanges? { lines.compactMap(\.gitChanges).first }
     var inspection: SidebarInspection? = nil
     var otherActivity: [SidebarCopilotNode] = []
@@ -518,9 +521,24 @@ enum SidebarPresentation {
         // Browser and other native surfaces cannot inherit an old terminal's agent.
         guard [.terminal, .agentSession].contains(surface.kind) else { return result }
         let replaced = replacedSessionIDs(tree, managed: managed.nodes, now: now)
-        let sessions = tree.sessions.filter {
-            $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && $0.liveness != .dead
-                && !replaced.contains($0.id)
+        let occupants = tree.sessions.filter {
+            $0.workspaceID == workspaceID && $0.surfaceID == surfaceID && !replaced.contains($0.id)
+        }
+        let sessions = occupants.filter { $0.liveness != .dead }
+        if sessions.isEmpty, occupants.count == 1, let ended = occupants.first,
+           ended.liveness == .dead, !ended.statusOnly, !tree.hasGlobalPermissionDenial,
+           tree.isCurrent(ended, now: now),
+           tree.generatedAt.map({ ended.observedAt <= $0.addingTimeInterval(1) }) == true,
+           tree.sessions.filter({ $0.id == ended.id }).count == 1,
+           !managed.nodes.contains(where: {
+               $0.workspaceId == workspaceID && $0.surfaceId == surfaceID
+                   && $0.copilotSessionId != nil && $0.copilotSessionId != ended.id
+           }) {
+            result.petSessionID = ended.id
+            result.petChoice = ended.petId
+            result.petMood = .project(session: ended, tree: tree, managed: managed, availability: availability, now: now)
+            result.visual = sessionState(ended)
+            return result
         }
         guard sessions.count == 1, let session = sessions.first,
               tree.sessions.filter({ $0.id == session.id }).count == 1,
@@ -540,6 +558,7 @@ enum SidebarPresentation {
         }
         result.petSessionID = session.id
         result.petChoice = session.petId
+        result.petMood = .project(session: session, tree: tree, managed: managed, availability: availability, now: now)
         result.visual = sessionState(session)
         result.lines = sessionDetails(session).filter {
             ["Model", "Session ID", "Observed", "Child history"].contains($0.title)
@@ -782,7 +801,9 @@ enum SidebarPresentation {
                 isAgent: true,
                 needsInput: managedNeedsInput(node, tree: tree, now: now),
                 petSessionID: managedPet(node, tree: tree, now: now)?.session,
-                petChoice: managedPet(node, tree: tree, now: now)?.choice
+                petChoice: managedPet(node, tree: tree, now: now)?.choice,
+                petMood: .project(session: managedSession(for: node, in: tree, now: now),
+                                  node: node, tree: tree, managed: managed, availability: availability, now: now)
             )
         case .unmanaged(let selection):
             switch selection {
@@ -828,6 +849,7 @@ enum SidebarPresentation {
                 return .init(title: session.sessionName ?? "Copilot · \(session.shortID)", lines: sessionDetails(session) + context,
                              notice: notice, isAgent: true, needsInput: needsInput(session.attention),
                              petSessionID: session.id, petChoice: session.petId,
+                             petMood: .project(session: session, tree: tree, managed: managed, availability: availability, now: now),
                              otherActivity: session.secondaryActivity)
             }
         }
@@ -1462,6 +1484,14 @@ enum SidebarPresentation {
         _ node: SidebarOrchestrationNode, tree: SidebarCopilotTree, now: Date
     ) -> (session: UUID, choice: String?)? {
         if let session = managedSession(for: node, in: tree, now: now) { return (session.id, session.petId) }
+        if let id = node.copilotSessionId, !tree.hasGlobalPermissionDenial {
+            let ended = tree.sessions.filter { $0.id == id }
+            if ended.count == 1, let session = ended.first, session.liveness == .dead,
+               !session.statusOnly, session.workspaceID == node.workspaceId, session.surfaceID == node.surfaceId,
+               tree.isCurrent(session, now: now) {
+                return (session.id, session.petId)
+            }
+        }
         guard isInteractiveSessionPhase(node), let id = node.copilotSessionId,
               let details = tree.managedDetails(id: id, now: now) else { return nil }
         return (id, details.petId)

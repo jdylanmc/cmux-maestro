@@ -5,8 +5,9 @@ import { timingSafeEqual } from "node:crypto";
 import { TextDecoder } from "node:util";
 import { execFile } from "node:child_process";
 import os from "node:os";
-import { MODEL_ID, CONTEXT_TIERS, PREFERENCES, validatePreferences, modelCapabilities } from "./models.mjs";
+import { PREFERENCES, validatePreferences, modelCapabilities, modelObservation } from "./models.mjs";
 import { notificationSpec, notificationTool } from "./notifications.mjs";
+import { moodSpec, moodTool } from "./moods.mjs";
 
 const PEERS = ["a", "b"];
 const MANAGED_PEER = /^[0-9a-f]{16}$/;
@@ -17,27 +18,6 @@ const MAX_FRAME = 8192;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const CAPABILITY = /^[0-9a-f]{64}$/;
 const decoder = new TextDecoder("utf-8", { fatal: true });
-
-function modelObservation(snapshot) {
-  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
-      (snapshot.modelId !== undefined &&
-        (typeof snapshot.modelId !== "string" || !MODEL_ID.test(snapshot.modelId))) ||
-      (snapshot.contextTier !== undefined && !CONTEXT_TIERS.includes(snapshot.contextTier)) ||
-      (snapshot.reasoningEffort !== undefined &&
-        (typeof snapshot.reasoningEffort !== "string" ||
-          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(snapshot.reasoningEffort)))) {
-    return { status: "unavailable", reason: "model-response-invalid" };
-  }
-  if (snapshot.modelId === undefined) {
-    return { status: "unavailable", reason: "model-not-reported" };
-  }
-  return {
-    status: "observed", source: "session-model-current", observedAt: new Date().toISOString(),
-    model: snapshot.modelId,
-    ...(snapshot.contextTier === undefined ? {} : { contextTier: snapshot.contextTier }),
-    ...(snapshot.reasoningEffort === undefined ? {} : { reasoningEffort: snapshot.reasoningEffort }),
-  };
-}
 
 function requireCondition(condition, reason = "Invalid or unavailable proof route.") {
   if (!condition) throw new Error(reason);
@@ -260,6 +240,7 @@ function toolSpecs(managed) {
       },
     },
     maestro_notify: notificationSpec,
+    maestro_mood: moodSpec,
     maestro_close: {
       name: "maestro_close",
       description: "Request an explicitly authorized owned descendant close, or a fixed descendant-first subtree pass with scope: subtree. Selects stock CMUX's documented noninteractive route on the initial admitted request; host refusals stay explicit. Acceptance is not removal or task completion. No removal wait, retry, provider shutdown, or capacity release.",
@@ -303,7 +284,7 @@ function toolSpecs(managed) {
       },
     },
   };
-  if (!managed) for (const key of ["maestro_identity", "maestro_close", "maestro_spawn", "maestro_notify"]) delete specs[key];
+  if (!managed) for (const key of ["maestro_identity", "maestro_close", "maestro_spawn", "maestro_notify", "maestro_mood"]) delete specs[key];
   return specs;
 }
 
@@ -313,6 +294,7 @@ export function managedToolSpecs() {
 
 export async function start({ root, peer, joinSession, managed = false, expected, launch = launchNative,
   notify = (request, controller) => invokeController("native-notify", request, controller),
+  reportMood = (request, controller, signal) => invokeController("native-mood", request, controller, signal),
   closeChild = (request, controller, signal) => invokeController("native-close", request, controller, signal),
   endSession, endGate = sessionEndGate, observe, signal, onListener, custody, diagnostic = () => {
   console.error("Maestro message dropped; no retry.");
@@ -455,6 +437,9 @@ export async function start({ root, peer, joinSession, managed = false, expected
   });
   if (managed) tools.push(notificationTool({
     own, ownAddress, session: () => session, currentBinding, notify, controller: expected.controller,
+  }));
+  if (managed) tools.push(moodTool({
+    own, ownAddress, session: () => session, currentBinding, reportMood, controller: expected.controller, signal,
   }));
   if (managed) tools.push({
     ...specs.maestro_close,

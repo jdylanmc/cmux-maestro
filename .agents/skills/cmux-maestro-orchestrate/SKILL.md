@@ -41,6 +41,18 @@ delivery/read confirmation. Clicks target only the recorded session and
 surface; stale clicks report `Unavailable`. CMUX's optional iPhone forwarding
 does not apply to Maestro's direct macOS notifications.
 
+## Self-report a mood
+
+Optionally call `maestro_mood({"mood":"happy"})` once per meaningful change:
+`happy` after a verified good outcome, `celebrating` for a significant win,
+`confused` for missing or conflicting meaning, `clear` to withdraw. The CLI
+equivalent is
+`"$CMUX_MAESTRO_ORCHESTRATOR" mood --self --session-id "<own-session-uuid>" --mood happy`.
+Never report ordinary errors or routine progress, and never use a mood instead
+of a question, failure report or human decision. It is presentation metadata,
+not evidence of success. Refusals (for example `mood-rate-limited`) are final:
+no automatic retry. Details: `/maestro` and ADR 0031.
+
 ## Start a managed coordinator
 
 A Copilot session started in CMUX after setup is already a born-managed root
