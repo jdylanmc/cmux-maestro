@@ -2682,31 +2682,40 @@ def release_failed_launch_lease(state, node, retiring):
 def reconcile_failed_launch_leases(root, cmux, verify_actor):
     """Native-path counterpart of status's proven-absence lease release for the caller's tree.
 
-    verify_actor(state) is the entry point's full actor authorization, custody included. It runs
-    before any probe and again under the lock, so a caller without authority changes nothing.
-    Probes run outside the lock; only actor-, identity- and lease-unchanged records are released.
-    Anything unproven, unauthorized or unreadable is left for the caller's own guards.
+    verify_actor(state) is the entry point's full actor authorization: identity, invoking session,
+    custody or token. require_invoking_provider_ancestry then proves the caller descends from the
+    actor's exact provider. Both run before any probe and again under the lock, so a caller
+    without authority changes nothing. Probes run outside the lock; only actor-, identity- and
+    lease-unchanged records are released. Anything unproven, unauthorized or unreadable is left
+    for the caller's own guards.
     """
     try:
         snapshot = read_state(root, wait=0)
         actor = verify_actor(snapshot)
     except (OrchestrationError, OSError):
         return
-    proven = []
+    candidates = []
     for node in descendants(snapshot, actor):
         lease = snapshot["launches"].get(node["id"])
-        if (not failed_launch_lease_moot(node, lease, False, True) or not node.get("providerProcess")
-                or not node.get("surfaceId")
-                or lease.get("surfaceId") != node["surfaceId"] or node.get("surfaceUnknown")
-                or process_observation(node["providerProcess"]) is not False):
-            continue
-        if cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is False:
-            proven.append(node["id"])
+        if (failed_launch_lease_moot(node, lease, False, True) and node.get("providerProcess")
+                and node.get("surfaceId") and lease.get("surfaceId") == node["surfaceId"]
+                and not node.get("surfaceUnknown")):
+            candidates.append(node)
+    if not candidates:
+        return
+    try:
+        require_invoking_provider_ancestry(actor)
+    except (OrchestrationError, OSError):
+        return
+    proven = [node["id"] for node in candidates
+              if process_observation(node["providerProcess"]) is False
+              and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is False]
     if not proven:
         return
 
     def release(state, retiring):
-        if verify_actor(state)["id"] != actor["id"] or not observation_matches(snapshot, state, actor["id"]):
+        current = require_invoking_provider_ancestry(verify_actor(state))
+        if current["id"] != actor["id"] or not observation_matches(snapshot, state, actor["id"]):
             raise OrchestrationError("Lease reconciliation actor changed.")
         for identifier in proven:
             node = state["nodes"].get(identifier)
@@ -3155,6 +3164,13 @@ def require_invoking_native_session(state, actor, operation):
                 or str(actor["generation"]) != os.environ.get("CMUX_MAESTRO_GENERATION")):
             raise OrchestrationError(f"{operation} does not match the invoking native session.")
         authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
+
+
+def require_invoking_provider_ancestry(actor):
+    """The invoking process descends from the actor's exact recorded provider; env is not proof."""
+    if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
+        raise OrchestrationError("Invoking provider identity changed.")
+    return actor
 
 
 def verified_native_spawn_actor(state, identity):

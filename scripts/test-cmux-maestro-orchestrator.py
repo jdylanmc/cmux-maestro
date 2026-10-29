@@ -7143,7 +7143,26 @@ class ReservationAndLeaseTests(unittest.TestCase):
                 self.h.spawn_native(task="Unverified", label=label, cwd=self.h.path, env=env, check=False)
                 self.assertIn(node["id"], self.h.state()["launches"])
                 self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "launching")
-        self.h.spawn_native(task="Verified", label="Verified", cwd=self.h.path, env=session, check=False)
+        spawn_globals = CONTROLLER_API["command_native_spawn"].__globals__
+        real_identity = spawn_globals["direct_process_identity"]
+        # Correct env and token, but this test process is outside the recorded provider's tree.
+        with self.subTest(label="Wrong ancestry"), patch.dict(os.environ, session):
+            try:
+                self.h.spawn_in_process(CONTROLLER_API["Cmux"](), task="Unverified", label="Foreign",
+                                        cwd=self.h.path)
+            except CONTROLLER_API["OrchestrationError"]:
+                pass
+            self.assertIn(node["id"], self.h.state()["launches"])
+            self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "launching")
+        with patch.dict(os.environ, session), patch.dict(spawn_globals, {
+            "direct_process_identity": lambda pid: dict(actor["providerProcess"]) if pid == actor["providerProcess"]["pid"]
+            else real_identity(pid),
+        }):
+            try:
+                self.h.spawn_in_process(CONTROLLER_API["Cmux"](), task="Verified", label="Verified",
+                                        cwd=self.h.path)
+            except CONTROLLER_API["OrchestrationError"]:
+                pass
         self.assertNotIn(node["id"], self.h.state()["launches"])
         # With the lease gone, the same spawn's admission reconciliation retires the proven-ended node.
         self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "resource-retired")

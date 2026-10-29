@@ -2676,25 +2676,41 @@ finally:
         before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
         close = CONTROLLER["command_native_close"]
         lost = mock.Mock(side_effect=CONTROLLER["OrchestrationError"](CONTROLLER["CUSTODY_LOST"]))
-        for case in ("wrong-token", "born-custody-lost"):
+        foreign = mock.Mock(side_effect=CONTROLLER["OrchestrationError"]("Direct provider ancestry is unavailable or changed."))
+        for case in ("wrong-token", "born-custody-lost", "wrong-ancestry", "wrong-ancestry-subtree"):
             with self.subTest(case=case):
-                environment, globals_patch = dict(self.environment), {}
+                environment, globals_patch, anchor = dict(self.environment), {}, None
+                request = {"identity": self.identity, "target": self.target}
                 if case == "wrong-token":
                     environment["CMUX_MAESTRO_CONTROL_TOKEN"] = "0" * 64
-                else:
+                elif case == "born-custody-lost":
                     # A second tab resumed the same session: the binding is valid, custody is not.
                     self.actor["enrollment"] = "born"
                     self.persist()
                     before = {file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()}
                     environment["COPILOT_EXTENSION_PARENT_PID"] = "12345"
                     globals_patch["require_born_custody"] = lost
+                else:
+                    # Copied env values and live custody, but the caller is outside the provider tree.
+                    environment["COPILOT_EXTENSION_PARENT_PID"] = "12345"
+                    globals_patch["require_born_custody"] = mock.Mock()
+                    anchor = foreign
+                    if case == "wrong-ancestry-subtree":
+                        request["scope"] = "subtree"
                 with mock.patch.dict(self.environment, environment), \
-                        mock.patch.dict(close.__globals__, globals_patch), \
-                        self.assertRaises(CONTROLLER["OrchestrationError"]):
-                    self.invoke(retire=mock.Mock(side_effect=AssertionError("route retired")))
+                        mock.patch.dict(close.__globals__, globals_patch):
+                    if case == "wrong-ancestry-subtree":
+                        result = self.invoke(request, anchor=anchor,
+                                             retire=mock.Mock(side_effect=AssertionError("route retired")))
+                        self.assertEqual({item["reason"] for item in result["results"]}, {"actor-unavailable"})
+                    else:
+                        with self.assertRaises(CONTROLLER["OrchestrationError"]):
+                            self.invoke(request, anchor=anchor,
+                                        retire=mock.Mock(side_effect=AssertionError("route retired")))
                 self.assertEqual({file: file.read_bytes() for file in self.home.rglob("*") if file.is_file()},
                                  before)
                 self.cmux.surface_exists.assert_not_called()
+        self.assertTrue(foreign.called)
         self.assertTrue(lost.called)
         self.cmux.run.assert_not_called()
 

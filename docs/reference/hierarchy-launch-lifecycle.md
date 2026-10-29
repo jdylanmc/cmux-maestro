@@ -188,8 +188,8 @@ launches cannot infer Copilot never ran: unresolved leases stay retained,
 and missing process anchor blocks reclamation. A failed direct attach releases
 its lease only with exact provider exit and confirmed surface absence; status,
 native close and native spawn run that same release for the caller's tree, only
-after the entry point's full actor, invoking-session and custody checks, which
-repeat under the lock before anything changes. Attach
+after the entry point's full actor, invoking-session, custody and provider-ancestry
+checks, which repeat under the lock before anything changes. Attach
 confirms pane membership from the atomic `surface.list` snapshot, not per-pane
 tab reads. Status captures process and host
 probes outside global write lock. Then it applies only identity/lease-matched
