@@ -802,7 +802,8 @@ enum SidebarPresentation {
                 needsInput: managedNeedsInput(node, tree: tree, now: now),
                 petSessionID: managedPet(node, tree: tree, now: now)?.session,
                 petChoice: managedPet(node, tree: tree, now: now)?.choice,
-                petMood: .project(session: nil, node: node, tree: tree, managed: managed, availability: availability, now: now)
+                petMood: .project(session: managedSession(for: node, in: tree, now: now),
+                                  node: node, tree: tree, managed: managed, availability: availability, now: now)
             )
         case .unmanaged(let selection):
             switch selection {

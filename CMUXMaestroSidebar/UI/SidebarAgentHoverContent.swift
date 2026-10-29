@@ -59,7 +59,8 @@ enum SidebarAgentHoverContent {
                 notice: current ? nil : availability == .stale ? "Observation: Stale" : "Observation: Unavailable",
                 pet: SidebarPresentation.managedPet(node, tree: tree, now: now).map {
                     .init(session: $0.session, choice: $0.choice, input: .project(
-                        session: nil, node: node, tree: tree, managed: managed, availability: availability, now: now))
+                        session: SidebarPresentation.managedSession(for: node, in: tree, now: now),
+                        node: node, tree: tree, managed: managed, availability: availability, now: now))
                 }
             )
         case .session(let id):

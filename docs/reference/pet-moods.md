@@ -11,6 +11,10 @@ snapshot or node timestamps: their age alone does not expire an otherwise
 eligible report. Unavailable observations, invalid stores and cold-start
 suppression still disable the overlay.
 
+For a legacy registered coordinator without a session UUID, hover and inspector
+reuse the existing unique fresh live observation on its exact workspace/surface
+for derived moods. This placement fallback never authorizes a self-report.
+
 The active footer retains a pet for one uniquely identified, freshly observed
 ended session on its surface, so Gone can preempt a hold. This does not restore
 live session names, model text, tags, managed Git fields or copyable paths.
