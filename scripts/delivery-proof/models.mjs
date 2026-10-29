@@ -10,6 +10,27 @@ function check(condition, reason) {
   if (!condition) throw new Error(reason);
 }
 
+export function modelObservation(snapshot) {
+  if (!snapshot || typeof snapshot !== "object" || Array.isArray(snapshot) ||
+      (snapshot.modelId !== undefined &&
+        (typeof snapshot.modelId !== "string" || !MODEL_ID.test(snapshot.modelId))) ||
+      (snapshot.contextTier !== undefined && !CONTEXT_TIERS.includes(snapshot.contextTier)) ||
+      (snapshot.reasoningEffort !== undefined &&
+        (typeof snapshot.reasoningEffort !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(snapshot.reasoningEffort)))) {
+    return { status: "unavailable", reason: "model-response-invalid" };
+  }
+  if (snapshot.modelId === undefined) {
+    return { status: "unavailable", reason: "model-not-reported" };
+  }
+  return {
+    status: "observed", source: "session-model-current", observedAt: new Date().toISOString(),
+    model: snapshot.modelId,
+    ...(snapshot.contextTier === undefined ? {} : { contextTier: snapshot.contextTier }),
+    ...(snapshot.reasoningEffort === undefined ? {} : { reasoningEffort: snapshot.reasoningEffort }),
+  };
+}
+
 export function validatePreferences(assignment) {
   for (const key of PREFERENCES) {
     if (!(key in assignment)) continue;

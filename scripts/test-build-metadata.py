@@ -2082,10 +2082,11 @@ class BuildMetadataTests(unittest.TestCase):
         (resources / "processes.mjs").write_text("// synthetic process passes\n")
         (resources / "models.mjs").write_text("// synthetic model projection\n")
         (resources / "notifications.mjs").write_text("// synthetic notifications\n")
+        (resources / "moods.mjs").write_text("// synthetic moods\n")
         self.save()
 
     def test_messaging_resources_are_required_for_every_build_profile(self):
-        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs"):
+        for name in ("adapter.mjs", "extension.mjs", "processes.mjs", "models.mjs", "notifications.mjs", "moods.mjs"):
             with self.subTest(name=name):
                 self.fixture("tests")
                 (self.app / "Contents/Resources" / name).unlink()

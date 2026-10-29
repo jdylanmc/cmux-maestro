@@ -1166,6 +1166,7 @@ with installer.locked():
             (resources / "processes.mjs").write_text("// synthetic process passes\n")
             (resources / "models.mjs").write_text("// synthetic model projection\n")
             (resources / "notifications.mjs").write_text("// synthetic notifications\n")
+            (resources / "moods.mjs").write_text("// synthetic moods\n")
         parent = {"CFBundleIdentifier": metadata.BASE_ID, "CFBundlePackageType": "APPL",
                   "CFBundleVersion": version, "CFBundleExecutable": "Preview",
                   "NSUserActivityTypes": ["INSendMessageIntent"],

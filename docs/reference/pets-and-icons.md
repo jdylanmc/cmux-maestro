@@ -93,6 +93,11 @@ Wholly undrawn mood rows copy the map's fallback; partly drawn rows fail.
 Row 10 stays transparent. Native imports validate geometry and decoding, not
 art quality or blank-row content. Draw distinct mood art when authoring a full atlas.
 
+Agents may self-report an enum-only mood for their own session
+([self-reported moods](self-reported-moods.md), ADR 0031). The sidebar reads it
+as labelled metadata only; selecting pet rows from these reports remains
+separate resolver work (#382).
+
 ### Reproduce the bundled art
 
 The original project's legacy drawing code remains in

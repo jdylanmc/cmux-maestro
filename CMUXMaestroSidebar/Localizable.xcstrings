@@ -34,6 +34,39 @@
       "zh-Hans": {"stringUnit":{"state":"translated","value":"上限：20,480 个精确标识 / 4 MiB。不自动过期。重置会清除所有已保存的已读记录；已读通知可能重新出现。"}},
       "zh-Hant": {"stringUnit":{"state":"translated","value":"上限：20,480 個精確識別碼 / 4 MiB。不自動到期。重設會清除所有已儲存的已讀記錄；已讀通知可能重新出現。"}}
     }},
+    "mood.selfReported.happy" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Self-reported: happy"}},
+      "ja": {"stringUnit":{"state":"translated","value":"自己申告: うれしい"}},
+      "de": {"stringUnit":{"state":"translated","value":"Selbst gemeldet: glücklich"}},
+      "fr": {"stringUnit":{"state":"translated","value":"État déclaré : heureux"}},
+      "es": {"stringUnit":{"state":"translated","value":"Estado declarado: feliz"}},
+      "ar": {"stringUnit":{"state":"translated","value":"حالة مُبلَّغ عنها ذاتيًا: سعيد"}},
+      "ko": {"stringUnit":{"state":"translated","value":"직접 보고한 상태: 기쁨"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"自行报告：开心"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"自行回報：開心"}}
+    }},
+    "mood.selfReported.celebrating" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Self-reported: celebrating"}},
+      "ja": {"stringUnit":{"state":"translated","value":"自己申告: お祝い中"}},
+      "de": {"stringUnit":{"state":"translated","value":"Selbst gemeldet: feiernd"}},
+      "fr": {"stringUnit":{"state":"translated","value":"État déclaré : en fête"}},
+      "es": {"stringUnit":{"state":"translated","value":"Estado declarado: celebrando"}},
+      "ar": {"stringUnit":{"state":"translated","value":"حالة مُبلَّغ عنها ذاتيًا: يحتفل"}},
+      "ko": {"stringUnit":{"state":"translated","value":"직접 보고한 상태: 축하 중"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"自行报告：庆祝"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"自行回報：慶祝"}}
+    }},
+    "mood.selfReported.confused" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Self-reported: confused"}},
+      "ja": {"stringUnit":{"state":"translated","value":"自己申告: 困惑"}},
+      "de": {"stringUnit":{"state":"translated","value":"Selbst gemeldet: verwirrt"}},
+      "fr": {"stringUnit":{"state":"translated","value":"État déclaré : perplexe"}},
+      "es": {"stringUnit":{"state":"translated","value":"Estado declarado: confundido"}},
+      "ar": {"stringUnit":{"state":"translated","value":"حالة مُبلَّغ عنها ذاتيًا: مرتبك"}},
+      "ko": {"stringUnit":{"state":"translated","value":"직접 보고한 상태: 혼란"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"自行报告：困惑"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"自行回報：困惑"}}
+    }},
     "pet.change" : { "extractionState": "manual", "localizations": {
       "en": {"stringUnit":{"state":"translated","value":"Change pet"}},
       "ja": {"stringUnit":{"state":"translated","value":"ペットを変更"}},
