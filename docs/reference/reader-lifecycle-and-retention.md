@@ -148,9 +148,15 @@ activity. It cannot silently acknowledge already-recorded outcomes or requests.
 Acknowledgements persist by provider-session UUID, owner ID (or primary owner),
 source and stable accepted event UUID. Labels, paths, tool payloads and topology
 are not keys. Same outcome stays acknowledged after reload or surface
-moves. New outcome reappears. Storage is versioned and bounded to **2,048
-acknowledgements / 1 MiB**. It refuses overflowing batches without eviction and
-offers **Reset acknowledgements**. Corruption fails open with visible warning:
+moves. New outcome reappears. The version-2 exact-key archive groups accepted
+event UUIDs by session UUID and owner (empty owner denotes the primary owner);
+the schema fixes the source to `copilot.events`. It retains every key, including
+absent sessions, with no age, topology, or tail-window eviction.
+Storage is bounded to **20,480 acknowledgements / 4 MiB**. Long owner identifiers
+can reach the byte cap first. It refuses overflowing batches without eviction and
+offers **Reset acknowledgements** directly in the warning. Reset clears every
+saved acknowledgement; previously read notices may reappear, including after
+source replay. Corruption fails open with visible warning:
 unreadable settings hide no attention.
 
 Acknowledgements use same coordinated action store as history, in the
@@ -163,7 +169,14 @@ view. Later acknowledgements stay later actions, not restored stale snapshots.
 
 Validate old `sidebar.attention.v1` defaults record and import it once
 under same lock. File is authoritative after that. Remove legacy key
-only after successful persistence/read. Corrupt or future-schema files
+only after successful persistence/read. Valid version-1 files/defaults retain
+their original 2,048-record / 1 MiB validation limits and migrate losslessly
+inside the next successful acknowledgement action. Reads alone do not rewrite
+them. A failed action leaves the original bytes intact. Version 2 uses the same
+file and coordination, so migration, union and reset need no cross-file commit.
+Older app versions cannot read version 2 and fail open; do not reset from an older
+version if the retained acknowledgements are needed.
+Corrupt or future-schema files
 and legacy data fail open. Ordinary acknowledgement
 actions leave them untouched. Only **Reset acknowledgements** replaces them. Failed migration keeps
 legacy data for retry. Tests inject both history and acknowledgement files.

@@ -9,6 +9,10 @@ Notable changes are recorded using Keep a Changelog categories.
 - Explicitly authorized close requests may target any exact owned descendant,
   not only immediate children. Self, ancestors and unrelated sessions remain
   excluded; target-only never closes the selected session's descendants (#377).
+- Acknowledgements use a lossless compact archive with room for 20,480 exact
+  identities / 4 MiB. Valid old records migrate on the next acknowledgement;
+  no identities expire or are evicted. Capacity warnings offer a direct reset
+  and explain that previously read notices may reappear (#392).
 - Bundled Maestro has 15 original mood expressions, including a distinct
   Startled face, while preserving all legacy poses. Mood art does not change
   state selection (#383).
