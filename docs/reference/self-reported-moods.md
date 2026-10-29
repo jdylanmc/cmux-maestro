@@ -80,6 +80,13 @@ Same-sequence mutation, rollback, tombstone, missing record, invalid file or
 binding mismatch cannot resurrect a report. A new reader intentionally loses
 eligibility, not sequencing safety.
 
+Host disconnects, unpaired windows, and connection rebinds revoke eligibility
+in the retained reader and require a new valid baseline before displaying later
+reports. The reset runs after any obsolete in-flight read finishes and before
+the replacement read. High-water marks and their no-eviction capacity survive
+the boundary; unchanged claims and reports written while disconnected cannot
+replay. Ordinary topology refreshes and visibility changes do not reset eligibility.
+
 The session node exposes `selfReportedMood: SidebarMoodObservation.Mood?` and
 `selfReportedMoodSequence: Int?`. `clear` is never exposed as a displayed mood;
 the sequence remains available for withdrawal/cold-start suppression.
