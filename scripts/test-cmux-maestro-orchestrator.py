@@ -518,7 +518,7 @@ try:
         if state.get("inventoryUnavailable"):
             raise SystemExit("synthetic host inventory unavailable")
         result = {"workspace_id": workspace, "surfaces": [
-            {"id": item, "render_health": "not_started"} for item in state["surfaces"]
+            {"id": item, "pane_id": state["pane"], "render_health": "not_started"} for item in state["surfaces"]
         ]}
     elif command == "rpc" and args[args.index("rpc") + 1] == "surface.close":
         closing = json.loads(args[args.index("rpc") + 2])
@@ -535,6 +535,9 @@ try:
         state["surfaces"].append(surface)
         state["buffers"][surface] = ""
         state.setdefault("attaching", {})[surface] = os.getppid()
+        if os.environ.get("FAKE_UNLISTED_TAB"):
+            # The pane's tab listing lags the host's surface inventory for this surface.
+            state.setdefault("unlistedTabs", []).append(surface)
         result = {"surface_id": surface, "pane_id": state["pane"], "workspace_id": workspace}
         bootstrap = creation.get("initial_command")
         if bootstrap:
@@ -596,7 +599,8 @@ os.execv(sys.argv[1], sys.argv[1:])
     elif command == "list-pane-surfaces":
         if value("--pane") != state["pane"]:
             raise SystemExit("wrong pane")
-        result = {"surfaces": [{"surface_id": item} for item in state["surfaces"]]}
+        result = {"surfaces": [{"surface_id": item} for item in state["surfaces"]
+                               if item not in state.get("unlistedTabs", [])]}
     elif command == "rename-tab":
         if value("--surface") not in state["surfaces"] or "--" not in args:
             raise SystemExit("invalid rename")
@@ -7122,6 +7126,56 @@ class ReservationAndLeaseTests(unittest.TestCase):
         self.assertIn(node["id"], self.h.state()["launches"])
         refused = self.h.run("archive", "--actor-id", self.h.node, "--token", self.h.token, check=False)
         self.assertNotEqual(refused["returncode"], 0)
+
+    def test_native_spawn_releases_a_failed_lease_only_for_the_verified_invoking_session(self):
+        node = self.failed_attach()
+        self.h.change_state(lambda state: state["nodes"][node["id"]].update(providerProcess=self.dead_process()))
+        self.h.remove_surface(node["surfaceId"])
+        actor = self.h.state()["nodes"][self.h.node]
+        session = {
+            **self.h.env, "CMUX_MAESTRO_WORKER_ID": actor["id"], "SESSION_ID": actor["copilotSessionId"],
+            "CMUX_MAESTRO_RUN_ID": actor["runId"], "CMUX_MAESTRO_GENERATION": str(actor["generation"]),
+            "CMUX_MAESTRO_CONTROL_TOKEN": self.h.token,
+        }
+        for label, env in (("No session", self.h.env),
+                           ("Wrong token", {**session, "CMUX_MAESTRO_CONTROL_TOKEN": "0" * 64})):
+            with self.subTest(label=label):
+                self.h.spawn_native(task="Unverified", label=label, cwd=self.h.path, env=env, check=False)
+                self.assertIn(node["id"], self.h.state()["launches"])
+                self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "launching")
+        spawn_globals = CONTROLLER_API["command_native_spawn"].__globals__
+        real_identity = spawn_globals["direct_process_identity"]
+        # Correct env and token, but this test process is outside the recorded provider's tree.
+        with self.subTest(label="Wrong ancestry"), patch.dict(os.environ, session):
+            try:
+                self.h.spawn_in_process(CONTROLLER_API["Cmux"](), task="Unverified", label="Foreign",
+                                        cwd=self.h.path)
+            except CONTROLLER_API["OrchestrationError"]:
+                pass
+            self.assertIn(node["id"], self.h.state()["launches"])
+            self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "launching")
+        with patch.dict(os.environ, session), patch.dict(spawn_globals, {
+            "direct_process_identity": lambda pid: dict(actor["providerProcess"]) if pid == actor["providerProcess"]["pid"]
+            else real_identity(pid),
+        }):
+            try:
+                self.h.spawn_in_process(CONTROLLER_API["Cmux"](), task="Verified", label="Verified",
+                                        cwd=self.h.path)
+            except CONTROLLER_API["OrchestrationError"]:
+                pass
+        self.assertNotIn(node["id"], self.h.state()["launches"])
+        # With the lease gone, the same spawn's admission reconciliation retires the proven-ended node.
+        self.assertEqual(self.h.state()["nodes"][node["id"]]["phase"], "resource-retired")
+
+    def test_attach_finds_a_new_surface_the_pane_tab_listing_omits(self):
+        receipt = self.h.spawn_native(task="Listed late", label="Lagging tab", cwd=self.h.path,
+                                      env={**self.h.env, "FAKE_UNLISTED_TAB": "1"})
+        self.assertTrue(receipt["launchAccepted"])
+        self.assertIn(receipt["surfaceId"], self.h.cmux_data()["unlistedTabs"])
+        node = self.h.state()["nodes"][receipt["workerId"]]
+        self.assertEqual(node["paneId"], self.h.pane)
+        self.assertNotIn("launchError", node)
+        self.assertEqual(self.h.state()["launches"], {})
 
 
 class RoutePublicationTests(unittest.TestCase):

@@ -2036,21 +2036,12 @@ class Cmux:
             return None
 
     def find_pane(self, workspace, surface):
-        panes = self.run("list-panes", "--workspace", workspace)
-        candidates = []
-        for candidate in self.ids(panes, {"id", "paneid", "uuid"}):
-            if candidate not in candidates and candidate != workspace:
-                candidates.append(candidate)
-        for pane in candidates:
-            try:
-                listing = self.run(
-                    "list-pane-surfaces", "--workspace", workspace, "--pane", pane
-                )
-            except OrchestrationError:
-                continue
-            if surface in self.ids(listing, {"id", "surfaceid", "uuid"}):
-                return pane
-        raise OrchestrationError("The exact surface is not in a current pane of that workspace.")
+        # One surface.list snapshot, like workspace_surfaces: per-pane tab reads are separate
+        # host reads and can transiently omit a just-created surface from its pane.
+        pane = self.surface_inventory(workspace).get(surface)
+        if pane is None:
+            raise OrchestrationError("The exact surface is not in a current pane of that workspace.")
+        return pane
 
     def surface_tty(self, workspace, surface):
         """The controlling TTY CMUX reports for one exact surface (`top`), or None."""
@@ -2091,20 +2082,28 @@ class Cmux:
         return result.returncode == 0
 
     def workspace_surfaces(self, workspace):
+        return set(self.surface_inventory(workspace))
+
+    def surface_inventory(self, workspace):
+        """Each listed surface's pane (None when unreported), from one host snapshot."""
         # surface.list takes one host main-actor snapshot. Separate pane reads
         # can miss a live surface moved into an already-read pane.
         listing = self.run("rpc", "surface.list", json.dumps({"workspace_id": workspace}))
         if (not isinstance(listing, dict) or not isinstance(listing.get("surfaces"), list)
                 or canonical_uuid(listing.get("workspace_id"), "inventory workspace") != workspace):
             raise OrchestrationError("CMUX workspace surface inventory is unavailable.")
-        surfaces = set()
+        surfaces = {}
         for item in listing["surfaces"]:
             if not isinstance(item, dict):
                 raise OrchestrationError("CMUX surface inventory has invalid identity.")
             surface = canonical_uuid(item.get("id"), "inventory surface")
             if surface in surfaces:
                 raise OrchestrationError("CMUX surface inventory has duplicate identity.")
-            surfaces.add(surface)
+            try:
+                # An unreported or malformed pane stays unknown; it never invalidates the inventory.
+                surfaces[surface] = canonical_uuid(item.get("pane_id"), "inventory pane")
+            except OrchestrationError:
+                surfaces[surface] = None
         return surfaces
 
     def create_surface(self, workspace, pane, cwd, command=None):
@@ -2665,6 +2664,70 @@ def reconcile_resources(state, snapshot, observations, retained_gone):
     ]
 
 
+def failed_launch_lease_moot(node, lease, surface, exited):
+    """A failed direct attach whose provider exit and surface absence are proven.
+
+    Nothing remains for its lease to fence. A missing provider anchor is never exit proof.
+    """
+    return bool(is_direct_launch(node) and node.get("launchError") and lease is not None
+                and exited is True and surface is False)
+
+
+def release_failed_launch_lease(state, node, retiring):
+    del state["launches"][node["id"]]
+    node["phase"], node["availability"], node["updatedAt"] = "terminal-disappeared", "unavailable", now()
+    retiring.append(node)
+
+
+def reconcile_failed_launch_leases(root, cmux, verify_actor):
+    """Native-path counterpart of status's proven-absence lease release for the caller's tree.
+
+    verify_actor(state) is the entry point's full actor authorization: identity, invoking session,
+    custody or token. require_invoking_provider_ancestry then proves the caller descends from the
+    actor's exact provider. Both run before any probe and again under the lock, so a caller
+    without authority changes nothing. Probes run outside the lock; only actor-, identity- and
+    lease-unchanged records are released. Anything unproven, unauthorized or unreadable is left
+    for the caller's own guards.
+    """
+    try:
+        snapshot = read_state(root, wait=0)
+        actor = verify_actor(snapshot)
+    except (OrchestrationError, OSError):
+        return
+    candidates = []
+    for node in descendants(snapshot, actor):
+        lease = snapshot["launches"].get(node["id"])
+        if (failed_launch_lease_moot(node, lease, False, True) and node.get("providerProcess")
+                and node.get("surfaceId") and lease.get("surfaceId") == node["surfaceId"]
+                and not node.get("surfaceUnknown")):
+            candidates.append(node)
+    if not candidates:
+        return
+    try:
+        require_invoking_provider_ancestry(actor)
+    except (OrchestrationError, OSError):
+        return
+    proven = [node["id"] for node in candidates
+              if process_observation(node["providerProcess"]) is False
+              and cmux.surface_exists(node["workspaceId"], node["surfaceId"]) is False]
+    if not proven:
+        return
+
+    def release(state, retiring):
+        current = require_invoking_provider_ancestry(verify_actor(state))
+        if current["id"] != actor["id"] or not observation_matches(snapshot, state, actor["id"]):
+            raise OrchestrationError("Lease reconciliation actor changed.")
+        for identifier in proven:
+            node = state["nodes"].get(identifier)
+            if (observation_matches(snapshot, state, identifier)
+                    and failed_launch_lease_moot(node, state["launches"].get(identifier), False, True)):
+                release_failed_launch_lease(state, node, retiring)
+    try:
+        mutate_retiring_routes(root, release, wait=0)
+    except (OrchestrationError, OSError):
+        pass
+
+
 def record_launch_failure(state, worker_id, surface=None, *, phase="launch-failed"):
     node = state["nodes"].get(worker_id)
     if node is not None and is_direct_launch(node) and (
@@ -3085,6 +3148,38 @@ def authorize_native_spawn(state, identity):
     return actor
 
 
+def require_invoking_native_session(state, actor, operation):
+    """The invoking process is the actor's own live session: born custody, or launcher token."""
+    if actor.get("enrollment") == "born":
+        # A born root has no launcher token: its exact session and provider are its authority.
+        if (actor["copilotSessionId"] != os.environ.get("SESSION_ID")
+                or str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
+                or not process_matches(actor)):
+            raise OrchestrationError(f"{operation} does not match the invoking native session.")
+        require_born_custody(actor)
+    else:
+        if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
+                or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
+                or actor["runId"] != os.environ.get("CMUX_MAESTRO_RUN_ID")
+                or str(actor["generation"]) != os.environ.get("CMUX_MAESTRO_GENERATION")):
+            raise OrchestrationError(f"{operation} does not match the invoking native session.")
+        authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
+
+
+def require_invoking_provider_ancestry(actor):
+    """The invoking process descends from the actor's exact recorded provider; env is not proof."""
+    if direct_process_identity(actor["providerProcess"]["pid"]) != actor["providerProcess"]:
+        raise OrchestrationError("Invoking provider identity changed.")
+    return actor
+
+
+def verified_native_spawn_actor(state, identity):
+    """Spawn's actor authorization plus the invoking-session proof, for lease reconciliation."""
+    actor = authorize_native_spawn(state, identity)
+    require_invoking_native_session(state, actor, "Spawn")
+    return actor
+
+
 def command_native_spawn(root, cmux):
     try:
         raw = sys.stdin.buffer.read(65_537)
@@ -3122,6 +3217,8 @@ def command_native_spawn(root, cmux):
         model=assignment.get("model"), context_tier=assignment.get("contextTier"),
         reasoning_effort=assignment.get("reasoningEffort"), launch_capabilities=request.get("launchCapabilities"),
     )
+    reconcile_failed_launch_leases(root, cmux, lambda state: verified_native_spawn_actor(
+        state, request["identity"]))
     return command_spawn(args, root, cmux, native_identity=request["identity"])
 
 
@@ -4711,28 +4808,20 @@ def native_close_request(root, cmux, request):
     target_identity = request["target"]
     subtree = request.get("scope") == "subtree"
 
-    def owned(state, identity=target_identity, *, selecting=False):
+    def verified_actor(state):
+        """The invoking session's full close authority: identity, session, custody and token."""
         native_identity = request["identity"]
         node_id = native_identity.get("nodeId") if isinstance(native_identity, dict) else None
         stored_actor = state["nodes"].get(node_id) if isinstance(node_id, str) else None
         if stored_actor and not stored_actor.get("copilotSessionId"):
             raise OrchestrationError("Native session identity changed.")
         actor = authorize_native_actor(state, request["identity"])
-        if actor.get("enrollment") == "born":
-            # A born root has no launcher token: its exact session and provider are its authority.
-            if (actor["copilotSessionId"] != os.environ.get("SESSION_ID")
-                    or str(actor["providerProcess"]["pid"]) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")
-                    or not process_matches(actor)):
-                raise OrchestrationError("Close does not match the invoking native session.")
-            require_born_custody(actor)
-        else:
-            if (actor["id"] != os.environ.get("CMUX_MAESTRO_WORKER_ID")
-                    or actor["copilotSessionId"] != os.environ.get("SESSION_ID")
-                    or actor["runId"] != os.environ.get("CMUX_MAESTRO_RUN_ID")
-                    or str(actor["generation"]) != os.environ.get("CMUX_MAESTRO_GENERATION")):
-                raise OrchestrationError("Close does not match the invoking native session.")
-            authorize(state, actor["id"], os.environ.get("CMUX_MAESTRO_CONTROL_TOKEN"))
+        require_invoking_native_session(state, actor, "Close")
         require_current_surface(actor["workspaceId"], actor["surfaceId"])
+        return actor
+
+    def owned(state, identity=target_identity, *, selecting=False):
+        actor = verified_actor(state)
         target = ensure_owned(state, actor, identity["workerId"])
         if target["id"] == actor["id"]:
             raise OrchestrationError("Target is outside the actor's owned orchestration tree.")
@@ -4750,9 +4839,15 @@ def native_close_request(root, cmux, request):
                     or is_direct_launch(node) and node.get("enrollment") != "born"
                     and node.get("launchAccepted") is not True):
                 raise OrchestrationError("Close ownership is unresolved or no longer current.")
-        if any(lease["runId"] == actor["runId"] for lease in state["launches"].values()):
-            raise OrchestrationError("Close refuses an active run launch lease.")
+        # A lease fences its own node and surface: never cross one in the closing subtree
+        # or on a closing surface, but an unrelated sibling's lease does not block.
+        fenced = {item["id"] for item in descendants(state, target)} | {actor["id"]}
+        if any(identifier in fenced or lease.get("surfaceId") in (target["surfaceId"], actor["surfaceId"])
+               for identifier, lease in state["launches"].items()):
+            raise OrchestrationError("Close refuses an active launch lease in the target subtree.")
         return actor, target
+
+    reconcile_failed_launch_leases(root, cmux, verified_actor)
 
     snapshot = read_state(root, wait=0) if subtree else read_state(root)
     actor, target = owned(snapshot, selecting=request.get("scope") == "subtree")
@@ -7522,16 +7617,11 @@ def command_status(args, root, cmux):
                         node["phase"], node["availability"], node["updatedAt"] = (
                             "terminal-disappeared", "unavailable", now()
                         )
-                    elif (node.get("launchError") and exited and surface is False
-                            and node["id"] in state["launches"]
+                    elif (failed_launch_lease_moot(node, state["launches"].get(node["id"]), surface, exited)
                             and state["launches"][node["id"]] == snapshot["launches"].get(node["id"])):
                         # Failed attach with exact provider exit and surface absence proven:
                         # nothing remains to fence, so the lease no longer protects anything.
-                        del state["launches"][node["id"]]
-                        node["phase"], node["availability"], node["updatedAt"] = (
-                            "terminal-disappeared", "unavailable", now()
-                        )
-                        retiring.append(node)
+                        release_failed_launch_lease(state, node, retiring)
                         cancelled.append(node["id"])
                     continue
                 if (node["phase"] == "launching" and node.get("surfaceId") and surface is False

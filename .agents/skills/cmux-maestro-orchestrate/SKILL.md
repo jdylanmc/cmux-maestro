@@ -518,7 +518,9 @@ OS parentage, PID/start and marker identity must remain stable across preflight;
 the launch anchor is never rewritten to the marker PID. Deeper, unrelated or
 sibling owners refuse, without executable-name guessing. Missing, stale,
 ambiguous or repurposed evidence and an ended/zombie launch or source owner
-refuse. Active run launch leases and unresolved ownership refuse. No provider
+refuse. Active launch leases on the target, its descendants, the actor or either
+surface refuse, as does unresolved ownership; an unrelated sibling's failed
+launch lease does not. No provider
 shutdown is required or attempted before closing an eligible live child.
 
 Admission issues **one stock CMUX `surface.close`** request per eligible target.
