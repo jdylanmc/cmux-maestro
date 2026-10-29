@@ -748,9 +748,14 @@ struct SidebarView: View {
                     .accessibilityIdentifier("sidebar-tag-notice")
             }
             if let notice = preferences.attentionNotice {
-                Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("sidebar-attention-notice")
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("sidebar-attention-notice")
+                    Button(String(localized: "attention.reset", defaultValue: "Reset acknowledgements"), action: resetAcknowledgements)
+                        .font(.caption2)
+                        .accessibilityIdentifier("sidebar-attention-notice-reset")
+                }
             }
             if let notice = preferences.layoutNotice {
                 Text(notice).font(.caption2).foregroundStyle(SidebarTone.attention.color)
@@ -1014,6 +1019,11 @@ struct SidebarView: View {
         model.copilot.updateAttention(preferences.attention)
     }
 
+    private func resetAcknowledgements() {
+        preferences.resetAcknowledgements()
+        model.copilot.updateAttention(preferences.attention)
+    }
+
     private func prepareSeen(_ target: SidebarSeenTarget) -> () -> Void {
         let captured = SidebarSeenWork.capture(
             target, tree: model.copilot.tree
@@ -1228,12 +1238,9 @@ struct SidebarView: View {
             Text("Focusing a tab or opening details marks its nonblocking notices as read. Permissions and questions still require a response in the agent. Turn finished does not mean background work ended.")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("Reset acknowledgements") {
-                preferences.resetAcknowledgements()
-                model.copilot.updateAttention(preferences.attention)
-            }
+            Button(String(localized: "attention.reset", defaultValue: "Reset acknowledgements"), action: resetAcknowledgements)
             .disabled(preferences.attention.acknowledged.isEmpty && preferences.attentionNotice == nil)
-            Text("Limit: 2,048 identities / 1 MiB. Reset reveals current outstanding outcomes, not all past completions.")
+            Text(String(localized: "attention.storage.limit", defaultValue: "Limit: 20,480 exact identities / 4 MiB. No automatic expiry. Reset clears all saved acknowledgements; previously read notices may reappear."))
                 .font(.caption2).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

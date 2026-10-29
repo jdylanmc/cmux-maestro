@@ -7,4 +7,9 @@ nonisolated protocol SidebarPreferenceValue: Codable, Equatable, Sendable {
     static var unreadableNotice: String { get }
     static var saveNotice: String { get }
     var isValid: Bool { get }
+    var maximumEncodedBytes: Int { get }
+}
+
+extension SidebarPreferenceValue {
+    nonisolated var maximumEncodedBytes: Int { Self.maximumStoredBytes }
 }

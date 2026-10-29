@@ -106,6 +106,39 @@
       "zh-Hans": {"stringUnit":{"state":"translated","value":"自行报告：困惑"}},
       "zh-Hant": {"stringUnit":{"state":"translated","value":"自行回報：困惑"}}
     }},
+    "attention.reset" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Reset acknowledgements"}},
+      "ja": {"stringUnit":{"state":"translated","value":"確認済みの記録をリセット"}},
+      "de": {"stringUnit":{"state":"translated","value":"Bestätigungen zurücksetzen"}},
+      "fr": {"stringUnit":{"state":"translated","value":"Réinitialiser les confirmations"}},
+      "es": {"stringUnit":{"state":"translated","value":"Restablecer confirmaciones"}},
+      "ar": {"stringUnit":{"state":"translated","value":"إعادة تعيين إقرارات القراءة"}},
+      "ko": {"stringUnit":{"state":"translated","value":"읽음 확인 초기화"}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"重置已读记录"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"重設已讀記錄"}}
+    }},
+    "attention.storage.full" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Acknowledgement archive is full (20,480 identities / 4 MiB). Nothing new was acknowledged. Reset clears all saved acknowledgements; previously read notices may reappear."}},
+      "ja": {"stringUnit":{"state":"translated","value":"確認済み記録のアーカイブが満杯です（20,480 件の識別情報 / 4 MiB）。新たな確認は保存されませんでした。リセットすると保存済みの確認記録がすべて消去され、既読の通知が再表示される場合があります。"}},
+      "de": {"stringUnit":{"state":"translated","value":"Das Bestätigungsarchiv ist voll (20.480 Identitäten / 4 MiB). Keine neue Bestätigung wurde gespeichert. Zurücksetzen löscht alle gespeicherten Bestätigungen; bereits gelesene Hinweise können erneut erscheinen."}},
+      "fr": {"stringUnit":{"state":"translated","value":"L’archive des confirmations est pleine (20 480 identités / 4 MiB). Aucune nouvelle confirmation n’a été enregistrée. La réinitialisation efface toutes les confirmations enregistrées ; des avis déjà lus peuvent réapparaître."}},
+      "es": {"stringUnit":{"state":"translated","value":"El archivo de confirmaciones está lleno (20.480 identidades / 4 MiB). No se guardó ninguna confirmación nueva. Restablecer borra todas las confirmaciones guardadas; los avisos ya leídos pueden reaparecer."}},
+      "ar": {"stringUnit":{"state":"translated","value":"أرشيف إقرارات القراءة ممتلئ (20,480 هوية / 4 MiB). لم يُحفظ أي إقرار جديد. تمسح إعادة التعيين جميع الإقرارات المحفوظة؛ وقد تظهر إشعارات مقروءة سابقًا من جديد."}},
+      "ko": {"stringUnit":{"state":"translated","value":"읽음 확인 보관함이 가득 찼습니다(식별자 20,480개 / 4 MiB). 새 읽음 확인은 저장되지 않았습니다. 초기화하면 저장된 모든 읽음 확인이 지워지며, 이전에 읽은 알림이 다시 표시될 수 있습니다."}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"已读记录存档已满（20,480 个标识 / 4 MiB）。未保存新的已读记录。重置会清除所有已保存的已读记录；已读通知可能重新出现。"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"已讀記錄封存已滿（20,480 個識別碼 / 4 MiB）。未儲存新的已讀記錄。重設會清除所有已儲存的已讀記錄；已讀通知可能重新出現。"}}
+    }},
+    "attention.storage.limit" : { "extractionState": "manual", "localizations": {
+      "en": {"stringUnit":{"state":"translated","value":"Limit: 20,480 exact identities / 4 MiB. No automatic expiry. Reset clears all saved acknowledgements; previously read notices may reappear."}},
+      "ja": {"stringUnit":{"state":"translated","value":"上限：20,480 件の正確な識別情報 / 4 MiB。自動的に期限切れにはなりません。リセットすると保存済みの確認記録がすべて消去され、既読の通知が再表示される場合があります。"}},
+      "de": {"stringUnit":{"state":"translated","value":"Limit: 20.480 exakte Identitäten / 4 MiB. Kein automatischer Ablauf. Zurücksetzen löscht alle gespeicherten Bestätigungen; bereits gelesene Hinweise können erneut erscheinen."}},
+      "fr": {"stringUnit":{"state":"translated","value":"Limite : 20 480 identités exactes / 4 MiB. Aucune expiration automatique. La réinitialisation efface toutes les confirmations enregistrées ; des avis déjà lus peuvent réapparaître."}},
+      "es": {"stringUnit":{"state":"translated","value":"Límite: 20.480 identidades exactas / 4 MiB. Sin caducidad automática. Restablecer borra todas las confirmaciones guardadas; los avisos ya leídos pueden reaparecer."}},
+      "ar": {"stringUnit":{"state":"translated","value":"الحد: 20,480 هوية دقيقة / 4 MiB. لا انتهاء تلقائي للصلاحية. تمسح إعادة التعيين جميع الإقرارات المحفوظة؛ وقد تظهر إشعارات مقروءة سابقًا من جديد."}},
+      "ko": {"stringUnit":{"state":"translated","value":"한도: 정확한 식별자 20,480개 / 4 MiB. 자동 만료되지 않습니다. 초기화하면 저장된 모든 읽음 확인이 지워지며, 이전에 읽은 알림이 다시 표시될 수 있습니다."}},
+      "zh-Hans": {"stringUnit":{"state":"translated","value":"上限：20,480 个精确标识 / 4 MiB。不自动过期。重置会清除所有已保存的已读记录；已读通知可能重新出现。"}},
+      "zh-Hant": {"stringUnit":{"state":"translated","value":"上限：20,480 個精確識別碼 / 4 MiB。不自動到期。重設會清除所有已儲存的已讀記錄；已讀通知可能重新出現。"}}
+    }},
     "pet.change" : { "extractionState": "manual", "localizations": {
       "en": {"stringUnit":{"state":"translated","value":"Change pet"}},
       "ja": {"stringUnit":{"state":"translated","value":"ペットを変更"}},

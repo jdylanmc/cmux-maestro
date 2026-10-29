@@ -74,7 +74,7 @@ nonisolated struct SidebarPreferenceFile<Value: SidebarPreferenceValue>: Sendabl
             do {
                 try mutation(&next)
                 let data = try JSONEncoder().encode(next)
-                guard next.isValid, data.count <= Value.maximumStoredBytes else {
+                guard next.isValid, data.count <= next.maximumEncodedBytes else {
                     result = .init(settings: current.settings, notice: Value.saveNotice)
                     return
                 }
@@ -101,7 +101,7 @@ nonisolated struct SidebarPreferenceFile<Value: SidebarPreferenceValue>: Sendabl
             let data = try handle.read(upToCount: Value.maximumStoredBytes + 1) ?? Data()
             guard data.count <= Value.maximumStoredBytes else { return unreadable }
             let settings = try JSONDecoder().decode(Value.self, from: data)
-            guard settings.isValid else { return unreadable }
+            guard settings.isValid, data.count <= settings.maximumEncodedBytes else { return unreadable }
             return .init(settings: settings)
         } catch {
             return unreadable

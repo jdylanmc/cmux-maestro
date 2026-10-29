@@ -177,7 +177,11 @@ final class SidebarPreferences {
             guard let data = stored as? Data, data.count <= SidebarAttentionSettings.maximumStoredBytes else {
                 throw SidebarPreferenceRejection(notice: SidebarAttentionSettings.unreadableNotice)
             }
-            return try JSONDecoder().decode(SidebarAttentionSettings.self, from: data)
+            let settings = try JSONDecoder().decode(SidebarAttentionSettings.self, from: data)
+            guard data.count <= settings.maximumEncodedBytes else {
+                throw SidebarPreferenceRejection(notice: SidebarAttentionSettings.unreadableNotice)
+            }
+            return settings
         }, migrated: {
             defaults.removeObject(forKey: Self.attentionKey)
         })
@@ -386,11 +390,12 @@ final class SidebarPreferences {
         let eligible = outcomes.intersection(tree.acknowledgeableOutcomes)
         guard !eligible.isEmpty else { return }
         attentionStore.apply {
+            $0.version = 2
             $0.acknowledged.formUnion(eligible)
             guard $0.isValid,
                   try JSONEncoder().encode($0).count <= SidebarAttentionSettings.maximumStoredBytes else {
                 throw SidebarPreferenceRejection(
-                    notice: "Acknowledgement storage is full or invalid (limit 2,048 / 1 MiB). Nothing new was acknowledged. Reset acknowledgements to free space."
+                    notice: String(localized: "attention.storage.full", defaultValue: "Acknowledgement archive is full (20,480 identities / 4 MiB). Nothing new was acknowledged. Reset clears all saved acknowledgements; previously read notices may reappear.")
                 )
             }
         }

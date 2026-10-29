@@ -7,6 +7,103 @@ import Testing
 struct SidebarAttentionCoordinationTests {
     private let evidence = PreferenceAttentionFixture()
 
+    @Test(arguments: [false, true])
+    func fullLegacyStoreCompactsLosslesslyAndAcceptsNewAcknowledgements(fromDefaults: Bool) throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let old = Set((0..<SidebarAttentionSettings.legacyMaximumAcknowledgements).map { index in
+            SidebarAcknowledgedOutcome(
+                sessionID: UUID(), ownerID: index.isMultiple(of: 2) ? nil : "worker",
+                evidence: .init(source: "copilot.events", eventID: UUID())
+            )
+        })
+        let legacy = SidebarAttentionSettings(version: 1, acknowledged: old)
+        let bytes = try JSONEncoder().encode(legacy)
+        #expect(bytes.count <= SidebarAttentionSettings.legacyMaximumStoredBytes)
+        if fromDefaults { fixture.defaults.set(bytes, forKey: "sidebar.attention.v1") }
+        else { try bytes.write(to: fixture.attentionFile) }
+        let a = fixture.preferences()
+        let b = fixture.preferences()
+        #expect(a.attention == legacy)
+        a.acknowledge([evidence.key("a")], in: evidence.tree())
+        #expect(a.attentionNotice == nil)
+        #expect(a.attention.version == 2)
+        #expect(a.attention.acknowledged == old.union([evidence.key("a")]))
+        #expect(b.attention == a.attention)
+        let compactBytes = try Data(contentsOf: fixture.attentionFile)
+        #expect(compactBytes.count < bytes.count)
+        let reloaded = fixture.preferences()
+        #expect(reloaded.attention == a.attention)
+        for key in old {
+            #expect(reloaded.attention.contains(
+                .init(kind: .turnFinished, evidence: key.evidence, occurredAt: nil),
+                sessionID: key.sessionID, ownerID: key.ownerID
+            ))
+        }
+        b.acknowledge([evidence.key("b")], in: evidence.tree())
+        #expect(a.attention.acknowledged == old.union([evidence.key("a"), evidence.key("b")]))
+        a.resetAcknowledgements()
+        #expect(b.attention.acknowledged.isEmpty)
+        #expect(fixture.preferences().attention.acknowledged.isEmpty)
+    }
+
+    @Test func compactArchiveHoldsTenTimesLegacyCapacityWithoutForgettingExactKeys() throws {
+        let keys = Set((0..<20_480).map { _ in
+            SidebarAcknowledgedOutcome(
+                sessionID: UUID(), ownerID: nil,
+                evidence: .init(source: "copilot.events", eventID: UUID())
+            )
+        })
+        let settings = SidebarAttentionSettings(acknowledged: keys)
+        #expect(settings.isValid)
+        let bytes = try JSONEncoder().encode(settings)
+        #expect(bytes.count <= SidebarAttentionSettings.maximumStoredBytes)
+        #expect(try JSONDecoder().decode(SidebarAttentionSettings.self, from: bytes) == settings)
+    }
+
+    @Test func oversizedLegacyBytesAndCountRemainUnreadableRatherThanBeingRepaired() throws {
+        let fixture = try SidebarPreferenceFixture()
+        defer { fixture.cleanup() }
+        let tooMany = SidebarAttentionSettings(version: 1, acknowledged: Set(
+            (0...2048).map { evidence.key("legacy-\($0)") }
+        ))
+        let padded = Data(#"{"version":1,"acknowledged":[]}"#.utf8)
+            + Data(repeating: 32, count: SidebarAttentionSettings.legacyMaximumStoredBytes)
+        for bytes in [try JSONEncoder().encode(tooMany), padded] {
+            try bytes.write(to: fixture.attentionFile)
+            let preferences = fixture.preferences()
+            preferences.acknowledge([evidence.key("a")], in: evidence.tree())
+            #expect(preferences.attentionNotice == SidebarAttentionSettings.unreadableNotice)
+            #expect(try Data(contentsOf: fixture.attentionFile) == bytes)
+        }
+    }
+
+    @Test func malformedArchiveCannotHideAttentionOrBeOverwrittenByAnOrdinaryAction() throws {
+        let session = evidence.sessionID.uuidString
+        let event = evidence.eventID.uuidString
+        let malformed = [
+            #"{"version":3,"archive":{}}"#,
+            #"{"version":2,"acknowledged":[],"archive":{}}"#,
+            #"{"version":2,"archive":{"bad":{"":["\#(event)"]}}}"#,
+            #"{"version":2,"archive":{"\#(session)":{"":["\#(event)","\#(event)"]}}}"#,
+            #"{"version":2,"archive":{"\#(session)":{"bad\nowner":["\#(event)"]}}}"#,
+            #"{"version":2,"archive":{"\#(session)":{"":[]}}}"#
+        ]
+        for json in malformed {
+            let fixture = try SidebarPreferenceFixture()
+            defer { fixture.cleanup() }
+            let bytes = Data(json.utf8)
+            try bytes.write(to: fixture.attentionFile)
+            let preferences = fixture.preferences()
+            preferences.acknowledge([evidence.key("a")], in: evidence.tree())
+            #expect(preferences.attention == .failOpen)
+            #expect(preferences.attentionNotice == SidebarAttentionSettings.unreadableNotice)
+            #expect(try Data(contentsOf: fixture.attentionFile) == bytes)
+            preferences.resetAcknowledgements()
+            #expect(preferences.attentionNotice == nil)
+        }
+    }
+
     @Test func existingInstancesMergeAcknowledgementsAndKeepHistoryAndModeIndependent() async throws {
         let fixture = try SidebarPreferenceFixture()
         defer { fixture.cleanup() }
@@ -252,7 +349,7 @@ struct SidebarAttentionCoordinationTests {
             Data("broken".utf8),
             Data(#"{"version":2,"acknowledged":[]}"#.utf8),
             Data(repeating: 0, count: SidebarAttentionSettings.maximumStoredBytes + 1),
-            try JSONEncoder().encode(SidebarAttentionSettings(acknowledged: [evidence.key("bad\nid")])),
+            try JSONEncoder().encode(SidebarAttentionSettings(version: 1, acknowledged: [evidence.key("bad\nid")])),
             try JSONEncoder().encode(SidebarAttentionSettings(acknowledged: Set(
                 (0...SidebarAttentionSettings.maximumAcknowledgements).map { evidence.key("over-limit-\($0)") }
             )))
