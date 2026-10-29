@@ -8,6 +8,66 @@ struct SidebarAgentHoverTests {
     private let fixtures = SidebarTreeFixtures()
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    @Test(arguments: [
+        "permission", "question", "no-attention", "ambiguous", "duplicate", "competing",
+        "stale-session", "stale-tree", "denied", "wrong-placement", "status-only"
+    ])
+    func registeredCoordinatorMoodUsesOnlyEligibleObservedPlacement(_ scenario: String) throws {
+        var observed = session(
+            surface: scenario == "wrong-placement" ? fixtures.surfaceB : nil,
+            liveness: scenario == "ambiguous" ? .ambiguous : .alive)
+        observed.attention = scenario == "no-attention" ? [] : [
+            .init(kind: scenario == "question" ? .answer : .permission,
+                  evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)
+        ]
+        if scenario == "stale-session" { observed.observedAt = now.addingTimeInterval(-3_600) }
+        if scenario == "status-only" { observed.statusOnly = true }
+        var node = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Synthetic coordinator",
+            workspaceId: fixtures.workspaceA, surfaceId: fixtures.surfaceA, generation: 1,
+            phase: "registered", availability: "idle", createdAt: now, updatedAt: now)
+        node.selfReportedMood = .happy
+        node.selfReportedMoodSequence = 7
+        let managed = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        let sessions = scenario == "duplicate" ? [observed, observed]
+            : scenario == "competing" ? [observed, session(id: fixtures.otherSessionID)] : [observed]
+        var tree = SidebarCopilotTree(availability: .ready, sessions: sessions, issues: [], generatedAt: now)
+        if scenario == "stale-tree" { tree.generatedAt = now.addingTimeInterval(-3_600) }
+        if scenario == "denied" { tree.issues = [.permissionDenied] }
+        let hierarchy = fixtures.hierarchy()
+        let hover = SidebarAgentHoverContent.card(
+            for: .managed(node.id, generation: node.generation), hierarchy: hierarchy, connected: true,
+            tree: tree, managed: managed, availability: .ready, now: now)
+        let subject = SidebarPresentation.inspection(
+            for: .managed(node), hierarchy: hierarchy, connected: true,
+            tree: tree, managed: managed, availability: .ready, now: now)
+        let inspector = subject.flatMap {
+            SidebarPresentation.inspectorDetails(
+                for: $0, hierarchy: hierarchy, connected: true,
+                tree: tree, managed: managed, availability: .ready, now: now)
+        }
+        if ["permission", "question", "no-attention"].contains(scenario) {
+            let pet = try #require(hover?.pet)
+            let details = try #require(inspector)
+            #expect(pet.session == observed.id && details.petSessionID == observed.id)
+            let expected: SidebarPetSheet.Mood = scenario == "permission" ? .needsPermission
+                : scenario == "question" ? .question : .idle
+            for input in [pet.input, details.petMood] {
+                #expect(input.observationAvailable)
+                #expect(input.session == observed, "Mood projection must preserve work and attention")
+                #expect(input.identity?.session == observed.id && input.identity?.generation == node.generation)
+                #expect(input.selfReport == nil && input.selfReportSequence == nil,
+                        "Placement observation is not an exact managed claim binding")
+                #expect(SidebarPetMood.resolve(input, now: now).mood == expected)
+            }
+        } else {
+            #expect(hover?.pet?.input.observationAvailable != true)
+            #expect(inspector?.petMood.observationAvailable != true)
+            #expect(hover?.pet?.input.selfReport == nil && inspector?.petMood.selfReport == nil)
+        }
+    }
+
     @Test(arguments: ["shell_completed", "shell_detached_completed"], [1, 137, 143])
     func backgroundShellExitCannotChangeAnySidebarConsumer(_ notification: String, _ exitCode: Int) throws {
         var reducer = CopilotEventReducer(sessionID: fixtures.sessionID)
@@ -534,7 +594,9 @@ struct SidebarAgentHoverTests {
                                state: .working, model: nil, ancestryUnresolved: false, hasChildren: false)]
         let sessions = [active, hovered]
         let pet = try #require(card(.session(hovered.id), sessions: sessions)?.pet)
-        #expect(pet == .init(session: hovered.id, choice: "hovered-pet", state: .working))
+        #expect(pet.session == hovered.id)
+        #expect(pet.choice == "hovered-pet")
+        #expect(pet.input.session?.id == hovered.id)
         #expect(card(.session(active.id), sessions: sessions)?.pet?.session == active.id)
         #expect(card(.child(sessionID: hovered.id, childID: "child"), sessions: sessions)?.pet == nil)
 

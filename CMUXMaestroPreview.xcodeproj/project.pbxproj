@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C38200000000000000000001 = {isa = PBXBuildFile; fileRef = C38200000000000000000011; };
+		C38200000000000000000002 = {isa = PBXBuildFile; fileRef = C38200000000000000000012; };
+		C38200000000000000000003 = {isa = PBXBuildFile; fileRef = C38200000000000000000013; };
+		C38200000000000000000004 = {isa = PBXBuildFile; fileRef = C38200000000000000000014; };
+		C38200000000000000000005 = {isa = PBXBuildFile; fileRef = C38200000000000000000015; };
 		C38000000000000000000001 = {isa = PBXBuildFile; fileRef = C38000000000000000000011; };
 		C38000000000000000000002 = {isa = PBXBuildFile; fileRef = C38000000000000000000012; };
 		C37110000000000000000001 = {isa = PBXBuildFile; fileRef = C04900000000000000000014; };
@@ -216,6 +221,11 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		C38200000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPetMood.swift; sourceTree = SOURCE_ROOT; };
+		C38200000000000000000012 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPetMoodInput.swift; sourceTree = SOURCE_ROOT; };
+		C38200000000000000000013 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/State/SidebarPetMoodDisplay.swift; sourceTree = SOURCE_ROOT; };
+		C38200000000000000000014 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "CMUXMaestroSidebar/State/SidebarPetSheet+MoodTitle.swift"; sourceTree = SOURCE_ROOT; };
+		C38200000000000000000015 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/UI/SidebarMoodPetView.swift; sourceTree = SOURCE_ROOT; };
 		C38000000000000000000011 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroSidebar/Orchestration/SidebarMoodObservation.swift; sourceTree = SOURCE_ROOT; };
 		C38000000000000000000012 = {isa = PBXFileReference; lastKnownFileType = sourcecode.javascript; path = scripts/delivery-proof/moods.mjs; sourceTree = SOURCE_ROOT; };
 		C37110000000000000000021 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CMUXMaestroPreview/CopilotShared/SidebarTagColor.swift; sourceTree = SOURCE_ROOT; };
@@ -536,6 +546,11 @@
 				C37000000000000000000013,
 				D12700000000000000000002 /* SidebarPreferenceStore.swift */,
 				C0A200000000000000000002 /* SidebarPetStore.swift */,
+				C38200000000000000000011,
+				C38200000000000000000012,
+				C38200000000000000000013,
+				C38200000000000000000014,
+				C38200000000000000000015,
 				C0A200000000000000000004 /* SidebarPetViews.swift */,
 				C0A300000000000000000002 /* SidebarBeatsModel.swift */,
 				C0A300000000000000000004 /* SidebarBeatsViews.swift */,
@@ -878,6 +893,11 @@
 				C0307B000000000000000004 /* SidebarStatusAnimationView.swift in Test Sources */,
 				D12700000000000000000001 /* SidebarPreferenceStore.swift in Test Sources */,
 				C0A200000000000000000001 /* SidebarPetStore.swift in Test Sources */,
+				C38200000000000000000001,
+				C38200000000000000000002,
+				C38200000000000000000003,
+				C38200000000000000000004,
+				C38200000000000000000005,
 				C0A200000000000000000003 /* SidebarPetViews.swift in Test Sources */,
 				C0A300000000000000000001 /* SidebarBeatsModel.swift in Test Sources */,
 				C0A300000000000000000003 /* SidebarBeatsViews.swift in Test Sources */,

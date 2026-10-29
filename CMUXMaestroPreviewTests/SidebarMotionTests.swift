@@ -560,8 +560,8 @@ struct SidebarMotionTests {
         let stores = SidebarStoreFixture()
         defer { stores.cleanup() }
         let petID = try installMotionPet(in: stores)
-        let frames = try (0..<SidebarPetState.idle.frameCount).map {
-            try #require(stores.pets.frame(petID: petID, session: nil, state: .idle, index: $0))
+        let frames = try (0..<SidebarPetSheet.frameCounts[0]).map {
+            try #require(stores.pets.frame(petID: petID, session: nil, mood: .idle, index: $0))
         }
         let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 160, height: 40),
                               styleMask: .borderless, backing: .buffered, defer: false)
@@ -622,7 +622,7 @@ struct SidebarMotionTests {
             let host = NSHostingView(rootView:
                 HStack {
                     if isPet {
-                        SidebarPetView(store: stores.pets, petID: petID, state: .idle, width: 14)
+                        SidebarPetView(store: stores.pets, petID: petID, mood: .idle, width: 14)
                     } else {
                         SidebarStateBadge(visual: SidebarPresentation.state(.working), needsInput: needsInput)
                     }

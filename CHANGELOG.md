@@ -50,15 +50,18 @@ Notable changes are recorded using Keep a Changelog categories.
   tool-failure and compaction inputs for richer pet presentation. Unknown
   evidence and existing work and attention semantics stay unchanged (#379).
 - Pets accept a bounded 20-row mood atlas with explicit nine-row fallbacks.
-  The drawing kit previews the new rows; current state selection stays
-  unchanged (#381).
-- An explicit offline pet-copy upgrade preserves the supplied original and
-  backups while filling the 20-row format with generic fallbacks. It never
-  updates or selects installed pets (#383).
+  The drawing kit previews the new rows (#381).
 - Managed sessions can optionally self-report happy, celebrating or confused,
   or clear a report, through an exact-self `maestro_mood` tool or
   `mood --self`. Bounded storage and cold-start suppression keep these claims
-  separate from work and attention; pet rendering follows separately (#380).
+  separate from work and attention (#380).
+- Pets express thirteen observation-derived moods and optional self-reports,
+  with three-second anti-flicker holds, immediate urgent expressions, and
+  accessible current/held descriptions. Reduce Motion keeps the same mood;
+  legacy sheets retain explicit art fallbacks (#382).
+- An explicit offline pet-copy upgrade preserves the supplied original and
+  backups while filling the 20-row format with generic fallbacks. It never
+  updates or selects installed pets (#383).
 - Saved footer pets, including Maestro, show a pencil badge on hover to open
   the pet picker. Unsaved agent-made pets keep their save badge and confirmation.
 - Agents can notify the human through macOS with their selected sidebar glyph

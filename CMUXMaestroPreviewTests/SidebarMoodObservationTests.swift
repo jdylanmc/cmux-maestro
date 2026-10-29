@@ -278,4 +278,88 @@ struct SidebarMoodObservationTests {
         #expect(malformed.complete && malformed.moodsUnavailable)
         #expect(malformed.nodes[0].selfReportedMood == nil)
     }
+
+    @Test func freshExactObservationKeepsReportsEligibleWithoutLifecycleHeartbeat() throws {
+        let owner = node()
+        let base = snapshot(owner)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.sortedKeys]
+        let lifecycle = try encoder.encode(base)
+        var cache = SidebarOrchestrationReader.Cache()
+        func read(_ sequence: Int, mood: String = "happy", at date: Date) throws -> SidebarOrchestrationSnapshot {
+            try SidebarOrchestrationReader.resolve(
+                current: lifecycle, icons: nil, processes: nil,
+                moods: data([record(owner, sequence: sequence, mood: mood)]), cache: &cache, now: date)
+        }
+        func observed(at date: Date, liveness: AgentProcessLiveness = .alive) -> SidebarCopilotSession {
+            var session = SidebarCopilotSession(
+                id: owner.copilotSessionId!, workspaceID: owner.workspaceId, surfaceID: owner.surfaceId,
+                liveness: liveness, state: .idle, model: nil, observedAt: date, nodes: [],
+                childrenComplete: true, treeDegraded: false, omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
+            session.presentation = .init(turnClean: true)
+            session.attention = [.init(kind: .turnFinished,
+                                       evidence: .init(source: "copilot.events", eventID: owner.id), occurredAt: date)]
+            return session
+        }
+        func project(_ managed: SidebarOrchestrationSnapshot, session: SidebarCopilotSession,
+                     at date: Date, availability: SidebarOrchestrationAvailability = .stale) -> SidebarPetMoodInput {
+            .project(session: session, tree: .init(availability: .ready, sessions: [session], issues: [], generatedAt: date),
+                     managed: managed, availability: availability, now: date)
+        }
+        let cold = try read(1, at: now)
+        #expect(project(cold, session: observed(at: now), at: now, availability: .ready).selfReport == nil)
+        let later = now.addingTimeInterval(SidebarOrchestrationReader.staleInterval + 1)
+        let live = observed(at: later)
+        let accepted = try read(2, at: later)
+        #expect(SidebarOrchestrationReader.isStale(accepted, now: later))
+        #expect(accepted.nodes[0].updatedAt == now)
+        let input = project(accepted, session: live, at: later)
+        #expect(input.selfReport == .happy && input.selfReportSequence == 2)
+        #expect(SidebarPetMood.resolve(input, now: later).mood == .proud)
+        #expect(input.session == live, "A self-report must not change work or attention")
+        #expect(try encoder.encode(accepted) == lifecycle, "No synthetic lifecycle heartbeat")
+
+        let muchLater = later.addingTimeInterval(120)
+        let retained = try read(2, at: muchLater)
+        #expect(project(retained, session: observed(at: muchLater), at: muchLater).selfReport == .happy)
+        let cleared = try read(3, mood: "clear", at: muchLater)
+        let afterClear = project(cleared, session: observed(at: muchLater), at: muchLater)
+        #expect(afterClear.selfReport == nil && afterClear.selfReportSequence == 3)
+        #expect(SidebarPetMood.resolve(afterClear, now: muchLater).mood == .content)
+        #expect(project(try read(2, at: muchLater), session: observed(at: muchLater), at: muchLater).selfReport == nil)
+
+        let resumed = snapshot(.init(
+            id: owner.id, runId: owner.runId, parentId: nil, role: owner.role, label: owner.label,
+            workspaceId: owner.workspaceId, surfaceId: owner.surfaceId, generation: owner.generation + 1,
+            phase: owner.phase, availability: owner.availability, copilotSessionId: owner.copilotSessionId,
+            executionMode: .interactive, createdAt: now, updatedAt: now))
+        let wrongGeneration = try SidebarOrchestrationReader.resolve(
+            current: encoder.encode(resumed), icons: nil, processes: nil,
+            moods: data([record(owner, sequence: 4)]), cache: &cache, now: muchLater)
+        let rejected = project(wrongGeneration, session: observed(at: muchLater), at: muchLater)
+        #expect(rejected.identity?.generation == 2 && rejected.selfReport == nil)
+        #expect(rejected.session?.state == .idle && rejected.session?.attention == observed(at: muchLater).attention)
+
+        for unavailable in [SidebarOrchestrationAvailability.unavailable, .waiting, .hidden, .disconnected] {
+            #expect(project(accepted, session: live, at: later, availability: unavailable).selfReport == nil)
+        }
+        for scenario in ["stale-tree", "stale-session", "denied", "duplicate", "ambiguous", "dead", "status-only"] {
+            var subject = live
+            var tree = SidebarCopilotTree(availability: .ready, sessions: [subject], issues: [], generatedAt: later)
+            switch scenario {
+            case "stale-tree": tree.generatedAt = now
+            case "stale-session": subject.observedAt = now
+            case "denied": tree.issues = [.permissionDenied]
+            case "ambiguous": subject = observed(at: later, liveness: .ambiguous)
+            case "dead": subject = observed(at: later, liveness: .dead)
+            case "status-only": subject.statusOnly = true
+            default: break
+            }
+            tree.sessions = scenario == "duplicate" ? [subject, subject] : [subject]
+            let unavailable = SidebarPetMoodInput.project(
+                session: subject, tree: tree, managed: accepted, availability: .stale, now: later)
+            #expect(unavailable.selfReport == nil, "\(scenario) cannot authorize an overlay")
+        }
+    }
 }

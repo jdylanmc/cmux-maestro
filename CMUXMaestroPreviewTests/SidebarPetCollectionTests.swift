@@ -45,13 +45,13 @@ struct SidebarPetCollectionTests {
     func petLabelReceivesMouseClick(animated: Bool, reduceMotion: Bool) throws {
         let stores = SidebarStoreFixture()
         defer { stores.cleanup() }
-        for index in 0..<SidebarPetState.idle.frameCount {
+        for index in 0..<SidebarPetSheet.frameCounts[0] {
             _ = try #require(stores.pets.frame(
-                petID: SidebarPetStore.defaultID, session: nil, state: .idle, index: index))
+                petID: SidebarPetStore.defaultID, session: nil, mood: .idle, index: index))
         }
         var clicks = 0
         let host = NSHostingView(rootView: Button { clicks += 1 } label: {
-            SidebarPetView(store: stores.pets, petID: SidebarPetStore.defaultID, state: .idle, width: 46,
+            SidebarPetView(store: stores.pets, petID: SidebarPetStore.defaultID, mood: .idle, width: 46,
                            animated: animated)
         }.buttonStyle(.plain).environment(\._accessibilityReduceMotion, reduceMotion))
         let window = NSWindow(contentRect: NSRect(x: -10000, y: -10000, width: 60, height: 60),
@@ -193,7 +193,7 @@ struct SidebarPetCollectionTests {
             let id = try #require(store.visibleID(session: session, agentChoice: "blob"))
             #expect(id == "blob")
             #expect(store.available(for: session).contains { $0.id == "blob" })
-            #expect(store.frame(petID: id, session: session, state: .working, index: index) != nil)
+            #expect(store.frame(petID: id, session: session, mood: .working, index: index) != nil)
             _ = store.topInset(petID: id, session: session)
         }
         #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
@@ -212,7 +212,7 @@ struct SidebarPetCollectionTests {
         try Data("not an image".utf8).write(to: sheet)
         let before = SidebarPetStore.decodeCount(sheet)
         for index in 0..<5 {
-            _ = store.frame(petID: "blob", session: session, state: .idle, index: index)
+            _ = store.frame(petID: "blob", session: session, mood: .idle, index: index)
         }
         #expect(SidebarPetStore.decodeCount(sheet) - before == 1)
         #expect(!store.available(for: session).contains { $0.id == "blob" })
@@ -253,9 +253,9 @@ struct SidebarPetCollectionTests {
     @Test func framesAreCachedAndWrapByIndex() throws {
         let (store, root, session, _) = try makeStore()
         defer { try? FileManager.default.removeItem(at: root) }
-        let first = try #require(store.frame(petID: "blob", session: session, state: .idle, index: 0))
-        let again = try #require(store.frame(petID: "blob", session: session, state: .idle, index: 0))
-        let wrapped = try #require(store.frame(petID: "blob", session: session, state: .idle, index: SidebarPetState.idle.frameCount))
+        let first = try #require(store.frame(petID: "blob", session: session, mood: .idle, index: 0))
+        let again = try #require(store.frame(petID: "blob", session: session, mood: .idle, index: 0))
+        let wrapped = try #require(store.frame(petID: "blob", session: session, mood: .idle, index: SidebarPetSheet.frameCounts[0]))
         #expect(first === again)
         #expect(first === wrapped)
         #expect(first.width == SidebarPetSheet.cellWidth)
@@ -270,7 +270,7 @@ struct SidebarPetCollectionTests {
 
         var frame = CGRect.null
         let hosting = NSHostingView(rootView: SidebarPetView(
-            store: store, petID: "blob", session: session, state: .idle, width: 48, animated: false, topTrim: inset)
+            store: store, petID: "blob", session: session, mood: .idle, width: 48, animated: false, topTrim: inset)
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
             .fixedSize())
         hosting.frame = NSRect(x: 0, y: 0, width: 100, height: 100)
@@ -416,8 +416,8 @@ struct SidebarPetCollectionTests {
                 }
             }
             #expect(store.playback(petID: "blob", session: session, mood: .compacting)?.frameCount == (rows == 20 ? 6 : 8))
-            let old = try #require(store.frame(petID: "blob", session: session, state: .working, index: 0))
-            #expect(old === store.frame(petID: "blob", session: session, mood: .working, index: 0))
+            let first = try #require(store.frame(petID: "blob", session: session, mood: .working, index: 0))
+            #expect(first === store.frame(petID: "blob", session: session, mood: .working, index: 6))
         }
     }
 
@@ -440,5 +440,64 @@ struct SidebarPetCollectionTests {
         try #require(oversized.representation(using: .png, properties: [:])).write(to: source)
         #expect(store.upload(from: source) == nil)
         #expect(store.notice?.contains("512–1536") == true)
+    }
+
+    @Test func everyMoodReducedMotionRendersItsSelectedStillFrame() throws {
+        let width = SidebarPetSheet.width, height = SidebarPetSheet.moodRows * SidebarPetSheet.cellHeight
+        let rep = try #require(NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0))
+        let pixels = try #require(rep.bitmapData)
+        for y in 0..<height {
+            let row = y / SidebarPetSheet.cellHeight
+            for x in 0..<width {
+                let column = x / SidebarPetSheet.cellWidth
+                let offset = y * rep.bytesPerRow + x * 4
+                (pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]) =
+                    (UInt8(20 + row * 10), UInt8(30 + column * 25), UInt8(220 - row * 8), 255)
+            }
+        }
+        let data = try #require(rep.representation(using: .png, properties: [:]))
+        let (store, root, session, _) = try makeStore(sheet: data)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var frames: [Data] = []
+        for mood in SidebarPetSheet.Mood.allCases {
+            let reduced = ImageRenderer(content: SidebarPetView(
+                store: store, petID: "blob", session: session, mood: mood, width: 48)
+                .environment(\._accessibilityReduceMotion, true))
+            reduced.scale = 2
+            let still = ImageRenderer(content: SidebarPetView(
+                store: store, petID: "blob", session: session, mood: mood, width: 48, animated: false))
+            still.scale = 2
+            let actual = try #require(reduced.cgImage)
+            let expected = try #require(still.cgImage)
+            let actualBytes = try #require(actual.dataProvider?.data) as Data
+            #expect(actualBytes == (try #require(expected.dataProvider?.data) as Data))
+            frames.append(actualBytes)
+        }
+        #expect(Set(frames).count == SidebarPetSheet.Mood.allCases.count)
+        for scheme in [ColorScheme.light, .dark] {
+            let contact = ImageRenderer(content: VStack(spacing: 16) {
+                Text("Synthetic mood atlas · Reduce Motion · routing evidence, not final art")
+                    .font(.headline)
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(160)), count: 5), spacing: 16) {
+                    ForEach(SidebarPetSheet.Mood.allCases, id: \.rawValue) { mood in
+                        VStack(spacing: 8) {
+                            SidebarPetView(store: store, petID: "blob", session: session, mood: mood, width: 46)
+                            Text(mood.title).font(.caption)
+                        }.frame(width: 160, height: 100)
+                    }
+                }
+            }
+            .padding(16).background(scheme == .dark ? Color.black : Color.white)
+            .environment(\.colorScheme, scheme).environment(\._accessibilityReduceMotion, true))
+            contact.scale = 2
+            let image = try #require(contact.cgImage)
+            let png = try #require(NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]))
+            let destination = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent(".build/mood-render", isDirectory: true)
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+            try png.write(to: destination.appendingPathComponent("moods-\(scheme == .dark ? "dark" : "light").png"))
+        }
     }
 }

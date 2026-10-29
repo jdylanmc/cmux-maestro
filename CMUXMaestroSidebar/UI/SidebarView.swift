@@ -3380,7 +3380,7 @@ struct SidebarPinnedFooter: View {
     private static let bodySpace = "sidebar-pinned-body"
     private var iconRowHeight: CGFloat { content.isAgent ? 14 : 0 }
     private var minimumBodyHeight: CGFloat {
-        guard content.isAgent else { return rowHeight }
+        guard content.showsPet else { return rowHeight }
         return max(SidebarFooterPetSize.height(forWidth: SidebarFooterPetSize.baselineWidth, topInset: petInset),
                    baselineTextHeight)
     }
@@ -3389,7 +3389,7 @@ struct SidebarPinnedFooter: View {
                                    userSized: userHeight.wrappedValue != nil, topInset: petInset)
     }
     private var petInset: CGFloat {
-        guard content.isAgent else { return 0 }
+        guard content.showsPet else { return 0 }
         let store = pets
         let id = store.resolvedID(session: content.petSessionID, agentChoice: content.petChoice)
         return store.topInset(petID: id, session: content.petSessionID)
@@ -3495,7 +3495,7 @@ struct SidebarPinnedFooter: View {
     private var footerContents: some View {
         VStack(alignment: .leading, spacing: 5) {
             HStack(alignment: .center, spacing: rowSpacing) {
-                if content.isAgent {
+                if content.showsPet {
                     SidebarPetButton(store: pets, content: content, width: petWidth, topInset: petInset)
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.bodySpace)) } action: {
                             geometryChanged?(.pet, $0)
@@ -3508,7 +3508,7 @@ struct SidebarPinnedFooter: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .background(alignment: .topLeading) {
-                if content.isAgent {
+                if content.showsPet {
                     textColumn
                         .frame(width: baselineTextWidth, alignment: .leading)
                         .fixedSize(horizontal: false, vertical: true)
