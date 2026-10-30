@@ -50,10 +50,9 @@ The pet shows a small corner play glyph that covers no face of the built-in
 pets and adds no separate accessibility element. Its accessibility label and tooltip state
 **Cosmetic preview; not session state** and its real current mood.
 Question, permission, real failure and process death preempt immediately.
-Urgent facts, lost observations or changed identity seen by a pet view halt
+Urgent facts, lost observations or changed identity halt
 that preview request in every pet view, including hover cards opened later,
-rather than resuming it when those facts disappear. If no pet view shows the
-session at that moment, a later view may play the rest of the 75-second window.
+rather than resuming it when those facts disappear.
 Cold reader starts, disconnects, mismatches and invalid data suppress playback.
 Preview never writes or fabricates lifecycle, attention, history, custody,
 acknowledgement or capacity. The existing single cosmetic display deadline
