@@ -4,13 +4,23 @@ import Foundation
 struct SidebarPetMood: Equatable {
     let mood: SidebarPetSheet.Mood
     let basis: String
+    var isPreview = false
 
     static let minimumMoodHold: TimeInterval = 3
     static let sleepyAfter: TimeInterval = 60
     static let confusedToolFailureThreshold: UInt8 = 3
 
-    var preemptsHold: Bool { [.question, .needsPermission, .sad, .gone].contains(mood) }
+    var preemptsHold: Bool { !isPreview && [.question, .needsPermission, .sad, .gone].contains(mood) }
     var description: String { "\(mood.title) · \(basis)" }
+
+    static func preview(_ playback: SidebarMoodObservation.Playback, now: Date) -> Self? {
+        guard playback.isCurrent(at: now) else { return nil }
+        let index = Int(now.timeIntervalSince(playback.startedAt) / SidebarMoodObservation.Playback.step)
+        guard SidebarPetSheet.Mood.allCases.indices.contains(index) else { return nil }
+        return .init(mood: SidebarPetSheet.Mood.allCases[index],
+                     basis: String(localized: "mood.preview.basis", defaultValue: "Cosmetic preview; not session state"),
+                     isPreview: true)
+    }
 
     static func resolve(_ input: SidebarPetMoodInput, now: Date) -> Self {
         let session = input.session

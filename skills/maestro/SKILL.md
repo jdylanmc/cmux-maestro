@@ -51,6 +51,22 @@ starts; do not spam a report to make it animate. Never inspect the private
 store, forge identity fields, trigger enrollment/reload, or widen permissions
 when the tool is absent or refuses.
 
+Only on an explicit human request, use
+`maestro_mood({ "mood": "preview" })` once to preview all fifteen existing
+expressions for five seconds each (75 seconds total).
+`maestro_mood({ "mood": "cancel-preview" })` cancels it and restores ordinary
+resolution; `clear` also withdraws the prior self-report. The equivalent CLI
+uses `mood --self --session-id "<own-session-uuid>" --mood preview` or
+`--mood cancel-preview`. Never emulate this with a shell loop or scheduled
+self-reports. Preview is labelled cosmetic, cannot assert session state,
+and real urgent facts preempt it. Startup/disconnect suppress stale playback.
+
+Refusals distinguish `mood-busy`, `mood-proof-unavailable`,
+`mood-identity-unverified`, `mood-placement-unavailable`, store, rate and capacity
+failures. These identify a failing prerequisite, not its hidden cause.
+Report the bounded reason; do not retry automatically, inspect private runtime
+files, alter permissions, reload live sessions or use a different control path.
+
 ## Participation and availability
 
 After the human explicitly enables Maestro integration, newly Maestro-spawned

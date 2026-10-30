@@ -1,6 +1,8 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "mood.preview.basis": {"extractionState":"manual","localizations":{
+      "en":{"stringUnit":{"state":"translated","value":"Cosmetic preview; not session state"}},"ja":{"stringUnit":{"state":"translated","value":"外観のプレビュー。セッションの状態ではありません"}},"de":{"stringUnit":{"state":"translated","value":"Reine Vorschau; kein Sitzungsstatus"}},"fr":{"stringUnit":{"state":"translated","value":"Aperçu visuel ; pas l’état de la session"}},"es":{"stringUnit":{"state":"translated","value":"Vista previa visual; no es el estado de la sesión"}},"ar":{"stringUnit":{"state":"translated","value":"معاينة شكلية؛ ليست حالة الجلسة"}},"ko":{"stringUnit":{"state":"translated","value":"외형 미리 보기이며 세션 상태가 아닙니다"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"仅外观预览；并非会话状态"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"僅外觀預覽；並非工作階段狀態"}}}},
     "mood.idle": {"extractionState":"manual","localizations":{
       "en":{"stringUnit":{"state":"translated","value":"Idle"}},"ja":{"stringUnit":{"state":"translated","value":"待機中"}},"de":{"stringUnit":{"state":"translated","value":"Inaktiv"}},"fr":{"stringUnit":{"state":"translated","value":"Au repos"}},"es":{"stringUnit":{"state":"translated","value":"Inactivo"}},"ar":{"stringUnit":{"state":"translated","value":"خامل"}},"ko":{"stringUnit":{"state":"translated","value":"대기 중"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"空闲"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"閒置"}}}},
     "mood.thinking": {"extractionState":"manual","localizations":{

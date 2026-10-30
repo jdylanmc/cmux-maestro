@@ -1,8 +1,8 @@
-const moods = ["happy", "celebrating", "confused", "clear"];
+const moods = ["happy", "celebrating", "confused", "clear", "preview", "cancel-preview"];
 
 export const moodSpec = {
   name: "maestro_mood",
-  description: "Optionally self-report happy after a verified good outcome, celebrating for a significant win, or confused about missing/conflicting meaning; clear withdraws it. Once per meaningful change, never ordinary errors or a substitute for a question or failure. Cosmetic only, not task-success evidence. Refusals are not queued or retried.",
+  description: "Optionally self-report happy after a verified good outcome, celebrating for a significant win, or confused about missing/conflicting meaning; clear withdraws it. Only on explicit human request, preview shows all 15 cosmetic expressions for 5 seconds each (75 seconds); cancel-preview restores ordinary resolution. Exact own session only. Never ordinary errors or a substitute for a question or failure. Cosmetic only, not task-success evidence. Refusals are not queued or retried.",
   parameters: {
     type: "object", properties: { mood: { type: "string", enum: moods } },
     required: ["mood"], additionalProperties: false,
@@ -15,12 +15,18 @@ export function moodTool({ own, ownAddress, session, currentBinding, reportMood,
     handler: async (args, invocation) => {
       try {
         signal?.throwIfAborted();
-        if (session()?.sessionId !== own.sessionId || invocation?.sessionId !== own.sessionId ||
-            !args || typeof args !== "object" || Array.isArray(args) ||
+        if (session()?.sessionId !== own.sessionId || invocation?.sessionId !== own.sessionId) {
+          throw new Error("mood-identity-unverified");
+        }
+        if (!args || typeof args !== "object" || Array.isArray(args) ||
             Object.keys(args).length !== 1 || !Object.hasOwn(args, "mood") || !moods.includes(args.mood)) {
           throw new Error("mood-input-invalid");
         }
-        await currentBinding();
+        try {
+          await currentBinding();
+        } catch {
+          throw new Error("mood-identity-unverified");
+        }
         signal?.throwIfAborted();
         const result = await reportMood({
           identity: { nodeId: own.nodeId, ...ownAddress, capability: own.capability }, mood: args.mood,
@@ -34,7 +40,8 @@ export function moodTool({ own, ownAddress, session, currentBinding, reportMood,
         return JSON.stringify(result);
       } catch (error) {
         const reason = ["mood-input-invalid", "mood-identity-unverified", "mood-rate-limited",
-          "mood-capacity-unavailable", "mood-store-unavailable"].includes(error?.message) ? error.message : "mood-unavailable";
+          "mood-capacity-unavailable", "mood-store-unavailable", "mood-busy",
+          "mood-proof-unavailable", "mood-placement-unavailable"].includes(error?.message) ? error.message : "mood-unavailable";
         return { resultType: "failure", textResultForLlm: `Maestro mood refused or uncertain (${reason}). No queue, fallback or retry.` };
       }
     },

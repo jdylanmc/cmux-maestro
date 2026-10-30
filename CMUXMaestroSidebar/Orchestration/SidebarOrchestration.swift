@@ -107,6 +107,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     /// Exact-generation authored metadata only; excluded from the lifecycle wire contract.
     var selfReportedMood: SidebarMoodObservation.Mood? = nil
     var selfReportedMoodSequence: Int? = nil
+    var moodPreview: SidebarMoodObservation.Playback? = nil
 
     /// The row title: a born root's eligible session name, otherwise its projected label.
     var title: String { sessionTitle ?? label }
@@ -360,7 +361,7 @@ nonisolated enum SidebarOrchestrationReader {
         cache: inout Cache, now: Date
     ) throws -> SidebarOrchestrationSnapshot {
         let base = try resolveBase(current: data, icons: iconData, processes: processData, cache: &cache, now: now)
-        return cache.moods.applying(moodData, to: base)
+        return cache.moods.applying(moodData, to: base, now: now)
     }
 
     private static func resolveBase(
@@ -573,6 +574,8 @@ final class SidebarOrchestrationPolling {
     // The filtered projection before born-root naming; names come from Copilot observations.
     private var projected = SidebarOrchestrationSnapshot.empty
     private var observedTree: SidebarCopilotTree?
+    // Survives invalidation so hiding or re-scoping the sidebar cannot resume a halted preview.
+    @ObservationIgnored private var previewHalts = SidebarMoodPreviewHalts()
     private var topology = SidebarTopology(.empty)
     private var visible = false
     private var connected = false
@@ -630,8 +633,9 @@ final class SidebarOrchestrationPolling {
     }
 
     private func retitle(now: Date) {
-        let named = observedTree.map { projected.namingBornRoots(from: $0, now: now) }
-            ?? projected.namingBornRoots(from: .waiting, now: now)
+        let tree = observedTree ?? .waiting
+        let named = previewHalts.applying(
+            projected.namingBornRoots(from: tree, now: now), tree: tree, availability: availability, now: now)
         if named != snapshot { snapshot = named }
     }
 
@@ -641,7 +645,10 @@ final class SidebarOrchestrationPolling {
 
     func update(topology: SidebarTopology, connected: Bool) {
         guard self.topology != topology || self.connected != connected else { return }
-        if self.connected && !connected { needsMoodBaseline = true }
+        if self.connected && !connected {
+            needsMoodBaseline = true
+            previewHalts.observationLost(now: now())
+        }
         self.topology = topology
         self.connected = connected
         invalidate()
@@ -701,18 +708,21 @@ final class SidebarOrchestrationPolling {
                         complete: raw.complete, omittedCount: raw.omittedCount,
                         nodes: nodes, processes: raw.processes, moodsUnavailable: raw.moodsUnavailable
                     )
-                    self.retitle(now: self.now())
+                    // Availability first: preview halts judge the new snapshot under its own availability.
                     self.availability = SidebarOrchestrationReader.isStale(raw, now: self.now())
-                        ? .stale : self.snapshot.complete ? .ready : .partial
+                        ? .stale : self.projected.complete ? .ready : .partial
+                    self.retitle(now: self.now())
                     self.schedulePresentationExpiry()
                 } catch CopilotFileError.missing {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.previewHalts.observationLost(now: self.now())
                     self.snapshot = .empty
                     self.projected = .empty
                     self.availability = .waiting
                     self.cancelPresentationExpiry()
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.previewHalts.observationLost(now: self.now())
                     self.snapshot = .empty
                     self.projected = .empty
                     self.availability = .unavailable

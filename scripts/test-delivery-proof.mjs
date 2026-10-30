@@ -311,21 +311,28 @@ test("mood tool accepts only exact-self enums and fences stale routes without re
     [{}, { sessionId: own.sessionId }],
   ]) assert.equal((await tool.handler(args, invocation)).resultType, "failure");
   assert.equal(calls.length, 0);
-  for (const mood of ["happy", "celebrating", "confused", "clear"]) {
+  for (const mood of ["happy", "celebrating", "confused", "clear", "preview", "cancel-preview"]) {
     const result = JSON.parse(await tool.handler({ mood }, { sessionId: own.sessionId }));
     assert.equal(result.mood, mood);
     assert.deepEqual(calls.at(-1), {
       identity: { nodeId: own.nodeId, ...managedAddress(own), capability: own.capability }, mood,
     });
   }
-  failure = "mood-rate-limited";
-  assert.match((await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).textResultForLlm, /mood-rate-limited/);
-  assert.equal(calls.length, 5);
+  for (const reason of ["mood-rate-limited", "mood-busy", "mood-proof-unavailable",
+    "mood-identity-unverified", "mood-placement-unavailable", "mood-store-unavailable",
+    "mood-capacity-unavailable"]) {
+    failure = reason;
+    const before = calls.length;
+    assert.ok((await tool.handler({ mood: "preview" }, { sessionId: own.sessionId })).textResultForLlm.includes(reason));
+    assert.equal(calls.length, before + 1);
+  }
   failure = "private controller diagnostic";
   assert.equal(JSON.stringify(await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).includes("private"), false);
   await fs.writeFile(path.join(f.root, `${own.peer}.json`), JSON.stringify({ ...own, generation: 2 }), { mode: 0o600 });
-  assert.equal((await tool.handler({ mood: "happy" }, { sessionId: own.sessionId })).resultType, "failure");
-  assert.equal(calls.length, 6);
+  const beforeStale = calls.length;
+  assert.match((await tool.handler({ mood: "preview" }, { sessionId: own.sessionId })).textResultForLlm,
+    /mood-identity-unverified/);
+  assert.equal(calls.length, beforeStale);
   await fs.writeFile(path.join(f.root, `${own.peer}.json`), JSON.stringify(own), { mode: 0o600 });
   failure = undefined;
   response = { ok: true, sessionId: own.sessionId, mood: "happy", sequence: 6, changed: false };

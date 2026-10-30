@@ -18,6 +18,23 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         }
     }
 
+    struct Preview: Decodable, Equatable, Sendable {
+        let startedAt: Int
+        let active: Bool
+        let reportSequence: Int
+    }
+
+    struct Playback: Hashable, Sendable {
+        let sequence: Int
+        let startedAt: Date
+        static let step: TimeInterval = 5
+        static let duration: TimeInterval = 75
+
+        func isCurrent(at now: Date) -> Bool {
+            now >= startedAt && now < startedAt.addingTimeInterval(Self.duration)
+        }
+    }
+
     struct Claim: Decodable, Equatable, Sendable {
         let nodeId: UUID
         let runId: UUID
@@ -29,6 +46,13 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         let source: String
         let mood: Mood
         let lastChangedAt: Int
+        var preview: Preview? = nil
+
+        var reportSequence: Int { preview?.reportSequence ?? sequence }
+        var playback: Playback? {
+            guard let preview, preview.active else { return nil }
+            return .init(sequence: sequence, startedAt: Date(timeIntervalSince1970: Double(preview.startedAt) / 1000))
+        }
 
         func matches(_ node: SidebarOrchestrationNode) -> Bool {
             nodeId == node.id && runId == node.runId && sessionId == node.copilotSessionId
@@ -54,9 +78,14 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         let fields: Set<String> = ["nodeId", "runId", "sessionId", "workspaceId", "surfaceId",
                                    "generation", "sequence", "source", "mood", "lastChangedAt"]
         for record in records {
-            guard Set(record.keys) == fields,
+            guard [fields, fields.union(["preview"])].contains(Set(record.keys)),
                   try JSONSerialization.data(withJSONObject: record).count <= maximumRecordBytes
             else { throw CopilotFileError.changed }
+            if let preview = record["preview"] {
+                guard let preview = preview as? [String: Any],
+                      Set(preview.keys) == ["startedAt", "active", "reportSequence"]
+                else { throw CopilotFileError.changed }
+            }
             for field in ["nodeId", "runId", "sessionId", "workspaceId", "surfaceId"] {
                 guard let raw = record[field] as? String, let id = UUID(uuidString: raw),
                       id.uuidString.lowercased() == raw else { throw CopilotFileError.changed }
@@ -66,10 +95,13 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         guard decoded.version == 1, Set(decoded.moods.map(\.nodeId)).count == decoded.moods.count,
               Dictionary(grouping: decoded.moods, by: \.workspaceId).values.allSatisfy({
                   $0.count <= maximumWorkspaceNodes
-              }), decoded.moods.allSatisfy({
-                  $0.source == "self-report" && [ $0.generation, $0.sequence, $0.lastChangedAt ].allSatisfy {
+              }), decoded.moods.allSatisfy({ claim in
+                  claim.source == "self-report" && [ claim.generation, claim.sequence, claim.lastChangedAt ].allSatisfy {
                       (1...maximumInteger).contains($0)
-                  }
+                  } && (claim.preview.map { preview in
+                      (1...(maximumInteger - 75_000)).contains(preview.startedAt)
+                          && (1...claim.sequence).contains(preview.reportSequence)
+                  } ?? true)
               }) else { throw CopilotFileError.changed }
         return decoded
     }
@@ -79,19 +111,24 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         private var initialized = false
         private var seen: [UUID: Claim] = [:]
         private var eligible: Set<UUID> = []
+        private var previewEligible: Set<UUID> = []
         private var decoded = SidebarOrchestrationReader.Decoded<SidebarMoodObservation>()
 
         mutating func resetForConnection() {
             initialized = false
             eligible.removeAll()
+            previewEligible.removeAll()
         }
 
-        mutating func applying(_ data: Data?, to base: SidebarOrchestrationSnapshot) -> SidebarOrchestrationSnapshot {
+        mutating func applying(
+            _ data: Data?, to base: SidebarOrchestrationSnapshot, now: Date = Date()
+        ) -> SidebarOrchestrationSnapshot {
             var result = base
             result.nodes = result.nodes.map {
                 var node = $0
                 node.selfReportedMood = nil
                 node.selfReportedMoodSequence = nil
+                node.moodPreview = nil
                 return node
             }
             let records: [Claim]
@@ -102,32 +139,47 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
             } catch {
                 result.moodsUnavailable = true
                 eligible.removeAll()
+                previewEligible.removeAll()
                 return result
             }
             let currentIDs = Set(records.map(\.nodeId))
             eligible.formIntersection(currentIDs)
+            previewEligible.formIntersection(currentIDs)
             let nodes = Dictionary(uniqueKeysWithValues: result.nodes.map { ($0.id, $0) })
             for claim in records {
                 let matches = nodes[claim.nodeId].map(claim.matches) ?? false
                 if let previous = seen[claim.nodeId] {
                     if claim.sequence > previous.sequence {
                         seen[claim.nodeId] = claim
-                        if initialized && matches && claim.mood != .clear { eligible.insert(claim.nodeId) }
-                        else { eligible.remove(claim.nodeId) }
+                        if initialized && matches && claim.mood != .clear {
+                            if claim.reportSequence > previous.reportSequence { eligible.insert(claim.nodeId) }
+                            else if claim.reportSequence != previous.reportSequence || claim.mood != previous.mood {
+                                eligible.remove(claim.nodeId)
+                            }
+                        } else { eligible.remove(claim.nodeId) }
+                        if initialized && matches && claim.playback?.isCurrent(at: now) == true {
+                            previewEligible.insert(claim.nodeId)
+                        } else { previewEligible.remove(claim.nodeId) }
                     } else if claim != previous || !matches {
                         eligible.remove(claim.nodeId)
+                        previewEligible.remove(claim.nodeId)
                     }
                 } else {
                     seen[claim.nodeId] = claim
                     if initialized && matches && claim.mood != .clear { eligible.insert(claim.nodeId) }
+                    if initialized && matches && claim.playback?.isCurrent(at: now) == true {
+                        previewEligible.insert(claim.nodeId)
+                    }
                 }
+                if claim.playback?.isCurrent(at: now) != true { previewEligible.remove(claim.nodeId) }
             }
             initialized = true
             result.nodes = result.nodes.map { node in
                 var updated = node
                 guard let claim = seen[node.id], claim.matches(node), currentIDs.contains(node.id) else { return updated }
-                updated.selfReportedMoodSequence = claim.sequence
+                updated.selfReportedMoodSequence = claim.reportSequence
                 if eligible.contains(node.id) { updated.selfReportedMood = claim.mood }
+                if previewEligible.contains(node.id) { updated.moodPreview = claim.playback }
                 return updated
             }
             return result

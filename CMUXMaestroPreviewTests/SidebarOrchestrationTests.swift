@@ -1112,6 +1112,161 @@ struct SidebarOrchestrationTests {
         #expect(poll.snapshot.nodes.map(\.title) == ["Copilot session"])
     }
 
+    @Test(arguments: ["permission", "question", "sad", "gone", "unavailable", "identity"])
+    func realEventHaltsPreviewWithoutAMountedPet(_ boundary: String) async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        var born = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: workspace, surfaceId: surface, generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: session, executionMode: .interactive,
+            createdAt: now, updatedAt: now)
+        born.enrollment = "born"
+        born.moodPreview = .init(sequence: 2, startedAt: now)
+        var snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [born])
+        let published = AsyncStream<Void>.makeStream()
+        let poll = SidebarOrchestrationPolling(read: { @MainActor in snapshot }, pause: {
+            published.continuation.yield(())
+            try await sidebarFrozenExpiry(0)
+        }, now: { now })
+        let process = AgentBindingProcess(pid: 42, startSeconds: 1, startMicroseconds: 0)
+        func evidence(_ condition: String?) -> SidebarCopilotTree {
+            var value = SidebarCopilotSession(
+                id: session, workspaceID: workspace, surfaceID: surface,
+                liveness: condition == "gone" ? .dead : .alive, state: condition == "sad" ? .failed : .idle,
+                model: nil, observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+                omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
+            value.bindingProcess = condition == "identity"
+                ? .init(pid: 43, startSeconds: 1, startMicroseconds: 0) : process
+            if condition == "permission" || condition == "question" {
+                value.attention = [.init(kind: condition == "permission" ? .permission : .answer,
+                                         evidence: .init(source: "copilot.events", eventID: UUID()), occurredAt: now)]
+            }
+            return SidebarCopilotTree(availability: .ready, sessions: condition == "unavailable" ? [] : [value],
+                                      issues: [], generatedAt: now)
+        }
+        func mounted() async -> SidebarPetMoodDisplay {
+            let tree = evidence(nil)
+            let display = SidebarPetMoodDisplay(clock: .init(now: { now }, sleepUntil: { _ in try await sidebarFrozenExpiry(0) }))
+            display.update(.project(session: tree.sessions.first, tree: tree, managed: poll.snapshot,
+                                    availability: poll.availability, now: now))
+            return display
+        }
+        poll.update(topology: topology(workspace: workspace, surfaces: [surface]), connected: true)
+        poll.updateObservedSessions(evidence(nil))
+        poll.setVisible(true)
+        defer {
+            poll.setVisible(false)
+            published.continuation.finish()
+        }
+        try #require(await publicationArrived(published.stream))
+        let control = await mounted()
+        #expect(control.shown?.isPreview == true, "The admitted preview is eligible before the event")
+        control.stop()
+
+        // No pet is mounted while the real event comes and goes inside the 75-second window.
+        poll.updateObservedSessions(evidence(boundary))
+        poll.updateObservedSessions(evidence(nil))
+        #expect(poll.snapshot.nodes.first?.moodPreview == nil)
+        let later = await mounted()
+        defer { later.stop() }
+        #expect(later.shown?.isPreview == false)
+        #expect(later.shown == later.current && later.current?.mood == .idle)
+
+        snapshot.nodes[0].moodPreview = .init(sequence: 3, startedAt: now)
+        poll.setVisible(false)
+        poll.setVisible(true)
+        try #require(await publicationArrived(published.stream))
+        #expect(poll.snapshot.nodes.first?.moodPreview == .init(sequence: 3, startedAt: now),
+                "A later explicit request is a new preview instance")
+    }
+
+    @Test(arguments: ["missing", "malformed", "disconnect"])
+    func lostOrchestrationReadHaltsPreviewInsteadOfPausingIt(_ boundary: String) async throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let workspace = UUID(), surface = UUID(), session = UUID()
+        var born = SidebarOrchestrationNode(
+            id: UUID(), runId: UUID(), parentId: nil, role: "coordinator", label: "Copilot session",
+            workspaceId: workspace, surfaceId: surface, generation: 1, phase: "turn-running",
+            availability: "busy", copilotSessionId: session, executionMode: .interactive,
+            createdAt: now, updatedAt: now)
+        born.enrollment = "born"
+        born.moodPreview = .init(sequence: 2, startedAt: now)
+        var snapshot = SidebarOrchestrationSnapshot(
+            version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [born])
+        var failing = false
+        var gate: CheckedContinuation<Void, Error>?
+        let published = AsyncStream<Void>.makeStream()
+        let poll = SidebarOrchestrationPolling(read: { @MainActor in
+            if failing {
+                if boundary == "missing" { throw CopilotFileError.missing }
+                throw DecodingError.dataCorrupted(.init(codingPath: [], debugDescription: "Synthetic"))
+            }
+            return snapshot
+        }, resetMoodBaseline: {}, pause: { @MainActor in
+            published.continuation.yield(())
+            try await withCheckedThrowingContinuation { gate = $0 }
+        }, now: { now })
+        func release(_ error: Error? = nil) {
+            let pending = gate
+            gate = nil
+            if let error { pending?.resume(throwing: error) } else { pending?.resume() }
+        }
+        var tree = SidebarCopilotSession(
+            id: session, workspaceID: workspace, surfaceID: surface, liveness: .alive, state: .idle,
+            model: nil, observedAt: now, nodes: [], childrenComplete: true, treeDegraded: false,
+            omittedChildrenCount: 0, omittedActiveChildrenCount: 0)
+        tree.bindingProcess = .init(pid: 42, startSeconds: 1, startMicroseconds: 0)
+        let evidence = SidebarCopilotTree(availability: .ready, sessions: [tree], issues: [], generatedAt: now)
+        func mounted() -> SidebarPetMoodDisplay {
+            let display = SidebarPetMoodDisplay(clock: .init(now: { now }, sleepUntil: { _ in try await sidebarFrozenExpiry(0) }))
+            display.update(.project(session: tree, tree: evidence, managed: poll.snapshot,
+                                    availability: poll.availability, now: now))
+            return display
+        }
+        let scope = topology(workspace: workspace, surfaces: [surface])
+        poll.update(topology: scope, connected: true)
+        poll.updateObservedSessions(evidence)
+        poll.setVisible(true)
+        defer {
+            poll.setVisible(false)
+            release(CancellationError())
+            published.continuation.finish()
+        }
+        try #require(await publicationArrived(published.stream))
+        let control = mounted()
+        #expect(control.shown?.isPreview == true, "The admitted preview is eligible before the loss")
+        control.stop()
+
+        // No pet is mounted while the orchestration observation is lost and recovers unchanged.
+        if boundary == "disconnect" {
+            poll.update(topology: scope, connected: false)
+            release(CancellationError())
+            #expect(poll.snapshot.nodes.isEmpty)
+            poll.update(topology: scope, connected: true)
+        } else {
+            failing = true
+            release()
+            try #require(await publicationArrived(published.stream))
+            #expect(poll.snapshot.nodes.isEmpty)
+            failing = false
+            release()
+        }
+        try #require(await publicationArrived(published.stream))
+        #expect(poll.snapshot.nodes.count == 1 && poll.snapshot.nodes.first?.moodPreview == nil)
+        let later = mounted()
+        defer { later.stop() }
+        #expect(later.shown?.isPreview == false)
+        #expect(later.shown == later.current && later.current?.mood == .idle)
+
+        snapshot.nodes[0].moodPreview = .init(sequence: 3, startedAt: now)
+        release()
+        try #require(await publicationArrived(published.stream))
+        #expect(poll.snapshot.nodes.first?.moodPreview == .init(sequence: 3, startedAt: now),
+                "A later explicit request is a new preview instance")
+    }
+
     @Test func enrollmentDecodesAndOnlyBornRootsMayCarryIt() throws {
         let workspace = UUID(), surface = UUID(), session = UUID()
         let born = bornRoot(workspace: workspace, surface: surface, session: session)

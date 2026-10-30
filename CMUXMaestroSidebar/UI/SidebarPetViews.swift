@@ -117,6 +117,7 @@ struct SidebarPetButton: View {
             } else {
                 SidebarPetView(store: store, petID: petID, session: content.petSessionID,
                                mood: shown.mood, width: width, topTrim: topInset)
+                    .overlay { if shown.isPreview { SidebarMoodPreviewGlyph(width: width) } }
             }
         }
         .buttonStyle(.plain)

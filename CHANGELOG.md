@@ -46,6 +46,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Added
 
+- Own-session cosmetic previews show all fifteen pet expressions for 75 seconds,
+  with cancellation, a corner preview glyph, cosmetic accessibility labels and
+  urgent-state preemption, without changing work or attention.
 - Session snapshots expose sanitized turn, cancellation, technical-error,
   tool-failure and compaction inputs for richer pet presentation. Unknown
   evidence and existing work and attention semantics stay unchanged (#379).
@@ -325,6 +328,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Mood refusals distinguish busy, proof, identity, placement and store failures
+  without exposing private diagnostics or automatically retrying. Failures after
+  the store is replaced stay uncertain rather than refused.
 - A failed native spawn's launch lease no longer blocks closing unrelated
   children in its run; it still fences its own node, subtree and surfaces. Native
   close/spawn release a failed lease once provider exit and surface absence are
