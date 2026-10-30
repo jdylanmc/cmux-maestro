@@ -17,6 +17,14 @@ struct SidebarMoodPreviewHalts {
     private var halted: Set<Key> = []
     private var seen: [UUID: Seen] = [:]
 
+    /// A failed read or disconnect loses every observation; hiding or re-scoping the sidebar does not.
+    mutating func observationLost(now: Date) {
+        for (node, entry) in seen where entry.playback.isCurrent(at: now) {
+            halted.insert(.init(node: node, playback: entry.playback))
+        }
+        seen = [:]
+    }
+
     /// Removes halted playback. Current urgent facts halt immediately; observation loss or a changed
     /// binding halts only a playback already observed eligible for that exact node.
     mutating func applying(

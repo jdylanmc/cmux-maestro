@@ -645,7 +645,10 @@ final class SidebarOrchestrationPolling {
 
     func update(topology: SidebarTopology, connected: Bool) {
         guard self.topology != topology || self.connected != connected else { return }
-        if self.connected && !connected { needsMoodBaseline = true }
+        if self.connected && !connected {
+            needsMoodBaseline = true
+            previewHalts.observationLost(now: now())
+        }
         self.topology = topology
         self.connected = connected
         invalidate()
@@ -712,12 +715,14 @@ final class SidebarOrchestrationPolling {
                     self.schedulePresentationExpiry()
                 } catch CopilotFileError.missing {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.previewHalts.observationLost(now: self.now())
                     self.snapshot = .empty
                     self.projected = .empty
                     self.availability = .waiting
                     self.cancelPresentationExpiry()
                 } catch {
                     guard let self, self.generation == token, !Task.isCancelled else { break }
+                    self.previewHalts.observationLost(now: self.now())
                     self.snapshot = .empty
                     self.projected = .empty
                     self.availability = .unavailable
