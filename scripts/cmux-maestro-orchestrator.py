@@ -1795,7 +1795,7 @@ class Store:
         return encoded
 
     @staticmethod
-    def _atomic(directory, name, data):
+    def _atomic(directory, name, data, *, committed=None):
         temporary = f".pending-{uuid.uuid4()}"
         descriptor = os.open(
             temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
@@ -1818,6 +1818,8 @@ class Store:
         finally:
             os.close(descriptor)
         os.replace(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        if committed is not None:
+            committed()
         os.fsync(directory)
 
 
@@ -6395,7 +6397,7 @@ def read_moods(store):
         os.close(descriptor)
 
 
-def write_mood(store, actor, mood, *, clock=time.time):
+def write_mood(store, actor, mood, *, clock=time.time, committed=None):
     value = read_moods(store)
     identity = dict(zip(MOOD_ID_FIELDS, (
         actor["id"], actor["runId"], actor["copilotSessionId"],
@@ -6449,7 +6451,7 @@ def write_mood(store, actor, mood, *, clock=time.time):
     if len(candidate) > MOOD_MAX_BYTES or len(mood_bytes(record)) > MOOD_MAX_RECORD_BYTES:
         raise OrchestrationError("mood-capacity-unavailable")
     moods_decode(candidate)
-    store._atomic(store.observer_fd, "moods.json", candidate)
+    store._atomic(store.observer_fd, "moods.json", candidate, committed=committed)
     return {"changed": True, "sequence": record["sequence"], "mood": mood}
 
 
@@ -6470,6 +6472,12 @@ def command_self_mood(args, root, cmux, *, native_identity=None, clock=time.time
 
     proof()
     stage = "mood-store-unavailable"
+
+    def committed():
+        # The record may already be published; later durability or unlock failures stay uncertain.
+        nonlocal stage
+        stage = "mood-unavailable"
+
     try:
         with Store(root) as store:
             state = store.read()
@@ -6484,12 +6492,13 @@ def command_self_mood(args, root, cmux, *, native_identity=None, clock=time.time
             stage = "mood-proof-unavailable"
             proof()
             stage = "mood-store-unavailable"
-            return {**write_mood(store, actor, args.mood, clock=clock), "sessionId": session}
+            return {**write_mood(store, actor, args.mood, clock=clock, committed=committed), "sessionId": session}
     except StoreBusy:
         raise OrchestrationError("mood-busy") from None
     except (OrchestrationError, OSError) as error:
         reason = str(error)
-        raise OrchestrationError(reason if reason in MOOD_ERRORS else stage) from None
+        raise OrchestrationError(
+            reason if reason in MOOD_ERRORS and stage != "mood-unavailable" else stage) from None
 
 
 MOOD_ERRORS = frozenset({

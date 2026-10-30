@@ -24,7 +24,7 @@ nonisolated struct SidebarMoodObservation: Decodable, Equatable, Sendable {
         let reportSequence: Int
     }
 
-    struct Playback: Equatable, Sendable {
+    struct Playback: Hashable, Sendable {
         let sequence: Int
         let startedAt: Date
         static let step: TimeInterval = 5

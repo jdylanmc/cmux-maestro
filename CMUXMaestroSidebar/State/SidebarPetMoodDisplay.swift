@@ -1,6 +1,28 @@
 import Foundation
 import Observation
 
+/// Cosmetic previews halted by a real event, shared by every pet view so a later view cannot resume them.
+@MainActor
+final class SidebarMoodPreviewHalts {
+    private struct Key: Hashable {
+        let session: UUID
+        let playback: SidebarMoodObservation.Playback
+    }
+
+    static let shared = SidebarMoodPreviewHalts()
+    private var halted: Set<Key> = []
+
+    func halt(_ playback: SidebarMoodObservation.Playback, session: UUID, now: Date) {
+        // Entries end with their own fixed window, so the set stays bounded by concurrent previews.
+        halted = halted.filter { $0.playback.isCurrent(at: now) }
+        halted.insert(.init(session: session, playback: playback))
+    }
+
+    func contains(_ playback: SidebarMoodObservation.Playback, session: UUID) -> Bool {
+        halted.contains(.init(session: session, playback: playback))
+    }
+}
+
 /// Owned by a visible pet, with one cancellable presentation deadline and no replay queue.
 @MainActor @Observable
 final class SidebarPetMoodDisplay {
@@ -33,8 +55,12 @@ final class SidebarPetMoodDisplay {
     @ObservationIgnored private var wake: Task<Void, Never>?
     @ObservationIgnored private var rejectedPreview: SidebarMoodObservation.Playback?
     @ObservationIgnored private var observedPreview: SidebarMoodObservation.Playback?
+    @ObservationIgnored private let previewHalts: SidebarMoodPreviewHalts
 
-    init(clock: Clock = .continuous) { self.clock = clock }
+    init(clock: Clock = .continuous, previewHalts: SidebarMoodPreviewHalts = .shared) {
+        self.clock = clock
+        self.previewHalts = previewHalts
+    }
 
     static func description(shown: SidebarPetMood, current: SidebarPetMood) -> String {
         shown.mood == current.mood && !shown.isPreview ? current.description
@@ -64,11 +90,19 @@ final class SidebarPetMoodDisplay {
         if !input.observationAvailable || candidate.preemptsHold
             || (identity != nil && identity != input.identity && input.preview == observedPreview) {
             rejectedPreview = input.preview ?? observedPreview
+            // A real event for this exact session halts the preview everywhere; switching subjects does not.
+            if let rejectedPreview, let session = input.identity?.session,
+               input.preview != nil || identity?.session == session {
+                previewHalts.halt(rejectedPreview, session: session, now: now)
+            }
         }
         if let playback = input.preview { observedPreview = playback }
-        let preview = input.preview.flatMap {
-            $0 != rejectedPreview && input.identity != nil && input.observationAvailable && !candidate.preemptsHold
-                ? SidebarPetMood.preview($0, now: now) : nil
+        let preview = input.preview.flatMap { playback in
+            input.identity.flatMap { identity in
+                playback != rejectedPreview && !previewHalts.contains(playback, session: identity.session)
+                    && input.observationAvailable && !candidate.preemptsHold
+                    ? SidebarPetMood.preview(playback, now: now) : nil
+            }
         }
         if let preview {
             shown = preview

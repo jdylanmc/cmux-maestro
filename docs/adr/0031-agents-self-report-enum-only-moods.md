@@ -76,12 +76,14 @@ timestamp, an active/cancelled flag and the preserved report sequence.
 Readers do not use `lastChangedAt` as time. Expiry/cancellation restores
 ordinary resolution without making a cold-suppressed report eligible.
 Reader startup and reconnect still baseline rather than replay; exact identity
-and generation remain mandatory. Real urgent facts preempt; a visible display
-invalidates playback on urgency, observation loss or identity change.
-Every preview is visibly and accessibly labelled cosmetic, including its
-Question, Needs permission, Sad and Gone art. No lifecycle fact is simulated.
+and generation remain mandatory. Real urgent facts preempt; urgency,
+observation loss or identity change halts that request in every pet view.
+Every preview is visibly marked by a corner glyph and accessibly labelled
+cosmetic, including its Question, Needs permission, Sad and Gone art. No
+lifecycle fact is simulated.
 
 Known failures are categorized at their actual boundary (busy, proof,
 identity, placement, store, input, rate or capacity), never by parsing private
-prose. Unknown outcomes remain unavailable; no retries or raw diagnostics.
+prose. Unknown outcomes, and failures after the store was replaced, remain
+unavailable; no retries or raw diagnostics.
 This improves observability without claiming a cause for historical refusals.

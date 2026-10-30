@@ -273,6 +273,61 @@ struct SidebarPetMoodTests {
         }
     }
 
+    @Test(arguments: ["permission", "question", "sad", "gone", "unavailable", "identity"])
+    func previewHaltedByRealEventDoesNotResumeInANewlyMountedView(_ boundary: String) async {
+        let clock = SidebarMoodTestClock(now: epoch)
+        let halts = SidebarMoodPreviewHalts()
+        let footer = SidebarPetMoodDisplay(clock: clock.clock, previewHalts: halts)
+        defer { footer.stop(); clock.finish() }
+        var fixture = Fixture(now: epoch)
+        fixture.report = .happy
+        let preview = SidebarMoodObservation.Playback(sequence: 2, startedAt: epoch)
+        var input = fixture.input
+        input.preview = preview
+        footer.update(input)
+        await clock.registered()
+        #expect(footer.shown?.isPreview == true)
+        clock.now = epoch.addingTimeInterval(10)
+        if boundary == "identity" {
+            fixture.generation = 2
+        } else {
+            fixture.add(boundary)
+        }
+        input = fixture.input
+        input.preview = boundary == "unavailable" ? nil : preview
+        footer.update(input)
+        #expect(footer.shown?.isPreview == false)
+
+        // The urgent fact is gone, but the shared reader still offers the same playback inside its window.
+        clock.now = epoch.addingTimeInterval(20)
+        var restored = Fixture(now: epoch).input
+        restored.identity = input.identity
+        restored.preview = preview
+        footer.update(restored)
+        let hoverClock = SidebarMoodTestClock(now: clock.now)
+        let hover = SidebarPetMoodDisplay(clock: hoverClock.clock, previewHalts: halts)
+        defer { hover.stop(); hoverClock.finish() }
+        hover.update(restored)
+        #expect(footer.shown?.isPreview == false)
+        #expect(hover.shown?.isPreview == false)
+        #expect(hover.shown == hover.current)
+
+        let unrelatedClock = SidebarMoodTestClock(now: clock.now)
+        let unrelated = SidebarPetMoodDisplay(clock: unrelatedClock.clock, previewHalts: SidebarMoodPreviewHalts())
+        defer { unrelated.stop(); unrelatedClock.finish() }
+        unrelated.update(restored)
+        await unrelatedClock.registered()
+        #expect(unrelated.shown?.isPreview == true, "Only the recorded halt suppresses the playback")
+        var requested = restored
+        requested.preview = .init(sequence: 3, startedAt: clock.now)
+        let nextClock = SidebarMoodTestClock(now: clock.now)
+        let next = SidebarPetMoodDisplay(clock: nextClock.clock, previewHalts: halts)
+        defer { next.stop(); nextClock.finish() }
+        next.update(requested)
+        await nextClock.registered()
+        #expect(next.shown?.isPreview == true, "A later explicit request is a new preview instance")
+    }
+
     @Test func sameMoodDoesNotRearmAndNewShownMoodGetsItsOwnHold() async {
         let clock = SidebarMoodTestClock(now: epoch)
         let display = SidebarPetMoodDisplay(clock: clock.clock)

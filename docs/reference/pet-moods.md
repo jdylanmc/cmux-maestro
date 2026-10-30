@@ -61,8 +61,11 @@ clock for deterministic tests.
 A human-requested `maestro_mood({"mood":"preview"})` temporarily shows all fifteen
 expressions at five seconds each, without altering the ordinary resolver.
 The real current mood remains available in the description. Every preview pet
-shows a localized Preview badge and cosmetic accessibility basis. Urgent facts,
-observation loss and identity changes immediately invalidate visible playback.
+shows a small play glyph in the art's physical top-left corner, without
+changing the pet frame; the glyph is hidden from accessibility, and the pet's
+label and help carry the localized cosmetic basis. Urgent facts, observation
+loss and identity changes immediately halt that request in every pet view,
+including views created later, so it never resumes.
 `cancel-preview` and the 75-second expiry snap to ordinary resolution without
 the three-second art hold. The request's fixed timeline never restarts on
 duplicate observations or late view creation.

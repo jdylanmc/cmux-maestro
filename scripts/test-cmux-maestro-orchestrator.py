@@ -163,6 +163,41 @@ class MoodTests(unittest.TestCase):
                     fn(args, self.root, unittest.mock.Mock())
                 self.assertEqual(self.path.read_bytes(), before)
 
+    def test_failures_after_publication_are_uncertain_not_store_refusals(self):
+        self.write("celebrating")
+        before = self.path.read_bytes()
+        fn = self.api["command_self_mood"]
+        session = self.actor["copilotSessionId"]
+        real_fsync = os.fsync
+
+        def directory_fsync(descriptor):
+            if os.fstat(descriptor).st_mode & 0o170000 == 0o040000:
+                raise OSError("private directory sync failure")
+            real_fsync(descriptor)
+
+        def failed_replace(*_args, **_kwargs):
+            raise OSError("private rename failure")
+
+        store = self.api["Store"]
+        for failure, injected, expected, published in (
+            ("replace", patch.object(os, "replace", failed_replace), "mood-store-unavailable", False),
+            ("directory-fsync", patch.object(os, "fsync", directory_fsync), "mood-unavailable", True),
+            ("unlock", patch.object(store, "__exit__", side_effect=OSError("private unlock")), "mood-unavailable", True),
+        ):
+            with self.subTest(failure=failure), patch.object(store, "read", return_value={}), \
+                    patch.dict(fn.__globals__, {
+                        "prove_own_session": lambda *a, **k: None,
+                        "exact_self_actor": lambda state: self.actor,
+                        "default_root": lambda: self.root, "Cmux": unittest.mock.Mock,
+                    }), patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                with injected:
+                    self.assertEqual(self.api["main"](
+                        ["mood", "--self", "--session-id", session, "--mood", "preview"]), 2)
+                self.assertEqual(json.loads(stderr.getvalue()), {"ok": False, "error": expected})
+                stored = json.loads(self.path.read_bytes())["moods"][0]
+                self.assertEqual("preview" in stored, published)
+                self.path.write_bytes(before)
+
     def test_native_and_cli_preview_actions_share_the_own_session_contract(self):
         fn = self.api["command_self_mood"]
         session = self.actor["copilotSessionId"]

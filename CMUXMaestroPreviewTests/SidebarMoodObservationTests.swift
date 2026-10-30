@@ -46,7 +46,9 @@ struct SidebarMoodObservationTests {
         let shown = cache.applying(bytes, to: base, now: now)
         #expect(shown.nodes[0].moodPreview == .init(sequence: 2, startedAt: now))
         #expect(shown.nodes[0].selfReportedMood == .happy && shown.nodes[0].selfReportedMoodSequence == 1)
-        #expect(try JSONEncoder().encode(shown) == JSONEncoder().encode(base))
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        #expect(try encoder.encode(shown) == encoder.encode(base))
         #expect(cache.applying(bytes, to: base, now: now.addingTimeInterval(74.999)).nodes[0].moodPreview != nil)
         let expired = cache.applying(bytes, to: base, now: now.addingTimeInterval(75))
         #expect(expired.nodes[0].moodPreview == nil && expired.nodes[0].selfReportedMood == .happy)

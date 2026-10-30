@@ -46,11 +46,13 @@ custom duration, mood list, scheduler, heartbeat or repeated write is supported.
 Starting an already-active preview is a no-op; explicit cancellation does not
 refill the three-second allowance. Acceptance confirms storage, not display.
 
-The pet displays a localized **Preview** badge, with an accessibility/tooltip
-basis of **Cosmetic preview; not session state** and its real current mood.
+The pet shows a small corner play glyph that covers no face and adds no
+separate accessibility element. Its accessibility label and tooltip state
+**Cosmetic preview; not session state** and its real current mood.
 Question, permission, real failure and process death preempt immediately.
-The visible display invalidates the preview on urgent facts, lost observations
-or changed identity, rather than resuming it when those facts disappear.
+Urgent facts, lost observations or changed identity halt that preview request
+in every pet view, including hover cards opened later, rather than resuming it
+when those facts disappear.
 Cold reader starts, disconnects, mismatches and invalid data suppress playback.
 Preview never writes or fabricates lifecycle, attention, history, custody,
 acknowledgement or capacity. The existing single cosmetic display deadline
@@ -66,11 +68,11 @@ Both native and CLI paths expose only bounded categories:
 | `mood-proof-unavailable` | Native own-session proof could not complete or verify. |
 | `mood-identity-unverified` | Exact actor, current route, ancestry or custody could not be verified. |
 | `mood-placement-unavailable` | Exact current host workspace/surface placement could not be verified. |
-| `mood-store-unavailable` | The private state or mood store could not be read, validated or written. |
+| `mood-store-unavailable` | The private state or mood store could not be read, validated or written; nothing was published. |
 | `mood-rate-limited` | A distinct non-clear change arrived inside three seconds. |
 | `mood-capacity-unavailable` | A store or sequence bound prevents admission. |
 | `mood-input-invalid` | The own-session request has an invalid shape or value. |
-| `mood-unavailable` | The operation failed or its outcome remains uncertain without a known category. |
+| `mood-unavailable` | The operation failed or its outcome remains uncertain, including a failure after the new record was published. |
 
 These categories identify the failing boundary, not the hidden root cause.
 They never echo helper output, paths, capabilities or process details. Inspect

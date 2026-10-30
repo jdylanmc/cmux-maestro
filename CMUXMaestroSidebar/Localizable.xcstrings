@@ -1,8 +1,6 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
-    "mood.preview.badge": {"extractionState":"manual","localizations":{
-      "en":{"stringUnit":{"state":"translated","value":"Preview"}},"ja":{"stringUnit":{"state":"translated","value":"プレビュー"}},"de":{"stringUnit":{"state":"translated","value":"Vorschau"}},"fr":{"stringUnit":{"state":"translated","value":"Aperçu"}},"es":{"stringUnit":{"state":"translated","value":"Vista previa"}},"ar":{"stringUnit":{"state":"translated","value":"معاينة"}},"ko":{"stringUnit":{"state":"translated","value":"미리 보기"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"预览"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"預覽"}}}},
     "mood.preview.basis": {"extractionState":"manual","localizations":{
       "en":{"stringUnit":{"state":"translated","value":"Cosmetic preview; not session state"}},"ja":{"stringUnit":{"state":"translated","value":"外観のプレビュー。セッションの状態ではありません"}},"de":{"stringUnit":{"state":"translated","value":"Reine Vorschau; kein Sitzungsstatus"}},"fr":{"stringUnit":{"state":"translated","value":"Aperçu visuel ; pas l’état de la session"}},"es":{"stringUnit":{"state":"translated","value":"Vista previa visual; no es el estado de la sesión"}},"ar":{"stringUnit":{"state":"translated","value":"معاينة شكلية؛ ليست حالة الجلسة"}},"ko":{"stringUnit":{"state":"translated","value":"외형 미리 보기이며 세션 상태가 아닙니다"}},"zh-Hans":{"stringUnit":{"state":"translated","value":"仅外观预览；并非会话状态"}},"zh-Hant":{"stringUnit":{"state":"translated","value":"僅外觀預覽；並非工作階段狀態"}}}},
     "mood.idle": {"extractionState":"manual","localizations":{
