@@ -53,6 +53,8 @@ Question, permission, real failure and process death preempt immediately.
 Urgent facts, lost observations or changed identity halt
 that preview request in every pet view, including hover cards opened later,
 rather than resuming it when those facts disappear.
+An urgent fact that starts and ends while the sidebar is hidden is not
+observed, so the rest of the 75-second window may play when it is shown again.
 Cold reader starts, disconnects, mismatches and invalid data suppress playback.
 Preview never writes or fabricates lifecycle, attention, history, custody,
 acknowledgement or capacity. The existing single cosmetic display deadline

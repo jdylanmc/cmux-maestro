@@ -78,7 +78,7 @@ ordinary resolution without making a cold-suppressed report eligible.
 Reader startup and reconnect still baseline rather than replay; exact identity
 and generation remain mandatory. Real urgent facts preempt; urgency,
 observation loss or identity change halts that request
-in every pet view.
+in every pet view while the sidebar is observing.
 Every preview is visibly marked by a corner glyph and accessibly labelled
 cosmetic, including its Question, Needs permission, Sad and Gone art. No
 lifecycle fact is simulated.

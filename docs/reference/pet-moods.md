@@ -66,6 +66,8 @@ changing the pet frame; the glyph is hidden from accessibility, and the pet's
 label and help carry the localized cosmetic basis. Urgent facts, observation
 loss and identity changes immediately halt that request in every pet view
 showing the session, including views created later.
+An urgent fact that starts and ends while the sidebar is hidden is not
+observed, so the rest of the 75-second window may play when it is shown again.
 `cancel-preview` and the 75-second expiry snap to ordinary resolution without
 the three-second art hold. The request's fixed timeline never restarts on
 duplicate observations or late view creation.
