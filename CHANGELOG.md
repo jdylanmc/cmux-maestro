@@ -48,8 +48,8 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Own-session cosmetic previews show all fifteen pet expressions for 75 seconds,
   with cancellation, a corner preview glyph, cosmetic accessibility labels and
-  urgent-state preemption that no pet view resumes, without changing work or
-  attention.
+  urgent-state preemption that later pet views do not resume, without
+  changing work or attention.
 - Session snapshots expose sanitized turn, cancellation, technical-error,
   tool-failure and compaction inputs for richer pet presentation. Unknown
   evidence and existing work and attention semantics stay unchanged (#379).

@@ -64,8 +64,9 @@ The real current mood remains available in the description. Every preview pet
 shows a small play glyph in the art's physical top-left corner, without
 changing the pet frame; the glyph is hidden from accessibility, and the pet's
 label and help carry the localized cosmetic basis. Urgent facts, observation
-loss and identity changes immediately halt that request in every pet view,
-including views created later, so it never resumes.
+loss and identity changes immediately halt that request in every pet view
+showing the session, including views created later. If no pet view shows the
+session at that moment, a later view may play the rest of the 75-second window.
 `cancel-preview` and the 75-second expiry snap to ordinary resolution without
 the three-second art hold. The request's fixed timeline never restarts on
 duplicate observations or late view creation.

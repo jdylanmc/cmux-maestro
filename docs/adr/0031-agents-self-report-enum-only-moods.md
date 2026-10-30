@@ -77,7 +77,8 @@ Readers do not use `lastChangedAt` as time. Expiry/cancellation restores
 ordinary resolution without making a cold-suppressed report eligible.
 Reader startup and reconnect still baseline rather than replay; exact identity
 and generation remain mandatory. Real urgent facts preempt; urgency,
-observation loss or identity change halts that request in every pet view.
+observation loss or identity change seen by any pet view halts that request
+in every pet view.
 Every preview is visibly marked by a corner glyph and accessibly labelled
 cosmetic, including its Question, Needs permission, Sad and Gone art. No
 lifecycle fact is simulated.
