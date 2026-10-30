@@ -60,3 +60,28 @@ Consequence: same-user processes can edit the file; readers check shape,
 ownership, privacy and exact binding, not cryptographic authorship. Exact-self
 proof establishes who reported, not whether the report is true. Contract:
 [self-reported moods](../reference/self-reported-moods.md).
+
+## Human-requested cosmetic preview extension
+
+The owner additionally authorized an exact-own-session preview of all fifteen
+existing expressions, five seconds each, 75 seconds total, with cancellation
+and bounded refusal diagnostics. `preview` and `cancel-preview` are explicit
+actions on the same native/CLI mood interface, not new self-reported emotions.
+They reuse the existing proof, lock, store, sequence, read grant and single
+cosmetic display deadline. There is no new scheduler, transport, permission,
+heartbeat, arbitrary duration or other-session control.
+
+An optional bounded preview object in the mood record stores a fixed start
+timestamp, an active/cancelled flag and the preserved report sequence.
+Readers do not use `lastChangedAt` as time. Expiry/cancellation restores
+ordinary resolution without making a cold-suppressed report eligible.
+Reader startup and reconnect still baseline rather than replay; exact identity
+and generation remain mandatory. Real urgent facts preempt; a visible display
+invalidates playback on urgency, observation loss or identity change.
+Every preview is visibly and accessibly labelled cosmetic, including its
+Question, Needs permission, Sad and Gone art. No lifecycle fact is simulated.
+
+Known failures are categorized at their actual boundary (busy, proof,
+identity, placement, store, input, rate or capacity), never by parsing private
+prose. Unknown outcomes remain unavailable; no retries or raw diagnostics.
+This improves observability without claiming a cause for historical refusals.

@@ -199,6 +199,80 @@ struct SidebarPetMoodTests {
         #expect(display.deadline == nil)
     }
 
+    @Test func previewShowsEveryExpressionForFiveSecondsAndRestoresAtSeventyFive() async throws {
+        let clock = SidebarMoodTestClock(now: epoch)
+        let display = SidebarPetMoodDisplay(clock: clock.clock)
+        defer { display.stop(); clock.finish() }
+        var fixture = Fixture(now: epoch)
+        fixture.report = .happy
+        var input = fixture.input
+        input.preview = .init(sequence: 2, startedAt: epoch)
+        let original = input
+        let ordinary = SidebarPetMood.resolve(input, now: epoch)
+        display.update(input)
+        let expected: [SidebarPetSheet.Mood] = [
+            .idle, .thinking, .working, .delegating, .question, .needsPermission, .confused,
+            .content, .startled, .sad, .compacting, .sleepy, .gone, .proud, .celebrating,
+        ]
+        for (index, mood) in expected.enumerated() {
+            await clock.registered()
+            let shown = try #require(display.shown)
+            #expect(shown.mood == mood && shown.isPreview && !shown.preemptsHold)
+            #expect(display.current == ordinary)
+            #expect(SidebarPetMoodDisplay.description(shown: shown, current: ordinary).contains("Cosmetic preview"))
+            #expect(display.deadline == epoch.addingTimeInterval(Double(index + 1) * 5))
+            clock.now = epoch.addingTimeInterval(Double(index + 1) * 5 - 0.001)
+            display.update(input)
+            #expect(display.shown?.mood == mood)
+            await clock.advance(to: epoch.addingTimeInterval(Double(index + 1) * 5), observing: display)
+        }
+        #expect(display.shown == ordinary && display.current == ordinary)
+        #expect(display.deadline == nil)
+        #expect(input == original, "Preview cannot change lifecycle, attention, or the prior self-report")
+        display.update(input)
+        #expect(display.shown == ordinary, "An expired request cannot restart its timeline")
+    }
+
+    @Test(arguments: ["cancel", "permission", "question", "sad", "gone", "unavailable", "identity", "stop"])
+    func previewIsImmediatelyCancelledOrPreemptedWithoutReplay(_ boundary: String) async {
+        let clock = SidebarMoodTestClock(now: epoch)
+        let display = SidebarPetMoodDisplay(clock: clock.clock)
+        defer { display.stop(); clock.finish() }
+        var fixture = Fixture(now: epoch)
+        fixture.report = .happy
+        var input = fixture.input
+        let preview = SidebarMoodObservation.Playback(sequence: 2, startedAt: epoch)
+        input.preview = preview
+        display.update(input)
+        await clock.registered()
+        clock.now = epoch.addingTimeInterval(1)
+        if boundary == "cancel" {
+            input.preview = nil
+        } else if boundary == "stop" {
+            display.stop()
+        } else if boundary == "identity" {
+            fixture.generation = 2
+            input = fixture.input
+            input.preview = preview
+        } else {
+            fixture.add(boundary)
+            input = fixture.input
+            input.preview = boundary == "unavailable" ? nil : preview
+        }
+        display.update(input)
+        #expect(display.shown?.isPreview == false)
+        #expect(display.shown == display.current)
+        #expect(display.deadline == nil)
+        if boundary != "cancel" {
+            clock.now = epoch.addingTimeInterval(10)
+            var restored = Fixture(now: epoch).input
+            restored.identity = input.identity
+            restored.preview = preview
+            display.update(restored)
+            #expect(display.shown?.isPreview == false)
+        }
+    }
+
     @Test func sameMoodDoesNotRearmAndNewShownMoodGetsItsOwnHold() async {
         let clock = SidebarMoodTestClock(now: epoch)
         let display = SidebarPetMoodDisplay(clock: clock.clock)
@@ -333,12 +407,15 @@ struct SidebarPetMoodTests {
             executionMode: .interactive, createdAt: epoch, updatedAt: epoch)
         node.selfReportedMood = .happy
         node.selfReportedMoodSequence = 1
+        node.moodPreview = .init(sequence: 2, startedAt: epoch)
         var managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: epoch, complete: true, omittedCount: 0, nodes: [node])
         func project() -> SidebarPetMoodInput {
             .project(session: session, tree: tree, managed: managed, availability: .ready, now: epoch)
         }
         #expect(SidebarPetMood.resolve(project(), now: epoch).mood == .proud)
+        #expect(project().preview == node.moodPreview)
         managed.moodsUnavailable = true
+        #expect(project().preview == nil)
         #expect(SidebarPetMood.resolve(project(), now: epoch).mood == .thinking)
         managed.moodsUnavailable = false
         managed.nodes.append(node)
@@ -348,6 +425,7 @@ struct SidebarPetMoodTests {
         let lost = project()
         #expect(lost.identity?.generation == 1)
         #expect(lost.selfReport == nil)
+        #expect(lost.preview == nil)
         #expect(SidebarPetMood.resolve(lost, now: epoch).mood == .idle)
     }
 }

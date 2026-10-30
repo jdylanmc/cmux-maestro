@@ -28,6 +28,71 @@ struct SidebarMoodObservationTests {
         .init(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
     }
 
+    private func previewRecord(
+        _ node: SidebarOrchestrationNode, sequence: Int = 2, active: Bool = true
+    ) -> [String: Any] {
+        var result = record(node, sequence: sequence)
+        result["preview"] = ["startedAt": 1_800_000_000_000, "active": active, "reportSequence": 1] as [String: Any]
+        return result
+    }
+
+    @Test func previewPreservesEligibleReportAndExpiresWithoutChangingLifecycle() throws {
+        let node = node()
+        let base = snapshot(node)
+        var cache = SidebarMoodObservation.Cache()
+        _ = cache.applying(nil, to: base, now: now)
+        _ = cache.applying(try data([record(node)]), to: base, now: now)
+        let bytes = try data([previewRecord(node)])
+        let shown = cache.applying(bytes, to: base, now: now)
+        #expect(shown.nodes[0].moodPreview == .init(sequence: 2, startedAt: now))
+        #expect(shown.nodes[0].selfReportedMood == .happy && shown.nodes[0].selfReportedMoodSequence == 1)
+        #expect(try JSONEncoder().encode(shown) == JSONEncoder().encode(base))
+        #expect(cache.applying(bytes, to: base, now: now.addingTimeInterval(74.999)).nodes[0].moodPreview != nil)
+        let expired = cache.applying(bytes, to: base, now: now.addingTimeInterval(75))
+        #expect(expired.nodes[0].moodPreview == nil && expired.nodes[0].selfReportedMood == .happy)
+        #expect(cache.applying(bytes, to: base, now: now).nodes[0].moodPreview == nil, "Clock rollback cannot replay")
+    }
+
+    @Test func previewCancellationKeepsBaselineSuppressionAndTombstoneOrdering() throws {
+        let node = node()
+        let base = snapshot(node)
+        var cache = SidebarMoodObservation.Cache()
+        _ = cache.applying(try data([record(node)]), to: base, now: now)
+        let active = try data([previewRecord(node)])
+        let shown = cache.applying(active, to: base, now: now)
+        #expect(shown.nodes[0].moodPreview != nil && shown.nodes[0].selfReportedMood == nil)
+        let cancelled = cache.applying(try data([previewRecord(node, sequence: 3, active: false)]), to: base, now: now)
+        #expect(cancelled.nodes[0].moodPreview == nil && cancelled.nodes[0].selfReportedMood == nil)
+        #expect(cache.applying(active, to: base, now: now).nodes[0].moodPreview == nil)
+        let normal = cache.applying(try data([record(node, sequence: 4)]), to: base, now: now)
+        #expect(normal.nodes[0].selfReportedMood == .happy && normal.nodes[0].moodPreview == nil)
+    }
+
+    @Test(arguments: ["cold", "disconnect", "missing", "malformed", "generation", "surface", "future"])
+    func previewCannotReplayAcrossReaderBoundaries(_ boundary: String) throws {
+        let node = node()
+        let base = snapshot(node)
+        var cache = SidebarMoodObservation.Cache()
+        let bytes = try data([previewRecord(node)])
+        if boundary != "cold" {
+            _ = cache.applying(nil, to: base, now: now)
+            #expect(cache.applying(bytes, to: base, now: now).nodes[0].moodPreview != nil)
+        }
+        switch boundary {
+        case "disconnect": cache.resetForConnection()
+        case "missing": _ = cache.applying(nil, to: base, now: now)
+        case "malformed": _ = cache.applying(Data("invalid".utf8), to: base, now: now)
+        case "generation", "surface":
+            var foreign = previewRecord(node, sequence: 3)
+            foreign[boundary == "generation" ? "generation" : "surfaceId"] =
+                boundary == "generation" ? 2 : UUID().uuidString.lowercased() as Any
+            _ = cache.applying(try data([foreign]), to: base, now: now)
+        case "future": _ = cache.applying(bytes, to: base, now: now.addingTimeInterval(-1))
+        default: break
+        }
+        #expect(cache.applying(bytes, to: base, now: now).nodes[0].moodPreview == nil)
+    }
+
     @Test func coldStartNoopClearAndStaleSequences() throws {
         let node = node()
         let base = snapshot(node)
@@ -104,6 +169,16 @@ struct SidebarMoodObservationTests {
         for (field, value) in mutations {
             var bad = record(node)
             bad[field] = value
+            invalid.append(try data([bad]))
+        }
+        for preview in [
+            NSNull(), [:], ["startedAt": 1, "active": 1, "reportSequence": 1],
+            ["startedAt": 1, "active": true, "reportSequence": 2],
+            ["startedAt": -1, "active": true, "reportSequence": 1],
+            ["startedAt": 1, "active": true, "reportSequence": 1, "reason": "private"],
+        ] as [Any] {
+            var bad = record(node)
+            bad["preview"] = preview
             invalid.append(try data([bad]))
         }
         invalid.append(Data(String(decoding: claim, as: UTF8.self)

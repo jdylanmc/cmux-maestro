@@ -53,6 +53,17 @@ of a question, failure report or human decision. It is presentation metadata,
 not evidence of success. Refusals (for example `mood-rate-limited`) are final:
 no automatic retry. Details: `/maestro` and ADR 0031.
 
+Only if the human explicitly requests a cosmetic preview, call
+`maestro_mood({"mood":"preview"})` once: all fifteen expressions, five seconds
+each, 75 seconds total. `cancel-preview` restores ordinary resolution; `clear`
+also withdraws the report. The same CLI accepts `--mood preview` and
+`--mood cancel-preview`. Never use a repeated shell loop or scheduler.
+The preview is labelled cosmetic; real urgent attention, failure and death
+preempt it. Stale identity, cold reader start or disconnect cannot replay it.
+Bounded refusal codes distinguish busy, proof, identity, placement, store,
+rate and capacity boundaries. They are not proof of a historical cause and
+do not authorize retry, fallback or permission changes.
+
 ## Start a managed coordinator
 
 A Copilot session started in CMUX after setup is already a born-managed root

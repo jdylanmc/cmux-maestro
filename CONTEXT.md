@@ -237,6 +237,12 @@ _Avoid_: sentiment, status
 Optional `happy`, `celebrating` or `confused` an agent reports for its own exact session; `clear` withdraws it. Authored presentation metadata, never work, success or completion evidence (ADR 0031).
 _Avoid_: emotion, feeling
 
+**Cosmetic mood preview**:
+Explicit own-session preview of all fifteen pet expressions, five seconds each,
+expiring after 75 seconds or cancellation. Labelled cosmetic; never session
+state. Real urgent attention, failure and death preempt it (ADR 0031).
+_Avoid_: simulated status, self-reported failure
+
 **Host footer clearance**:
 Fixed 50-point strip reserved for CMUX's overlaid footer.
 _Avoid_: footer inset

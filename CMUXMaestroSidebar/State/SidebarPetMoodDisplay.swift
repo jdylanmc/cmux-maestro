@@ -31,11 +31,13 @@ final class SidebarPetMoodDisplay {
     @ObservationIgnored private var identity: SidebarPetMoodInput.Identity?
     @ObservationIgnored private var shownAt: Date?
     @ObservationIgnored private var wake: Task<Void, Never>?
+    @ObservationIgnored private var rejectedPreview: SidebarMoodObservation.Playback?
+    @ObservationIgnored private var observedPreview: SidebarMoodObservation.Playback?
 
     init(clock: Clock = .continuous) { self.clock = clock }
 
     static func description(shown: SidebarPetMood, current: SidebarPetMood) -> String {
-        shown.mood == current.mood ? current.description
+        shown.mood == current.mood && !shown.isPreview ? current.description
             : String(localized: "mood.held", defaultValue: "Shown: \(shown.description). Current: \(current.description)")
     }
 
@@ -45,6 +47,7 @@ final class SidebarPetMoodDisplay {
     }
 
     func stop() {
+        rejectedPreview = observedPreview
         wake?.cancel()
         wake = nil
         deadline = nil
@@ -58,7 +61,20 @@ final class SidebarPetMoodDisplay {
         let now = clock.now()
         let candidate = SidebarPetMood.resolve(input, now: now)
         current = candidate
-        if shown == nil || identity != input.identity || candidate.preemptsHold
+        if !input.observationAvailable || candidate.preemptsHold
+            || (identity != nil && identity != input.identity && input.preview == observedPreview) {
+            rejectedPreview = input.preview ?? observedPreview
+        }
+        if let playback = input.preview { observedPreview = playback }
+        let preview = input.preview.flatMap {
+            $0 != rejectedPreview && input.identity != nil && input.observationAvailable && !candidate.preemptsHold
+                ? SidebarPetMood.preview($0, now: now) : nil
+        }
+        if let preview {
+            shown = preview
+            shownAt = now
+            identity = input.identity
+        } else if shown?.isPreview == true || shown == nil || identity != input.identity || candidate.preemptsHold
             || now >= (shownAt ?? now).addingTimeInterval(SidebarPetMood.minimumMoodHold) {
             if shown?.mood != candidate.mood || identity != input.identity || shownAt == nil {
                 shownAt = now
@@ -70,10 +86,14 @@ final class SidebarPetMoodDisplay {
             shown = candidate
         }
         var next: Date?
-        if shown?.mood != candidate.mood, let shownAt {
+        if preview != nil, let playback = input.preview {
+            let step = SidebarMoodObservation.Playback.step
+            let index = floor(now.timeIntervalSince(playback.startedAt) / step)
+            next = playback.startedAt.addingTimeInterval((index + 1) * step)
+        } else if shown?.mood != candidate.mood, let shownAt {
             next = shownAt.addingTimeInterval(SidebarPetMood.minimumMoodHold)
         }
-        if input.observationAvailable, let sleepy = SidebarPetMood.sleepyDeadline(input), sleepy > now,
+        if preview == nil, input.observationAvailable, let sleepy = SidebarPetMood.sleepyDeadline(input), sleepy > now,
            SidebarPetMood.resolve(input, now: sleepy).mood == .sleepy {
             next = min(next ?? sleepy, sleepy)
         }

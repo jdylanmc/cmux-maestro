@@ -17,6 +17,7 @@ struct SidebarPetMoodInput: Equatable {
     var session: SidebarCopilotSession?
     var selfReport: SidebarMoodObservation.Mood?
     var selfReportSequence: Int?
+    var preview: SidebarMoodObservation.Playback?
 
     static let unavailable = Self()
 
@@ -68,6 +69,7 @@ struct SidebarPetMoodInput: Equatable {
         return Self(identity: identity, observationAvailable: current, session: current ? exactSession : nil,
                     selfReport: current && ownerCurrent && !managed.moodsUnavailable ? owner?.selfReportedMood : nil,
                     selfReportSequence: current && ownerCurrent && !managed.moodsUnavailable
-                        ? owner?.selfReportedMoodSequence : nil)
+                        ? owner?.selfReportedMoodSequence : nil,
+                    preview: current && ownerCurrent && !managed.moodsUnavailable ? owner?.moodPreview : nil)
     }
 }

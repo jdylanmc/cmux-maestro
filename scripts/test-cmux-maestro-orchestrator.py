@@ -86,6 +86,110 @@ class MoodTests(unittest.TestCase):
         self.write("clear")
         self.assertEqual(self.write("happy", 1000)["sequence"], 2)
 
+    def test_preview_preserves_report_cancels_and_does_not_extend_or_write_lifecycle(self):
+        self.write("happy")
+        self.assertEqual(self.write("preview", 1003)["sequence"], 2)
+        record = json.loads(self.path.read_bytes())["moods"][0]
+        self.assertEqual(record["mood"], "happy")
+        self.assertEqual(record["preview"], {"startedAt": 1003000, "active": True, "reportSequence": 1})
+        original = self.path.read_bytes()
+        self.assertFalse(self.write("preview", 1077.999)["changed"])
+        self.assertEqual(self.path.read_bytes(), original)
+        self.assertEqual(self.write("preview", 1078)["sequence"], 3)
+        self.assertEqual(self.write("cancel-preview", 1078)["sequence"], 4)
+        cancelled = json.loads(self.path.read_bytes())["moods"][0]
+        self.assertEqual(cancelled["mood"], "happy")
+        self.assertEqual(cancelled["preview"], {"startedAt": 1078000, "active": False, "reportSequence": 1})
+        self.assertEqual(cancelled["lastChangedAt"], 1078000)
+        self.assertFalse(self.write("cancel-preview", 1078)["changed"])
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "mood-rate-limited"):
+            self.write("preview", 1079)
+        self.assertEqual(self.write("clear", 1079)["sequence"], 5)
+        self.assertNotIn("preview", json.loads(self.path.read_bytes())["moods"][0])
+        self.assertFalse((self.root / "control/state.json").exists())
+        self.assertFalse((self.root / "observer/current.json").exists())
+        self.assertEqual(self.write("preview", 1081)["sequence"], 6)
+        resumed = self.write("preview", 1081, {**self.actor, "generation": 2})
+        self.assertEqual(resumed["sequence"], 7)
+        self.assertEqual(json.loads(self.path.read_bytes())["moods"][0]["mood"], "clear")
+        with self.assertRaisesRegex(self.api["OrchestrationError"], "mood-identity-unverified"):
+            self.write("cancel-preview", 1082)
+
+    def test_refusal_boundaries_are_bounded_and_preserve_existing_claim(self):
+        self.write("celebrating")
+        before = self.path.read_bytes()
+        fn = self.api["command_self_mood"]
+        args = self.api["argparse"].Namespace(
+            own_session=True, session_id=self.actor["copilotSessionId"], mood="preview")
+        error = self.api["OrchestrationError"]
+        for condition, expected in [
+            ("proof", "mood-proof-unavailable"), ("reproof", "mood-proof-unavailable"),
+            ("actor", "mood-identity-unverified"), ("native", "mood-identity-unverified"),
+            ("placement", "mood-placement-unavailable"), ("store", "mood-store-unavailable"),
+        ]:
+            host = unittest.mock.Mock()
+            proof = unittest.mock.Mock(side_effect=(
+                [None, error("private reproof")] if condition == "reproof"
+                else error("private proof") if condition == "proof" else None))
+            actor = unittest.mock.Mock(
+                side_effect=error("private process details") if condition == "actor" else None,
+                return_value=self.actor)
+            if condition == "placement":
+                host.validate_surface.side_effect = error("private host diagnostic")
+            native = unittest.mock.Mock(
+                side_effect=error("private capability") if condition == "native" else None,
+                return_value=self.actor)
+            with self.subTest(condition=condition), \
+                    patch.object(self.api["Store"], "read", return_value={},
+                                 side_effect=error("private path") if condition == "store" else None), \
+                    patch.dict(fn.__globals__, {
+                        "prove_own_session": proof, "exact_self_actor": actor, "authorize_native_actor": native,
+                        "default_root": lambda: self.root, "Cmux": lambda: host,
+                    }), patch("sys.stderr", new_callable=io.StringIO) as stderr, \
+                    patch("sys.stdin", unittest.mock.Mock(buffer=io.BytesIO(json.dumps({
+                        "identity": {"sessionId": args.session_id}, "mood": "preview",
+                    }).encode()))):
+                invocation = (["native-mood"] if condition == "native" else
+                              ["mood", "--self", "--session-id", args.session_id, "--mood", "preview"])
+                self.assertEqual(self.api["main"](invocation), 2)
+                self.assertEqual(json.loads(stderr.getvalue()), {"ok": False, "error": expected})
+                self.assertEqual(self.path.read_bytes(), before)
+                self.assertLessEqual(proof.call_count, 2)
+                self.assertLessEqual(host.validate_surface.call_count, 1)
+        for shared in (False, True):
+            with self.subTest(shared=shared), self.api["Store"](self.root, read_only=shared), \
+                    patch.dict(fn.__globals__, {"prove_own_session": lambda *a, **k: None}):
+                with self.assertRaisesRegex(error, "^mood-busy$"):
+                    fn(args, self.root, unittest.mock.Mock())
+                self.assertEqual(self.path.read_bytes(), before)
+
+    def test_native_and_cli_preview_actions_share_the_own_session_contract(self):
+        fn = self.api["command_self_mood"]
+        session = self.actor["copilotSessionId"]
+        with patch.object(self.api["Store"], "read", return_value={}), \
+                patch.dict(fn.__globals__, {
+                    "prove_own_session": lambda *a, **k: None,
+                    "exact_self_actor": lambda state: self.actor,
+                    "authorize_native_actor": lambda state, identity: self.actor,
+                    "default_root": lambda: self.root, "Cmux": unittest.mock.Mock,
+                }):
+            for sequence, mood in enumerate(("preview", "cancel-preview"), 1):
+                with patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+                        patch("sys.stdin", unittest.mock.Mock(buffer=io.BytesIO(json.dumps({
+                            "identity": {"sessionId": session}, "mood": mood,
+                        }).encode()))):
+                    invocation = (["native-mood"] if mood == "preview" else
+                                  ["mood", "--self", "--session-id", session, "--mood", mood])
+                    self.assertEqual(self.api["main"](invocation), 0)
+                    self.assertEqual(json.loads(stdout.getvalue()), {
+                        "ok": True, "sessionId": session, "mood": mood, "sequence": sequence, "changed": True,
+                    })
+            stored = json.loads(self.path.read_bytes())["moods"][0]
+            self.assertEqual(stored["mood"], "clear")
+            self.assertFalse(stored["preview"]["active"])
+            self.assertFalse((self.root / "control/state.json").exists())
+            self.assertFalse((self.root / "observer/current.json").exists())
+
     def test_malformed_or_unsafe_store_is_never_overwritten(self):
         self.write("happy")
         original = self.path.read_bytes()
@@ -102,6 +206,11 @@ class MoodTests(unittest.TestCase):
             ("sessionId", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"), ("lastChangedAt", -1),
         ):
             malformed.append(self.api["mood_bytes"]({"version": 1, "moods": [{**record, field: value}]}))
+        for preview in (None, {}, {"startedAt": 1000, "active": 1, "reportSequence": 1},
+                        {"startedAt": 1000.0, "active": True, "reportSequence": 1},
+                        {"startedAt": 1000, "active": True, "reportSequence": 2},
+                        {"startedAt": 1000, "active": True, "reportSequence": 1, "reason": "private"}):
+            malformed.append(self.api["mood_bytes"]({"version": 1, "moods": [{**record, "preview": preview}]}))
         for raw in malformed:
             with self.subTest(raw=raw[:120]):
                 self.path.write_bytes(raw)

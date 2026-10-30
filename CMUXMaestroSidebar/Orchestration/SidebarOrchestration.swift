@@ -107,6 +107,7 @@ nonisolated struct SidebarOrchestrationNode: Codable, Identifiable, Equatable, S
     /// Exact-generation authored metadata only; excluded from the lifecycle wire contract.
     var selfReportedMood: SidebarMoodObservation.Mood? = nil
     var selfReportedMoodSequence: Int? = nil
+    var moodPreview: SidebarMoodObservation.Playback? = nil
 
     /// The row title: a born root's eligible session name, otherwise its projected label.
     var title: String { sessionTitle ?? label }
@@ -360,7 +361,7 @@ nonisolated enum SidebarOrchestrationReader {
         cache: inout Cache, now: Date
     ) throws -> SidebarOrchestrationSnapshot {
         let base = try resolveBase(current: data, icons: iconData, processes: processData, cache: &cache, now: now)
-        return cache.moods.applying(moodData, to: base)
+        return cache.moods.applying(moodData, to: base, now: now)
     }
 
     private static func resolveBase(

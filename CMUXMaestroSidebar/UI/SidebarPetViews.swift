@@ -117,6 +117,13 @@ struct SidebarPetButton: View {
             } else {
                 SidebarPetView(store: store, petID: petID, session: content.petSessionID,
                                mood: shown.mood, width: width, topTrim: topInset)
+                    .overlay(alignment: .bottom) {
+                        if shown.isPreview {
+                            Text(String(localized: "mood.preview.badge", defaultValue: "Preview"))
+                                .font(.caption2).padding(2).background(.regularMaterial, in: Capsule())
+                                .allowsHitTesting(false)
+                        }
+                    }
             }
         }
         .buttonStyle(.plain)

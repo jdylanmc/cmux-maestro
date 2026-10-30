@@ -54,8 +54,18 @@ Disappearance cancels the deadline; nothing is persisted.
 
 Sleepy uses the existing unacknowledged Turn finished timestamp, not process idle
 time. Acknowledgement removes that candidate; the ordinary art hold still applies.
-It does not expire or acknowledge an outcome. One deadline handles both hold
-catch-up and Sleepy, with an injectable clock for deterministic tests.
+It does not expire or acknowledge an outcome. One deadline handles hold
+catch-up, Sleepy and explicit cosmetic preview slots/expiry, with an injectable
+clock for deterministic tests.
+
+A human-requested `maestro_mood({"mood":"preview"})` temporarily shows all fifteen
+expressions at five seconds each, without altering the ordinary resolver.
+The real current mood remains available in the description. Every preview pet
+shows a localized Preview badge and cosmetic accessibility basis. Urgent facts,
+observation loss and identity changes immediately invalidate visible playback.
+`cancel-preview` and the 75-second expiry snap to ordinary resolution without
+the three-second art hold. The request's fixed timeline never restarts on
+duplicate observations or late view creation.
 
 Reduce Motion displays frame zero of the same selected mood and obeys the same
 precedence and hold. Held art is described separately from the current mood/basis.

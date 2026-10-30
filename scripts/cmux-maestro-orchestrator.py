@@ -99,6 +99,10 @@ class OrchestrationError(Exception):
     pass
 
 
+class StoreBusy(OrchestrationError):
+    pass
+
+
 class CommittedProjectionError(OrchestrationError):
     """Control state committed; only the derived observer projection failed to publish."""
 
@@ -1435,7 +1439,7 @@ class Store:
             try:
                 fcntl.flock(self.lock_fd, operation)
             except BlockingIOError:
-                raise OrchestrationError("Another orchestration operation is active; retry.")
+                raise StoreBusy("Another orchestration operation is active; retry.")
             return self
         except Exception:
             self._close()
@@ -6302,6 +6306,8 @@ def command_self_icon(args):
 
 
 MOOD_VALUES = ("happy", "celebrating", "confused", "clear")
+MOOD_ACTIONS = (*MOOD_VALUES, "preview", "cancel-preview")
+MOOD_PREVIEW_MS = 75_000
 MOOD_MAX_BYTES = 1024 * 1024
 MOOD_MAX_RECORD_BYTES = 1024
 MOOD_MAX_NODES = 1024
@@ -6335,7 +6341,7 @@ def moods_decode(raw):
             raise ValueError()
         nodes, workspaces = set(), {}
         for record in value["moods"]:
-            if (not isinstance(record, dict) or set(record) != MOOD_FIELDS
+            if (not isinstance(record, dict) or set(record) not in (MOOD_FIELDS, MOOD_FIELDS | {"preview"})
                     or len(mood_bytes(record)) > MOOD_MAX_RECORD_BYTES
                     or record["source"] != "self-report"
                     or not isinstance(record["mood"], str) or record["mood"] not in MOOD_VALUES):
@@ -6345,6 +6351,15 @@ def moods_decode(raw):
                     raise ValueError()
             for field in ("generation", "sequence", "lastChangedAt"):
                 if type(record[field]) is not int or not 1 <= record[field] <= MOOD_MAX_INTEGER:
+                    raise ValueError()
+            if "preview" in record:
+                preview = record["preview"]
+                if (not isinstance(preview, dict) or set(preview) != {"startedAt", "active", "reportSequence"}
+                        or type(preview["active"]) is not bool
+                        or type(preview["startedAt"]) is not int
+                        or not 1 <= preview["startedAt"] <= MOOD_MAX_INTEGER - MOOD_PREVIEW_MS
+                        or type(preview["reportSequence"]) is not int
+                        or not 1 <= preview["reportSequence"] <= record["sequence"]):
                     raise ValueError()
             if record["nodeId"] in nodes:
                 raise ValueError()
@@ -6394,15 +6409,32 @@ def write_mood(store, actor, mood, *, clock=time.time):
         or any(previous[k] != identity[k] for k in MOOD_ID_FIELDS[:-1])
     ):
         raise OrchestrationError("mood-identity-unverified")
-    if same_identity and previous["mood"] == mood:
-        return {"changed": False, "sequence": previous["sequence"], "mood": mood}
     stamp = int(clock() * 1000)
-    if same_identity and mood != "clear" and stamp - previous["lastChangedAt"] < MOOD_CHANGE_INTERVAL_MS:
+    preview = previous.get("preview") if same_identity else None
+    no_change = same_identity and (
+        (mood in MOOD_VALUES and previous["mood"] == mood and preview is None)
+        or (mood == "cancel-preview" and (preview is None or not preview["active"]))
+        or (mood == "preview" and preview is not None and preview["active"]
+            and stamp < preview["startedAt"] + MOOD_PREVIEW_MS)
+    )
+    if no_change:
+        return {"changed": False, "sequence": previous["sequence"], "mood": mood}
+    if same_identity and mood not in ("clear", "cancel-preview") and stamp - previous["lastChangedAt"] < MOOD_CHANGE_INTERVAL_MS:
         raise OrchestrationError("mood-rate-limited")
-    record = {**identity, "source": "self-report", "mood": mood,
+    record = {**identity, "source": "self-report",
+              "mood": mood if mood in MOOD_VALUES else (previous["mood"] if same_identity else "clear"),
               "sequence": previous["sequence"] + 1 if previous else 1,
               # Clear cannot refill the rate bucket or make clear/report spam possible.
-              "lastChangedAt": (previous["lastChangedAt"] if same_identity else 1) if mood == "clear" else stamp}
+              "lastChangedAt": (previous["lastChangedAt"] if same_identity else 1)
+              if mood in ("clear", "cancel-preview") else stamp}
+    if mood == "preview":
+        record["preview"] = {
+            "startedAt": stamp, "active": True,
+            "reportSequence": (preview["reportSequence"] if preview else previous["sequence"])
+            if same_identity else record["sequence"],
+        }
+    elif mood == "cancel-preview" and preview:
+        record["preview"] = {**preview, "active": False}
     records = [record if r["nodeId"] == actor["id"] else r for r in value["moods"]]
     if previous is None:
         records.append(record)
@@ -6422,22 +6454,48 @@ def write_mood(store, actor, mood, *, clock=time.time):
 
 
 def command_self_mood(args, root, cmux, *, native_identity=None, clock=time.time):
-    if not args.own_session or not isinstance(args.mood, str) or args.mood not in MOOD_VALUES:
+    if not args.own_session or not isinstance(args.mood, str) or args.mood not in MOOD_ACTIONS:
         raise OrchestrationError("mood-input-invalid")
-    session = canonical_uuid(args.session_id, "current session ID")
-    # The same side-effect-free native proof used by icons/pets and tags.
-    prove_own_session(session, feature="self-reported moods", subject="mood")
-    with Store(root) as store:
-        state = store.read()
-        actor = exact_self_actor(state)
-        if actor["copilotSessionId"] != session:
-            raise OrchestrationError("mood-identity-unverified")
-        if native_identity is not None and authorize_native_actor(state, native_identity)["id"] != actor["id"]:
-            raise OrchestrationError("mood-identity-unverified")
-        cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
-        prove_own_session(session, feature="self-reported moods", subject="mood")
-        return {**write_mood(store, actor, args.mood, clock=clock),
-                "sessionId": session}
+    try:
+        session = canonical_uuid(args.session_id, "current session ID")
+    except OrchestrationError:
+        raise OrchestrationError("mood-input-invalid") from None
+
+    def proof():
+        # Classify at the failing boundary, never by parsing private helper prose.
+        try:
+            prove_own_session(session, feature="self-reported moods", subject="mood")
+        except (OrchestrationError, OSError):
+            raise OrchestrationError("mood-proof-unavailable") from None
+
+    proof()
+    stage = "mood-store-unavailable"
+    try:
+        with Store(root) as store:
+            state = store.read()
+            stage = "mood-identity-unverified"
+            actor = exact_self_actor(state)
+            if actor["copilotSessionId"] != session:
+                raise OrchestrationError(stage)
+            if native_identity is not None and authorize_native_actor(state, native_identity)["id"] != actor["id"]:
+                raise OrchestrationError(stage)
+            stage = "mood-placement-unavailable"
+            cmux.validate_surface(actor["workspaceId"], actor["surfaceId"])
+            stage = "mood-proof-unavailable"
+            proof()
+            stage = "mood-store-unavailable"
+            return {**write_mood(store, actor, args.mood, clock=clock), "sessionId": session}
+    except StoreBusy:
+        raise OrchestrationError("mood-busy") from None
+    except (OrchestrationError, OSError) as error:
+        reason = str(error)
+        raise OrchestrationError(reason if reason in MOOD_ERRORS else stage) from None
+
+
+MOOD_ERRORS = frozenset({
+    "mood-input-invalid", "mood-identity-unverified", "mood-rate-limited", "mood-capacity-unavailable",
+    "mood-store-unavailable", "mood-busy", "mood-proof-unavailable", "mood-placement-unavailable",
+})
 
 
 def command_native_mood(root, cmux):
@@ -7970,7 +8028,7 @@ def parser():
     mood = commands.add_parser("mood", help="Report an optional expression for your exact managed session")
     mood.add_argument("--self", action="store_true", dest="own_session")
     mood.add_argument("--session-id", required=True)
-    mood.add_argument("--mood", required=True, choices=MOOD_VALUES)
+    mood.add_argument("--mood", required=True, choices=MOOD_ACTIONS)
     pets = commands.add_parser("pets", help="List the default pet and this session's own pets")
     pets.add_argument("--session-id")
     pet = commands.add_parser("pet", help="Add and/or choose a Codex pet for your own session")
@@ -8068,9 +8126,7 @@ def main(argv=None):
                 return 0
             except (OrchestrationError, OSError) as error:
                 reason = str(error)
-                allowed = {"mood-input-invalid", "mood-identity-unverified", "mood-rate-limited", "mood-capacity-unavailable",
-                           "mood-store-unavailable"}
-                print(json.dumps({"ok": False, "error": reason if reason in allowed else "mood-unavailable"}),
+                print(json.dumps({"ok": False, "error": reason if reason in MOOD_ERRORS else "mood-unavailable"}),
                       file=sys.stderr)
                 return 2
         if args.command in {"notify", "native-notify", "notification-authorize", "notification-focus", "notification-confirm"}:
