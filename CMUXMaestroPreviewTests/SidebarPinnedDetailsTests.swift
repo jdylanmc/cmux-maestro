@@ -201,7 +201,7 @@ struct SidebarPinnedDetailsTests {
         )))
     }
 
-    @Test func pinnedActiveAgentSharesOnlyTheSixPermittedRawCopyFields() throws {
+    @Test func pinnedActiveAgentSharesOnlyTheFivePermittedRawCopyFields() throws {
         let source = hierarchy(directory: "/synthetic/work/../current")
         let workspaces = source.workspaces.enumerated().map { index, workspace in
             HierarchyWorkspace(
@@ -230,16 +230,15 @@ struct SidebarPinnedDetailsTests {
             "Session ID": fixtures.sessionID.uuidString,
             "Observed": timestamp.string(from: now),
             "Child history": "complete",
-            "Workspace path": "/synthetic/root/../workspace",
             "Project path": "/synthetic/project/../repo",
             "Surface directory": "/synthetic/work/../current"
         ])
-        #expect(content.lines.first { $0.title == "Workspace path" }?.value == "/synthetic/workspace")
+        #expect(!content.lines.contains { $0.title == "Workspace path" })
         #expect(content.lines.first { $0.title == "Project path" }?.value == "/synthetic/repo")
         #expect(content.lines.first { $0.title == "Surface directory" }?.value == "/synthetic/current")
 
         let noPaths = pinned(hierarchy(paths: false), sessions: [session()])
-        #expect(noPaths.lines.first { $0.title == "Workspace path" }?.copyableValue == nil)
+        #expect(!noPaths.lines.contains { $0.title == "Workspace path" })
         #expect(noPaths.lines.first { $0.title == "Project path" }?.copyableValue == nil)
         #expect(noPaths.lines.first { $0.title == "Surface directory" }?.copyableValue == nil)
     }
@@ -478,7 +477,7 @@ struct SidebarPinnedDetailsTests {
             try await settle(hosting)
             let buttons = views(hosting).compactMap { $0 as? NSButton }
                 .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
-            #expect(buttons.count == 5)
+            #expect(buttons.count == 4)
             let sessionButton = try #require(buttons.first { $0.accessibilityLabel() == "Copy session ID" })
             #expect(sessionButton.accessibilityPerformPress())
             #expect(copied == [replacementID.uuidString] && inspections == 0)
@@ -1188,7 +1187,7 @@ struct SidebarPinnedDetailsTests {
                     let buttons = views(hosting).compactMap { $0 as? NSButton }
                         .filter { $0.accessibilityIdentifier() == "hover-copy-value" }
                     let button = try #require(buttons.first { $0.accessibilityLabel() == "Copy session ID" })
-                    #expect(buttons.count == 5)
+                    #expect(buttons.count == 4)
                     for action in buttons { #expect(action.acceptsFirstResponder) }
                     #expect(button.acceptsFirstResponder)
                     button.scrollToVisible(button.bounds)

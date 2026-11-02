@@ -6,6 +6,9 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Changed
 
+- Agent previews and the agent **Active window** footer omit **Workspace path**.
+  Workspace previews and Details keep it; **Project path** and **Surface
+  directory** stay unchanged.
 - Explicitly authorized close requests may target any exact owned descendant,
   not only immediate children. Self, ancestors and unrelated sessions remain
   excluded; target-only never closes the selected session's descendants (#377).

@@ -35,7 +35,7 @@ enum SidebarAgentHoverContent {
             let allowed = Set([
                 "Model", "Role", "Branch", "Worktree", "Last verified location",
                 "Git evidence", "Git changes", SidebarSurfaceDirectory.title, "Session ID",
-                "Observed", "Child history", "Workspace path", "Project path"
+                "Observed", "Child history", "Project path"
             ])
             var lines = SidebarPresentation.managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { allowed.contains($0.title) }
@@ -122,7 +122,7 @@ enum SidebarAgentHoverContent {
         var lines = SidebarPresentation.sessionDetails(session).filter { allowed.contains($0.title) }
         if !unfocusable { lines += SidebarPresentation.paths(hierarchy.pathContext(
             workspaceID: session.workspaceID, surfaceID: session.surfaceID
-        ), copyable: true) }
+        ), copyable: true, includeWorkspacePath: false) }
         lines = Self.copyable(lines)
         let state = SidebarPresentation.sessionState(session)
         return .init(

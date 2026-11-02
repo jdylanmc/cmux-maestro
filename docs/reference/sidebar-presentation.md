@@ -299,6 +299,8 @@ navigation or identity previews. Each card resolves its own exact
 subject and only current or explicitly last-known metadata. Label missing/expired
 observations. Never replace them with invented model, context, timing or
 Git metrics. Windowless children keep parent-session placement context.
+**Workspace path** belongs to the workspace preview and Details. Agent previews
+and the agent footer omit it, keeping **Project path** and **Surface directory**.
 Agent cards show that exact session's own pet, honoring its hidden state; child,
 terminal, browser and workspace cards show none. Hovering never changes the
 footer pet. Opening a card never invokes the existing inspection/mark-seen action. Icon
