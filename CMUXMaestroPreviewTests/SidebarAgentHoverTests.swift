@@ -321,6 +321,54 @@ struct SidebarAgentHoverTests {
         ) == true, "Assigned Git evidence stays separate, never used as the directory")
     }
 
+    @Test func workspacePathStaysWithWorkspaceHoverAndDetailsNotAgentViews() throws {
+        let hierarchy = directoryHierarchy("/synthetic/reported")
+        let session = session()
+        let node = directoryNode(session)
+        let tree = SidebarCopilotTree(availability: .ready, sessions: [session], issues: [], generatedAt: now)
+        let managed = SidebarOrchestrationSnapshot(version: 1, generatedAt: now, complete: true, omittedCount: 0, nodes: [node])
+        var agentViews: [(String, [SidebarDetailLine])] = []
+        for (name, target) in [
+            ("session hover", SidebarAgentHoverTarget.session(session.id)),
+            ("managed hover", .managed(node.id, generation: 2))
+        ] {
+            agentViews.append((name, try #require(card(target, sessions: [session], hierarchy: hierarchy, nodes: [node])).lines))
+        }
+        for (name, nodes) in [("session footer", SidebarOrchestrationSnapshot.empty), ("managed footer", managed)] {
+            let footer = SidebarPresentation.pinnedDetails(
+                hierarchy: hierarchy, connected: true, tree: tree, managed: nodes, availability: .ready, now: now
+            )
+            #expect(footer.isAgent, "\(name) must resolve the agent")
+            agentViews.append((name, footer.lines))
+        }
+        for (name, lines) in agentViews {
+            #expect(!lines.contains { $0.title == "Workspace path" }, "\(name) omits Workspace path")
+            #expect(lines.contains { $0.title == "Project path" && $0.value == "/synthetic/project" }, "\(name) keeps Project path")
+            #expect(lines.contains { $0.title == "Surface directory" }, "\(name) keeps Surface directory")
+        }
+
+        var workspaceViews: [(String, [SidebarDetailLine])] = [
+            ("workspace hover", try #require(SidebarHoverContent.workspace(
+                fixtures.workspaceA, hierarchy: hierarchy, connected: true
+            )).lines)
+        ]
+        for (name, target) in [
+            ("workspace details", SidebarInspection.Target.unmanaged(.workspace(fixtures.workspaceA))),
+            ("session details", .unmanaged(.session(session.id))),
+            ("managed details", .managed(node))
+        ] {
+            let subject = try #require(SidebarPresentation.inspection(
+                for: target, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            ))
+            workspaceViews.append((name, try #require(SidebarPresentation.inspectorDetails(
+                for: subject, hierarchy: hierarchy, connected: true, tree: tree, managed: managed, availability: .ready, now: now
+            )).lines))
+        }
+        for (name, lines) in workspaceViews {
+            #expect(lines.contains { $0.title == "Workspace path" && $0.value == "/synthetic/workspace" }, "\(name) keeps Workspace path")
+        }
+    }
+
     @Test(arguments: ["fresh", "stale", "unavailable", "absent", "stale-counts", "detached"])
     func managedGitConsumersQualifyAssignedDirectoryWithoutChangingFreshness(_ evidence: String) throws {
         let session = session()
@@ -553,7 +601,6 @@ struct SidebarAgentHoverTests {
             "Model": "model",
             "Observed": timestamp.string(from: observed.observedAt),
             "Child history": "incomplete",
-            "Workspace path": "/synthetic/workspace",
             "Project path": "/synthetic/project",
             "Surface directory": "/synthetic/reported"
         ])

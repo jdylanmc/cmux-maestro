@@ -512,11 +512,11 @@ enum SidebarPresentation {
               }) else {
             return .init(title: "No uniquely focused surface")
         }
-        let paths = paths(hierarchy.pathContext(workspaceID: workspaceID, surfaceID: surfaceID))
+        let pathContext = hierarchy.pathContext(workspaceID: workspaceID, surfaceID: surfaceID)
         var result = SidebarDetailContent(
             title: surface.title.isEmpty ? surface.kind.title : surface.title,
             visual: .init(title: surface.kind.title, symbol: surface.kind.symbolName, tone: .neutral),
-            lines: paths, inspection: native
+            lines: paths(pathContext), inspection: native
         )
         // Browser and other native surfaces cannot inherit an old terminal's agent.
         guard [.terminal, .agentSession].contains(surface.kind) else { return result }
@@ -560,9 +560,10 @@ enum SidebarPresentation {
         result.petChoice = session.petId
         result.petMood = .project(session: session, tree: tree, managed: managed, availability: availability, now: now)
         result.visual = sessionState(session)
+        // Workspace path belongs to the workspace hover; the agent footer omits it.
         result.lines = sessionDetails(session).filter {
             ["Model", "Session ID", "Observed", "Child history"].contains($0.title)
-        } + Self.paths(hierarchy.pathContext(workspaceID: workspaceID, surfaceID: surfaceID), copyable: true)
+        } + Self.paths(pathContext, copyable: true, includeWorkspacePath: false)
         result.inspection = inspection(
             for: .unmanaged(.session(session.id)), hierarchy: hierarchy, connected: connected,
             tree: tree, managed: managed, availability: availability, now: now
@@ -579,8 +580,7 @@ enum SidebarPresentation {
             result.visual = managedState(node, availability: availability, now: now, tree: tree)
             let fields = Set([
                 "Model", "Branch", "Worktree", "Git evidence", "Git changes",
-                SidebarSurfaceDirectory.title, "Session ID", "Observed", "Child history",
-                "Workspace path", "Project path"
+                SidebarSurfaceDirectory.title, "Session ID", "Observed", "Child history", "Project path"
             ])
             result.lines = managedNodeDetails(node, hierarchy: hierarchy, tree: tree, now: now)
                 .filter { fields.contains($0.title) }
@@ -1318,11 +1318,13 @@ enum SidebarPresentation {
     }
 
     static func paths(
-        _ paths: HierarchyPathContext, isParent: Bool = false, copyable: Bool = false
+        _ paths: HierarchyPathContext, isParent: Bool = false, copyable: Bool = false,
+        includeWorkspacePath: Bool = true
     ) -> [SidebarDetailLine] {
-        [
+        (includeWorkspacePath ? [
             .init(title: "Workspace path", value: paths.rootPath.pathDisplayText,
-                  copyableValue: copyable ? paths.rootPath.copyablePathValue : nil),
+                  copyableValue: copyable ? paths.rootPath.copyablePathValue : nil)
+        ] : []) + [
             .init(title: "Project path", value: paths.projectRootPath.pathDisplayText,
                   copyableValue: copyable ? paths.projectRootPath.copyablePathValue : nil),
             SidebarSurfaceDirectory.line(paths.workingDirectory, isParent: isParent, copyable: copyable)
