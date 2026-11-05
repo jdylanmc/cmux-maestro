@@ -15,6 +15,12 @@ private final class HookProbeCalls: @unchecked Sendable {
         count += 1
         return count
     }
+
+    func peek() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return count
+    }
 }
 
 struct CopilotHookTests: Sendable {
@@ -797,6 +803,110 @@ struct CopilotHookTests: Sendable {
         #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .unavailable)
 
         #expect(try binding(root).ownerPID == 101)
+    }
+
+    @Test func lockMovingToARestartedChildAfterOwnerSelectionCannotProveTheParent() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let state = root.appendingPathComponent("state/\(session.uuidString.lowercased())")
+        // Hook 103 descends from the parent 101; its restarted child 201 is not its ancestor.
+        func racing() -> @Sendable (Int32) -> HookLookup {
+            let calls = HookProbeCalls()
+            return { pid in
+                // 101's first lookup selects it by its lock; the second opens its proof.
+                if pid == 101, calls.next() == 2 {
+                    do {
+                        try FileManager.default.removeItem(at: state.appendingPathComponent("inuse.101.lock"))
+                        try Data().write(to: state.appendingPathComponent("inuse.201.lock"))
+                    } catch { Issue.record(error) }
+                }
+                if pid == 201 {
+                    return .found(HookProcess(pid: 201, parentPID: 101, uid: getuid(), startSeconds: 4, startMicroseconds: 0))
+                }
+                return lookup(pid)
+            }
+        }
+
+        #expect(recorder(root, process: racing()).bind(payload: payload, environment: environment) == .noOwner)
+        try FileManager.default.removeItem(at: state.appendingPathComponent("inuse.201.lock"))
+        try marker(root)
+        #expect(recorder(root, process: racing()).prove(payload: payload, environment: environment) == .noOwner)
+
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try archivedOwners(root).isEmpty)
+    }
+
+    @Test func parentBindingNewerThanTheChildHookBlocksTheHandoff() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let previous = try binding(root)
+        let newer = CopilotIdentityRecord(
+            sessionID: previous.sessionID, surfaceID: previous.surfaceID,
+            launchWorkspaceID: previous.launchWorkspaceID, ownerPID: previous.ownerPID,
+            ownerStartSeconds: previous.ownerStartSeconds, ownerStartMicroseconds: previous.ownerStartMicroseconds,
+            recordedAt: Date(timeIntervalSince1970: 100))
+        let file = root.appendingPathComponent("integration/bindings/\(session.uuidString.lowercased()).json")
+        try CopilotIdentityJSON.encode(newer).write(to: file, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        try moveLock(root, from: 101, to: 201)
+
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .superseded)
+
+        #expect(try binding(root) == newer)
+        #expect(try archivedOwners(root).isEmpty)
+    }
+
+    @Test func parentExitingAfterTheHandoffDecisionRefusesTheWrite() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        try moveLock(root, from: 101, to: 201)
+        let base = restarted()
+        let decided = HookProbeCalls()
+        let exited = HookProbeCalls()
+        // 101 is looked up only by the handoff decision; afterwards it exits and 201 is reparented.
+        let exiting: @Sendable (Int32) -> HookLookup = { pid in
+            if pid == 101 {
+                if decided.next() == 1 { return base(pid) }
+                return .dead
+            }
+            guard pid == 201, decided.peek() > 0 else { return base(pid) }
+            _ = exited.next()
+            return .found(HookProcess(pid: 201, parentPID: 1, uid: getuid(), startSeconds: 4, startMicroseconds: 0))
+        }
+
+        #expect(recorder(root, process: exiting).bind(payload: payload, environment: environment) == .noOwner)
+
+        #expect(exited.peek() > 0, "The commit fence must look the child up after the decision")
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try archivedOwners(root).isEmpty)
+    }
+
+    @Test func handoffArchiveDirectoryMustBeDurableBeforeTheBindingMoves() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        try moveLock(root, from: 101, to: 201)
+        let fd = try HookFiles.privateDirectory(root.appendingPathComponent("integration"))
+        defer { close(fd) }
+        let parent = try CMUXMaestroPreview.CopilotFileAccess.statFile(fd)
+        var failing = recorder(root, process: restarted())
+        failing.syncDirectory = { directory in
+            guard let stamp = try? CMUXMaestroPreview.CopilotFileAccess.statFile(directory),
+                  !stamp.sameFile(as: parent) else { return -1 }
+            return fsync(directory)
+        }
+
+        #expect(failing.bind(payload: payload, environment: environment) == .unavailable)
+        #expect(try binding(root).ownerPID == 101)
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
+        #expect(try binding(root).ownerPID == 201)
     }
 
     @Test func sandboxGrantPrefixesAreExactAndReadOnly() throws {

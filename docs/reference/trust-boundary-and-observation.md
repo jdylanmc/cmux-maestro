@@ -36,7 +36,10 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   Sidebar verifier accepts the same case read-only (live bound owner, its
   direct child holding the sole live marker) as alive, so the row recovers
   before the next hook; it never writes bindings. Same rule as the controller's
-  custody check (ADR 0025 amendment). No title, path or chronology involved.
+  custody check (ADR 0025 amendment), plus start ordering. The helper's own
+  proof must also name the exact owner it selected, so a lock that moves to a
+  restarted child mid-check cannot prove the old parent. No title, path or
+  chronology involved.
   The human no longer needs to exit fully and `--resume` after a restart.
 - Bindings live under
   `~/Library/Application Support/CMUXMaestroPreview/Copilot/bindings/`.

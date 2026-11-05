@@ -149,9 +149,8 @@ nonisolated struct CopilotBindingRetirement {
         defer { close(survivorLock) }
         guard try unchanged(candidate, bindings: bindings), try unchanged(survivor, bindings: bindings),
               try isDead(candidate), try isDead(survivor) else { return false }
-        let archive = try HookFiles.privateDirectory(integrationRoot.appendingPathComponent("retired-bindings"))
+        let archive = try Self.openArchive(integrationRoot: integrationRoot, root: root, syncDirectory: syncDirectory)
         defer { close(archive) }
-        guard syncDirectory(root) == 0 else { throw HookFiles.Failure.unavailable }
         try preserve(candidate.record, archive: archive)
 
         let currentRoot = try CopilotFileAccess.openDirectory(integrationRoot, owner: getuid())
@@ -169,6 +168,19 @@ nonisolated struct CopilotBindingRetirement {
             throw HookFiles.Failure.unavailable
         }
         return true
+    }
+
+    /// Opens (creating if needed) the private archive directory and makes its entry durable in the
+    /// integration root before any record is archived there.
+    static func openArchive(
+        integrationRoot: URL, root: Int32, syncDirectory: (Int32) -> Int32
+    ) throws -> Int32 {
+        let archive = try HookFiles.privateDirectory(integrationRoot.appendingPathComponent("retired-bindings"))
+        guard syncDirectory(root) == 0 else {
+            close(archive)
+            throw HookFiles.Failure.unavailable
+        }
+        return archive
     }
 
     private func preserve(_ record: CopilotIdentityRecord, archive: Int32) throws {

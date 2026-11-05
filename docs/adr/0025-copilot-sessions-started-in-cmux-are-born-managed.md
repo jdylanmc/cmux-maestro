@@ -117,7 +117,9 @@ refused to replace a binding whose recorded owner was still alive, and the
 sidebar verifier called a live owner without its own lock ambiguous. The row
 showed `Copilot session` with a plain-terminal footer until the parent exited.
 
-The observer now applies the same exact rule. The hook helper rebinds when the
+The observer now applies the controller's direct-child rule, with one extra
+condition: the child must have started after the bound owner. The hook helper
+rebinds when the
 recorded owner is alive and is the direct parent (same user, child started
 after it) of the hook's own owner, that child holds the session's only live
 marker, and session, workspace and surface match the existing binding. It

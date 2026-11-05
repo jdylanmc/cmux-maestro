@@ -32,8 +32,10 @@ retirement. The newest dead binding on each surface is never a candidate.
 
 In-place restart handoff (see trust boundary) is not retirement: a live
 owner's binding is replaced by its exact direct child's, under the same
-session lock. The superseded record is archived first with the same digest
-format and identical-archive reuse; a failed archive keeps the binding.
+session lock. The superseded record is archived first through the same
+helpers: archive directory created and the integration root synchronized,
+same digest format, identical-archive reuse. A failed archive or sync keeps
+the binding.
 
 ## Coordination and durability
 
