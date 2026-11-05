@@ -58,6 +58,13 @@ nonisolated struct CopilotBindingRetirement {
     private func pass(root: Int32, report: inout Report) throws {
         let lease = try lock(at: root, name: ".binding-retirement.lock")
         defer { close(lease) }
+        // Hygiene only: unpublished archive attempts never block publication.
+        if let archive = try? CopilotFileAccess.openDirectory(at: root, name: "retired-bindings", owner: getuid()) {
+            defer { close(archive) }
+            if (try? HookFiles.metadata(archive, directory: true)) != nil {
+                _ = try? Self.sweepPendingArchives(archive, process: process)
+            }
+        }
         let bindings = try CopilotFileAccess.openDirectory(at: root, name: "bindings", owner: getuid())
         defer { close(bindings) }
         _ = try HookFiles.metadata(bindings, directory: true)
@@ -187,33 +194,100 @@ nonisolated struct CopilotBindingRetirement {
         try Self.preserve(record, archive: archive, syncDirectory: syncDirectory)
     }
 
-    /// Durably keeps a superseded binding's canonical identity under its digest. An identical
-    /// existing archive is reused; a conflicting or unverifiable one throws.
+    static let pendingArchivePrefix = ".pending-archive-"
+    static let maximumPendingArchiveSweeps = 8
+
+    /// Durably keeps a superseded binding's canonical identity under the SHA-256 of its exact bytes.
+    /// The record is written and synced under a unique pending name, then published with an
+    /// exclusive rename, so a killed or failed writer never leaves a partial digest file. Because
+    /// the name commits to the content, an existing entry whose bytes do not hash to its name
+    /// cannot be a complete archive (empty, truncated or corrupt) and is atomically replaced. An
+    /// identical entry is reused. Anything else (unsafe entry, different valid content) throws.
     static func preserve(
         _ record: CopilotIdentityRecord, archive: Int32,
-        syncDirectory: (Int32) -> Int32 = { fsync($0) }
+        syncDirectory: (Int32) -> Int32 = { fsync($0) },
+        publish: (Int32, String, String) -> Int32 = { directory, from, to in
+            renameatx_np(directory, from, directory, to, UInt32(RENAME_EXCL))
+        }
     ) throws {
         let data = try CopilotIdentityJSON.encode(record)
-        let name = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() + ".json"
-        let fd = openat(archive, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        if fd < 0 {
+        let digest = digestName(data)
+        let name = digest + ".json"
+        let pending = pendingName()
+        let fd = openat(archive, pending, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+        guard fd >= 0 else { throw HookFiles.Failure.unavailable }
+        var published = false
+        defer { if !published { unlinkat(archive, pending, 0) } }
+        do {
+            defer { close(fd) }
+            let written = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
+            guard written == data.count, fsync(fd) == 0 else { throw HookFiles.Failure.unavailable }
+        }
+        if publish(archive, pending, name) == 0 {
+            published = true
+        } else {
             guard errno == EEXIST else { throw HookFiles.Failure.unavailable }
             let existingFD = try CopilotFileAccess.openRegular(
                 at: archive, name: name, owner: getuid(), permissions: 0o600)
             defer { close(existingFD) }
+            // Single-link, owner-only regular file; empty allowed, so a partial write is recoverable.
             let stamp = CopilotFileStamp(try HookFiles.metadata(existingFD))
-            let existing = try CopilotFileAccess.readStableRegular(
-                at: archive, filename: name, owner: getuid(), maximum: 16_384, permissions: 0o600)
-            guard existing == data,
-                  try stamp == CopilotFileAccess.statEntry(at: archive, name: name),
-                  fsync(existingFD) == 0, syncDirectory(archive) == 0 else { throw Failure.changed }
-            return
+            guard stamp.size <= 16_384 else { throw HookFiles.Failure.unavailable }
+            let existing = stamp.size == 0 ? Data() : try CopilotFileAccess.read(existingFD, offset: 0, count: 16_385)
+            guard existing.count == Int(stamp.size), try stamp == CopilotFileAccess.statFile(existingFD),
+                  try stamp == CopilotFileAccess.statEntry(at: archive, name: name) else { throw Failure.changed }
+            if existing == data {
+                guard fsync(existingFD) == 0 else { throw HookFiles.Failure.unavailable }
+            } else {
+                // Same name, valid different content would need a SHA-256 collision: refuse it.
+                guard digestName(existing) != digest else { throw Failure.changed }
+                guard renameat(archive, pending, archive, name) == 0 else { throw HookFiles.Failure.unavailable }
+                published = true
+            }
         }
-        defer { close(fd) }
-        let written = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-        guard written == data.count, fsync(fd) == 0, syncDirectory(archive) == 0 else {
-            throw HookFiles.Failure.unavailable
+        guard syncDirectory(archive) == 0 else { throw HookFiles.Failure.unavailable }
+    }
+
+    private static func digestName(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Unique per attempt and tagged with the writer's exact process, so a later sweep removes
+    /// only pending files whose writer has provably exited.
+    private static func pendingName() -> String {
+        let pid = getpid()
+        var start = "0-0"
+        if case .found(let process) = CopilotProcessProbe.read(pid) {
+            start = "\(process.startSeconds)-\(process.startMicroseconds)"
         }
+        return "\(pendingArchivePrefix)\(pid)-\(start)-\(UUID().uuidString.lowercased())"
+    }
+
+    /// Bounded, best-effort removal of pending archive files left by writers that exited before
+    /// publishing. A live, reused-unknown or unavailable writer keeps its file. Never touches
+    /// published archives.
+    static func sweepPendingArchives(
+        _ archive: Int32, process: (Int32) -> CopilotProcessLookup
+    ) throws -> Int {
+        let entries = try CopilotFileAccess.names(at: archive, limit: maximumEntries)
+        var removed = 0
+        for name in entries.names where name.hasPrefix(pendingArchivePrefix) {
+            guard removed < maximumPendingArchiveSweeps else { break }
+            let fields = name.dropFirst(pendingArchivePrefix.count).split(separator: "-", maxSplits: 3)
+            guard fields.count == 4, let pid = Int32(fields[0]), pid > 0,
+                  let seconds = UInt64(fields[1]), let microseconds = UInt64(fields[2]) else { continue }
+            let exited: Bool
+            switch process(pid) {
+            case .dead: exited = true
+            case .found(let writer):
+                exited = seconds > 0 && (writer.startSeconds != seconds || writer.startMicroseconds != microseconds)
+            case .unavailable: exited = false
+            }
+            guard exited, let stamp = try? CopilotFileAccess.statEntry(at: archive, name: name),
+                  stamp.isRegular, stamp.uid == getuid() else { continue }
+            if unlinkat(archive, name, 0) == 0 { removed += 1 }
+        }
+        return removed
     }
 
     private func lock(at directory: Int32, name: String) throws -> Int32 {

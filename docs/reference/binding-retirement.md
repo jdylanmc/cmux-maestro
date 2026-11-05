@@ -57,10 +57,24 @@ All traversal is descriptor-relative, no-follow, same-user and permission
 checked. Binding and archive files are mode 0600, directories 0700. Retirement
 does not widen sidebar grants. Before unlinking the exact unchanged binding,
 durably retain its canonical sanitized identity in `retired-bindings`, outside
-reader discovery, under a digest of that record. Existing identical archives
-are reused; conflicts or partial archives preserve the active binding.
-Synchronize the integration root after creating the archive directory, then
-the archive file and directory before unlinking the active binding.
+reader discovery, under the SHA-256 of that record's exact canonical bytes.
+Synchronize the integration root after creating the archive directory. Write
+the record to a unique `.pending-archive-<pid>-<start s>-<start µs>-<uuid>`
+file, verify the full write and fsync it, then publish it under the digest
+name with an exclusive rename (`RENAME_EXCL`), never replacing an entry, and
+fsync the directory before unlinking the active binding. A writer killed or
+failing mid-write therefore never leaves a partial digest file.
+An existing digest entry with identical bytes is reused. Because the name
+commits to the content, an existing owner-only, single-link regular entry whose
+bytes do not hash to its name (empty, truncated or corrupt, e.g. from an earlier
+helper's in-place write) cannot be a complete archive: it is atomically replaced
+by the verified pending file. Different bytes that do hash to the name (a
+SHA-256 collision) refuse. Symlinks, extra links, wrong owner or mode, and
+unstable or oversized entries refuse; refusal preserves the active binding.
+Each retirement pass also removes at most eight pending files whose writer is
+proven exited (probe dead, or same PID with a different recorded start time).
+Live, unavailable or unidentified writers keep theirs; pending files never
+block publication, and published archives are never swept.
 The archive contains only the binding schema's identifiers, PID/start time
 and recording time. No payloads, transcripts, credentials or paths.
 

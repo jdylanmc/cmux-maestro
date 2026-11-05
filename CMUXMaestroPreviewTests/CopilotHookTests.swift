@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import Testing
@@ -661,6 +662,7 @@ struct CopilotHookTests: Sendable {
         let directory = root.appendingPathComponent("integration/retired-bindings")
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
         return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { !$0.lastPathComponent.hasPrefix(".") }
             .map { try CopilotIdentityJSON.decode(Data(contentsOf: $0)).ownerPID }.sorted()
     }
 
@@ -907,6 +909,144 @@ struct CopilotHookTests: Sendable {
         #expect(try binding(root).ownerPID == 101)
         #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
         #expect(try binding(root).ownerPID == 201)
+    }
+
+    /// The parent's archive name and exact bytes, plus an archive directory ready for fault injection.
+    private func parentArchive(_ root: URL) throws -> (directory: URL, file: URL, bytes: Data) {
+        let bytes = try CopilotIdentityJSON.encode(binding(root))
+        let digest = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let directory = root.appendingPathComponent("integration/retired-bindings")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                                                attributes: [.posixPermissions: 0o700])
+        return (directory, directory.appendingPathComponent(digest + ".json"), bytes)
+    }
+
+    private func writePrivate(_ data: Data, to url: URL) throws {
+        try data.write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    private func pendingArchives(_ directory: URL) throws -> [String] {
+        try FileManager.default.contentsOfDirectory(atPath: directory.path)
+            .filter { $0.hasPrefix(CopilotBindingRetirement.pendingArchivePrefix) }.sorted()
+    }
+
+    @Test(arguments: ["empty", "truncated", "garbage"])
+    func incompleteDigestArchiveIsReplacedSoTheHandoffCompletes(_ damage: String) throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let archive = try parentArchive(root)
+        // What an interrupted or short write by an earlier helper leaves under the final name.
+        let left = switch damage {
+        case "empty": Data()
+        case "truncated": archive.bytes.prefix(archive.bytes.count / 2)
+        default: Data(repeating: 0x7B, count: archive.bytes.count)
+        }
+        try writePrivate(Data(left), to: archive.file)
+        try moveLock(root, from: 101, to: 201)
+
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(try binding(root).ownerPID == 201)
+        #expect(try Data(contentsOf: archive.file) == archive.bytes)
+        #expect(try archivedOwners(root) == [101])
+        #expect(try pendingArchives(archive.directory).isEmpty)
+    }
+
+    @Test func identicalExistingArchiveIsReusedByTheHandoff() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let archive = try parentArchive(root)
+        try writePrivate(archive.bytes, to: archive.file)
+        let before = try FileManager.default.attributesOfItem(atPath: archive.file.path)[.systemFileNumber] as? Int
+        try moveLock(root, from: 101, to: 201)
+
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(try binding(root).ownerPID == 201)
+        #expect(try FileManager.default.attributesOfItem(atPath: archive.file.path)[.systemFileNumber] as? Int == before)
+        #expect(try archivedOwners(root) == [101])
+    }
+
+    @Test(arguments: ["symlink", "hard-link", "permissions"])
+    func unsafeExistingDigestEntryIsNeverReplaced(_ kind: String) throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let archive = try parentArchive(root)
+        let outside = root.appendingPathComponent("outside")
+        try writePrivate(Data(), to: outside)
+        switch kind {
+        case "symlink": try FileManager.default.createSymbolicLink(at: archive.file, withDestinationURL: outside)
+        case "hard-link": try FileManager.default.linkItem(at: outside, to: archive.file)
+        default:
+            try Data().write(to: archive.file)
+            try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: archive.file.path)
+        }
+        try moveLock(root, from: 101, to: 201)
+
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .unavailable)
+
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try Data(contentsOf: outside).isEmpty)
+        #expect(try pendingArchives(archive.directory).isEmpty)
+    }
+
+    @Test func pendingArchivesFromExitedWritersAreHarmlessAndSwept() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let archive = try parentArchive(root)
+        let prefix = CopilotBindingRetirement.pendingArchivePrefix
+        // A writer killed after a partial write, and one killed after a complete, synced write but
+        // before publishing (the digest name was never created).
+        let partial = prefix + "999-1-0-\(UUID().uuidString.lowercased())"
+        let unpublished = prefix + "998-1-0-\(UUID().uuidString.lowercased())"
+        let reused = prefix + "101-7-0-\(UUID().uuidString.lowercased())"
+        let live = prefix + "101-1-0-\(UUID().uuidString.lowercased())"
+        try writePrivate(archive.bytes.prefix(5), to: archive.directory.appendingPathComponent(partial))
+        try writePrivate(archive.bytes, to: archive.directory.appendingPathComponent(unpublished))
+        try writePrivate(Data(), to: archive.directory.appendingPathComponent(reused))
+        try writePrivate(Data(), to: archive.directory.appendingPathComponent(live))
+        try moveLock(root, from: 101, to: 201)
+
+        // The prompt hook hands off, then its retirement pass sweeps exited writers' leftovers.
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(try binding(root).ownerPID == 201)
+        #expect(try Data(contentsOf: archive.file) == archive.bytes)
+        #expect(try archivedOwners(root) == [101])
+        #expect(try pendingArchives(archive.directory) == [live], "Only a live writer's attempt survives")
+    }
+
+    @Test func failedPublishLeavesNoPendingOrPartialArchive() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let record = try CMUXMaestroPreview.CopilotIdentityJSON.decode(Data(contentsOf: root.appendingPathComponent(
+            "integration/bindings/\(session.uuidString.lowercased()).json")))
+        let archive = try parentArchive(root)
+        let fd = open(archive.directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        #expect(fd >= 0)
+        defer { close(fd) }
+
+        #expect(throws: (any Error).self) {
+            try CopilotBindingRetirement.preserve(record, archive: fd, publish: { _, _, _ in
+                errno = EIO
+                return -1
+            })
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: archive.directory.path).isEmpty)
+        try CopilotBindingRetirement.preserve(record, archive: fd)
+        #expect(try Data(contentsOf: archive.file) == archive.bytes)
+        #expect(try pendingArchives(archive.directory).isEmpty)
     }
 
     @Test func sandboxGrantPrefixesAreExactAndReadOnly() throws {
