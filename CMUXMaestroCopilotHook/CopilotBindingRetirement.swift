@@ -172,6 +172,15 @@ nonisolated struct CopilotBindingRetirement {
     }
 
     private func preserve(_ record: CopilotIdentityRecord, archive: Int32) throws {
+        try Self.preserve(record, archive: archive, syncDirectory: syncDirectory)
+    }
+
+    /// Durably keeps a superseded binding's canonical identity under its digest. An identical
+    /// existing archive is reused; a conflicting or unverifiable one throws.
+    static func preserve(
+        _ record: CopilotIdentityRecord, archive: Int32,
+        syncDirectory: (Int32) -> Int32 = { fsync($0) }
+    ) throws {
         let data = try CopilotIdentityJSON.encode(record)
         let name = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() + ".json"
         let fd = openat(archive, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)

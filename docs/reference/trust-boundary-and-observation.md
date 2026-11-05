@@ -20,6 +20,24 @@ What the sidebar reads, how sessions bind, what happens when observation is lost
   impose no content-size limit. Birthtime/ctime and rest of marker stat
   snapshot must stay stable. Unknown or multiple live marker owners are
   ambiguous, not guessed.
+- **In-place restart handoff** (`/restart`, `/update`). Copilot keeps the bound
+  CLI process alive as a parent and continues the same session in a new direct
+  child, which takes the session's `inuse.PID.lock`. Helper replaces a binding
+  whose recorded owner is still alive only when all exact evidence agrees: the
+  hook's own owner is that live owner's **direct child** (same user, parent PID
+  equals the recorded owner, started after it), holds the session's **only**
+  live marker, and the request's session, workspace and surface equal the
+  binding's. Only `bind` does this; appearance and proof keep requiring the
+  bound owner. The superseded binding is first archived in `retired-bindings`
+  (same digest format as retirement); archive failure keeps the old binding.
+  Repeated restarts follow the chain one direct child at a time from the
+  **current** bound owner; a grandchild, sibling, older child, second live
+  marker, placement or session mismatch still refuses (`superseded`/`noOwner`).
+  Sidebar verifier accepts the same case read-only (live bound owner, its
+  direct child holding the sole live marker) as alive, so the row recovers
+  before the next hook; it never writes bindings. Same rule as the controller's
+  custody check (ADR 0025 amendment). No title, path or chronology involved.
+  The human no longer needs to exit fully and `--resume` after a restart.
 - Bindings live under
   `~/Library/Application Support/CMUXMaestroPreview/Copilot/bindings/`.
   Own directories `0700`, files `0600`. Dates use milliseconds since 1970.

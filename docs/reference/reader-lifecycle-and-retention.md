@@ -478,6 +478,12 @@ independent terminal. This literal #10 integration does not complete broader
   limit warning. Additional sessions remain unavailable until an admitted owner
   is verified dead or a selection/binding change frees capacity. Live/uncertain
   replay evidence is never evicted for them.
+  A binding whose owner is alive but whose session lock moved to that owner's
+  direct child (Copilot `/restart`, `/update`) verifies alive under the child,
+  read-only, until the hook rebinds it. Identity evidence names the child, so a
+  changed holder fails the post-read stability fence. Any other live owner
+  without its own marker stays ambiguous (trust boundary: in-place restart
+  handoff).
   Content-free ended observations use a separate cache: newest proven-dead
   binding owner per selected surface, at most `maximumBindings` entries. Each
   emitted row revalidates its binding and owner; missing session directories do

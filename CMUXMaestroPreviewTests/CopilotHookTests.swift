@@ -630,6 +630,175 @@ struct CopilotHookTests: Sendable {
         #expect(try binding(root).surfaceID.uuidString == moved["CMUX_SURFACE_ID"])
     }
 
+    /// `/restart` or `/update`: the bound CLI (101) stays alive as the parent and the same
+    /// session continues in its direct child (201), which now holds the only live lock.
+    private func restarted(
+        child: Int32 = 201, childParent: Int32 = 101, childStart: UInt64 = 4,
+        extra: [Int32: HookProcess] = [:]
+    ) -> @Sendable (Int32) -> HookLookup {
+        let base: [Int32: HookProcess] = [
+            103: HookProcess(pid: 103, parentPID: child, uid: getuid(), startSeconds: 9, startMicroseconds: 0),
+            child: HookProcess(pid: child, parentPID: childParent, uid: getuid(), startSeconds: childStart, startMicroseconds: 0),
+            101: HookProcess(pid: 101, parentPID: 1, uid: getuid(), startSeconds: 1, startMicroseconds: 0),
+        ]
+        let table = base.merging(extra) { _, new in new }
+        return { pid in table[pid].map { .found($0) } ?? .dead }
+    }
+
+    private func moveLock(_ root: URL, from old: Int32, to new: Int32) throws {
+        try FileManager.default.removeItem(at: root.appendingPathComponent(
+            "state/\(session.uuidString.lowercased())/inuse.\(old).lock"))
+        try marker(root, pid: new)
+    }
+
+    private func archivedOwners(_ root: URL) throws -> [Int32] {
+        let directory = root.appendingPathComponent("integration/retired-bindings")
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .map { try CopilotIdentityJSON.decode(Data(contentsOf: $0)).ownerPID }.sorted()
+    }
+
+    @Test func inPlaceRestartRebindsToTheLockHoldingDirectChild() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        try moveLock(root, from: 101, to: 201)
+        let probe = restarted()
+
+        #expect(recorder(root, process: probe).bind(payload: payload, environment: environment) == .recorded)
+
+        let identity = try binding(root)
+        #expect(identity.ownerPID == 201 && identity.ownerStartSeconds == 4)
+        #expect(identity.sessionID == session && identity.surfaceID == surface && identity.launchWorkspaceID == workspace)
+        #expect(try archivedOwners(root) == [101])
+        // The rebound child is now the ordinary owner of its own later hooks.
+        #expect(recorder(root, process: probe).prove(payload: payload, environment: environment) == .recorded)
+    }
+
+    @Test func repeatedInPlaceRestartsFollowOnlyTheCurrentBoundOwner() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        try moveLock(root, from: 101, to: 201)
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
+        try moveLock(root, from: 201, to: 301)
+        let second = restarted(child: 301, childParent: 201, childStart: 6, extra: [
+            201: HookProcess(pid: 201, parentPID: 101, uid: getuid(), startSeconds: 4, startMicroseconds: 0),
+        ])
+
+        #expect(recorder(root, process: second).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(try binding(root).ownerPID == 301)
+        #expect(try archivedOwners(root) == [101, 201])
+    }
+
+    @Test func restartGrandchildOfTheBoundOwnerIsNotAHandoff() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        // Two restarts with no hook in between: the bound owner is the lock holder's grandparent.
+        try moveLock(root, from: 101, to: 301)
+        let skipped = restarted(child: 301, childParent: 201, childStart: 6, extra: [
+            201: HookProcess(pid: 201, parentPID: 101, uid: getuid(), startSeconds: 4, startMicroseconds: 0),
+        ])
+
+        #expect(recorder(root, process: skipped).bind(payload: payload, environment: environment) == .superseded)
+
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try archivedOwners(root).isEmpty)
+    }
+
+    @Test(arguments: ["no-child-lock", "two-holders", "unrelated", "older-child", "surface", "workspace"])
+    func liveOwnerWithoutExactRestartEvidenceKeepsItsBinding(_ variant: String) throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        var probe = restarted()
+        var env = environment
+        var expected = HookOutcome.superseded
+        switch variant {
+        case "no-child-lock":
+            try FileManager.default.removeItem(at: root.appendingPathComponent(
+                "state/\(session.uuidString.lowercased())/inuse.101.lock"))
+            expected = .noOwner
+        case "two-holders":
+            try marker(root, pid: 201)
+            expected = .noOwner
+        case "unrelated":
+            try moveLock(root, from: 101, to: 201)
+            probe = restarted(childParent: 150, extra: [
+                150: HookProcess(pid: 150, parentPID: 1, uid: getuid(), startSeconds: 2, startMicroseconds: 0),
+            ])
+        case "older-child":
+            try moveLock(root, from: 101, to: 201)
+            // Not started after the bound owner, so not the process its restart created.
+            probe = restarted(childStart: 1)
+        case "surface":
+            try moveLock(root, from: 101, to: 201)
+            env["CMUX_SURFACE_ID"] = UUID().uuidString
+        default:
+            try moveLock(root, from: 101, to: 201)
+            env["CMUX_WORKSPACE_ID"] = UUID().uuidString
+        }
+
+        #expect(recorder(root, process: probe).bind(payload: payload, environment: env) == expected)
+
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try binding(root).surfaceID == surface)
+        #expect(try archivedOwners(root).isEmpty)
+    }
+
+    @Test func liveParentStillHoldingTheLockStaysTheOwner() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .recorded)
+
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try archivedOwners(root).isEmpty)
+    }
+
+    @Test func restartHandoffNeverCrossesSessions() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        let other = UUID(uuidString: "44444444-4444-4444-8444-444444444444")!
+        let otherState = root.appendingPathComponent("state/\(other.uuidString.lowercased())")
+        try FileManager.default.createDirectory(at: otherState, withIntermediateDirectories: true)
+        try FileManager.default.removeItem(at: root.appendingPathComponent(
+            "state/\(session.uuidString.lowercased())/inuse.101.lock"))
+        try Data().write(to: otherState.appendingPathComponent("inuse.201.lock"))
+        let otherPayload = Data("{\"sessionId\":\"\(other.uuidString)\"}".utf8)
+
+        #expect(recorder(root, process: restarted()).bind(payload: otherPayload, environment: environment) == .recorded)
+
+        #expect(try binding(root).ownerPID == 101)
+        #expect(try archivedOwners(root).isEmpty)
+        let otherBinding = try CopilotIdentityJSON.decode(Data(contentsOf: root.appendingPathComponent(
+            "integration/bindings/\(other.uuidString.lowercased()).json")))
+        #expect(otherBinding.ownerPID == 201)
+    }
+
+    @Test func unarchivableRestartHandoffKeepsTheParentBinding() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        #expect(recorder(root).bind(payload: payload, environment: environment) == .recorded)
+        try moveLock(root, from: 101, to: 201)
+        try Data("not a directory".utf8).write(to: root.appendingPathComponent("integration/retired-bindings"))
+
+        #expect(recorder(root, process: restarted()).bind(payload: payload, environment: environment) == .unavailable)
+
+        #expect(try binding(root).ownerPID == 101)
+    }
+
     @Test func sandboxGrantPrefixesAreExactAndReadOnly() throws {
         let repository = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
         let data = try Data(contentsOf: repository.appendingPathComponent("CMUXMaestroSidebar/CMUXMaestroSidebar.entitlements"))

@@ -30,6 +30,11 @@ times retain both. Both bindings and their death/custody evidence are checked
 again under their session locks. Rewrites, resumes and uncertainty cancel
 retirement. The newest dead binding on each surface is never a candidate.
 
+In-place restart handoff (see trust boundary) is not retirement: a live
+owner's binding is replaced by its exact direct child's, under the same
+session lock. The superseded record is archived first with the same digest
+format and identical-archive reuse; a failed archive keeps the binding.
+
 ## Coordination and durability
 
 Use the existing permanent per-session binding locks, plus a permanent
