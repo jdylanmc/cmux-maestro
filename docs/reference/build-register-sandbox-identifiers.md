@@ -25,7 +25,7 @@ merely command success, and do not prove the hosted UI loaded.
 
 ### Historical local-build diagnostic
 
-An already-selected preview once kept a lost connection after replacement; that workaround is [archived](../evidence/reference.md#build-sandbox-and-identifiers). The coordinated installer's automatic registration transition still needs stock-host acceptance. `cmux sidebar reload` applies to interpreted Swift sidebars, not native `.appex` extensions.
+An already-selected preview once kept a lost connection after replacement, and that workaround is [archived](../evidence/reference.md#build-sandbox-and-identifiers). The coordinated installer's automatic registration transition still needs stock-host acceptance. `cmux sidebar reload` applies to interpreted Swift sidebars, not native `.appex` extensions.
 
 ## Sandbox and distribution
 

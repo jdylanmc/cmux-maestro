@@ -8,7 +8,7 @@
 - **Unsupported telemetry stays unknown**: [ADR 0003](../adr/0003-liveness-work-attention-completion-stay-separate.md).
 - **Bounded uncertainty is visible**: [ADR 0010](../adr/0010-history-fails-open-replay-fails-closed.md).
 - **Accessibility evidence has boundaries**: no spoken VoiceOver testing or global keyboard/contrast change is claimed.
-- **Uninstall and cutover are deliberately limited**: [remove only the owned local preview](../reference/install/remove-local-preview.md); test `test_uninstall_requires_explicit_hook_retirement_keeps_all_user_data`. Public licensing, notarization and disabling/retiring the legacy plugin remain operator decisions.
+- **Uninstall and cutover are deliberately limited**: [remove only the owned local preview](../reference/install/remove-local-preview.md), with test `test_uninstall_requires_explicit_hook_retirement_keeps_all_user_data`. Public licensing, notarization and disabling/retiring the legacy plugin remain operator decisions.
 - **Update preparation is explicit** ([PR33](https://github.com/jdylanmc/cmux-maestro/pull/33#issuecomment-5661869270)): [update, rollback and status](../reference/install/update-and-rollback.md).
 
 With these dispositions the visible-capability inventory has no unexplained gaps. That is not a new exhaustive legacy audit, a claim that all operator-gated work is finished, or permission to weaken future regression and live-verification gates. The full disposition text, its tests and its limits are archived. [Archived evidence](../evidence/behavioral-parity.md#intentional-differences-and-explicit-limits).

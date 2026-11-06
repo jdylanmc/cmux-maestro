@@ -16,7 +16,7 @@
     permanently invalidate later working/idle state.
   - **Refused (fail closed):** every other known lifecycle event, such as
     `assistant.turn_start`. The line marks the session malformed and
-    `readLimitReached`; the previous state is kept.
+    `readLimitReached`, and the previous state is kept.
   - Unknown work-lifecycle types (`subagent.`, `tool.execution_` or
     `assistant.turn_` prefixes) are projected but still reach the reducer's
     explicit degradation, not healthy state.
@@ -28,7 +28,7 @@
     and truncated structure are rejected; anything that fails these checks is
     malformed, not projected.
   - Publication still needs a complete newline and a verified file/identity
-    boundary; torn appends keep the previous observation.
+    boundary, and torn appends keep the previous observation.
   - Tests: `CopilotAssetEnvelopeTests` in
     [`CopilotAssetEnvelopeTests.swift`](../../../CMUXMaestroPreviewTests/CopilotAssetEnvelopeTests.swift),
     including `oversizedLifecycleDataStillFailsClosed`,

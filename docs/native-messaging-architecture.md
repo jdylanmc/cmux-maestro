@@ -62,8 +62,7 @@ verifies it first, and a refusal leaves it unmanaged. See
 ## Evidence, corrected assumptions, and remaining gap
 
 <a id="evidence"></a>
-Source declarations justified an experiment, not a compatibility or
-draft-safety guarantee. The installed exchange disproves a dependency on
+Source declarations justified only an experiment and guarantee neither compatibility nor draft safety. The installed exchange disproves a dependency on
 selecting the Maestro sidebar, not all visibility conditions, and does not show
 reliable delivery. Mocked transport/setup tests and packaging checks do not
 prove native UI behavior. No exact upstream cause of the plugin-based

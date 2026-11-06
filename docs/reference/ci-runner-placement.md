@@ -31,4 +31,4 @@ Per-layout run timings before and after the #196 split are archived. [Archived e
 
 ## Effect
 
-Documentation-only pull requests (`docs/**`, `README.md`, `CHANGELOG.md`, `CONTEXT.md` or `AGENTS.md`, other than the merge policy) run no macOS job; `validate-portable` runs on Linux. Merge-policy changes still run `validate-contracts`, because `scripts/test-build-metadata.py` reads the policy. The measured before/after effect is archived. The Linux execution estimate for `validate-portable` still needs a live run to confirm. [Archived evidence](../evidence/ci.md#effect).
+Documentation-only pull requests (`docs/**`, `README.md`, `CHANGELOG.md`, `CONTEXT.md` or `AGENTS.md`, other than the merge policy) run no macOS job, and `validate-portable` runs on Linux. Merge-policy changes still run `validate-contracts`, because `scripts/test-build-metadata.py` reads the policy. The measured before/after effect is archived. The Linux execution estimate for `validate-portable` still needs a live run to confirm. [Archived evidence](../evidence/ci.md#effect).
