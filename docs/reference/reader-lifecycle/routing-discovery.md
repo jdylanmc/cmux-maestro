@@ -4,12 +4,11 @@
 
 - Routing discovery resumes one descriptor-anchored directory stream across
   batches (up to 1,024 directory entries per batch, plus bounded revalidation of
-  at most 64 cached identities and one staged granted binding). Historical locks
-  and off-surface records cannot pin discovery to a prefix. Retain at most 64 transcript
-  tails. Admitted live or uncertain owners keep their slots after publication.
+  at most 64 cached identities and one staged granted binding). Historical locks and off-surface records cannot pin discovery to a prefix. At
+  most 64 transcript tails are kept. Admitted live or uncertain owners keep their slots after publication.
   Current routing revalidation releases a verified-dead owner's slot. Discovery
-  checks owner death before admission, without requiring a session directory;
-  historical dead bindings therefore never fill active capacity. Missing files
+  checks owner death before admission without needing a session directory, so
+  historical dead bindings never fill active capacity. Missing files
   or unavailable probes alone cannot establish owner death. Discovery
   stages at most one next binding while capacity is full, with an explicit
   limit warning. Additional sessions remain unavailable until an admitted owner
@@ -29,8 +28,8 @@
   Binding timestamps select among already verified ended candidates only.
   It preserves **Show ended agents**, **Process ended**, Beats ended styling
   and dead-status retention. Cache overflow reports `readLimitReached`.
-  Only full, unchanged, non-overflowed cycle without errors can be complete.
-  Check cached bindings before process/transcript access and publication.
+  Only a full, unchanged, non-overflowed cycle without errors can be complete.
+  Cached bindings are checked before process/transcript access and publication.
   Discovery restarts, cancellation and unrelated topology changes retain private
   tails for still-selected bindings, never cached publication. Revoked bindings
   or selections discard their exact tails. Directory replacement requires current
