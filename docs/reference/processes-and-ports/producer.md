@@ -1,6 +1,6 @@
 # Producer
 
-Part of [Background processes and ports](../processes-and-ports.md). Next page is [`observer/processes.json`](observer-processes-json.md).
+[↑ Background processes and ports](../processes-and-ports.md) | [`observer/processes.json` →](observer-processes-json.md)
 
 `cmux-maestro-orchestrator process-observe` runs outside the sandbox and covers every managed node in one pass:
 

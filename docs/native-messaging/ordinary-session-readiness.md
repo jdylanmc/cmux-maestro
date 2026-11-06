@@ -1,6 +1,6 @@
 # Ordinary-session readiness (partial #162)
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Previous page is [Born managed sessions (#252, ADR 0025)](born-managed-sessions.md). Next page is [Explicit owned-descendant close](owned-descendant-close.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Born managed sessions (#252, ADR 0025)](born-managed-sessions.md) | [Explicit owned-descendant close →](owned-descendant-close.md)
 
 When this loader is enabled and discovered by Copilot in an ordinary CMUX
 session, it can join **only its own CLI-owned conversation** and register

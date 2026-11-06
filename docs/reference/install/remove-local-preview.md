@@ -1,6 +1,6 @@
 # Remove only the owned local preview
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Recovery commands and diagnostics](recovery-commands.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Recovery commands and diagnostics](recovery-commands.md)
 
 First, in the stable containing app, explicitly choose **Uninstall Native
 Plugin…** and confirm the official CLI action. Restart/resume sessions that

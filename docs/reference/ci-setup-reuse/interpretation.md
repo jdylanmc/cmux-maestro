@@ -1,6 +1,6 @@
 # Interpretation
 
-Part of [CI setup reuse](../ci-setup-reuse.md). Previous page is [Measured cost and benefit of the realistic candidate](measured-cost-and-benefit-of-the.md). Next page is [Rejected options](rejected-options.md).
+[↑ CI setup reuse](../ci-setup-reuse.md) | [← Measured cost and benefit of the realistic candidate](measured-cost-and-benefit-of-the.md) | [Rejected options →](rejected-options.md)
 
 - After a checkout, Xcode recompiles every Swift file regardless of the cache.
   Restored DerivedData saves only the explicit-module (PCM) generation and some

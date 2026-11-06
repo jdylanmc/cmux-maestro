@@ -1,6 +1,6 @@
 # Alpha installation: retired slots and native publication
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [coordinated alpha installation](alpha-installation.md). Next page is [Alpha installation: integration checkpoint](install-integration-checkpoint.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Coordinated alpha installation](alpha-installation.md) | [Alpha installation: integration checkpoint →](install-integration-checkpoint.md)
 
 For a changed install, the new bridge is staged and verified before the old
 retired slot is reclaimed. A `reclaiming` transaction journals exact

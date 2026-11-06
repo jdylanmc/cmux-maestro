@@ -1,6 +1,6 @@
 # Transaction and recovery contract: integration checkpoint
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Transaction and recovery contract: integrity and retained generations](retained-generations.md). Next page is [Transaction and recovery contract: plugin disabled state and recovery blocks](plugin-disabled-state.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Transaction and recovery contract: integrity and retained generations](retained-generations.md) | [Transaction and recovery contract: plugin disabled state and recovery blocks →](plugin-disabled-state.md)
 
 - Before app replacement, a private `0600` checkpoint at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/install-transaction.json`

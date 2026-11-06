@@ -1,6 +1,6 @@
 # Re-check, installed guide status and acceptance evidence
 
-Part of [CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md). Previous page is [Maestro demo guide and PR acceptance](maestro-demo-and-pr-acceptance.md). Next page is [Acceptance composition and runner](acceptance-composition-and-runner.md).
+[↑ CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md) | [← Maestro demo guide and PR acceptance](maestro-demo-and-pr-acceptance.md) | [Acceptance composition and runner →](acceptance-composition-and-runner.md)
 
 On opening CLI Integration or choosing **Re-check**, Maestro reads only
 `~/.agents/skills/maestro/SKILL.md` (the observed shared global installation)

@@ -1,6 +1,6 @@
 # Store version 1
 
-Part of [Self-reported moods](../self-reported-moods.md). Previous page is [Refusals](refusals.md). Next page is [Reader and consumer contract, and local validation](reader-and-consumer-contract.md).
+[↑ Self-reported moods](../self-reported-moods.md) | [← Refusals](refusals.md) | [Reader and consumer contract, and local validation →](reader-and-consumer-contract.md)
 
 Private, atomically replaced `Orchestration/observer/moods.json`, under the
 existing observer read grant:

@@ -1,6 +1,6 @@
 # Local agent launch settings and per-launch preferences
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Previous page is [Native-child launch policy](native-child-launch-policy.md). Next page is [Preference refusals and launch selection](preference-refusals-and-launch-selection.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [← Native-child launch policy](native-child-launch-policy.md) | [Preference refusals and launch selection →](preference-refusals-and-launch-selection.md)
 
 The containing app's **Settings > Agent launches** tab has **Launch agents with
 subscription:** and an optional worker-model setting. Dropdown lists

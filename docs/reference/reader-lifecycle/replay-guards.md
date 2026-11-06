@@ -1,6 +1,6 @@
 # Reducer budget and replay guards
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Bounded retention and discovery](bounded-retention.md). Next page is [Routing discovery and caches](routing-discovery.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Bounded retention and discovery](bounded-retention.md) | [Routing discovery and caches →](routing-discovery.md)
 
 - 256-row reducer budget retires oldest terminal **leaf**, not active,
   idle, blocked, or unknown work. Current-cycle error/abort outcomes protect their

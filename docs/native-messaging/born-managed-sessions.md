@@ -1,6 +1,6 @@
 # Born managed sessions (#252, ADR 0025)
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Previous page is [Installed lifecycle and permissions](installed-lifecycle.md). Next page is [Ordinary-session readiness (partial #162)](ordinary-session-readiness.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Installed lifecycle and permissions](installed-lifecycle.md) | [Ordinary-session readiness (partial #162) →](ordinary-session-readiness.md)
 
 A Copilot session in a CMUX terminal with no launcher inputs enrolls itself as
 its own root coordinator when the loader joins it: at its start, at a resume,

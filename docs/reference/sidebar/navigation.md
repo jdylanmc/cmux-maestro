@@ -1,6 +1,6 @@
 # Navigation and ended rows
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Managed Git context and notices](managed-git-context.md). Next page is [Refresh and render cost](refresh-cost.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Managed Git context and notices](managed-git-context.md) | [Refresh and render cost →](refresh-cost.md)
 
 Unresolved child rows navigate to their owning session's exact terminal even
 when its session heading is suppressed by a managed row. Navigation validates

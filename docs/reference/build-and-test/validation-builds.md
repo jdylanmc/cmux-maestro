@@ -1,6 +1,6 @@
 # Validation builds
 
-Part of [Build and test](../build-and-test.md). Previous page is [Setup controls and focused diagnostics](setup-controls-and-focused-diagnostics.md). Next page is [Isolated setup, hook and sandbox checks](isolated-setup-hook-and-sandbox-checks.md).
+[↑ Build and test](../build-and-test.md) | [← Setup controls and focused diagnostics](setup-controls-and-focused-diagnostics.md) | [Isolated setup, hook and sandbox checks →](isolated-setup-hook-and-sandbox-checks.md)
 
 Xcode can register macOS app outputs with LaunchServices even when signing is
 disabled. Validation builds therefore use isolated identities **and** isolated

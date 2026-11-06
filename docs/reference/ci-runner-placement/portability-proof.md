@@ -1,6 +1,6 @@
 # Portability proof
 
-Part of [CI runner placement](../ci-runner-placement.md). Previous page is [Dependencies between suites](dependencies-between-suites.md). Next page is [Not moved](not-moved.md).
+[↑ CI runner placement](../ci-runner-placement.md) | [← Dependencies between suites](dependencies-between-suites.md) | [Not moved →](not-moved.md)
 
 A check moves only when it can produce the same verdict and the same test count
 on Linux. Python or Node source alone is not proof. #191 moved two commands to

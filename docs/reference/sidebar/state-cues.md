@@ -1,6 +1,6 @@
 # State cues and headers
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Footer and session previews](footer.md). Next page is [Workspace summaries and header actions](workspace-summaries.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Footer and session previews](footer.md) | [Workspace summaries and header actions →](workspace-summaries.md)
 
 Working agents use one 9-point open ring, rotating linearly once per second.
 Reduce Motion keeps the ring static. Questions and approval requests use a

@@ -1,6 +1,6 @@
 # Agent icons
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Display clock, expiry and CPU acceptance](display-clock.md). Next page is [Hover previews and copy](hover-previews.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Display clock, expiry and CPU acceptance](display-clock.md) | [Hover previews and copy →](hover-previews.md)
 
 Agent icons come from the bundled **Nerd Fonts Symbols 3.5.1** font and its
 pinned glyph-name catalog. No system font installation or uploaded images are

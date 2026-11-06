@@ -1,6 +1,6 @@
 # Recovery commands and diagnostics
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Transaction and recovery contract: plugin disabled state and recovery blocks](plugin-disabled-state.md). Next page is [Remove only the owned local preview](remove-local-preview.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Transaction and recovery contract: plugin disabled state and recovery blocks](plugin-disabled-state.md) | [Remove only the owned local preview →](remove-local-preview.md)
 
 ```sh
 python3 scripts/local-preview.py status

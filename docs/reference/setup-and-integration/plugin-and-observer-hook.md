@@ -1,6 +1,6 @@
 # Plugin and observer hook
 
-Part of [Setup and Copilot integration](../setup-and-integration.md). Previous page is [Installer process and cancellation](installer-process-and-cancellation.md). Next page is [Legacy migration and disable preservation](legacy-migration-and-disable-preservation.md).
+[↑ Setup and Copilot integration](../setup-and-integration.md) | [← Installer process and cancellation](installer-process-and-cancellation.md) | [Legacy migration and disable preservation →](legacy-migration-and-disable-preservation.md)
 
 Setup installs distinct, now **hookless `cmux-maestro-native`** plugin and
 its bundled skills, private local controller, native loader at

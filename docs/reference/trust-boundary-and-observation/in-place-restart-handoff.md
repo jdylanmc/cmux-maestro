@@ -1,6 +1,6 @@
 # In-place restart handoff
 
-Part of [Trust boundary and observation](../trust-boundary-and-observation.md). Previous page is [Data and trust boundary: hooks, bindings and locations](data-and-trust-boundary.md). Next page is [Controller, hook shell and sidebar reads](controller-hook-shell-and-sidebar-reads.md).
+[↑ Trust boundary and observation](../trust-boundary-and-observation.md) | [← Data and trust boundary: hooks, bindings and locations](data-and-trust-boundary.md) | [Controller, hook shell and sidebar reads →](controller-hook-shell-and-sidebar-reads.md)
 
 Copilot `/restart` and `/update` keep the bound CLI process alive as a parent.
 The same session continues in a new direct child, which takes the session's

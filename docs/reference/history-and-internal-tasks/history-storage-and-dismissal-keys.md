@@ -1,6 +1,6 @@
 # History storage and dismissal keys
 
-Part of [History and internal tasks](../history-and-internal-tasks.md). Previous page is [Other activity, session history and history settings](other-activity-and-session-history.md).
+[↑ History and internal tasks](../history-and-internal-tasks.md) | [← Other activity, session history and history settings](other-activity-and-session-history.md)
 
 History uses a versioned `CMUXMaestroPreview/sidebar-history.json` record in the
 extension container's Application Support directory. Coordinated, atomic

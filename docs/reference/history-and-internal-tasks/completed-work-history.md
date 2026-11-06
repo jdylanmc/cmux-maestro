@@ -1,6 +1,6 @@
 # Internal Copilot tasks
 
-Part of [History and internal tasks](../history-and-internal-tasks.md). Next page is [Other activity, session history and history settings](other-activity-and-session-history.md).
+[↑ History and internal tasks](../history-and-internal-tasks.md) | [Other activity, session history and history settings →](other-activity-and-session-history.md)
 
 ### Internal Copilot tasks
 

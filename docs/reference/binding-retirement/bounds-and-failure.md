@@ -1,6 +1,6 @@
 # Bounds and failure
 
-Part of [Hook-owned binding retirement](../binding-retirement.md). Previous page is [Coordination and durability](coordination-and-durability.md).
+[↑ Hook-owned binding retirement](../binding-retirement.md) | [← Coordination and durability](coordination-and-durability.md)
 
 Each pass enumerates at most 4096 directory entries plus one overflow check,
 selects at most 16 binding candidates (16 KiB each), and retains a dead survivor

@@ -1,6 +1,6 @@
 # Refusals
 
-Part of [Self-reported moods](../self-reported-moods.md). Previous page is [Agent interface and cosmetic preview](agent-interface.md). Next page is [Store version 1](store-version-1.md).
+[↑ Self-reported moods](../self-reported-moods.md) | [← Agent interface and cosmetic preview](agent-interface.md) | [Store version 1 →](store-version-1.md)
 
 Both native and CLI paths expose only bounded categories:
 

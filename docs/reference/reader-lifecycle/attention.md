@@ -1,6 +1,6 @@
 # Attention and safe activity
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Next page is [Turn identity and causal bridging](turn-identity.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [Turn identity and causal bridging →](turn-identity.md)
 
 Both views split permission requests from questions. Each shows on the session or child
 that owns the durable request. Pending question = in-flight `ask_user` call (current Copilot builds emit no `user_input.requested` event).

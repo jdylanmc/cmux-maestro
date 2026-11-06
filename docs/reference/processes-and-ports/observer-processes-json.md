@@ -1,6 +1,6 @@
 # `observer/processes.json`
 
-Part of [Background processes and ports](../processes-and-ports.md). Previous page is [Producer](producer.md). Next page is [Triggers](triggers.md).
+[↑ Background processes and ports](../processes-and-ports.md) | [← Producer](producer.md) | [Triggers →](triggers.md)
 
 ```json
 {"version": 1, "observedAt": "…Z", "nodes": [{

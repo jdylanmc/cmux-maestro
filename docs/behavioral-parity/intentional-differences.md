@@ -1,6 +1,6 @@
 # Intentional differences and explicit limits
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 - **No observer service or loopback transport.** The proposals in
   [#9](https://github.com/jdylanmc/cmux-maestro/issues/9) and

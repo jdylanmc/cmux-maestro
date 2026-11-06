@@ -1,6 +1,6 @@
 # Display clock, expiry and CPU acceptance
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Refresh and render cost](refresh-cost.md). Next page is [Agent icons](agent-icons.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Refresh and render cost](refresh-cost.md) | [Agent icons →](agent-icons.md)
 
 Copilot's raw tree and evidence stream still publish exact observation timestamps.
 The outline observes a separate presentation key: semantic content, freshness

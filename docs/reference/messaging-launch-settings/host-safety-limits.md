@@ -1,6 +1,6 @@
 # Host safety limits
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Previous page is [Workspace launch capacity](workspace-launch-capacity.md). Next page is [Legacy bounded-worker compatibility](legacy-bounded-worker-compatibility.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [← Workspace launch capacity](workspace-launch-capacity.md) | [Legacy bounded-worker compatibility →](legacy-bounded-worker-compatibility.md)
 
 Independent **host safety limits** bound the shared store: 1,024 total nodes
 (including leases), 1,024 retained resources, 128 configured workspace-limit

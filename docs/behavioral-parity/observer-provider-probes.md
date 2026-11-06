@@ -1,6 +1,6 @@
 # Observer registration: provider probe evidence
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [dedicated observer registration](observer-registration.md). Next page is [migration and restoration](observer-migration.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Dedicated observer registration](observer-registration.md) | [Migration and restoration →](observer-migration.md)
 
 The 1.0.89 maintenance probe covers public metadata, inactive file staging,
 official plugin settings normalization, real-core migration/install/update/

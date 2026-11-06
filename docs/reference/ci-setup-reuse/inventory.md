@@ -1,6 +1,6 @@
 # Inventory: sources and validate-native
 
-Part of [CI setup reuse](../ci-setup-reuse.md). Next page is [Inventory: other suites and existing reuse](validate-contracts.md).
+[↑ CI setup reuse](../ci-setup-reuse.md) | [Inventory: other suites and existing reuse →](validate-contracts.md)
 
 ### Sources
 

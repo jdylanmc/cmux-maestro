@@ -1,6 +1,6 @@
 # Projection reuse and publication
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Activity and publication](activity-and-publication.md). Next page is [File-driven reader wakeups](reader-wakeups.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Activity and publication](activity-and-publication.md) | [File-driven reader wakeups →](reader-wakeups.md)
 
 Unchanged polling reuses the structural sidebar projection (#321), not reader
 identity checks. The key compares the complete typed content, keeping observation

@@ -1,6 +1,6 @@
 # Launch evidence limits and legacy workers
 
-Part of [Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md). Previous page is [Launch receipt evidence](launch-receipt-evidence.md).
+[↑ Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md) | [← Launch receipt evidence](launch-receipt-evidence.md)
 
 `render_health`, quiet periods, terminal output and elapsed time prove none of
 the phases in [launch receipt evidence](launch-receipt-evidence.md). Inventory/probe errors remain unknown, not death. Confirmed

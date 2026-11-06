@@ -1,6 +1,6 @@
 # Refresh and render cost
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Navigation and ended rows](navigation.md). Next page is [Display clock, expiry and CPU acceptance](display-clock.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Navigation and ended rows](navigation.md) | [Display clock, expiry and CPU acceptance →](display-clock.md)
 
 Title controls update their hosted label only when SwiftUI updates the content.
 Size proposals use `NSHostingController.sizeThatFits(in:)` without replacing the

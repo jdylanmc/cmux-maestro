@@ -1,6 +1,6 @@
 # Explicit local-only native acceptance
 
-Part of [required CI and local acceptance](../ci-test-determinism.md). Previous page is [Installer, preferences and guide acceptance](installer-preferences-and-guide-acceptance.md). Next page is [Repeated focused diagnostics and timing ratchet](repeated-focused-diagnostics.md).
+[↑ Required CI and local acceptance](../ci-test-determinism.md) | [← Installer, preferences and guide acceptance](installer-preferences-and-guide-acceptance.md) | [Repeated focused diagnostics and timing ratchet →](repeated-focused-diagnostics.md)
 
 `scripts/local-ui-acceptance.json` inventories each opt-in test and its reason.
 The same identities appear as attributed skips in `coverage.json`; an unlisted

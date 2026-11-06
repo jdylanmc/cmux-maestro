@@ -1,6 +1,6 @@
 # Multi-turn child identity and completion attribution
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Next page is [Multi-turn child identity: unknown turns and capability](multi-turn-unknown-and-capability.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [Multi-turn child identity: unknown turns and capability →](multi-turn-unknown-and-capability.md)
 
 Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
 original spawn task, then start another interaction on the same child without

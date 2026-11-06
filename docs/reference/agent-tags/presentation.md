@@ -1,6 +1,6 @@
 # Presentation
 
-Part of [Agent tags](../agent-tags.md). Previous page is [Color](color.md).
+[↑ Agent tags](../agent-tags.md) | [← Color](color.md)
 
 ![Synthetic expanded row with a human automatic-color tag and a human Forest-swatch tag, right-aligned beside the title.](../../images/agent-tags/expanded-row-light.png)
 

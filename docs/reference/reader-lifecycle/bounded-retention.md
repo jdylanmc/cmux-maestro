@@ -1,6 +1,6 @@
 # Bounded retention and discovery
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Snapshot schema and validation](snapshot-schema.md). Next page is [Reducer budget and replay guards](replay-guards.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Snapshot schema and validation](snapshot-schema.md) | [Reducer budget and replay guards →](replay-guards.md)
 
 - Cold start and file-generation replacement start at the newest configured
   window, not byte zero of an unbounded log. **Event tail (MiB)** in sidebar

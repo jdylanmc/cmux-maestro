@@ -1,6 +1,6 @@
 # Data and trust boundary: hooks, bindings and locations
 
-Part of [Trust boundary and observation](../trust-boundary-and-observation.md). Next page is [In-place restart handoff](in-place-restart-handoff.md).
+[↑ Trust boundary and observation](../trust-boundary-and-observation.md) | [In-place restart handoff →](in-place-restart-handoff.md)
 
 - Small native executable lives at
   `CMUX Maestro Preview.app/Contents/Helpers/CMUXMaestroCopilotHook`.

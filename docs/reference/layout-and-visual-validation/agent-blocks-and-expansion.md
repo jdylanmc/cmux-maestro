@@ -1,6 +1,6 @@
 # Agent blocks and expansion
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Outline grouping and density](outline-grouping-and-density.md). Next page is [Sidebar order and layout storage](sidebar-order-and-layout-storage.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Outline grouping and density](outline-grouping-and-density.md) | [Sidebar order and layout storage →](sidebar-order-and-layout-storage.md)
 
 An expanded agent block is one row group: a managed root agent with its descendants, a
 terminal surface row with its session's children or sessions, or a listed Copilot session

@@ -1,6 +1,6 @@
 # Measured cost and benefit of the realistic candidate
 
-Part of [CI setup reuse](../ci-setup-reuse.md). Previous page is [Inventory: other suites and existing reuse](validate-contracts.md). Next page is [Interpretation](interpretation.md).
+[↑ CI setup reuse](../ci-setup-reuse.md) | [← Inventory: other suites and existing reuse](validate-contracts.md) | [Interpretation →](interpretation.md)
 
 DerivedData reuse is the only candidate on the critical path. The test build
 takes 3 to 4 minutes of a 16 to 18 minute job.

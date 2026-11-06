@@ -1,6 +1,6 @@
 # Pets: `/cmux-maestro-native:maestro-pet`
 
-Part of [Pets and session icons](../pets-and-icons.md). Next page is [Mood atlas contract](mood-atlas-contract.md).
+[↑ Pets and session icons](../pets-and-icons.md) | [Mood atlas contract →](mood-atlas-contract.md)
 
 Active agent's pinned details show animated Codex-format pet (1536×1872 PNG/WebP,
 8×9 cells of 192×208). Legacy sheets have width a multiple of 8, 512-4096,

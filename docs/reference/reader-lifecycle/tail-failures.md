@@ -1,6 +1,6 @@
 # Catch-up and tail failures
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Routing discovery and caches](routing-discovery.md). Next page is [Oversized assets, rerouting and fast retry](oversized-and-rerouting.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Routing discovery and caches](routing-discovery.md) | [Oversized assets, rerouting and fast retry →](oversized-and-rerouting.md)
 
 - Capture fixed prefix length and observation time for each catch-up pass.
   Later appends do not extend that lease forever. Verified complete prefix may

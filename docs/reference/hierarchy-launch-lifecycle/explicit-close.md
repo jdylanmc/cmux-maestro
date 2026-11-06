@@ -1,6 +1,6 @@
 # Explicit close
 
-Part of [Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md). Previous page is [Launch commands and interactive workers](launch-commands-and-interactive-workers.md). Next page is [Interactive startup and native bindings](interactive-startup-and-native-bindings.md).
+[↑ Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md) | [← Launch commands and interactive workers](launch-commands-and-interactive-workers.md) | [Interactive startup and native bindings →](interactive-startup-and-native-bindings.md)
 
 Native `maestro_close` requests closure of one explicitly authorized, currently
 owned strict descendant, including a grandchild. It uses exact `workerId`, `workspaceId`, `surfaceId`,

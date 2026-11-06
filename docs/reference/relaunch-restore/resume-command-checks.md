@@ -1,6 +1,6 @@
 # Resume command checks
 
-Part of [relaunch restore](../relaunch-restore.md). Previous page is [Maestro-launched sessions](maestro-launched-sessions.md). Next page is [One-time approval in CMUX](one-time-approval-in-cmux.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [← Maestro-launched sessions](maestro-launched-sessions.md) | [One-time approval in CMUX →](one-time-approval-in-cmux.md)
 
 On relaunch, CMUX types that command into the restored shell. The resume command checks:
 

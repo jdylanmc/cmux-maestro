@@ -1,6 +1,6 @@
 # Hover components and detail labels
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Hover previews and copy](hover-previews.md). Next page is [Footer and session previews](footer.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Hover previews and copy](hover-previews.md) | [Footer and session previews →](footer.md)
 
 `SidebarHoverRegion` and `SidebarHoverCard` accept presentation data, independent
 of sessions, navigation, preferences, and the bottom details. Passive panels

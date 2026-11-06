@@ -1,6 +1,6 @@
 # Launch: legacy fixtures and lock budgets
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [direct interactive launch](direct-interactive-launch.md). Next page is [Launch: workspace capacity](launch-workspace-capacity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Direct interactive launch](direct-interactive-launch.md) | [Launch: workspace capacity →](launch-workspace-capacity.md)
 
 Preserved legacy tests still cover attachment-ticket serialization, late-claim
 refusal, strict reports and exact resume. The inherited eight-pending fixture

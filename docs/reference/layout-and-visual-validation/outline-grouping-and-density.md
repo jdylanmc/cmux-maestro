@@ -1,6 +1,6 @@
 # Outline grouping and density
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Unmanaged terminals and outline content](unmanaged-terminals-and-outline-content.md). Next page is [Agent blocks and expansion](agent-blocks-and-expansion.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Unmanaged terminals and outline content](unmanaged-terminals-and-outline-content.md) | [Agent blocks and expansion →](agent-blocks-and-expansion.md)
 
 With or without managed graph, same outline groups real CMUX
 surfaces and valid inferred Copilot sessions under workspace headers. Working

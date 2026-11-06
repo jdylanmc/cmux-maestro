@@ -1,6 +1,6 @@
 # Installed lifecycle and permissions
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Previous page is [Managed steering and turn boundaries (#163)](managed-steering.md). Next page is [Born managed sessions (#252, ADR 0025)](born-managed-sessions.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Managed steering and turn boundaries (#163)](managed-steering.md) | [Born managed sessions (#252, ADR 0025) →](born-managed-sessions.md)
 
 Explicit production setup installs the native loader, shared adapter, local
 controller and lifecycle/icon plugin skills. The global `/maestro` guide is

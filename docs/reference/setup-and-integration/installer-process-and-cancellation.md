@@ -1,6 +1,6 @@
 # Installer process and cancellation
 
-Part of [Setup and Copilot integration](../setup-and-integration.md). Next page is [Plugin and observer hook](plugin-and-observer-hook.md).
+[↑ Setup and Copilot integration](../setup-and-integration.md) | [Plugin and observer hook →](plugin-and-observer-hook.md)
 
 Containing app = installer, not session observer. Close it
 after setup. **Check Registration** reads only registration files. Successful

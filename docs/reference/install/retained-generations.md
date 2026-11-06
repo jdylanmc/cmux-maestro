@@ -1,6 +1,6 @@
 # Transaction and recovery contract: integrity and retained generations
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Transaction and recovery contract: locks and supervision](transaction-contract.md). Next page is [Transaction and recovery contract: integration checkpoint](integration-checkpoint.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Transaction and recovery contract: locks and supervision](transaction-contract.md) | [Transaction and recovery contract: integration checkpoint →](integration-checkpoint.md)
 
 - Source and staged copy must match an integrity receipt and pass effective
   signed-profile verification. Files and directory metadata are synchronized

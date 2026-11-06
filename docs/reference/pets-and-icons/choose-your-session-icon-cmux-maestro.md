@@ -1,6 +1,6 @@
 # Choose your session icon
 
-Part of [Pets and session icons](../pets-and-icons.md). Previous page is [Reproduce the bundled art and upgrade copies](reproduce-the-bundled-art.md). Next page is [Agent appearance records](agent-appearance-records.md).
+[↑ Pets and session icons](../pets-and-icons.md) | [← Reproduce the bundled art and upgrade copies](reproduce-the-bundled-art.md) | [Agent appearance records →](agent-appearance-records.md)
 
 Bundled `/cmux-maestro-native:maestro-icon` skill searches local Nerd Fonts catalog. It saves
 glyph and/or identity color for **the invoking session only**.

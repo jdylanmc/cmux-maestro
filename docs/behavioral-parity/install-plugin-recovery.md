@@ -1,6 +1,6 @@
 # Alpha installation: plugin-state recovery and tests
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [Alpha installation: plugin identity and disabled state](install-plugin-state.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Alpha installation: plugin identity and disabled state](install-plugin-state.md)
 
 Recovery handles a failed/lost disable response or process exit between the
 operations described in [plugin identity and disabled state](install-plugin-state.md)

@@ -1,6 +1,6 @@
 # Native-child launch policy
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Previous page is [Native peer messaging](native-peer-messaging.md). Next page is [Local agent launch settings and per-launch preferences](local-agent-launch-settings.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [← Native peer messaging](native-peer-messaging.md) | [Local agent launch settings and per-launch preferences →](local-agent-launch-settings.md)
 
 Prospective native children of an interactive managed parent: omitted
 `allowTools` and `yolo` inherit parent's explicit **recorded launch policy**.

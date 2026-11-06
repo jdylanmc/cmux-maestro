@@ -1,6 +1,6 @@
 # Sender appearance and body
 
-Part of [Agent notifications](../agent-notifications.md). Next page is [Priority, permission and mute](priority-permission-and-mute.md).
+[↑ Agent notifications](../agent-notifications.md) | [Priority, permission and mute →](priority-permission-and-mute.md)
 
 Communication notifications show the sender's selected sidebar glyph/color at
 the leading edge, with the system-owned small app-icon badge. The app badge is

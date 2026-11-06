@@ -1,6 +1,6 @@
 # Controller, hook shell and sidebar reads
 
-Part of [Trust boundary and observation](../trust-boundary-and-observation.md). Previous page is [In-place restart handoff](in-place-restart-handoff.md). Next page is [Temporary status observation loss](temporary-status-observation-loss.md).
+[↑ Trust boundary and observation](../trust-boundary-and-observation.md) | [← In-place restart handoff](in-place-restart-handoff.md) | [Temporary status observation loss →](temporary-status-observation-loss.md)
 
 - Terminal control runs in installed standard-library Python controller at
   `~/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/`.

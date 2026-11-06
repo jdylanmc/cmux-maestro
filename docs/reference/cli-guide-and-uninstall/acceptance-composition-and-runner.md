@@ -1,6 +1,6 @@
 # Acceptance composition and runner
 
-Part of [CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md). Previous page is [Re-check, installed guide status and acceptance evidence](re-check-and-installed-guide-status.md). Next page is [Fresh acceptance provenance](fresh-acceptance-provenance.md).
+[↑ CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md) | [← Re-check, installed guide status and acceptance evidence](re-check-and-installed-guide-status.md) | [Fresh acceptance provenance →](fresh-acceptance-provenance.md)
 
 Acceptance uses the original 600x414 AppKit composition (600x350 real guide and
 600x64 minimal subject), explicit accessibility environment, five statuses in

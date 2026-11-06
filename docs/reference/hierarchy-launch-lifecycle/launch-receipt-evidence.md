@@ -1,6 +1,6 @@
 # Launch receipt evidence
 
-Part of [Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md). Previous page is [Interactive startup and native bindings](interactive-startup-and-native-bindings.md). Next page is [Launch evidence limits and legacy workers](launch-evidence-limits.md).
+[↑ Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md) | [← Interactive startup and native bindings](interactive-startup-and-native-bindings.md) | [Launch evidence limits and legacy workers →](launch-evidence-limits.md)
 
 Launch receipts and private `status` distinguish evidence below. This
 applies to interactive sessions and preserved legacy bounded workers. Neither

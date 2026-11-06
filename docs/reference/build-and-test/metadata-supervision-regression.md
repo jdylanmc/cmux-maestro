@@ -1,6 +1,6 @@
 # Metadata supervision regression
 
-Part of [Build and test](../build-and-test.md). Next page is [Watchdog report slots](watchdog-report-slots.md).
+[↑ Build and test](../build-and-test.md) | [Watchdog report slots →](watchdog-report-slots.md)
 
 Metadata supervision regression has a test-only, executor-independent
 30-second bound for each subcase. A stall records subcase, real deadline

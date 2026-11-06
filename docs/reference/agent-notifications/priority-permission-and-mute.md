@@ -1,6 +1,6 @@
 # Priority, permission and mute
 
-Part of [Agent notifications](../agent-notifications.md). Previous page is [Sender appearance and body](sender-appearance-and-body.md). Next page is [Rate limit and clicks](rate-limit-and-clicks.md).
+[↑ Agent notifications](../agent-notifications.md) | [← Sender appearance and body](sender-appearance-and-body.md) | [Rate limit and clicks →](rate-limit-and-clicks.md)
 
 Normal is `.active` and silent. Urgent is `.active` and requests default sound.
 User notification settings and Focus remain authoritative; no time-sensitive or

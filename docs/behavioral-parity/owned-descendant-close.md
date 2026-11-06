@@ -1,6 +1,6 @@
 # Explicit owned-descendant and subtree close (#90, #91, #377)
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 The native adapter's `maestro_close` and controller's private `native-close`
 ingress admit one exact, currently owned strict-descendant interactive session

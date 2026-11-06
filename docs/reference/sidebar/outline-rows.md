@@ -1,6 +1,6 @@
 # Outline rows and Git evidence
 
-Part of [sidebar presentation](../sidebar-presentation.md). Next page is [Managed Git context and notices](managed-git-context.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [Managed Git context and notices →](managed-git-context.md)
 
 Default view: restrained workspace outline. Primary semibold workspace headers
 contain explicit coordinator → worker → nested-worker rows. Guide lines show hierarchy.

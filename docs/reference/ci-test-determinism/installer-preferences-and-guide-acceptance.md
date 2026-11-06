@@ -1,6 +1,6 @@
 # Installer, preferences and guide acceptance
 
-Part of [required CI and local acceptance](../ci-test-determinism.md). Previous page is [Orchestration, watchers and multiwindow teardown](orchestration-watchers-and-multiwindow-teardown.md). Next page is [Explicit local-only native acceptance](explicit-local-only-native-acceptance.md).
+[↑ Required CI and local acceptance](../ci-test-determinism.md) | [← Orchestration, watchers and multiwindow teardown](orchestration-watchers-and-multiwindow-teardown.md) | [Explicit local-only native acceptance →](explicit-local-only-native-acceptance.md)
 
 - A denied installer process-group probe is conservatively treated as present.
   Only proven absence permits recovery; a transient permission refusal cannot

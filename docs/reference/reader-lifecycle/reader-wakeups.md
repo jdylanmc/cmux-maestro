@@ -1,6 +1,6 @@
 # File-driven reader wakeups
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Projection reuse and publication](projection-reuse.md). Next page is [Conversion caches and acceptance](conversion-caches.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Projection reuse and publication](projection-reuse.md) | [Conversion caches and acceptance →](conversion-caches.md)
 
 While visible and connected, the Copilot reader watches only the exact directories
 of sessions shown (including retained-status rows) or bound on its current

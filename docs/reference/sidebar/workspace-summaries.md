@@ -1,6 +1,6 @@
 # Workspace summaries and header actions
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [State cues and headers](state-cues.md). Next page is [Projections](projections.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← State cues and headers](state-cues.md) | [Projections →](projections.md)
 
 Workspace summaries are action-only: questions/approval requests show **needs
 input**, other explicit blockers show **blocked**. Quiet workspaces show no

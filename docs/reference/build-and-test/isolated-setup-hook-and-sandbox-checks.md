@@ -1,6 +1,6 @@
 # Isolated setup, hook and sandbox checks
 
-Part of [Build and test](../build-and-test.md). Previous page is [Validation builds](validation-builds.md). Next page is [Orchestrator fixture edges](orchestrator-fixture-edges.md).
+[↑ Build and test](../build-and-test.md) | [← Validation builds](validation-builds.md) | [Orchestrator fixture edges →](orchestrator-fixture-edges.md)
 
 Focused, isolated setup, hook, and sandbox checks (no SDK fetch or app launch):
 

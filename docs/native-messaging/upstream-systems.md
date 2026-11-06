@@ -1,6 +1,6 @@
 # Native messaging: what the upstream systems do
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Next page is [Chosen Maestro contract](maestro-contract.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [Chosen Maestro contract →](maestro-contract.md)
 
 ## Orca: durable mailbox, two different attention paths
 

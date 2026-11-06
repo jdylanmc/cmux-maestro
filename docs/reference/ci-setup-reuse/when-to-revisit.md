@@ -1,6 +1,6 @@
 # When to revisit, and a coherent future design
 
-Part of [CI setup reuse](../ci-setup-reuse.md). Previous page is [Rejected options](rejected-options.md).
+[↑ CI setup reuse](../ci-setup-reuse.md) | [← Rejected options](rejected-options.md)
 
 Reconsider DerivedData reuse only when a live A/B test on hosted runners (cold
 miss against warm hit, same commit) shows a net saving of at least 2 minutes

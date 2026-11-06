@@ -1,6 +1,6 @@
 # Evidence, corrected assumptions, and remaining gap
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Previous page is [Owned-descendant close: stock host behavior and admission limits](close-host-behavior.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Owned-descendant close: stock host behavior and admission limits](close-host-behavior.md)
 
 Initial SDK inspection used npm Copilot **1.0.83**, while live sessions reported
 **1.0.87-0**. Source declarations justified an experiment, not a compatibility or

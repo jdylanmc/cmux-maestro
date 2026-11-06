@@ -1,6 +1,6 @@
 # Bounded oversized event projection
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 The reader retains its 1 MiB ordinary-line limit, 4 MiB per-session / 8 MiB
 per-read I/O budgets, and 2,048-line per-session budget. When a line exceeds

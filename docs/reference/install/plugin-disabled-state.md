@@ -1,6 +1,6 @@
 # Transaction and recovery contract: plugin disabled state and recovery blocks
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Transaction and recovery contract: integration checkpoint](integration-checkpoint.md). Next page is [Recovery commands and diagnostics](recovery-commands.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Transaction and recovery contract: integration checkpoint](integration-checkpoint.md) | [Recovery commands and diagnostics →](recovery-commands.md)
 
 - Copilot 1.0.89 supports disabling direct plugins, but its install/update
   operations re-enable them. Identical repeats and compatible external-resource

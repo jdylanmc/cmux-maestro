@@ -1,6 +1,6 @@
 # Mood rules
 
-Part of [Pet moods](../pet-moods.md). Next page is [Timing, preview and motion](timing-preview-and-motion.md).
+[↑ Pet moods](../pet-moods.md) | [Timing, preview and motion →](timing-preview-and-motion.md)
 
 First matching rule wins:
 

@@ -1,6 +1,6 @@
 # Sidebar layout
 
-Part of [Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md). Next page is [Launch commands and interactive workers](launch-commands-and-interactive-workers.md).
+[↑ Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md) | [Launch commands and interactive workers →](launch-commands-and-interactive-workers.md)
 
 Coordinator explicitly registers terminal-backed run: coordinator
 → worker → nested-worker links become primary compact hierarchy.

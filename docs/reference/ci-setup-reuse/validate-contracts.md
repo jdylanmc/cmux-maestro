@@ -1,6 +1,6 @@
 # Inventory: other suites and existing reuse
 
-Part of [CI setup reuse](../ci-setup-reuse.md). Previous page is [Inventory: sources and validate-native](inventory.md). Next page is [Measured cost and benefit of the realistic candidate](measured-cost-and-benefit-of-the.md).
+[↑ CI setup reuse](../ci-setup-reuse.md) | [← Inventory: sources and validate-native](inventory.md) | [Measured cost and benefit of the realistic candidate →](measured-cost-and-benefit-of-the.md)
 
 | Step | A | B | C | Notes |
 | --- | --- | --- | --- | --- |

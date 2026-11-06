@@ -1,6 +1,6 @@
 # Watchdog report slots
 
-Part of [Build and test](../build-and-test.md). Previous page is [Metadata supervision regression](metadata-supervision-regression.md). Next page is [Setup controls and focused diagnostics](setup-controls-and-focused-diagnostics.md).
+[↑ Build and test](../build-and-test.md) | [← Metadata supervision regression](metadata-supervision-regression.md) | [Setup controls and focused diagnostics →](setup-controls-and-focused-diagnostics.md)
 
 `CopilotSetupObservation` remains for diagnosis. Only the
 `MetadataWatchdogProbe` `diagnostic-*` controls and `CopilotSetupObservationTests`

@@ -1,6 +1,6 @@
 # Multi-turn child identity: unknown turns and capability
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [Multi-turn child identity and completion attribution](multi-turn-child-identity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Multi-turn child identity and completion attribution](multi-turn-child-identity.md)
 
 **Missing current-turn proof remains Unknown.** The earlier review packet did
 not establish message tags; its negative regressions remain intact:

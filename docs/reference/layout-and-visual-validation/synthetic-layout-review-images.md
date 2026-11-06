@@ -1,6 +1,6 @@
 # Synthetic layout review images
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Sidebar order and layout storage](sidebar-order-and-layout-storage.md). Next page is [Native menu and warning matrix renders](native-menu-and-warning-matrix-renders.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Sidebar order and layout storage](sidebar-order-and-layout-storage.md) | [Native menu and warning matrix renders →](native-menu-and-warning-matrix-renders.md)
 
 `./scripts/test.sh` writes offscreen SwiftUI/AppKit PNGs to
 `.build/layout-validation/offscreen/`. CI uploads only those PNGs as the

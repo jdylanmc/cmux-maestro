@@ -1,6 +1,6 @@
 # Hover previews and copy
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Agent icons](agent-icons.md). Next page is [Hover components and detail labels](hover-components.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Agent icons](agent-icons.md) | [Hover components and detail labels →](hover-components.md)
 
 Only the workspace **name text** triggers its passive hover preview. Disclosure,
 blank title fill, and actions do not. Leaving that text cancels or dismisses the

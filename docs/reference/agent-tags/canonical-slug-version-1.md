@@ -1,6 +1,6 @@
 # Canonical slug and assignment
 
-Part of [Agent tags](../agent-tags.md). Next page is [Color](color.md).
+[↑ Agent tags](../agent-tags.md) | [Color →](color.md)
 
 Every entry point (sidebar editor, `tags` command, stored data) uses one rule:
 

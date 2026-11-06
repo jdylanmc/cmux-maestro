@@ -1,6 +1,6 @@
 # Workspace launch capacity
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Previous page is [Preference refusals and launch selection](preference-refusals-and-launch-selection.md). Next page is [Host safety limits](host-safety-limits.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [← Preference refusals and launch selection](preference-refusals-and-launch-selection.md) | [Host safety limits →](host-safety-limits.md)
 
 Controller `capacity --workspace <workspace-uuid>` command returns a
 read-only, **advisory** preflight. It needs no provider credentials or host RPCs.

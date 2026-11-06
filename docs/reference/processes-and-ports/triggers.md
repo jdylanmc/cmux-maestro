@@ -1,6 +1,6 @@
 # Triggers
 
-Part of [Background processes and ports](../processes-and-ports.md). Previous page is [`observer/processes.json`](observer-processes-json.md). Next page is [Sidebar and known limits](sidebar.md).
+[↑ Background processes and ports](../processes-and-ports.md) | [← `observer/processes.json`](observer-processes-json.md) | [Sidebar and known limits →](sidebar.md)
 
 `processes.mjs`, installed next to `adapter.mjs` and `extension.mjs`, decides when a session asks. Before it starts the controller, it checks `observer/processes.json`: a pass that began after the event already covers it, and with nothing pending a pass written under 2 s ago by any session means no request.
 - When the session becomes managed (a launched worker, or a born root once enrolled): one request.

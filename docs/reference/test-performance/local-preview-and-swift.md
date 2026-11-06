@@ -1,6 +1,6 @@
 # Local preview suite, Swift tests and next steps
 
-Part of [test performance](../test-performance.md). Previous page is [Orchestrator suite evidence](orchestrator-evidence.md).
+[↑ Test performance](../test-performance.md) | [← Orchestrator suite evidence](orchestrator-evidence.md)
 
 ## Local preview suite
 

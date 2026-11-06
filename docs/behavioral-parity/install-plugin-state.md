@@ -1,6 +1,6 @@
 # Alpha installation: plugin identity and disabled state
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [integration checkpoint](install-integration-checkpoint.md). Next page is [Alpha installation: plugin-state recovery and tests](install-plugin-recovery.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Integration checkpoint](install-integration-checkpoint.md) | [Alpha installation: plugin-state recovery and tests →](install-plugin-recovery.md)
 
 Plugin mutations use public sessionless RPCs, with the supported status checked
 before the mutation request. An install receipt supplies the exact owned

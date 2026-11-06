@@ -1,6 +1,6 @@
 # Authority and proof
 
-Part of [Hook-owned binding retirement](../binding-retirement.md). Next page is [Coordination and durability](coordination-and-durability.md).
+[↑ Hook-owned binding retirement](../binding-retirement.md) | [Coordination and durability →](coordination-and-durability.md)
 
 Only an already successful session-start or prompt identity-binding hook may
 run one retirement pass. Tool-use payloads do not run retirement.

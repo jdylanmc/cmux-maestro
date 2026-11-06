@@ -1,6 +1,6 @@
 # Preference refusals and launch selection
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Previous page is [Local agent launch settings and per-launch preferences](local-agent-launch-settings.md). Next page is [Workspace launch capacity](workspace-launch-capacity.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [← Local agent launch settings and per-launch preferences](local-agent-launch-settings.md) | [Workspace launch capacity →](workspace-launch-capacity.md)
 
 Refusals use bounded check names: `model-list-invalid` identifies list/count,
 ID/duplicate-ID, context/effort array bounds, pricing-tier shape, account drift or

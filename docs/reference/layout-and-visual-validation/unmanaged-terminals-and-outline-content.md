@@ -1,6 +1,6 @@
 # Unmanaged terminals and outline content
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Details inspector and row state](details-inspector-and-row-state.md). Next page is [Outline grouping and density](outline-grouping-and-density.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Details inspector and row state](details-inspector-and-row-state.md) | [Outline grouping and density →](outline-grouping-and-density.md)
 
 For unmanaged terminals with exactly one observed session, state and children
 show on the named terminal row. No duplicate provider/ID

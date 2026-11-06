@@ -1,6 +1,6 @@
 # Rate limit and clicks
 
-Part of [Agent notifications](../agent-notifications.md). Previous page is [Priority, permission and mute](priority-permission-and-mute.md). Next page is [Production signing prerequisite](production-signing-prerequisite.md).
+[↑ Agent notifications](../agent-notifications.md) | [← Priority, permission and mute](priority-permission-and-mute.md) | [Production signing prerequisite →](production-signing-prerequisite.md)
 
 The shared private controller ledger permits a burst of three per session,
 then refills one token per 60 seconds, capped at three. Failed/uncertain

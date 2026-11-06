@@ -1,6 +1,6 @@
 # Known gaps
 
-Part of [relaunch restore](../relaunch-restore.md). Previous page is [Sidebar rows](sidebar-rows.md). Next page is [Live checks](live-checks.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [← Sidebar rows](sidebar-rows.md) | [Live checks →](live-checks.md)
 
 - If you also installed CMUX's Copilot hooks yourself (in `config.json` or another hook file), both sets run and CMUX receives each event twice. Remove your copy and keep Maestro's file, which setup maintains.
 - CMUX's Copilot restore keeps `--name` and adds `--resume`. Copilot 1.0.98 refuses that pair. A session started with `--name` does not come back through CMUX's restore. Rename the session inside Copilot instead.

@@ -1,6 +1,6 @@
 # Sidebar and known limits
 
-Part of [Background processes and ports](../processes-and-ports.md). Previous page is [Triggers](triggers.md).
+[↑ Background processes and ports](../processes-and-ports.md) | [← Triggers](triggers.md)
 
 The sidebar reads `processes.json` with the existing read-only `observer/` grant, like `icons.json`. A missing or malformed file shows no list, never an error. It keeps an entry only when its node, session and generation match a node in `current.json`.
 

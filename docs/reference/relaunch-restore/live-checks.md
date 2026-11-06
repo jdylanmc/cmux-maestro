@@ -1,6 +1,6 @@
 # Live checks
 
-Part of [relaunch restore](../relaunch-restore.md). Previous page is [Known gaps](known-gaps.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [← Known gaps](known-gaps.md)
 
 Nothing in this document has been verified in a live CMUX yet. Run these before calling relaunch restore done. CMUX's CLI refuses processes started outside CMUX, so a human (or a verifier driving the CMUX window through Computer Use) runs them inside CMUX.
 

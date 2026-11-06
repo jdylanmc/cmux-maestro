@@ -1,6 +1,6 @@
 # Install a stable local preview
 
-Part of [install, update, and recovery](../install-update-recovery.md). Next page is [Install a verified artifact](verified-artifact.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [Install a verified artifact →](verified-artifact.md)
 
 This is a **local, user-owned preview**. It is not a public release, auto-updater,
 notarized distribution, license decision, or legacy-plugin cutover. Stable

@@ -1,6 +1,6 @@
 # Sources and separating the costs
 
-Part of [test performance](../test-performance.md). Next page is [Orchestrator suite](orchestrator-suite.md).
+[↑ Test performance](../test-performance.md) | [Orchestrator suite →](orchestrator-suite.md)
 
 - **CI:** PR run 38662873916 (`validate` job, macOS GitHub-hosted runner).
   Step times come from the jobs API; test times come from the suites' own

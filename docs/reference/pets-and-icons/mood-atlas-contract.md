@@ -1,6 +1,6 @@
 # Mood atlas contract
 
-Part of [Pets and session icons](../pets-and-icons.md). Previous page is [Pets: `/cmux-maestro-native:maestro-pet`](pets-cmux-maestro-native-maestro-pet.md). Next page is [Reproduce the bundled art and upgrade copies](reproduce-the-bundled-art.md).
+[↑ Pets and session icons](../pets-and-icons.md) | [← Pets: `/cmux-maestro-native:maestro-pet`](pets-cmux-maestro-native-maestro-pet.md) | [Reproduce the bundled art and upgrade copies →](reproduce-the-bundled-art.md)
 
 The 20-row format preserves rows 0-8. Row 9 is Startled, and row 10 is reserved.
 Partial extensions are refused. No manifest version bump or companion asset:

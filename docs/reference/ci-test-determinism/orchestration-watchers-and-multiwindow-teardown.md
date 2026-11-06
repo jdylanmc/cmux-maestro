@@ -1,6 +1,6 @@
 # Orchestration, watchers and multiwindow teardown
 
-Part of [required CI and local acceptance](../ci-test-determinism.md). Previous page is [Required behavioral coverage](required-behavioral-coverage.md). Next page is [Installer, preferences and guide acceptance](installer-preferences-and-guide-acceptance.md).
+[↑ Required CI and local acceptance](../ci-test-determinism.md) | [← Required behavioral coverage](required-behavioral-coverage.md) | [Installer, preferences and guide acceptance →](installer-preferences-and-guide-acceptance.md)
 
 - Orchestration snapshots and naming use an injected clock. Polling tests await
   publication at the existing pause boundary rather than counting scheduler yields.

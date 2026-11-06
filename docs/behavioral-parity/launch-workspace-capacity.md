@@ -1,6 +1,6 @@
 # Launch: workspace capacity
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [legacy fixtures and lock budgets](launch-legacy-fixtures.md). Next page is [Launch: native-child permissions](launch-child-permissions.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Legacy fixtures and lock budgets](launch-legacy-fixtures.md) | [Launch: native-child permissions →](launch-child-permissions.md)
 
 Workspace capacity regressions cover persisted CLI configuration, rejected
 worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and 128

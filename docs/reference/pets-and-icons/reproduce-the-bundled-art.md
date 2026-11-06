@@ -1,6 +1,6 @@
 # Reproduce the bundled art and upgrade copies
 
-Part of [Pets and session icons](../pets-and-icons.md). Previous page is [Mood atlas contract](mood-atlas-contract.md). Next page is [Choose your session icon](choose-your-session-icon-cmux-maestro.md).
+[↑ Pets and session icons](../pets-and-icons.md) | [← Mood atlas contract](mood-atlas-contract.md) | [Choose your session icon →](choose-your-session-icon-cmux-maestro.md)
 
 The original project's legacy drawing code remains in
 `scripts/generate-maestro-pet.py`; `scripts/maestro_pet_art.py` draws the new

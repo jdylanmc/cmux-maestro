@@ -1,6 +1,6 @@
 # Footer, Taskboard and Beats
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Next page is [Details inspector and row state](details-inspector-and-row-state.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [Details inspector and row state →](details-inspector-and-row-state.md)
 
 The workspace menu's **Rename… (⇧⌘R)** selects the workspace and shows a reminder of
 CMUX's own shortcut instead of renaming it. **Active window** footer has a drag handle on

@@ -1,6 +1,6 @@
 # Transaction and recovery contract: locks and supervision
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Copilot refresh and same-build updates](copilot-refresh.md). Next page is [Transaction and recovery contract: integrity and retained generations](retained-generations.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Copilot refresh and same-build updates](copilot-refresh.md) | [Transaction and recovery contract: integrity and retained generations →](retained-generations.md)
 
 - **CMUX Copilot hooks file.** Setup owns `~/.copilot/hooks/cmux-maestro-cmux-hooks.json` only while its bytes equal a manifest some Maestro release shipped. Update replaces an earlier copy. If setup, update or `recover` refuses and names that file, it holds hooks Maestro did not write: move it away (or remove your own CMUX hooks there) and rerun. Uninstall puts the file back if a later removal fails, and names a file it left in place.
 

@@ -1,6 +1,6 @@
 # Details inspector and row state
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Footer, Taskboard and Beats](footer-and-taskboard.md). Next page is [Unmanaged terminals and outline content](unmanaged-terminals-and-outline-content.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Footer, Taskboard and Beats](footer-and-taskboard.md) | [Unmanaged terminals and outline content →](unmanaged-terminals-and-outline-content.md)
 
 Settings and separate Details inspector popover have explicit Close controls.
 Inspector is keyboard-accessible and scrolls independently. It preserves full metadata

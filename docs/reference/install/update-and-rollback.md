@@ -1,6 +1,6 @@
 # Update, rollback and status
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Install a verified artifact](verified-artifact.md). Next page is [Copilot refresh and same-build updates](copilot-refresh.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Install a verified artifact](verified-artifact.md) | [Copilot refresh and same-build updates →](copilot-refresh.md)
 
 Updates journal and verify their candidate, then automatically withdraw
 only the receipt-owned app/extension registration. The installer verifies

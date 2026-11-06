@@ -1,6 +1,6 @@
 # Background-shell representation
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 Structured `shell_completed` and `shell_detached_completed` notifications remain
 decoded, but no longer create synthetic "Background shell" work rows, outcome

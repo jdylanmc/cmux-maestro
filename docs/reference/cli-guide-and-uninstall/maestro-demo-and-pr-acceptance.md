@@ -1,6 +1,6 @@
 # Maestro demo guide and PR acceptance
 
-Part of [CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md). Next page is [Re-check, installed guide status and acceptance evidence](re-check-and-installed-guide-status.md).
+[↑ CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md) | [Re-check, installed guide status and acceptance evidence →](re-check-and-installed-guide-status.md)
 
 **`/maestro-demo`** is an optional, human-requested live demonstration: two visible
 interactive workers by default, three on request, distinct icons/colors, their

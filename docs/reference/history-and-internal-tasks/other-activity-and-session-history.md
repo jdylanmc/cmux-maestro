@@ -1,6 +1,6 @@
 # Other activity, session history and history settings
 
-Part of [History and internal tasks](../history-and-internal-tasks.md). Previous page is [Internal Copilot tasks](completed-work-history.md). Next page is [History storage and dismissal keys](history-storage-and-dismissal-keys.md).
+[↑ History and internal tasks](../history-and-internal-tasks.md) | [← Internal Copilot tasks](completed-work-history.md) | [History storage and dismissal keys →](history-storage-and-dismissal-keys.md)
 
 Tool invocation completion is not an agent failure. Successful and failed shell
 invocations leave the sidebar child rows when their exact completion is

@@ -1,6 +1,6 @@
 # Launch: native-child permissions
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [workspace capacity](launch-workspace-capacity.md). Next page is [Launch: model selection](launch-model-selection.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Workspace capacity](launch-workspace-capacity.md) | [Launch: model selection →](launch-model-selection.md)
 
 Prospective native-child permission regressions exercise explicit recorded
 parent mode/allow/deny inheritance, deny-only additions, explicit list/false

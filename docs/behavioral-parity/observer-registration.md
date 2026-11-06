@@ -1,6 +1,6 @@
 # Dedicated observer registration (#114)
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Continued in [provider probe evidence](observer-provider-probes.md) and [migration and restoration](observer-migration.md). Next page is [Observer registration: provider probe evidence](observer-provider-probes.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [Observer registration: provider probe evidence →](observer-provider-probes.md)
 
 Explicit setup now owns a dedicated version-1 user file for exactly
 `sessionStart`, `userPromptSubmitted` and `postToolUse`. The bundled helper,

@@ -1,6 +1,6 @@
 # Managed steering and turn boundaries (#163)
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Previous page is [Chosen Maestro contract](maestro-contract.md). Next page is [Installed lifecycle and permissions](installed-lifecycle.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Chosen Maestro contract](maestro-contract.md) | [Installed lifecycle and permissions →](installed-lifecycle.md)
 
 Managed recipients request Copilot's native `immediate` mode. The separate
 legacy/disposable `a`/`b` proof transport retains `enqueue`; its historical

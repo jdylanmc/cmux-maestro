@@ -1,6 +1,6 @@
 # Footer and session previews
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Hover components and detail labels](hover-components.md). Next page is [State cues and headers](state-cues.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Hover components and detail labels](hover-components.md) | [State cues and headers →](state-cues.md)
 
 Flush footer uses native adaptive colors. It shows the verified agent's animated
 Codex-format pet (bundled original Maestro robot head by default, see

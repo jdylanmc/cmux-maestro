@@ -1,6 +1,6 @@
 # Sidebar rows
 
-Part of [relaunch restore](../relaunch-restore.md). Previous page is [One-time approval in CMUX](one-time-approval-in-cmux.md). Next page is [Known gaps](known-gaps.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [← One-time approval in CMUX](one-time-approval-in-cmux.md) | [Known gaps →](known-gaps.md)
 
 A restored tab used to show as `Terminal`. The sidebar shows an unmanaged Copilot row only after Maestro's observer hook binds the session to its surface. A restored session can show the CMUX surface title until that binding exists. Live checks must confirm when the hook binds a resumed session.
 

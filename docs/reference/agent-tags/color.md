@@ -1,6 +1,6 @@
 # Color
 
-Part of [Agent tags](../agent-tags.md). Previous page is [Canonical slug and assignment](canonical-slug-version-1.md). Next page is [Presentation](presentation.md).
+[↑ Agent tags](../agent-tags.md) | [← Canonical slug and assignment](canonical-slug-version-1.md) | [Presentation →](presentation.md)
 
 - **Automatic** (registry version 1): FNV-1a 32-bit over the slug's Unicode scalars;
   hue `hash % 360`, saturation `0.48 + ((hash >> 9) % 13) / 100`, lightness

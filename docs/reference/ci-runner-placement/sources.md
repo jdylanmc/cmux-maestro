@@ -1,6 +1,6 @@
 # Sources
 
-Part of [CI runner placement](../ci-runner-placement.md). Next page is [Concurrency and queueing](concurrency-and-queueing.md).
+[↑ CI runner placement](../ci-runner-placement.md) | [Concurrency and queueing →](concurrency-and-queueing.md)
 
 - **Window:** every Actions job the `jdylanmc` account ran from 2026-10-14 12:41Z to
   2026-10-15 11:40Z: 54 `cmux-maestro` CI runs (77 macOS jobs that started), plus

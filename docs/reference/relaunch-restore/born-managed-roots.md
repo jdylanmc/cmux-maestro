@@ -1,6 +1,6 @@
 # Born-managed roots
 
-Part of [relaunch restore](../relaunch-restore.md). Next page is [After a born-managed resume](after-a-born-managed-resume.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [After a born-managed resume →](after-a-born-managed-resume.md)
 
 A session you started in CMUX is a born-managed root. CMUX's own Copilot restore runs `copilot --resume <id>` in the restored surface. The Maestro extension then joins the resumed session and asks the controller to enroll it. The controller finds the node recorded for that exact session ID and resumes it as the next generation of the same node, in the same run. The root keeps its children. The same happens when you run `copilot --resume <id>` yourself, including after `/exit`; if the node was archived, the session enrolls as a new root.
 

@@ -1,6 +1,6 @@
 # Native peer messaging
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Next page is [Native-child launch policy](native-child-launch-policy.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [Native-child launch policy →](native-child-launch-policy.md)
 
 After explicit integration setup, select initial coordinator account and
 model in **Agent launch settings**. Then use `launch-coordinator`.

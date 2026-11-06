@@ -1,6 +1,6 @@
 # Maestro-launched sessions
 
-Part of [relaunch restore](../relaunch-restore.md). Previous page is [After a born-managed resume](after-a-born-managed-resume.md). Next page is [Resume command checks](resume-command-checks.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [← After a born-managed resume](after-a-born-managed-resume.md) | [Resume command checks →](resume-command-checks.md)
 
 Children from `maestro_spawn`, and coordinators from `launch-coordinator`, do not use CMUX's own restore. The owner approved the binding for `launch-coordinator` roots too: they carry recorded flags like children. Their launch sets `CMUX_COPILOT_HOOKS_DISABLED=1`, so CMUX's hooks never record them. CMUX's restore drops launch flags, which could drop deny rules or the parent link.
 

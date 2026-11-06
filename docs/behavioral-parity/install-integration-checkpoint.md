@@ -1,6 +1,6 @@
 # Alpha installation: integration checkpoint
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [retired slots and native publication](install-retired-slots.md). Next page is [Alpha installation: plugin identity and disabled state](install-plugin-state.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Retired slots and native publication](install-retired-slots.md) | [Alpha installation: plugin identity and disabled state →](install-plugin-state.md)
 
 `build-register.sh` now hands its verified artifact to the same `install`
 entrypoint. It no longer separately registers the development extension.

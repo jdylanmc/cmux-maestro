@@ -1,6 +1,6 @@
 # Orchestrator suite
 
-Part of [test performance](../test-performance.md). Previous page is [Sources and separating the costs](sources.md). Next page is [Orchestrator suite evidence](orchestrator-evidence.md).
+[↑ Test performance](../test-performance.md) | [← Sources and separating the costs](sources.md) | [Orchestrator suite evidence →](orchestrator-evidence.md)
 
 ## Orchestrator profile
 

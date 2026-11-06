@@ -1,6 +1,6 @@
 # Effect
 
-Part of [CI runner placement](../ci-runner-placement.md). Previous page is [Not moved](not-moved.md).
+[↑ CI runner placement](../ci-runner-placement.md) | [← Not moved](not-moved.md)
 
 - **Documentation-only pull requests** (`docs/**`, `README.md`, `CHANGELOG.md`,
   `CONTEXT.md` or `AGENTS.md`, other than this policy):

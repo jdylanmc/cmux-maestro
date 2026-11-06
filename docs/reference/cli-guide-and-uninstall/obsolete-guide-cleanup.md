@@ -1,6 +1,6 @@
 # Obsolete guide cleanup, disable and uninstall
 
-Part of [CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md). Previous page is [Guide UI consumer probe](guide-ui-consumer-probe.md).
+[↑ CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md) | [← Guide UI consumer probe](guide-ui-consumer-probe.md)
 
 On next explicit **Enable Copilot Integration**, setup removes only its old
 `Copilot/plugin/skills/maestro/SKILL.md` copy, if present, using owner-checked,

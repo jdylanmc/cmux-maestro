@@ -1,6 +1,6 @@
 # Turn identity and causal bridging
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Attention and safe activity](attention.md). Next page is [Tool events and missing causal evidence](tool-events.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Attention and safe activity](attention.md) | [Tool events and missing causal evidence →](tool-events.md)
 
 Copilot reuses turn IDs such as `0` and `1` in later interactions. When supplied,
 `data.interactionId` scopes accepted starts and replay protection together with

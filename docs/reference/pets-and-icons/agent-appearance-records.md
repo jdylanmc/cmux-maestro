@@ -1,6 +1,6 @@
 # Agent appearance records
 
-Part of [Pets and session icons](../pets-and-icons.md). Previous page is [Choose your session icon](choose-your-session-icon-cmux-maestro.md).
+[↑ Pets and session icons](../pets-and-icons.md) | [← Choose your session icon](choose-your-session-icon-cmux-maestro.md)
 
 All new registrations and workers default to `md-robot`.
 `register`/`spawn` accept optional `--icon` and `--color` startup choices.

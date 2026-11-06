@@ -1,6 +1,6 @@
 # Activity and publication
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Retention protection and acknowledgements](acknowledgements.md). Next page is [Projection reuse and publication](projection-reuse.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Retention protection and acknowledgements](acknowledgements.md) | [Projection reuse and publication →](projection-reuse.md)
 
 Activity uses only allowlisted durable tool-name field: **Executing tool**
 (latest still-executing invocation for that owner) or **Last completed tool**.

@@ -1,6 +1,6 @@
 # Routing discovery and caches
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Reducer budget and replay guards](replay-guards.md). Next page is [Catch-up and tail failures](tail-failures.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Reducer budget and replay guards](replay-guards.md) | [Catch-up and tail failures →](tail-failures.md)
 
 - Routing discovery resumes one descriptor-anchored directory stream across
   batches (up to 1,024 directory entries per batch, plus bounded revalidation of

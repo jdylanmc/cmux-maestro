@@ -1,6 +1,6 @@
 # Required behavioral coverage
 
-Part of [required CI and local acceptance](../ci-test-determinism.md). Next page is [Orchestration, watchers and multiwindow teardown](orchestration-watchers-and-multiwindow-teardown.md).
+[↑ Required CI and local acceptance](../ci-test-determinism.md) | [Orchestration, watchers and multiwindow teardown →](orchestration-watchers-and-multiwindow-teardown.md)
 
 - Metadata watchdog owned-process controls signal the diagnostic only after
   capturing readiness and the selected runner/task/exit boundary. A 70-second

@@ -1,6 +1,6 @@
 # Lazy preference observation (#169)
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 Layout remains read-only until an explicit action. Its file presenter watches
 the nearest existing container when the target is absent. Changes to that

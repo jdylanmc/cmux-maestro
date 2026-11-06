@@ -1,6 +1,6 @@
 # Sidebar order and layout storage
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Agent blocks and expansion](agent-blocks-and-expansion.md). Next page is [Synthetic layout review images](synthetic-layout-review-images.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Agent blocks and expansion](agent-blocks-and-expansion.md) | [Synthetic layout review images →](synthetic-layout-review-images.md)
 
 Sidebar order ([ADR 0021](../../adr/0021-sidebar-order-is-maestro-local.md)) is a
 separate versioned `CMUXMaestroPreview/sidebar-order.json` record in the same

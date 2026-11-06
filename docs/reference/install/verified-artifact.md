@@ -1,6 +1,6 @@
 # Install a verified artifact
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Install a stable local preview](local-preview.md). Next page is [Update, rollback and status](update-and-rollback.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Install a stable local preview](local-preview.md) | [Update, rollback and status →](update-and-rollback.md)
 
 To install an already-built, verified production artifact instead:
 

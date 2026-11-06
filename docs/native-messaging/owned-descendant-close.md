@@ -1,6 +1,6 @@
 # Explicit owned-descendant close
 
-Part of [native messaging: architecture and research findings](../native-messaging-architecture.md). Previous page is [Ordinary-session readiness (partial #162)](ordinary-session-readiness.md). Next page is [Owned-descendant close: stock host behavior and admission limits](close-host-behavior.md).
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Ordinary-session readiness (partial #162)](ordinary-session-readiness.md) | [Owned-descendant close: stock host behavior and admission limits →](close-host-behavior.md)
 
 `maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}, scope?})`
 uses the CLI-owned adapter and existing controller, not the peer socket or the

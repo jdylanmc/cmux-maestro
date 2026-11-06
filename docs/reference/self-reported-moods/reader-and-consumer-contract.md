@@ -1,6 +1,6 @@
 # Reader and consumer contract, and local validation
 
-Part of [Self-reported moods](../self-reported-moods.md). Previous page is [Store version 1](store-version-1.md).
+[↑ Self-reported moods](../self-reported-moods.md) | [← Store version 1](store-version-1.md)
 
 `SidebarOrchestrationReader.Cached` owns the bounded mood cache. Its first
 valid read baselines all existing sequences without displaying their claims.

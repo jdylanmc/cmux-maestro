@@ -1,6 +1,6 @@
 # Retention protection and acknowledgements
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Tool events and missing causal evidence](tool-events.md). Next page is [Activity and publication](activity-and-publication.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Tool events and missing causal evidence](tool-events.md) | [Activity and publication →](activity-and-publication.md)
 
 Outstanding attention protects rows from history retention and dismissal.
 Acknowledging error/abort then lets ordinary history retention apply.

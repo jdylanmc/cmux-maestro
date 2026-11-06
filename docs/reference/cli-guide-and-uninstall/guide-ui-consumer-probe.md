@@ -1,6 +1,6 @@
 # Guide UI consumer probe
 
-Part of [CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md). Previous page is [Fresh acceptance provenance](fresh-acceptance-provenance.md). Next page is [Obsolete guide cleanup, disable and uninstall](obsolete-guide-cleanup.md).
+[↑ CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md) | [← Fresh acceptance provenance](fresh-acceptance-provenance.md) | [Obsolete guide cleanup, disable and uninstall →](obsolete-guide-cleanup.md)
 
 A separate additive `guide-ui-consumer-probe` CI job builds the validation-only
 `CMUXMaestroGuideUIHost` app and public XCTest UI target. It compiles the same

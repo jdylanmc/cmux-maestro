@@ -1,6 +1,6 @@
 # Fresh acceptance provenance
 
-Part of [CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md). Previous page is [Acceptance composition and runner](acceptance-composition-and-runner.md). Next page is [Guide UI consumer probe](guide-ui-consumer-probe.md).
+[↑ CLI guide, enable, and uninstall](../cli-guide-and-uninstall.md) | [← Acceptance composition and runner](acceptance-composition-and-runner.md) | [Guide UI consumer probe →](guide-ui-consumer-probe.md)
 
 Fresh acceptance requires clean source before and after execution, exact source
 inventory/hashes, built product namespaces/hashes, attributable push or PR

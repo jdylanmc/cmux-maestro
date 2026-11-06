@@ -1,6 +1,6 @@
 # Agent interface and cosmetic preview
 
-Part of [Self-reported moods](../self-reported-moods.md). Next page is [Refusals](refusals.md).
+[↑ Self-reported moods](../self-reported-moods.md) | [Refusals →](refusals.md)
 
 Native `maestro_mood({ "mood": "happy" })`; supported values are `happy`,
 `celebrating`, `confused`, and `clear`. The installed adapter privately binds

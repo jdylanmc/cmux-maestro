@@ -1,6 +1,6 @@
 # Run timings by layout
 
-Part of [CI runner placement](../ci-runner-placement.md). Previous page is [Concurrency and queueing](concurrency-and-queueing.md). Next page is [Dependencies between suites](dependencies-between-suites.md).
+[↑ CI runner placement](../ci-runner-placement.md) | [← Concurrency and queueing](concurrency-and-queueing.md) | [Dependencies between suites →](dependencies-between-suites.md)
 
 macOS execution is the sum over the run's macOS jobs. Wall time runs from
 creation to the last job's completion.

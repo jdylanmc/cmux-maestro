@@ -1,6 +1,6 @@
 # Rejected options
 
-Part of [CI setup reuse](../ci-setup-reuse.md). Previous page is [Interpretation](interpretation.md). Next page is [When to revisit, and a coherent future design](when-to-revisit.md).
+[↑ CI setup reuse](../ci-setup-reuse.md) | [← Interpretation](interpretation.md) | [When to revisit, and a coherent future design →](when-to-revisit.md)
 
 | Option | Reason |
 | --- | --- |

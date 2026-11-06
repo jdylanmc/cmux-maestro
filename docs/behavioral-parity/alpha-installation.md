@@ -1,6 +1,6 @@
 # Coordinated alpha installation (#114)
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Continued in [retired slots and native publication](install-retired-slots.md), [integration checkpoint](install-integration-checkpoint.md) and [plugin identity and disabled state](install-plugin-state.md). Next page is [Alpha installation: retired slots and native publication](install-retired-slots.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [Alpha installation: retired slots and native publication →](install-retired-slots.md)
 
 The focused Python suite covers ordinary `install` upgrades, exact registered
 identical no-ops (without app replacement, receipt changes or lost backups),

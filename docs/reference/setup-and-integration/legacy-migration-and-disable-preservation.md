@@ -1,6 +1,6 @@
 # Legacy migration and disable preservation
 
-Part of [Setup and Copilot integration](../setup-and-integration.md). Previous page is [Plugin and observer hook](plugin-and-observer-hook.md). Next page is [Status, failures and messaging configuration](status-failures-and-messaging-configuration.md).
+[↑ Setup and Copilot integration](../setup-and-integration.md) | [← Plugin and observer hook](plugin-and-observer-hook.md) | [Status, failures and messaging configuration →](status-failures-and-messaging-configuration.md)
 
 For recognized direct legacy installation, setup: records provenance
 and stages **owned disabled** dedicated file; confirms disabled discovery;

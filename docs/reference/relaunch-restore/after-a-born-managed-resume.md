@@ -1,6 +1,6 @@
 # After a born-managed resume
 
-Part of [relaunch restore](../relaunch-restore.md). Previous page is [Born-managed roots](born-managed-roots.md). Next page is [Maestro-launched sessions](maestro-launched-sessions.md).
+[↑ Relaunch restore](../relaunch-restore.md) | [← Born-managed roots](born-managed-roots.md) | [Maestro-launched sessions →](maestro-launched-sessions.md)
 
 The node keeps its run and children. Its provider executable and PATH are refreshed from the resumed process. An ended node's recorded executable is read from its launch archive (`control/retired/<node-id>.json`) when compaction moved it there. The old generation's peer route and capability are retired, and the new generation gets a new route. Peers see the new address. Addresses are exact per generation: a child's task prompt names its coordinator's address at launch, and that address stops working once the coordinator resumes. The child finds the coordinator's current address with `maestro_peers`.
 

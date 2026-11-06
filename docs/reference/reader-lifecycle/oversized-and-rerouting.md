@@ -1,6 +1,6 @@
 # Oversized assets, rerouting and fast retry
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Catch-up and tail failures](tail-failures.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Catch-up and tail failures](tail-failures.md)
 
 - Oversized `session.binary_asset` events keep bounded, validated outer
   envelope. Their opaque `data` object is discarded incrementally. Uploaded

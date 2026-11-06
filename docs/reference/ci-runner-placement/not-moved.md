@@ -1,6 +1,6 @@
 # Not moved
 
-Part of [CI runner placement](../ci-runner-placement.md). Previous page is [Portability proof](portability-proof.md). Next page is [Effect](effect.md).
+[↑ CI runner placement](../ci-runner-placement.md) | [← Portability proof](portability-proof.md) | [Effect →](effect.md)
 
 | Command | Why it stays on macOS |
 | --- | --- |

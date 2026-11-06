@@ -1,6 +1,6 @@
 # Setup controls and focused diagnostics
 
-Part of [Build and test](../build-and-test.md). Previous page is [Watchdog report slots](watchdog-report-slots.md). Next page is [Validation builds](validation-builds.md).
+[↑ Build and test](../build-and-test.md) | [← Watchdog report slots](watchdog-report-slots.md) | [Validation builds →](validation-builds.md)
 
 `test-copilot-setup.sh` also runs disposable Foundation-only controls: successful
 disarming, stalled injected clock, continued polling of frozen clock, and

@@ -1,6 +1,6 @@
 # Managed Git context and notices
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Outline rows and Git evidence](outline-rows.md). Next page is [Navigation and ended rows](navigation.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Outline rows and Git evidence](outline-rows.md) | [Navigation and ended rows →](navigation.md)
 
 Managed rows show concise worktree context beside the exact state cue. Hover,
 Details and the existing pinned footer keep Git diagnostics. Fresh Git evidence

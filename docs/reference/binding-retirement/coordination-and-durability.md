@@ -1,6 +1,6 @@
 # Coordination and durability
 
-Part of [Hook-owned binding retirement](../binding-retirement.md). Previous page is [Authority and proof](authority-and-proof.md). Next page is [Bounds and failure](bounds-and-failure.md).
+[↑ Hook-owned binding retirement](../binding-retirement.md) | [← Authority and proof](authority-and-proof.md) | [Bounds and failure →](bounds-and-failure.md)
 
 Use the existing permanent per-session binding locks, plus a permanent
 nonblocking retirement lock to serialize passes. Never remove any lock,

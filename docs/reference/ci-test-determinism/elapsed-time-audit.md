@@ -1,6 +1,6 @@
 # Elapsed-time audit (#310)
 
-Part of [required CI and local acceptance](../ci-test-determinism.md). Previous page is [Repeated focused diagnostics and timing ratchet](repeated-focused-diagnostics.md).
+[↑ Required CI and local acceptance](../ci-test-determinism.md) | [← Repeated focused diagnostics and timing ratchet](repeated-focused-diagnostics.md)
 
 The post-kill quiescence tests use the existing controllable setup clock through
 the stop-group clock/sleep seam. They assert SIGTERM at zero, SIGKILL at 200 ms,

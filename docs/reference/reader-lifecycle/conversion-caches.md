@@ -1,6 +1,6 @@
 # Conversion caches and acceptance
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [File-driven reader wakeups](reader-wakeups.md). Next page is [Snapshot schema and validation](snapshot-schema.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← File-driven reader wakeups](reader-wakeups.md) | [Snapshot schema and validation →](snapshot-schema.md)
 
 The polling adapter retains a bounded conversion cache for at most 64 sessions.
 It compares the complete current observation except `observedAt`, reuses only

@@ -1,6 +1,6 @@
 # Temporary status observation loss
 
-Part of [Trust boundary and observation](../trust-boundary-and-observation.md). Previous page is [Controller, hook shell and sidebar reads](controller-hook-shell-and-sidebar-reads.md).
+[↑ Trust boundary and observation](../trust-boundary-and-observation.md) | [← Controller, hook shell and sidebar reads](controller-hook-shell-and-sidebar-reads.md)
 
 Confirmed first status/visibility slice of #119 keeps existing bounded
 reader and two-second polling pause. Ordinary updates should appear in roughly

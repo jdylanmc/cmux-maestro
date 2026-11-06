@@ -1,6 +1,6 @@
 # Deep-outline fixture readiness
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 Focus-layout fixtures own **available content width**, not AppKit's preferred
 scroller style. A test-host-only modifier applies `scrollIndicators(.never)`

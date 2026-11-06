@@ -1,6 +1,6 @@
 # Launch commands and interactive workers
 
-Part of [Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md). Previous page is [Sidebar layout](sidebar-layout.md). Next page is [Explicit close](explicit-close.md).
+[↑ Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md) | [← Sidebar layout](sidebar-layout.md) | [Explicit close →](explicit-close.md)
 
 Installed skill exposes `launch-coordinator`, `launch-settings`, `status`,
 `focus`, and `archive`. `register` and exact stale-surface `recover` remain for

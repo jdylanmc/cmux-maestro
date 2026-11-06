@@ -1,6 +1,6 @@
 # Status, failures and messaging configuration
 
-Part of [Setup and Copilot integration](../setup-and-integration.md). Previous page is [Legacy migration and disable preservation](legacy-migration-and-disable-preservation.md).
+[↑ Setup and Copilot integration](../setup-and-integration.md) | [← Legacy migration and disable preservation](legacy-migration-and-disable-preservation.md)
 
 **Status retains disable detail.** Completed registration records bounded
 opaque provider keys tied to its exact generation and tested provider version.

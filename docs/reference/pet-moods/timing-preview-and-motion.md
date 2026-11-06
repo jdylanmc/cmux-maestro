@@ -1,6 +1,6 @@
 # Timing, preview and motion
 
-Part of [Pet moods](../pet-moods.md). Previous page is [Mood rules](mood-rules.md).
+[↑ Pet moods](../pet-moods.md) | [← Mood rules](mood-rules.md)
 
 `SidebarPetMood` owns the three tuning constants: `minimumMoodHold` (3 seconds),
 `sleepyAfter` (60 seconds), and `confusedToolFailureThreshold` (3).

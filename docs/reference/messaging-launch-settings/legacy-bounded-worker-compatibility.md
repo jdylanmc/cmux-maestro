@@ -1,6 +1,6 @@
 # Legacy bounded-worker compatibility
 
-Part of [messaging, launch settings, and capacity](../messaging-launch-settings.md). Previous page is [Host safety limits](host-safety-limits.md).
+[↑ Messaging, launch settings, and capacity](../messaging-launch-settings.md) | [← Host safety limits](host-safety-limits.md)
 
 Existing bounded workers keep `follow-up` and `report`. Follow-up queues privately only after a directly owned
 worker has a successful exact-session boundary for its current generation.

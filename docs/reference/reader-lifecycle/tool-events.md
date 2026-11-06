@@ -1,6 +1,6 @@
 # Tool events and missing causal evidence
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Turn identity and causal bridging](turn-identity.md). Next page is [Retention protection and acknowledgements](acknowledgements.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Turn identity and causal bridging](turn-identity.md) | [Retention protection and acknowledgements →](acknowledgements.md)
 
 Same-owner tool-associated events are excluded from generic parent bridging. This includes tool-backed subagent events and unjoined
 shell notifications.

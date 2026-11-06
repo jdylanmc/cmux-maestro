@@ -1,6 +1,6 @@
 # Orchestrator fixture edges
 
-Part of [Build and test](../build-and-test.md). Previous page is [Isolated setup, hook and sandbox checks](isolated-setup-hook-and-sandbox-checks.md).
+[↑ Build and test](../build-and-test.md) | [← Isolated setup, hook and sandbox checks](isolated-setup-hook-and-sandbox-checks.md)
 
 The shipped orchestrator reads no test variables and has no testing mode.
 Worker admission's parent-evidence check and identity-helper proof always run.

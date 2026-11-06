@@ -1,6 +1,6 @@
 # Snapshot schema and validation
 
-Part of [reader, lifecycle, and retention](../reader-lifecycle-and-retention.md). Previous page is [Conversion caches and acceptance](conversion-caches.md). Next page is [Bounded retention and discovery](bounded-retention.md).
+[↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Conversion caches and acceptance](conversion-caches.md) | [Bounded retention and discovery →](bounded-retention.md)
 
 Schema version stays 1. Optional observation fields preserve process liveness,
 observation time, appearance, child kinds/models/outcome-event identities, issues

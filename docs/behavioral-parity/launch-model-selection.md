@@ -1,6 +1,6 @@
 # Launch: model selection
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Previous page is [native-child permissions](launch-child-permissions.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [← Native-child permissions](launch-child-permissions.md)
 
 Optional launch-selection tests exercise real native assignment forwarding,
 sanitized session-scoped model metadata, account rechecking, malformed/foreign

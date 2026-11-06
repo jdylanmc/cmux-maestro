@@ -1,6 +1,6 @@
 # Projections
 
-Part of [sidebar presentation](../sidebar-presentation.md). Previous page is [Workspace summaries and header actions](workspace-summaries.md).
+[↑ Sidebar presentation](../sidebar-presentation.md) | [← Workspace summaries and header actions](workspace-summaries.md)
 
 Workspaces are always the top level. One segmented control under the header,
 **Worktrees | Sub-agents**, applies to every workspace in every window and is saved

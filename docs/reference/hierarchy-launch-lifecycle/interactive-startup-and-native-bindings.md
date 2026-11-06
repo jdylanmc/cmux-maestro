@@ -1,6 +1,6 @@
 # Interactive startup and native bindings
 
-Part of [Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md). Previous page is [Explicit close](explicit-close.md). Next page is [Launch receipt evidence](launch-receipt-evidence.md).
+[↑ Managed hierarchy, launch, and close](../hierarchy-launch-lifecycle.md) | [← Explicit close](explicit-close.md) | [Launch receipt evidence →](launch-receipt-evidence.md)
 
 Interactive startup uses `surface.create` with `initial_command`, not
 CLI `new-surface --command`, which queues input behind interactive shell

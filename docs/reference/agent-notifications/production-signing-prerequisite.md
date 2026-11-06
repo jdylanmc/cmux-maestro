@@ -1,6 +1,6 @@
 # Production signing prerequisite
 
-Part of [Agent notifications](../agent-notifications.md). Previous page is [Rate limit and clicks](rate-limit-and-clicks.md).
+[↑ Agent notifications](../agent-notifications.md) | [← Rate limit and clicks](rate-limit-and-clicks.md)
 
 The containing app must carry
 `com.apple.developer.usernotifications.communication = true` in its effective

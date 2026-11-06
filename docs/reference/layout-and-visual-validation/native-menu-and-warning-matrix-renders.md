@@ -1,6 +1,6 @@
 # Native menu and warning matrix renders
 
-Part of [Taskboard, layout, and visual validation](../layout-and-visual-validation.md). Previous page is [Synthetic layout review images](synthetic-layout-review-images.md).
+[↑ Taskboard, layout, and visual validation](../layout-and-visual-validation.md) | [← Synthetic layout review images](synthetic-layout-review-images.md)
 
 Retained native-menu tests capture complete production details popover at
 explicit native 2x, including unavailable state after each identity change.

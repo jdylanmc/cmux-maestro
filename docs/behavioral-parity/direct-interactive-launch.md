@@ -1,6 +1,6 @@
 # Direct interactive launch and legacy startup (#61)
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Continued in [legacy fixtures and lock budgets](launch-legacy-fixtures.md), [workspace capacity](launch-workspace-capacity.md), [native-child permissions](launch-child-permissions.md) and [launch model selection](launch-model-selection.md). Next page is [Launch: legacy fixtures and lock budgets](launch-legacy-fixtures.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md) | [Launch: legacy fixtures and lock budgets →](launch-legacy-fixtures.md)
 
 The controller Harness reproduces both a delayed runtime after caller timeout
 and a child whose exact attachment is delayed. The former previously revoked

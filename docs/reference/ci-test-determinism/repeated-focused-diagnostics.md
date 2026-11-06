@@ -1,6 +1,6 @@
 # Repeated focused diagnostics and timing ratchet
 
-Part of [required CI and local acceptance](../ci-test-determinism.md). Previous page is [Explicit local-only native acceptance](explicit-local-only-native-acceptance.md). Next page is [Elapsed-time audit (#310)](elapsed-time-audit.md).
+[↑ Required CI and local acceptance](../ci-test-determinism.md) | [← Explicit local-only native acceptance](explicit-local-only-native-acceptance.md) | [Elapsed-time audit (#310) →](elapsed-time-audit.md)
 
 ```sh
 ./scripts/test.sh --focused CopilotEventReducerTests,SidebarOrchestrationTests --repeat 20

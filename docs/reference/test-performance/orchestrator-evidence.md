@@ -1,6 +1,6 @@
 # Orchestrator suite evidence
 
-Part of [test performance](../test-performance.md). Previous page is [Orchestrator suite](orchestrator-suite.md). Next page is [Local preview suite, Swift tests and next steps](local-preview-and-swift.md).
+[↑ Test performance](../test-performance.md) | [← Orchestrator suite](orchestrator-suite.md) | [Local preview suite, Swift tests and next steps →](local-preview-and-swift.md)
 
 Back-to-back local runs, same machine, same timing runner, 144 tests each, all
 passing:

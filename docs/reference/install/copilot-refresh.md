@@ -1,6 +1,6 @@
 # Copilot refresh and same-build updates
 
-Part of [install, update, and recovery](../install-update-recovery.md). Previous page is [Update, rollback and status](update-and-rollback.md). Next page is [Transaction and recovery contract: locks and supervision](transaction-contract.md).
+[↑ Install, update, and recovery](../install-update-recovery.md) | [← Update, rollback and status](update-and-rollback.md) | [Transaction and recovery contract: locks and supervision →](transaction-contract.md)
 
 Normal install/update refresh Copilot in the same transaction. The historical
 explicit `rollback` command keeps its app-only compatibility behavior for

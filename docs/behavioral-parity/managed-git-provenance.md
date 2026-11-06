@@ -1,6 +1,6 @@
 # Managed Git provenance
 
-Part of [behavioral parity and proof](../behavioral-parity.md).
+[↑ Behavioral parity and proof](../behavioral-parity.md)
 
 Managed Git branch/worktree labels, verification times and change counts describe
 the **assigned directory**, not Copilot's current `/cwd` or a tool's working
