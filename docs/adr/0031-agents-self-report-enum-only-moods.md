@@ -5,7 +5,7 @@ self-report one of `happy`, `celebrating` or `confused` for its own exact
 session, or `clear` to withdraw it. This is a narrow authored-content
 exception, like agent tags (ADR 0026) and notifications (ADR 0030): an enum
 value, never free text, a reason, observed content, transcript inference or a
-tool payload. There is no `thinking` report; derived presentation covers it.
+tool payload. There is no `thinking` report. Derived presentation covers it.
 
 The native `maestro_mood({mood})` tool and controller `mood --self` resolve the
 caller from its exact managed node, run, session, workspace, surface and
@@ -22,7 +22,7 @@ all six identity fields against the current verified binding (ADR 0002).
 Invalid mood data disables only the mood overlay, never the hierarchy or
 attention (ADR 0010). A claim is labelled self-reported and is never evidence
 of work, success or completion (ADR 0003). Question, permission, failure and
-Gone must win over it; that resolver (#382) and art (#383) are separate.
+Gone must win over it. That resolver (#382) and art (#383) are separate.
 
 Store rules: one current claim or `clear` tombstone per node, with a
 controller-issued sequence that increases across the node's generations. Only a
@@ -30,9 +30,9 @@ newer verified generation with the same run, session, workspace and surface
 replaces a node's claim. An unchanged claim is a no-op. Limits: 1 KiB per
 record, 1 MiB per file, 1,024 nodes, 128 per
 workspace. At most one distinct non-clear change per three seconds per exact
-identity; `clear` is exempt and never refills the allowance. Refusals are
+identity. `clear` is exempt and never refills the allowance. Refusals are
 bounded reason codes with no queue or retry. A controller-issued
-`lastChangedAt` enforces that limit only; readers never use it as a clock.
+`lastChangedAt` enforces that limit only. Readers never use it as a clock.
 
 Capacity: a full store refuses without eviction, including claims and
 tombstones for nodes no longer in the lifecycle store. Unlike the tag store's
@@ -63,7 +63,7 @@ proof establishes who reported, not whether the report is true. Contract:
 
 ## Human-requested cosmetic preview extension
 
-The owner additionally authorized an exact-own-session preview of all fifteen
+The owner also authorized an exact-own-session preview of all fifteen
 existing expressions, five seconds each, 75 seconds total, with cancellation
 and bounded refusal diagnostics. `preview` and `cancel-preview` are explicit
 actions on the same native/CLI mood interface, not new self-reported emotions.
@@ -86,5 +86,5 @@ lifecycle fact is simulated.
 Known failures are categorized at their actual boundary (busy, proof,
 identity, placement, store, input, rate or capacity), never by parsing private
 prose. Unknown outcomes, and failures after the store was replaced, remain
-unavailable; no retries or raw diagnostics.
+unavailable. No retries or raw diagnostics.
 This improves observability without claiming a cause for historical refusals.

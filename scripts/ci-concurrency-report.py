@@ -8,7 +8,7 @@ it waited. Queue delay is job started_at minus created_at; execution is complete
 Jobs reused by a re-run (started before they were created) are excluded, and jobs that never got a
 runner are not counted as active. Figures change as GitHub ages out old runs.
 
-Example (the window in docs/reference/ci-runner-placement.md):
+Example (the window in docs/reference/ci-runner-placement/sources.md):
 
     GH_TOKEN="$(gh auth token --user jdylanmc)" python3 scripts/ci-concurrency-report.py \\
         --owner jdylanmc --repo cmux-maestro --repo pr-sniper --repo homebrew-pr-sniper \\

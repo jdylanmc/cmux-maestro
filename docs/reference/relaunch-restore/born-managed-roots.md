@@ -1,0 +1,20 @@
+# Born-managed roots
+
+Part of [relaunch restore](../relaunch-restore.md). Next page is [After a born-managed resume](after-a-born-managed-resume.md).
+
+A session you started in CMUX is a born-managed root. CMUX's own Copilot restore runs `copilot --resume <id>` in the restored surface. The Maestro extension then joins the resumed session and asks the controller to enroll it. The controller finds the node recorded for that exact session ID and resumes it as the next generation of the same node, in the same run. The root keeps its children. The same happens when you run `copilot --resume <id>` yourself, including after `/exit`; if the node was archived, the session enrolls as a new root.
+
+Copilot 1.0.98 `--resume` first joins extensions to a startup placeholder: a session with a fresh ID that it never saves. About a second later it replaces the placeholder with the resumed session in the same process and joins extensions again. The placeholder has no `~/.copilot/session-state/<id>` directory, so the controller refuses it with `session-not-persisted` and records nothing: it takes no surface, archives no run, and does not hold the Copilot process (#261).
+
+The controller resumes only when all of these hold:
+
+- The node is a born root, and the session ID matches exactly. A Maestro launch refuses with `session-previously-managed`; it resumes through its binding instead.
+- The workspace and surface match the record exactly, and the provider's controlling TTY is that surface's TTY. A different surface refuses with `surface-mismatch`, and a TTY mismatch with `cmux-identity-unverified`.
+- The session has a saved session-state directory. A startup placeholder has none and refuses with `session-not-persisted`.
+- The prior generation ended. An `/exit` does not block a later resume (#261): CMUX's restore forgets an `/exit`ed session, so only a human's own `copilot --resume` brings it back. Maestro's extension records a Copilot `SessionEnd` for its exact session only when it is `/exit`.
+
+  Copilot 1.0.98 reports reason `user_exit` for `/exit`, a terminal hangup, a closed terminal, and `SIGHUP` or `SIGTERM` alike, so the reason alone cannot tell a CMUX quit from `/exit`. Measured in a disposable Copilot (spike on #252): every signal or hangup sends the extension `SIGHUP` before `SessionEnd`, while `/exit` sends only `SIGTERM`. The extension therefore records nothing once it has seen `SIGHUP`. `SIGKILL` delivers no `SessionEnd` at all. On `SIGTERM` the extension waits up to two seconds for the record, and a Maestro launch's binding clear, to land before it exits. The record is written first, and the clear has one second. If Copilot changes this order, a quit could be recorded as an exit. CMUX then forgets the session, and a manual `copilot --resume` still re-enrolls it.
+- The recorded process has ended, or the session ended in this same Copilot process and came back to it. The new provider (or its direct child) holds the session's `inuse.<PID>.lock`, and no other live process does. Copilot writes that marker only at the resumed session's first prompt, so the session reports `awaiting-first-prompt` until then and enrolls at the first hook event after it (the prompt, or the `sessionStart` that follows it). A crashed provider's stale marker is ignored. A live marker of another process refuses with `session-live-or-uncertain`. This is checked again inside the state lock, right before the commit.
+- The session's current account matches the recorded account. A different account refuses with `account-mismatch`, and `maestro_readiness` names the recorded login. Sign in to that account and restart the session. Nodes without a recorded account refuse with `account-unrecorded`. If Copilot does not report the session's account in time, the resume refuses with `account-unverified`.
+- A root whose surface had been retired (`resource-retired`) needs a free workspace slot to come back. Otherwise it refuses with `capacity-unavailable`.
+- No other node holds the resumed Copilot process. Otherwise it refuses with `provider-already-enrolled`.

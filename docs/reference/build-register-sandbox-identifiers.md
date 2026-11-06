@@ -57,7 +57,7 @@ compatibility**. Temporary file exceptions require distribution/review scrutiny.
 
 Separately signed sandbox probe established: the `Copilot/` and
 `/.copilot/session-state/` read-only prefixes permit synthetic nested
-identity/event reconstruction; it did not cover `Orchestration/observer/` or the
+identity/event reconstruction. It did not cover `Orchestration/observer/` or the
 `Beats/` write grant. Unrelated reads and writes
 stay denied. That is **not** an
 ExtensionKit-hosted runtime proof. Signed app/host loading and end-to-end

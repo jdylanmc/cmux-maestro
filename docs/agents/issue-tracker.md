@@ -41,7 +41,7 @@ remain evidence for that feature area, not a repository-wide backlog filter.
 
 Use native GitHub sub-issue and dependency relations when present. Preserve
 existing task-list/`Part of #57` or `Blocked by: #N` references as evidence
-where native relations are unavailable; do not silently migrate them.
+where native relations are unavailable. Do not silently migrate them.
 An unmerged dependency is not present on a worker's base simply because its
 checks pass.
 

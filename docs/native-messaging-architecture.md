@@ -7,441 +7,59 @@ Nothing here requires access to private research artifacts.
 
 ## What the upstream systems actually do
 
+Pinned source comparisons of Orca, Paseo, Herdr and upstream CMUX are in
+[what the upstream systems do](native-messaging/upstream-systems.md).
+
 ### Orca: durable mailbox, two different attention paths
 
-At `33ba1ff3df247652c546985201d9a6f4edaec80b`, Orca persists mail before notifying
-the recipient. Its notification is a pointer telling the agent to check mail;
-the complete body arrives through the subsequent CLI/tool result.
-The terminal path writes into a pseudoterminal (PTY) and separately submits Enter.
-The structured path instead journals a user message and dispatches it through an
-Orca-owned provider session. These are not interchangeable transports.
-See [staging][orca-stage], [submission][orca-submit], [structured delivery][orca-structured], [notification][orca-notify].
-
-The structured adapter router contains Claude and Codex, not Copilot
-([router][orca-router]). Orca therefore does not demonstrate injection-free
-delivery into an arbitrary existing Copilot terminal. Its durable mailbox and
-separate acknowledgements are useful contrasts, not features Maestro needs to
-copy: Orca itself distinguishes durable enqueue from attention, reading and
-completion ([delivery contract][orca-contract]).
+See [Orca: durable mailbox, two different attention paths](native-messaging/upstream-systems.md#orca-durable-mailbox-two-different-attention-paths).
 
 ### Paseo: daemon-owned provider sessions, including Copilot over ACP
 
-At `2c8e8a826810337492cc5a38bb0bbd705b6fb632`, Paseo's daemon owns agent runtimes.
-An agent tool dispatches a prompt; a daemon watcher can notify the caller through provider input,
-not a UI notification or Model Context Protocol server push into the model
-([watcher][paseo-watcher]).
-
-Copilot runs as `copilot --acp`, using Agent Client Protocol (ACP) with piped
-stdin/stdout ([adapter][paseo-copilot], [process launch][paseo-spawn]).
-This establishes focus-independent orchestration for daemon-managed sessions,
-not attachment to arbitrary human-operated native terminals. Ordinary dispatch
-can replace active work; steering also has fallback behavior
-([send][paseo-send], [steering][paseo-steer]). Maestro imports none of these mechanisms.
+See [Paseo: daemon-owned provider sessions, including Copilot over ACP](native-messaging/upstream-systems.md#paseo-daemon-owned-provider-sessions-including-copilot-over-acp).
 
 ### Herdr: identity reporting is not its message delivery channel
 
-At `28360107c1bfab57fb0de99d74bfa48e74423ca8`, Herdr's Copilot hook reports native
-session identity to Herdr ([hook][herdr-hook]). Cross-agent prompt delivery uses
-the recipient terminal: text, delay, then Enter. Copilot additionally receives a
-synthetic focus-gained terminal event ([prompt path][herdr-prompt],
-[Copilot handling][herdr-focus]). That is input injection even without activating
-an operating-system window.
-
-Ordered terminal writes do not establish safe coexistence with a human's unsent
-draft. Status waiting and terminal readback are also not exact request/reply
-correlation ([wait contract][herdr-wait]). Identity observation is distinct from model-context delivery.
+See [Herdr: identity reporting is not its message delivery channel](native-messaging/upstream-systems.md#herdr-identity-reporting-is-not-its-message-delivery-channel).
 
 ### Upstream CMUX: background transport is not a draft-safe mailbox
 
-At `aa4cc90348b96c2d087e6c5e9dee4b6756891bc4`, CMUX provides explicit terminal
-targets, improved runtime binding, and background text/key delivery
-([binding][cmux-binding], [send implementation][cmux-send]).
-The sidebar SDK has no terminal-input messaging action ([actions][cmux-actions], [host][cmux-host]).
-
-The original terminal-injection investigation found no atomic send-if-unfocused
-operation in the inspected interfaces. Separate focus observation and send would
-race; buffered input does not preserve a provider's draft, and the mobile-chat
-path explicitly clears input ([input replay][cmux-replay],
-[mobile chat][cmux-mobile]). Those findings remain valid for terminal injection,
-but **the proposed focus-gate host patch is no longer needed for this feature**:
-Maestro now delivers through Copilot's native conversation API, not CMUX input.
-No host fork, foreground gate, or sidebar rewrite follows from this decision.
+See [Upstream CMUX: background transport is not a draft-safe mailbox](native-messaging/upstream-systems.md#upstream-cmux-background-transport-is-not-a-draft-safe-mailbox).
 
 ## Chosen Maestro contract
 
-```text
-agent A: maestro_send(destination, body)
-  -> A's CLI-owned adapter supplies its bound sender/return address
-  -> one bounded local Unix-socket write
-  -> B's adapter validates destination, sender and current bindings
-  -> B's CLI-owned session.send({ prompt, mode: "immediate" })
-```
-
-Each participating session joins its own CLI conversation through
-`joinSession({ tools })` and owns one private socket; there is no standalone
-broker or second authenticated Copilot client. Discovery exposes participating
-same-workspace peers, not availability. Installed addresses contain exact
-workspace/session identities and generation; replies use the envelope's bound
-sender address, never an address asserted inside the untrusted message body.
-Peer messaging grants no ancestor-only lifecycle or process-control privileges.
-
-Copilot owns scheduling. Maestro adds no receipt, acknowledgement, retry,
-completion tracker or custom busy scheduler. A local-write result is not delivery,
-consumption or task-success evidence; offline/stale/unsupported recipients can
-fail, and an uncertain result is not proof that nothing arrived.
-Bodies are bounded to 4 KiB UTF-8 and frames to 8 KiB. Private bindings and sender
-capabilities enforce local routing, but this is a **same-OS-user trust boundary**:
-a malicious process running as that user can read private files. It is not an
-OS sandbox or a cryptographic identity claim against that user.
+Each participant joins its own CLI conversation and sends native prompts without
+receipts or retries. See [chosen Maestro contract](native-messaging/maestro-contract.md).
 
 ### Managed steering and turn boundaries (#163)
 
-Managed recipients request Copilot's native `immediate` mode. The separate
-legacy/disposable `a`/`b` proof transport retains `enqueue`; its historical
-observations are not evidence for the new managed mode.
-
-The public bundled SDK in Copilot **1.0.93** provides this contract:
-
-- `copilot-sdk/generated/rpc.d.ts:4159-4171`: `enqueue` appends to the normal
-  queue; `immediate` interjects during an in-progress turn. This API is marked
-  experimental.
-- `copilot-sdk/generated/session-events.d.ts:605-614`: `queued` delivery runs
-  after the busy run; `steering` joins the in-flight run; `idle` starts a run.
-- `copilot-sdk/session.d.ts:126-137`: `send` returns on admission and processing
-  is asynchronous. Its returned message ID does not prove consumption.
-
-The declarations' SHA-256 values, respectively, are
-`2fc5dfc654d148ba3835bdc196f5687b7453502b52b53e49dc85523c3db8c275`,
-`9c4c5d82d93c09f8ff64af639d79158a9f9a2373acc5fe15e19741e8621f0bdd`,
-and `81f8e880aa2519549214082e7a476b07144504b176151c81679d5011e0bf9de7`.
-These are version-specific API evidence, not a claim that every supported
-Copilot 1.x host implements steering identically. No new minimum version is
-inferred. A rejected send retains the existing bounded recipient diagnostic
-and is not retried or silently downgraded to enqueue.
-
-Previously the managed path explicitly chose after-turn enqueue. A long PM
-turn could therefore delay peer input by contract even while tools continued.
-The #163 screenshot showed four queued messages, but did not establish their
-arrival times, contents, consumption, or the sole cause of delay. The historical
-operator report of blocked decisions and fleet shutdown remains unresolved
-impact evidence until actual native acceptance, not just a changed mode.
-
-| Recipient state | Requested behavior and limit |
-| --- | --- |
-| Working in a model turn | Native steering, not another after-turn queued run; consumption remains Copilot-owned. |
-| Waiting for a tool | Submit once without awaiting that tool; no abort or guarantee of processing before tool completion. |
-| Awaiting human input or permission | No approval, response injection or bypass; processing may remain blocked. |
-| Idle or completing a turn | Copilot owns the transition and wake; Maestro adds no state probe, race retry or wake timer. |
-
-Coordinators still finish bounded decisions, yield when waiting for other
-owners, and reconcile actual received returns against current candidates.
-Preserve unresolved findings and their provenance rather than treating a newer
-message as resolution. This source change affects future sends only: previously
-queued messages are not read, promoted, replayed or discarded.
-
-Real-socket tests with mocked native sessions verify steering selection,
-unchanged envelopes, independent submissions while admission is pending, and
-visible rejection without fallback or application acknowledgements. They do
-not simulate Copilot's scheduler. Live input-to-action latency, draft preservation
-and the state transitions above require separately authorized native acceptance.
-There is no established numeric SLA, active-tool preemption guarantee or
-end-to-end #163 closure from these tests.
+Managed recipients request native `immediate` steering. See
+[managed steering and turn boundaries](native-messaging/managed-steering.md).
 
 ## Installed lifecycle and permissions
 
-Explicit production setup installs the native loader, shared adapter, local
-controller and lifecycle/icon plugin skills. The global `/maestro` guide is
-distributed separately through human-run `npx skills`; native Settings >
-CLI Integration only presents and copies the command. Neither guide installation
-nor availability is a runtime prerequisite. Managed tools require matching launcher
-bindings; ordinary-session diagnostics are separate, as described below.
-Newly Maestro-launched visible interactive sessions participate
-automatically; existing/unmanaged sessions are neither adopted nor restarted.
-A coordinator without a launcher-bound session cannot receive; the sidebar sees no bodies or secrets.
-
-New interactive launches precreate the exact workspace/session/generation
-binding before CMUX `initial_command` execs Copilot. The one-shot non-login
-shell restores the validated PATH and private control environment; subscription
-credentials go directly from the bounded account resolver into the process
-environment, not the command or a persistent credential file. The canonical
-interactive prompt explains capabilities but neither installs nor grants them.
-
-The loader joins the CLI-owned session, validates its actual session ID, then
-makes one bounded `native-observe` call. It records the exec-preserved provider
-PID/start only after verifying ancestry, current control identity, generation
-and host-supplied surface. The controller merges observation either before or
-after exact caller attachment without replacing another surface/process owner.
-The creation caller does **not** await this call, socket listening, hooks,
-provider readiness or prompt consumption. There is no startup acknowledgement
-protocol, retry, adoption, broker or alternate SDK client. A lost create reply
-or cancelled attachment retains the launch lease and capacity even if native
-observation already occurred. Legacy bindings and loaders keep their existing
-path; existing sessions are not converted or restarted.
-
-The CLI may stop and reload an extension within the same owned session. On
-SIGTERM or SIGHUP, the loader cancels its pending local observation and closes only its
-own listener/connections before exiting, including during initialization. On
-SIGTERM it first waits up to two seconds for an in-flight `/exit` SessionEnd
-record; after SIGHUP it records no SessionEnd (see
-[Relaunch restore](reference/relaunch-restore.md)).
-The private session binding stays intact for the CLI's replacement extension.
-There is no timer, messaging retry or startup acknowledgement. An occupied
-socket, or one left behind by forced termination, still fails closed; startup
-never unlinks or adopts an existing endpoint. Initialization failures report
-bounded allowlisted error codes (for example `EADDRINUSE`), never raw exception
-messages, prompts, capabilities or frames.
-
-The launcher retains the configured account/model pins and normal terminal I/O.
-Native extension trust/tool prompts remain Copilot-owned. Defaults add no grants;
-explicit user-approved coordinator `--yolo` launches may use `--allow-all` while
-preserving denies. Worker actors cannot request YOLO for descendants; the reviewed
-proof bypass was fixed before credential lookup/reservation. No full parent
-permission inheritance, auto-approval callback, or persistent policy rewrite is
-inferred. Cleanup must follow exact lifecycle ownership, not a guessed idle state.
+Explicit setup installs the native loader and adapter for new launches. See
+[installed lifecycle and permissions](native-messaging/installed-lifecycle.md).
 
 ### Born managed sessions (#252, ADR 0025)
 
-A Copilot session in a CMUX terminal with no launcher inputs enrolls itself as
-its own root coordinator when the loader joins it: at its start, at a resume,
-or, for a session already running, at its next extension join (#261). The loader joins once with the
-managed tools plus `maestro_readiness`. The managed tools refuse until
-enrollment succeeds. The loader then reads the session's own account with
-`gitHubAuth.getStatus()` and calls the controller's private `native-enroll`
-ingress with the session, workspace, surface, provider PID
-(`COPILOT_EXTENSION_PARENT_PID`) and account. The controller verifies each value
-and either records a new root and publishes its route, or refuses with one
-stable reason. `maestro_readiness` then reports `managed` with the node and
-generation, or `diagnostic-only` with that reason. See
-[ADR 0025](adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md) for
-the checks.
-
-Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrolled-node-unavailable`,
-`provider-process-unverified`, `account-unverified`, `integration-not-installed`,
-`awaiting-first-prompt`, `session-not-persisted`, `enrollment-busy`, `cmux-identity-unverified`, `surface-owned`,
-`provider-already-enrolled`, `session-previously-managed`, `capacity-unavailable`,
-`session-live-or-uncertain`, `enrollment-failed`.
-A resumed session also uses `surface-mismatch`, `account-mismatch` (with the
-recorded login) and `account-unrecorded`; see
-[Relaunch restore](reference/relaunch-restore.md).
-Readiness adds a plain-language `message` for each reason.
-The loader calls the controller only once Copilot holds the session: its
-`inuse.<PID>.lock` exists, which happens at the first prompt. Until then readiness
-reports `awaiting-first-prompt`. The `onUserPromptSubmitted`, `onSessionStart`,
-`onPostToolUse` and `onAgentStop` hooks re-check only for the exact joined session,
-without reading their content.
-`awaiting-first-prompt`, `session-not-persisted` (Copilot's never-saved `--resume`
-startup placeholder) and `enrollment-busy` are not recorded; the loader asks the
-controller again after the first such refusal; the second is final for the
-join, even when the reasons differ. Account/provider deferrals neither consume
-nor reset this shared budget. `account-unverified` stays
-pending and unrecorded; later exact-session hooks observe the account again.
-Previously recorded account-unverified refusals are reconsidered. A provider
-conflict stays pending too, but its recorded refusal permits enrollment only
-after no node holds that exact provider. Missing custody never releases a node.
-Each later event permits one attempt; concurrent events share it. There is no
-timer-driven enrollment or account fallback. Other decisions are recorded per
-session and Copilot process and repeated on reload. Enrollments are serialized on the host
-(20-second wait, inside the loader's 60-second call limit).
-While managed, the loader asks the controller's private `native-custody` command
-before readiness, identity, peers, send, spawn, close and each inbound peer
-message; the controller re-checks spawn and close itself. A second live holder of
-the session latches `session-custody-lost` until the next join.
-Unknown controller output becomes `enrollment-failed`; raw errors are never shown.
-One exact user-exit callback can be buffered during join until the managed
-observer is installed and runtime startup settles. Only a pending bit is held;
-the controller receives the original node/session/generation identity, never
-hook content. Hangup and forged-session checks remain in place. Actual CLI
-callback ordering during interactive `/resume` remains unverified (#348).
-
-The readiness-only branch below now applies only when launcher inputs are
-incomplete.
+An eligible Copilot session started in a CMUX terminal with no launcher inputs
+asks to enroll as its own managed root when the loader joins it. The controller
+verifies it first, and a refusal leaves it unmanaged. See
+[born managed sessions](native-messaging/born-managed-sessions.md).
 
 ### Ordinary-session readiness (partial #162)
 
-When this loader is enabled and discovered by Copilot in an ordinary CMUX
-session, it can join **only its own CLI-owned conversation** and register
-`maestro_readiness({})`. This is a nonprivileged diagnostic, not participation:
-no private binding lookup, socket, controller call, account lookup, prompt hook,
-permission handler, enrollment, replacement session or restart is added.
-Existing managed startup and native tools are unchanged; a failed managed
-initialization never falls back to this branch.
-
-The diagnostic reports its joined Copilot session UUID, after matching the
-CLI-supplied `SESSION_ID` and the invoking tool session. It reports incomplete
-required launcher inputs (message root, peer, worker ID and interactive
-execution mode); with no launcher inputs at all, born-managed enrollment owns
-the session instead. That is **not** proof that no binding exists on
-disk: bindings are not inspected. Complete managed inputs belong exclusively to
-the managed initializer.
-
-Well-formed `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID` environment hints in either
-hexadecimal case are required to enable this branch, but they are **not verified
-host identity** and their values are not returned. Missing or malformed CMUX/session hints leave the
-ordinary branch inert; this is not a host-location attestation.
-The account is explicitly not observed. Capability flags describe only what
-this extension registers, not other extensions, deferred-tool discovery or
-sidebar visibility. Cross-session calls, invalid arguments, cancellation and
-session mismatch fail closed with bounded output. Only the two placement hints
-are case-normalized for validation; CLI session/join/invocation identity and
-managed/private UUID validation remain exact and unchanged.
-
-This is an **intermediate slice of #162**, not its enrollment/Joe activation
-solution. Trusted host provenance for the original direct-human request is
-still required before privileged in-place enrollment can be implemented;
-caller-supplied message attribution is insufficient. No extra confirmation is
-introduced. The original pictured extension failure remains undiagnosed without
-its safe error evidence; a successful diagnostic does not retroactively diagnose
-that exception, prove repository placement, or establish managed readiness.
-
-The owning Copilot CLI 1.0.93 extension guide and public `extension.d.ts`
-document own-foreground-session `joinSession({ tools })` and tool invocation
-session IDs, consistent with the pinned
-[public SDK extension contract](https://github.com/github/copilot-sdk/blob/f84b4fdc6a2baceb2d4ea0edc2b75de342aeee78/nodejs/docs/extensions.md).
-Isolated loader and adapter tests exercise this contract, including
-ordinary startup and preserved managed failure paths. They do not prove live
-host discovery or availability in an already-running chat. Applying an updated
-loader requires the existing separately authorized setup/update path; this
-source change does not authorize installation or reload.
+Readiness diagnostics for an ordinary CMUX session are in
+[ordinary-session readiness](native-messaging/ordinary-session-readiness.md).
 
 ### Explicit owned-descendant close
 
-`maestro_close({target: {workerId, workspaceId, surfaceId, sessionId, generation}, scope?})`
-uses the CLI-owned adapter and existing controller, not the peer socket or the
-sidebar. The model supplies only one explicit descendant identity. The adapter binds
-the actual invoking session and private capability; controller admission also
-requires that session's inherited actor/control token, run, generation, current
-surface and provider ancestry. Public peer discovery grants no close rights.
-Omitted scope and explicit `target-only` preserve the flat single-target receipt.
-Explicit `subtree` captures a fixed bounded private root/descendant selection
-and uses the actual actor, not impersonated intermediate parents. The exact root
-must remain a strict descendant; selected descendants are separately admitted in that
-captured tree. Descendants precede parents, at most once each. An ended root can
-still identify owned live descendants without itself passing close admission.
-
-The controller rechecks exact descendant ownership against the initial
-snapshot under its existing exclusive state lock. Active run launch leases,
-unresolved/changed identities, moved/missing workspace surfaces, and absent or
-changed provider anchors refuse. Close admission positively checks non-zombie
-process state and exact PID/start before any host call; shared conservative
-resource-retention predicates are unchanged. The recorded `providerProcess`
-remains the launch anchor: npm can keep that Node process alive while its direct
-native CLI child owns the session source. A bounded metadata-only inspection of
-each exact standard session directory requires one safe `inuse.PID.lock`.
-Its owner must be the same live PID or one immediate same-user child of the
-current recorded launch PID. Both processes' identities and the owner's parent
-link are rechecked; marker identity and uniqueness must remain unchanged.
-Marker birth must follow the source owner's start, which cannot predate launch.
-Additional markers conservatively refuse, including stale ones. This permits
-the evidenced one-edge wrapper layout, not arbitrary descendant discovery or
-executable-name inference. No recorded-anchor/schema rewrite, transcript, hook
-wait, scan across sessions or provider API is used.
-
-With the same lock held, one existing `Cmux.run("rpc", "surface.close", ...)`
-uses explicit workspace/surface UUIDs and Boolean `force: true` on the initial
-admitted request, selecting the documented noninteractive route. There is no
-caller-exposed force option or changed request after refusal. Target-only retains
-its existing
-15-second I/O bound. Subtree uses context-local deadlines: 45 seconds for the
-whole pass including ancestry, at most five seconds per target including process
-probes, inventory and host request. Initial and per-target state acquisitions do
-not wait for capacity-scaled lock budgets. Context resets on success/failure so
-other commands retain their timeouts. The complete worst-case JSON result shape,
-including CLI wrapper/newline, is reserved under 65,536 bytes before host effects;
-oversized plans and generations outside the JavaScript safe-integer range refuse
-without truncating or rounding identities or enlarging the adapter's
-60-second timeout. Every budget-exhausted remainder target is not attempted.
-
-Inherit stock host behavior, including last-terminal refusal. Earlier CMUX 0.65
-requests without the field returned `confirmation_required`; immutable v0.65.0
-source defaults omitted force to false and requires true for the noninteractive
-branch. Selecting that published initial branch is a source-contract correction,
-not a host patch, retry, global setting or permission to invoke a separate live
-RPC. Actual installed/live acceptance remains unverified until separately
-authorized proof. Preserve any host refusal without fallback or confirmation
-manipulation.
-An exact successful reply maps to `closeAccepted: true`, `removal: "unconfirmed"`;
-the host's result naming is not a removal proof. Errors, timeout, cancellation
-and lost replies are surfaced without retries or post-send observations.
-Subtree results repeat every captured identity with `attempted`, `outcome`,
-`reason` and unconfirmed removal. Accepted alone adds `closeAccepted: true`;
-preflight failure (including a missing captured session) is refused; host failure,
-malformed text or lost reply after dispatch is unknown; deadline expiry before
-dispatch and budget remainder are not attempted. A failed descendant does not
-block an independently valid
-sibling/parent. Recheck captured ancestry, exact identity, actor/source/process,
-workspace and leases under each target lock. Never substitute replacements or
-expand with late children. No process exit, completion acknowledgement, new
-lifecycle state, capacity release, archive or automatic cleanup follows.
-
-Close-local admission explicitly refuses an absent/null stored worker-actor
-session before shared native authorization indexes it. Identity loss between
-targets retains earlier accepted results and refuses the remaining targets;
-capability, control-token and original-actor checks stay unchanged. Native spawn
-and observation authorization are not modified.
-
-The lock serializes controller changes only. PID/start precision and source
-marker freshness remain limited by their existing sources; markers are not an
-OS lock Maestro acquires or an authoritative host current-session assertion.
-The same-user boundary still applies. Host close takes no expected session or
-provider generation, so preflight cannot promise atomic fencing against
-replacement/movement after inspection. Ordinary independent observation and
-resource reconciliation remain separate.
+`maestro_close` admission and the stock host close are in
+[explicit owned-descendant close](native-messaging/owned-descendant-close.md) and
+[stock host behavior and admission limits](native-messaging/close-host-behavior.md).
 
 ## Evidence, corrected assumptions, and remaining gap
 
-Initial SDK inspection used npm Copilot **1.0.83**; live sessions reported
-**1.0.87-0**. Source declarations justified an experiment, not a compatibility or
-draft-safety guarantee. The native proof demonstrated agent-authored A -> B -> A.
-The human explicitly confirmed an unsent draft remained exact and editable.
-Separate harness-origin injection demonstrated app-background response; it was
-not an agent-authored send and not a sidebar-hidden test.
-
-Installed revision `93d6968`, normal updater and human-enabled integration then
-supported three fresh ordinary-working-directory participants: A discovered B
-and C with generations, and A -> B -> A returned `installed-violet-54-1`.
-CMUX's **Default sidebar** was selected. This disproves a dependency on the Maestro
-sidebar being selected, not all visibility conditions or reliable delivery.
-Mocked transport/setup tests and packaging checks do not prove native UI behavior.
-
-Plugin-based guide discovery failed live: bare-name lookup failed in interactive
-sessions despite later read-only discovery listing the skill; qualified lookup
-also failed. Explicit `--plugin-dir` did not fix the live failure. No exact
-upstream cause is claimed, and neither workaround remains in the launcher.
-
-At `2026-09-22T12:03:56.533Z`, the user reported successful global local-source
-installation with `npx skills` **1.5.26** to `~/.agents/skills/maestro`, followed
-by successful Copilot global discovery. Global `npx skills` is now the sole guide
-distribution: `/maestro` or `{"skill":"maestro"}`. This is observed discovery,
-not a guarantee across CLI versions or proof of every live messaging condition.
-The GitHub-source command in Settings requires the skill to merge to `main`;
-[local-source acceptance instructions](reference/cli-guide-and-uninstall.md#cli-integration-install-the-global-guide)
-cover development without movable refs or automatic installation.
-
-Setup writes only `{version, routes, extension}` for messaging; the old
-`pluginDirectory` field is ignored if encountered. On explicit setup only,
-the obsolete messaging guide in the installer's own plugin is removed, preserving
-unrelated and global skills. No live files were changed for this correction.
-Installed Settings UI acceptance and any consentful refresh remain separate from
-the already observed global discovery success.
-
-[orca-stage]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/orchestration/mailbox-pointer-stage.ts#L97-L109
-[orca-submit]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/orchestration/mailbox-pointer-submit.ts#L102-L128
-[orca-structured]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/orchestration/structured-mailbox-pointer-delivery.ts#L215-L252
-[orca-notify]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/orchestration/mailbox-notification-coordinator.ts#L48-L75
-[orca-router]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/src/main/runtime/structured-agent-session-runtime.ts#L288-L298
-[orca-contract]: https://github.com/stablyai/orca/blob/33ba1ff3df247652c546985201d9a6f4edaec80b/skill-guides/orchestration/references/messaging-and-gates.md#L6-L8
-[paseo-watcher]: https://github.com/getpaseo/paseo/blob/2c8e8a826810337492cc5a38bb0bbd705b6fb632/packages/server/src/server/agent/agent-prompt.ts#L428-L574
-[paseo-copilot]: https://github.com/getpaseo/paseo/blob/2c8e8a826810337492cc5a38bb0bbd705b6fb632/packages/server/src/server/agent/providers/copilot-acp-agent.ts#L81-L96
-[paseo-spawn]: https://github.com/getpaseo/paseo/blob/2c8e8a826810337492cc5a38bb0bbd705b6fb632/packages/server/src/server/agent/providers/acp-agent.ts#L2700-L2763
-[paseo-send]: https://github.com/getpaseo/paseo/blob/2c8e8a826810337492cc5a38bb0bbd705b6fb632/packages/server/src/server/agent/agent-prompt.ts#L306-L338
-[paseo-steer]: https://github.com/getpaseo/paseo/blob/2c8e8a826810337492cc5a38bb0bbd705b6fb632/packages/server/src/server/agent/agent-manager.ts#L2635-L2775
-[herdr-hook]: https://github.com/herdrdev/herdr/blob/28360107c1bfab57fb0de99d74bfa48e74423ca8/src/integration/assets/copilot/herdr-agent-state.sh#L53-L92
-[herdr-prompt]: https://github.com/herdrdev/herdr/blob/28360107c1bfab57fb0de99d74bfa48e74423ca8/src/app/api/agents.rs#L111-L215
-[herdr-focus]: https://github.com/herdrdev/herdr/blob/28360107c1bfab57fb0de99d74bfa48e74423ca8/src/app/api/agents.rs#L650-L687
-[herdr-wait]: https://github.com/herdrdev/herdr/blob/28360107c1bfab57fb0de99d74bfa48e74423ca8/src/app/api/agents.rs#L218-L257
-[cmux-binding]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Sources/TerminalController%2BControlTerminalBinding.swift#L7-L50
-[cmux-send]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Sources/TerminalController%2BControlSurfaceContext3.swift#L260-L366
-[cmux-actions]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Packages/macOS/CmuxExtensionKit/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarAction.swift#L10-L26
-[cmux-host]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Packages/macOS/CmuxExtensionKit/Sources/CmuxExtensionKit/Sidebar/CmuxSidebarHost.swift#L84-L90
-[cmux-replay]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Packages/macOS/CmuxTerminal/Sources/CmuxTerminal/Surface/TerminalSurface%2BInput.swift#L869-L963
-[cmux-mobile]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Sources/TerminalController%2BMobileChat.swift#L261-L336
+SDK versions, corrected assumptions and the remaining acceptance gap are in
+[evidence and remaining gap](native-messaging/evidence.md).

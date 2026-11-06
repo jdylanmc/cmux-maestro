@@ -6,4 +6,4 @@ Why: typing into a terminal clobbers the human's draft. Copilot already queues p
 
 Rejected: terminal input fallback, acknowledgement and retry layers, a standalone broker.
 
-Consequence: no delivery proof. Same-user processes are trusted; routes are generation-bound and retired on provider exit.
+Consequence: no delivery proof. Same-user processes are trusted. Routes are generation-bound and retired on provider exit.

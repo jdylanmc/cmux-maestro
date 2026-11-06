@@ -18,7 +18,7 @@ product branding, not a session icon or pet.
 The deployment target remains macOS 14. On macOS 26+, system icon style controls
 the native appearances. In **System Settings > Appearance > Icon & widget style**,
 **Dark > Auto** follows light/dark appearance. Default, Always, and tinted styles
-remain user choices; the app does not change system settings.
+remain user choices. The app does not change system settings.
 
 Older macOS receives Xcode's generated static light icon. Icon Composer owns
 the mask, rim/bevel and fallback padding/shadow; this native finish is approved,
@@ -26,7 +26,7 @@ not pixel-identical to the original flat artwork. Layer glass, specular,
 translucency and shadow are disabled to preserve the mark and authored colors,
 but system rendering still varies by platform generation.
 
-There is no Dock-only override, bundle mutation or runtime icon-selection code.
+The app has no Dock-only override, bundle mutation or runtime icon-selection code.
 Offscreen renders and compiled assets do **not** establish live Dock/Finder
 refresh behavior or Notification Center badge appearance/refresh. Notification
 communication avatars and session pets are separate concerns.
@@ -37,7 +37,7 @@ and [macOS appearance settings](https://support.apple.com/guide/mac-help/change-
 ## Export
 
 Ordinary builds consume the committed PNG masters with the repository's Xcode
-toolchain; no extra dependency is needed. After an approved vector edit, prepare
+toolchain. No extra dependency is needed. After an approved vector edit, prepare
 full-bleed SVGs:
 
 ```sh

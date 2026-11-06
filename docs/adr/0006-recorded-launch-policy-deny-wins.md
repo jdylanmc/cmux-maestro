@@ -84,7 +84,7 @@ at reservation. Maestro-launched descendants retain the existing recorded-policy
 contract. Omitted `yolo` and `allowTools` inherit the verified/recorded parent mode,
 for both coordinators and workers. Denies still replay. `yolo: false` or an
 explicit allow-list narrows to default. The result reports effective requested
-`permissionMode` and `permissionSource`; it does not attest to live child settings.
+`permissionMode` and `permissionSource`. It does not attest to live child settings.
 Children record the inherited mode so grandchildren inherit it too.
 
 Explicit `yolo: true` retains the separate existing human-approved coordinator

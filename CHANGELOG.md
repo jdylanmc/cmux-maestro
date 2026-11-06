@@ -11,7 +11,7 @@ Notable changes are recorded using Keep a Changelog categories.
   directory** stay unchanged.
 - Explicitly authorized close requests may target any exact owned descendant,
   not only immediate children. Self, ancestors and unrelated sessions remain
-  excluded; target-only never closes the selected session's descendants (#377).
+  excluded. Target-only never closes the selected session's descendants (#377).
 - Acknowledgements use a lossless compact archive with room for 20,480 exact
   identities / 4 MiB. Valid old records migrate on the next acknowledgement;
   no identities expire or are evicted. Capacity warnings offer a direct reset
@@ -27,7 +27,7 @@ Notable changes are recorded using Keep a Changelog categories.
   observations retain their status labels (#304).
 - Agent TCP listeners share one wrapping **Ports** field, deduplicated per process
   and port, with compact binding scope and overflow. Current, complete observations
-  offer explicit HTTP browser links and exact endpoint copies; no probing (#305).
+  offer explicit HTTP browser links and exact endpoint copies. No probing (#305).
 - Hover cards, details, footer and tooltips use terse evidence labels instead of
   explanatory prose. Stale/unavailable observations, incomplete child history,
   directory provenance and Git count exclusions remain visible. Old managed
@@ -84,15 +84,15 @@ Notable changes are recorded using Keep a Changelog categories.
   of the Dock (#370).
 - CMUX Maestro has its own Legato / Glacier app icon, separate from session
   icons and pets. macOS 26+ supports native light/dark appearances through the
-  system icon style; older macOS uses a static light fallback (#372).
+  system icon style. Older macOS uses a static light fallback (#372).
 - Collapsed workspace and worktree headers keep an aggregate activity glyph and
   count. Input and blockers take priority over failures and working agents;
   incomplete evidence stays visible. Activate the cue to expand, without
   focusing or acknowledging a session (#290).
 - Icon and tag editors keep their swatches and add **Custom…**, the macOS system
   color picker, for any opaque sRGB hex (#294). Custom tags retain readable
-  black/white text; custom icons retain a contrasting outline. Dragging previews
-  locally and commits once on panel close or Save/Done; the editor stays open. Named-only
+  black/white text. Custom icons retain a contrasting outline. Dragging previews
+  locally and commits once on panel close or Save/Done. The editor stays open. Named-only
   preferences remain format 1; custom choices use format 2, which older builds
   preserve but cannot display. Agent color APIs remain named-only.
 - `/maestro-demo` runs a human-requested live demo with two visible workers (three
@@ -227,7 +227,7 @@ Notable changes are recorded using Keep a Changelog categories.
   `/allow-all` changes are not observed (ADR 0006).
 - Every Copilot session in a CMUX tab is Maestro-managed (#261, ADR 0025 amendment). A session
   already running when Maestro was installed enrolls in place at its next extension join
-  (`/clear`, `/resume`, or an extension reload you run); Maestro never triggers one. A session the
+  (`/clear`, `/resume`, or an extension reload you run). Maestro never triggers one. A session the
   human resumes after `/exit` re-enrolls as the next generation of its node, or as a new root if
   the node was archived; a relaunch still never brings back an `/exit`ed session. The
   `session-started-before-install`, `enrollment-window-passed` and `session-ended` refusals are
@@ -250,7 +250,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Pull requests run only the CI suites their changes can affect (#194). A new `ci-classify` job
   classifies the exact change set with the reviewed map `scripts/ci-suite-map.json` and publishes
   each suite's selection and reason. Documentation-only changes skip the native tests and the
-  guide probe; documentation images skip every suite. Anything unmapped, shared, bundled or
+  guide probe. Documentation images skip every suite. Anything unmapped, shared, bundled or
   unclassifiable runs everything, and `main` always runs everything. `ci-gate` accepts a skipped
   suite only with that run's complete classification marking it not applicable.
 - CI ends with a `ci-gate` check, the merge signal: it passes only when every required suite
@@ -283,11 +283,11 @@ Notable changes are recorded using Keep a Changelog categories.
   `workspace.yaml` (ADR 0022), read only for the exact bound session, bounded and strictly
   parsed. Hover cards, details, the Active window footer, Taskboard cards and Beat targets use
   the same name. If the name is unavailable, the CMUX title shows unchanged. Managed rows keep
-  their launch label; plain terminals and browsers keep the CMUX title. An automatic name can
+  their launch label. Plain terminals and browsers keep the CMUX title. An automatic name can
   repeat the session's first prompt, as the terminal title already does; rename the session to
   choose its title.
 - Internal tasks no longer have their own "N internal tasks" header and chevron. They show
-  whenever their owning row is expanded; that row's chevron is the only collapse control.
+  whenever their owning row is expanded. That row's chevron is the only collapse control.
 - Make Beats store writes atomic and synced. The orchestrator now fsyncs the temporary file
   before the rename and the folder after it, and the sidebar syncs the folder after its rename,
   so a crash or OS failure can't tear the store. A failed folder sync, after the change has
@@ -310,7 +310,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Label a Beat as On or Off and its next run as an estimate. The sidebar showed "Active"
   without any confirmation from Copilot and promised exact timing ("Missed times are not
   replayed; one attempt per occurrence") that only Copilot's scheduler decides. The
-  redundant `SidebarBeatStatus` is gone; `enabled` is the single source.
+  redundant `SidebarBeatStatus` is gone. `enabled` is the single source.
 - Refuse a stale Beat edit in the sidebar. The form saved its cron and prompt over whatever
   the store held, so an agent's change made while the form was open was silently lost. A
   save is now refused if the Beat's cron, prompt or session changed since the form opened
@@ -333,16 +333,17 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Sessions restarted in place with Copilot `/restart` or `/update` keep their
   name, state and agent footer. The observer rebinds to the session's new
-  process when it is the exact direct child of the bound one and holds the only
-  session lock; the sidebar recovers immediately, read-only. You no longer need
-  to exit fully and resume. Every other live-owner conflict still refuses.
+  process when it is the exact direct child of the bound one and is the session
+  lock's only holder. The sidebar recovers immediately, read-only. You no
+  longer need to exit fully and resume. Every other live-owner conflict still
+  refuses.
 - Mood refusals distinguish busy, proof, identity, placement and store failures
   without exposing private diagnostics or automatically retrying. Failures after
   the store is replaced stay uncertain rather than refused.
 - A failed native spawn's launch lease no longer blocks closing unrelated
   children in its run; it still fences its own node, subtree and surfaces. Native
   close/spawn release a failed lease once provider exit and surface absence are
-  proven; unanchored leases stay retained. Attach confirms pane membership from
+  proven. Unanchored leases stay retained. Attach confirms pane membership from
   CMUX's atomic surface inventory (#387).
 - Nested sessions receive their direct parent's return address instead of the
   run root's. Missing parent routes stay unavailable rather than misrouting
@@ -375,7 +376,7 @@ Notable changes are recorded using Keep a Changelog categories.
 
 - Unattributed internal activity shares one neutral unresolved indicator instead
   of repeated unknown-agent rows. Named tasks, attention and required ancestry
-  remain visible; bounded history and work-state evidence stay unchanged (#341).
+  remain visible. Bounded history and work-state evidence stay unchanged (#341).
 
 - Sessions no longer stay Working after Copilot restarts turn counters within
   one interaction and ends without `session.idle`. Exact turn evidence settles
@@ -404,7 +405,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Large session logs start from a bounded recent tail rather than replaying all
   history. Sidebar settings offers **Event tail (MiB)**, default 4, range 1–64.
   New or replaced logs and large gaps after paused polling use the current value
-  without restart; existing windows never backfill on a setting change. Omitted
+  without restart. Existing windows never backfill on a setting change. Omitted
   child history stays incomplete, and unproven current state stays unknown.
   Still-selected sessions keep replay protection across unrelated tab changes
   and temporary reader outages. At the 64-session limit, live or uncertain owners
@@ -460,7 +461,7 @@ Notable changes are recorded using Keep a Changelog categories.
   stalls rather than consuming the CI job timeout (#302).
 - Status reads preserve proven resource retirement instead of charging ended
   workers against workspace capacity again (#182). Restored or uncertain
-  resources remain charged; stored history and its independent limits stay intact.
+  resources remain charged. Stored history and its independent limits stay intact.
 - One invalid or clock-skewed child no longer exposes unrelated child history.
   Mid-read event times remain known for activity, attention and history retention
   instead of disappearing for one refresh (#269).
@@ -508,7 +509,7 @@ Notable changes are recorded using Keep a Changelog categories.
   longer replaces the first window's workspaces, and focus or actions in one window no
   longer reach another (ADR 0023). A reviewed patch to the pinned SDK, applied by
   `scripts/fetch-sdk.sh`, keeps one connection per window instead of replacing the
-  previous one; each sidebar view owns its own state. If ExtensionKit shares one scene
+  previous one. Each sidebar view owns its own state. If ExtensionKit shares one scene
   across windows, both say "This window's CMUX connection is unavailable" until one
   closes, rather than showing the wrong window. Beat row icons keep each window's
   liveness, and the Beats panel opens only in the window that asked for it.
@@ -530,7 +531,7 @@ Notable changes are recorded using Keep a Changelog categories.
   clock (`beats_due`), the unreachable `beats gate-session` command, and the sidebar's
   "Needs recovery", "Target ended" and **Re-enable** states. Moving a Beat to another
   session keeps it on or off, and an agent's `beats enable` always turns it on. A version 1
-  store reads as empty and is replaced on the next write; its Beats are not migrated.
+  store reads as empty and is replaced on the next write. Its Beats are not migrated.
   Every store must also be plain JSON for both readers: unique keys, Int64 integers only,
   Unicode text and at most 8 nested levels, so a duplicate `version` can no longer make
   the sidebar and the orchestrator read different versions.
@@ -603,16 +604,16 @@ Notable changes are recorded using Keep a Changelog categories.
   contracts, unchanged in substance, to `docs/reference/`. Add `CONTEXT.md` (domain terms),
   `docs/adr/` (19 decision records), and an evidence and safety rules section in `AGENTS.md`.
 - Internal-task rows put their state spinner on the left and hide the counts on the
-  collapsed row; finished tasks stay hidden until the workspace eye is on. The expand
+  collapsed row. Finished tasks stay hidden until the workspace eye is on. The expand
   chevron is narrower, and "Error reported" no longer shows on an agent that is still
   working.
 - Rebuild the Taskboard as a state board: one card per agent session under **Waiting on
   you**, **Working**, **Failed**, **Idle**, **Finished** and **Unknown** headings with
   counts. Each card shows the title, activity, workspace, model and, when the agent is in a
   git repository or linked worktree, its branch. Sub-agent, skill, shell and internal-task
-  rows are no longer listed there; Hierarchy keeps them.
+  rows are no longer listed there. Hierarchy keeps them.
 - Show a small, always-visible copy icon beside every detail label (including the model in
-  the preview). A successful copy shows no "Copied" text; the icon turns into a checkmark.
+  the preview). A successful copy shows no "Copied" text. The icon turns into a checkmark.
 - Add more padding between Taskboard cards.
 - Remove the "Active window" heading and the "Details" button from the footer: clicking the
   agent's title now opens the details popover. Preview cards size themselves to their content
@@ -673,7 +674,7 @@ Notable changes are recorded using Keep a Changelog categories.
 - Report the exact owned target, operation, installer stage and expected/observed
   presence when LaunchServices verification fails; distinguish unknown query
   state without exposing other registered paths or adding retries. Diagnostic
-  improvement only; the original installation failure remains unresolved (#185).
+  improvement only. The original installation failure remains unresolved (#185).
 - Install the `pull-request` and `create-pull-request` skills project-locally and
   require agents to use `/pull-request` for PR bodies (what/why/how, evidence,
   blast radius).
@@ -762,7 +763,7 @@ Notable changes are recorded using Keep a Changelog categories.
   retaining exclusive mutations, failure on exhaustion and launch/result deadlines.
 - Attempt Copilot integration with stable CLI 1.x releases on protocol 3 instead
   of an exact-release whitelist. Preserve source ownership, disabled-state
-  readback and transaction guards; report incompatible version/protocol pairs.
+  readback and transaction guards. Report incompatible version/protocol pairs.
 
 - Constrain the working long-identity action-menu reference to the viewport,
   preserving complete accessible names and keyboard-reachable actions (#132).
@@ -780,7 +781,7 @@ Notable changes are recorded using Keep a Changelog categories.
   state after failed or interrupted publication. Bind ownership through public
   provider results, restore supported disable choices before publication, and
   preserve unrelated plugins. Gracefully restore the exact containing app
-  without activation; do not restart existing Copilot sessions. Retain one
+  without activation. Do not restart existing Copilot sessions. Retain one
   inactive app for recovery, and report conflicting native registrations before
   changing the installed app. Registration status describes owned state, not
   provider-wide uniqueness or loaded-session behavior (#114).
@@ -836,7 +837,7 @@ Notable changes are recorded using Keep a Changelog categories.
   unavailable states and separate CMUX surface-directory reports (#119, #59).
 - Keep exact-chat visual status through temporary observation gaps for five
   minutes, then quietly show Status unavailable without retaining control
-  authority; preserve real background tabs and internal-task parents (#119).
+  authority. Preserve real background tabs and internal-task parents (#119).
 - Start managed Copilot terminals directly with verbatim Maestro-wrapped tasks,
   return acceptance without a startup wait, and derive activity from fresh exact
   session observations. Preserve messaging across normal extension reloads and

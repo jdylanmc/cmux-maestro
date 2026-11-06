@@ -47,7 +47,7 @@ does not mean it is displayed.
 Distinct changes are limited to one per three seconds for the exact identity;
 unchanged reports are no-ops and clear is exempt. A refusal is not queued:
 do not retry automatically. Existing claims are suppressed when the reader
-starts; do not spam a report to make it animate. Never inspect the private
+starts. Do not spam a report to make it animate. Never inspect the private
 store, forge identity fields, trigger enrollment/reload, or widen permissions
 when the tool is absent or refuses.
 
@@ -55,7 +55,7 @@ Only on an explicit human request, use
 `maestro_mood({ "mood": "preview" })` once to preview all fifteen existing
 expressions for five seconds each (75 seconds total).
 `maestro_mood({ "mood": "cancel-preview" })` cancels it and restores ordinary
-resolution; `clear` also withdraws the prior self-report. The equivalent CLI
+resolution. `clear` also withdraws the prior self-report. The equivalent CLI
 uses `mood --self --session-id "<own-session-uuid>" --mood preview` or
 `--mood cancel-preview`. Never emulate this with a shell loop or scheduled
 self-reports. Preview is labelled cosmetic, cannot assert session state,
@@ -88,7 +88,7 @@ surface, terminal contents, current focus, or a recent session. Do not install,
 reload, restart, adopt, or spawn sessions merely to make a send work.
 
 A Copilot session started in CMUX after setup is already a born-managed root
-with `maestro_spawn`; use that. For a new human-authorized coordination
+with `maestro_spawn`. Use that. For a new human-authorized coordination
 workflow from a plain shell, the lifecycle guide provides
 `launch-coordinator`: a fresh managed root with messaging, not adoption of the
 current conversation. Orchestration clients consume this public interface;
@@ -121,7 +121,7 @@ guide's permission rules. Optional `icon` must be a Nerd Fonts 3.5.1 glyph name
 from the installed controller's `icons --search <term>`; a plain SF Symbol name
 such as `sparkles` is refused. The adapter obtains the actual invoking session's
 account itself. Never provide an account, sender, capability, or control token.
-Omit `yolo` to inherit verified parent launch allow-all; `false` narrows; runtime `/allow-all` toggles are not observed (ADR 0006).
+Omit `yolo` to inherit verified parent launch allow-all; `false` narrows. Runtime `/allow-all` toggles are not observed (ADR 0006).
 An unavailable account/API fails before terminal creation rather than selecting
 another subscription. Do not substitute a tabless helper for a refused launch
 or a missing managed lifecycle tool.
@@ -156,13 +156,13 @@ The sidebar's **Mute agent notifications** applies globally. `muted`,
 `rate-limited` and `notifications-not-authorized` are refusals, not invitations
 to retry, change settings, use another session or invoke a different notifier.
 Submission does not confirm display, reading or task completion. Keep secrets
-out of notification text; macOS retains the visible content.
+out of notification text. macOS retains the visible content.
 This is Maestro's OS notification, not CMUX's panel: CMUX's optional iPhone
 forwarding does not forward these notifications.
 
 If this tool is absent, the installed orchestrator's `notify --message TEXT
 --priority normal` is the equivalent own-session command. It refuses unverified
-callers; never pass or invent another session's identity.
+callers. Never pass or invent another session's identity.
 
 ## Discover peers
 
@@ -180,13 +180,13 @@ distinguishing recipient if the intended peer is ambiguous.
 
 Discovery is not an online check or a delivery guarantee. It does not enumerate
 every Copilot terminal. Peers may be siblings or belong to another managed run in
-the same workspace; messaging adds no ancestor-only process-control rights.
+the same workspace. Messaging adds no ancestor-only process-control rights.
 
 ## Send once
 
 Call `maestro_send` with only `destination` and `body`. Copy the exact
 `workspaceId`, `sessionId`, and numeric `generation` from the chosen entry into
-`destination`; omit the entry's `name` and `nodeId`.
+`destination`. Omit the entry's `name` and `nodeId`.
 
 ```json
 {
@@ -221,7 +221,7 @@ the recipient without fallback to enqueue, terminal input, or automatic retry.
 Report success only as **a local write attempt; delivery and completion are
 unconfirmed**. Do not turn the tool result, a native message ID, or silence into a
 receipt, acknowledgement, retry trigger, work-completion signal or tracking loop.
-There are no automatic retries or busy-state scheduling.
+Maestro adds no automatic retries or busy-state scheduling.
 
 ## Reply
 
@@ -282,7 +282,7 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 ```
 
 - Cron is five numeric fields, `minute hour day-of-month month weekday` (weekday 0 or 7
-  = Sunday), with lists, ranges and steps; no names or macros. It runs in the Mac's
+  = Sunday), with lists, ranges and steps. No names or macros. It runs in the Mac's
   local time. It runs roughly on schedule while the session is running; Copilot decides
   exact timing, including around daylight-saving changes. `cron-check` is only an estimate.
 - Prompts are plain text up to 4 KiB. At most 16 Beats per session.
@@ -294,9 +294,9 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 - Beats run on **Copilot's own scheduler**. The Maestro extension in each CMUX session
   asks the Maestro controller for that session's enabled Beats and mirrors them into
   Copilot schedules (labelled `Beat [id]`),
-  within about 15 seconds of a change and again whenever the session starts; Copilot owns
-  timing, time zone and queueing. There is no separate clock and no managed launch is
-  needed. A Beat fires only while its session is running.
+  within about 15 seconds of a change and again whenever the session starts. Copilot owns
+  timing, time zone and queueing. Beats need no separate clock and no managed
+  launch. A Beat fires only while its session is running.
 - Do not edit or stop `Beat [...]` schedules with `/every` or `/after`; manage Beats with
   the commands above. If Copilot scheduling is unavailable, or the Beats store is invalid,
   the extension logs one diagnostic and changes no schedule, so do not promise a firing you
@@ -305,7 +305,7 @@ MAESTRO="$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/
 ## Your own tags
 
 You may assign short tags to **your own session** so the human can scan agents in the
-sidebar. Resolve your exact session UUID as for Beats; the command proves ownership first.
+sidebar. Resolve your exact session UUID as for Beats. The command proves ownership first.
 
 ```sh
 "$MAESTRO" tags add    --self --session-id "$SESSION" --tag review --tag "front end"
@@ -315,14 +315,14 @@ sidebar. Resolve your exact session UUID as for Beats; the command proves owners
 ```
 
 - Tags are canonicalized (`Front End` and `front_end` are both `front-end`). At most 6 per
-  session, each at most 24 characters; an over-limit or empty tag refuses the whole command.
+  session, each at most 24 characters. An over-limit or empty tag refuses the whole command.
 - You change only your own tags. The human's tags for your session are separate and stay;
-  a tag you both assign shows once with both owners. Colors are the human's; you cannot set them.
+  a tag you both assign shows once with both owners. Colors are the human's. You cannot set them.
 
 ## Permissions, failures and lifecycle boundaries
 
 - Default-mode launches add **no tool grants**. Copilot may ask the human for native
-  extension trust or tool permissions; never answer or bypass those prompts.
+  extension trust or tool permissions. Never answer or bypass those prompts.
 - Only an **explicitly user-approved coordinator** launch may use `spawn --yolo`.
   It supplies Copilot `--allow-all` while retaining explicit denies. It is not
   required to use messaging and is never an implicit new grant or a recovery action.

@@ -15,9 +15,9 @@ Consequence:
 - A process that detaches before the first pass (for example `nohup … &`) is never attributed.
 - Only same-user processes and TCP `LISTEN` sockets are covered.
 - Sub-agents share their parent's Copilot process, so their work belongs to that session.
-- Copilot's own helpers are sorted into a counted group: a subtree under a direct child of the provider that shares its process group (MCP servers and extensions, and what they start). That sort is not ownership evidence. When it is wrong, a helper is listed as a background process, or work started through an MCP server is counted as a helper; neither is dropped.
+- Copilot's own helpers are sorted into a counted group: a subtree under a direct child of the provider that shares its process group (MCP servers and extensions, and what they start). That sort is not ownership evidence. When it is wrong, a helper is listed as a background process, or work started through an MCP server is counted as a helper. Neither is dropped.
 - An escape is classified only by a complete pass with the provider proven before and after it. Missing parentage keeps the last list.
-- Each managed session asks for one pass when it becomes managed and after tool use and agent stops (at most one request per 2 s). Every 10 s it asks again only while it has its own work to watch. A request is skipped when a pass by any session began after the event it serves; an event is never dropped by the debounce. One pass covers every managed node; the controller runs at most one pass at a time and at most one every 2 s.
+- Each managed session asks for one pass when it becomes managed and after tool use and agent stops (at most one request per 2 s). Every 10 s it asks again only while it has its own work to watch. A request is skipped when a pass by any session began after the event it serves. An event is never dropped by the debounce. One pass covers every managed node. The controller runs at most one pass at a time and at most one every 2 s.
 
 ## Amendment (2026-10-22, #305): explicit browser links
 

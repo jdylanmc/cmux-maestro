@@ -41,13 +41,13 @@ Donation informs system suggestions and communication prioritization; it is
 not a promise of zero Siri persistence. A successful donation can remain even
 if subsequent identity revalidation or submission fails. No retention timer,
 bulk donation deletion or retry is added. Permission and exact identity/mute
-checks precede donation; identity/mute is checked again before submission.
+checks precede donation. Identity/mute is checked again before submission.
 
 Global mute stays in the sidebar's own sandbox container, separate from layout,
 history and attention. The unsandboxed controller reads it. No grant changes.
 Rate buckets and one-use click capabilities stay in the private control store,
 without message content. Clicks recheck the exact generation, live provider,
-session custody and terminal; unavailable targets never fall back to focus.
+session custody and terminal. Unavailable targets never fall back to focus.
 
 Amendment (#371): a notification click launches the app under launchd, so
 CMUX's default `cmuxOnly` socket policy rejects it (ADR 0021). The controller
@@ -76,7 +76,7 @@ inodes before removing only that inactive window's known files. Active leases
 and senders retain their lock inodes. Normal teardown reclaims its window;
 admission and discovery each sweep at most 256 directory entries for crash
 leftovers before applying the unchanged 256-entry discovery bound. Exhaustion
-or contention still refuses; no automatic retry or larger scan.
+or contention still refuses. No automatic retry or larger scan.
 
 The one-shot `--maestro-notify` invocation uses accessory activation policy;
 normal app launches retain setup/settings and Dock behavior. No work state or

@@ -8,7 +8,7 @@ This repository uses a **single-context** layout:
 Read these before exploring when they exist. Their absence is normal: proceed
 without scaffolding placeholders or speculative decisions. Domain recording is
 a separate authorized activity, performed lazily when terminology or decisions
-are actually resolved; this setup creates neither file nor directory.
+are actually resolved. This setup creates neither file nor directory.
 
 Use the glossary's established terms in issues, tests, and proposals. Identify
 real vocabulary gaps for the authorized domain-modeling owner rather than
