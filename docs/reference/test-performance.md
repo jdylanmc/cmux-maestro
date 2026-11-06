@@ -10,7 +10,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ## Separating the costs
 
-[Separating the costs](test-performance/sources.md#separating-the-costs)
+[Separating the costs](../evidence/ci.md#separating-the-costs)
 
 ## Orchestrator suite
 
@@ -18,7 +18,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Profile
 
-[Orchestrator profile](test-performance/orchestrator-suite.md#orchestrator-profile)
+[Orchestrator profile](../evidence/ci.md#orchestrator-profile)
 
 ### Changes
 
@@ -34,7 +34,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Profile
 
-[Local preview profile](test-performance/local-preview-and-swift.md#local-preview-profile)
+[Local preview profile](../evidence/ci.md#local-preview-profile)
 
 ### Changes
 
@@ -46,7 +46,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Profile
 
-[Swift profile](test-performance/local-preview-and-swift.md#swift-profile)
+[Swift profile](../evidence/ci.md#swift-profile)
 
 ### Changes
 

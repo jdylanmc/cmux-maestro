@@ -28,15 +28,15 @@ live proof.
 
 ### L3 live draft-preservation observation
 
-[L3 live draft-preservation observation](delivery-proof/source-grounding.md#l3-live-draft-preservation-observation)
+[L3 live draft-preservation observation](evidence/delivery-proof.md#l3-live-draft-preservation-observation)
 
 ### L3 app-background delivery observation
 
-[L3 app-background delivery observation](delivery-proof/source-grounding.md#l3-app-background-delivery-observation)
+[L3 app-background delivery observation](evidence/delivery-proof.md#l3-app-background-delivery-observation)
 
 ### L4 fresh YOLO-launch observation
 
-[L4 fresh YOLO-launch observation](delivery-proof/source-grounding.md#l4-fresh-yolo-launch-observation)
+[L4 fresh YOLO-launch observation](evidence/delivery-proof.md#l4-fresh-yolo-launch-observation)
 
 ### Guide distribution decision after live proof
 

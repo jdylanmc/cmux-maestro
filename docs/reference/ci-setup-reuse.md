@@ -50,11 +50,11 @@ together.
 
 ### Method
 
-[Method](ci-setup-reuse/measured-cost-and-benefit-of-the.md#method)
+[Method](../evidence/ci.md#method)
 
 ### Results
 
-[Results](ci-setup-reuse/measured-cost-and-benefit-of-the.md#results)
+[Results](../evidence/ci.md#results)
 
 ### Interpretation
 

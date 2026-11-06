@@ -67,6 +67,6 @@ close tabs, or delete controller records. Only then remove the exact disposable
 or clean other runs. Preserve sanitized human findings alongside this prototype
 before recommending anything for #38. Current recommendation: **core mechanism
 demonstrated**, including fresh explicit YOLO launches and the bounded
-[app-background observation](source-grounding.md#l3-app-background-delivery-observation);
+[app-background observation](../evidence/delivery-proof.md#l3-app-background-delivery-observation);
 complete sidebar-hidden verification before
 claiming that condition.
