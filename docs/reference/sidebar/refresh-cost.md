@@ -50,7 +50,8 @@ app. Otherwise no timer runs. Visible means mounted, not on screen: a minimised
 or covered window keeps refreshing while CMUX stays active. Hiding the sidebar
 stops it, because CMUX unmounts the sidebar.
 
-Becoming active, visible or connected refreshes immediately. At most one request
+Becoming active, visible or connected refreshes immediately unless a request is
+still unanswered. At most one request
 is in flight, and a stop and restart keep it. Three ticks skip an unanswered
 request and the fourth re-sends it. A lost connection abandons the request. A
 failed pull shows the degraded state and stops refreshing until the host

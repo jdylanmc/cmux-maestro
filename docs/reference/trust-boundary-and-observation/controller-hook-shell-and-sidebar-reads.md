@@ -29,7 +29,7 @@
   An automatic name can reproduce the session's first prompt; it is
   shown because the CMUX terminal title already shows the same text.
   Tree navigation uses CMUX extension API and current host snapshot.
-  CMUX does not push a snapshot on focus changes. A visible, connected sidebar
+  CMUX does not push a snapshot on focus changes. A mounted, connected sidebar
   in an active CMUX therefore also pulls its own window's snapshot every 500 ms
   ([host focus refresh](../sidebar/refresh-cost.md#host-focus-refresh)).
   The pull only reads.
