@@ -35,6 +35,8 @@ actions show disabled reasons.
 Menus add no capability or lifecycle authority.
 Previewing never changes the **Active window** footer. Footer follows only the
 current window's selected workspace and uniquely focused native surface.
+CMUX does not push a snapshot on focus changes. The footer learns them from a
+[host focus refresh](refresh-cost.md#host-focus-refresh).
 Disconnected, redacted, missing or ambiguous focus clears the previous subject.
 Ordinary terminals and browsers show native context without agent fields or a pet.
 An agent on a terminal requires one fresh, live, exact observed session. Managed
