@@ -337,6 +337,11 @@ Notable changes are recorded using Keep a Changelog categories.
   lock's only holder. The sidebar recovers immediately, read-only. You no
   longer need to exit fully and resume. Every other live-owner conflict still
   refuses.
+- The focus bar and **Active window** footer follow tab, pane and workspace
+  focus changes made in CMUX, including in custom-titled workspaces. CMUX does
+  not push these changes, so each mounted sidebar re-reads its own window's
+  snapshot every 500 ms while CMUX is active. Unchanged snapshots re-render
+  nothing (ADR 0032).
 - Mood refusals distinguish busy, proof, identity, placement and store failures
   without exposing private diagnostics or automatically retrying. Failures after
   the store is replaced stay uncertain rather than refused.

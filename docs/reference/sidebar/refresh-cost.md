@@ -38,3 +38,24 @@ Workspace placement caches retain only ordered identity, location and freshness
 inputs, plus session indices and owner IDs. They never retain session histories.
 Raw visibility and history-filtered rows have separate caches. Worktrees,
 Sub-agents and collapsed summaries reuse the same indexed ownership evidence.
+
+## Host focus refresh
+
+CMUX does not push a sidebar snapshot when only tab, pane or workspace focus
+changes. As a workaround for this host gap, each window's binding pulls its
+own connection's snapshot every 500 ms
+([ADR 0032](../../adr/0032-refresh-host-focus-while-visible.md)). The pull runs
+only while that window's sidebar is visible, connected and CMUX is the active
+app. Otherwise no timer runs. Visible means mounted, not on screen: a minimised
+or covered window keeps refreshing while CMUX stays active. Hiding the sidebar
+stops it, because CMUX unmounts the sidebar.
+
+Becoming active, visible or connected refreshes immediately unless a request is
+still unanswered. At most one request
+is in flight, and a stop and restart keep it. Three ticks skip an unanswered
+request and the fourth re-sends it. A lost connection abandons the request. A
+failed pull shows the degraded state and stops refreshing until the host
+publishes again: a push, an accepted action or a reconnection. Unchanged
+snapshots stop before any model update. The pull only reads. It never moves
+focus, sends input or changes unread counts. Activation only gates power. It is
+never focus evidence.

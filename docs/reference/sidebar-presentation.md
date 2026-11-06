@@ -8,6 +8,7 @@ headers and projections. Short version: [README](../../README.md). Terms:
 - [Managed Git context and notices](sidebar/managed-git-context.md)
 - [Navigation and ended rows](sidebar/navigation.md)
 - [Refresh and render cost](sidebar/refresh-cost.md)
+  - [Host focus refresh](sidebar/refresh-cost.md#host-focus-refresh)
 - [Display clock, expiry and CPU acceptance](sidebar/display-clock.md)
 - [Agent icons](sidebar/agent-icons.md)
 - [Hover previews and copy](sidebar/hover-previews.md)
