@@ -39,7 +39,7 @@ exact-session hooks observe the account again, and earlier recorded
 account-unverified refusals are reconsidered. A provider conflict is also
 pending, but its recorded refusal permits enrollment only once no node holds
 that exact provider. Missing custody never releases a node. Each later event
-permits one attempt, shared by concurrent events. Enrollment has no timer or account fallback. Other decisions are recorded per session and
+permits one attempt, shared by concurrent events. There is no timer-driven enrollment or account fallback. Other decisions are recorded per session and
 Copilot process and repeated on reload. Enrollments are serialized on the host
 (20-second wait, inside the loader's 60-second call limit).
 
