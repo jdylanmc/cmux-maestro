@@ -25,13 +25,6 @@ Copilot 1.x host steers identically, and implies no new minimum version. A
 rejected send keeps the bounded recipient diagnostic and is neither retried nor
 silently downgraded to enqueue.
 
-The managed path used to choose after-turn enqueue, so a long PM turn could
-delay peer input by contract even while tools ran. The #163 screenshot showed
-four queued messages but did not establish their arrival times, contents,
-consumption or the sole cause of delay. The historical operator report of
-blocked decisions and fleet shutdown is unresolved impact evidence until actual
-native acceptance, not just a changed mode.
-
 | Recipient state | Requested behavior and limit |
 | --- | --- |
 | Working in a model turn | Native steering, not another after-turn queued run. Consumption remains Copilot-owned. |
@@ -52,3 +45,5 @@ simulate Copilot's scheduler. Live input-to-action latency, draft preservation
 and the state transitions above need separately authorized native acceptance.
 The tests establish no numeric SLA, active-tool preemption guarantee or
 end-to-end #163 closure.
+
+[Earlier behavior and #163 evidence](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163).

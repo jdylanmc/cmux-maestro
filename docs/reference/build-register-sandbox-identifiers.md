@@ -25,16 +25,6 @@ merely command success, and do not prove the hosted UI loaded.
 
 ### Historical local-build diagnostic
 
-An already-selected preview used to keep a lost connection after replacement.
-The observed workaround was to right-click CMUX's sidebar toggle, select the
-default sidebar, then reselect **Maestro Sidebar**. In that case it recreated
-the host view and loaded the replacement extension without restarting CMUX or
-Copilot sessions. It is not a universal fix or proof of an OS cause, and the
-coordinated installer uses it neither as a prerequisite nor as a fallback. Its
-automatic registration transition still needs stock-host acceptance.
-`cmux sidebar reload` applies to interpreted Swift sidebars, not native `.appex`
-extensions.
-
 ## Sandbox and distribution
 
 The extension keeps App Sandbox enabled. Its only additional file grants are
@@ -43,10 +33,10 @@ all read-only except the Beats store
 ([ADR 0020](../adr/0020-sidebar-writes-beats-store-outside-its-container.md)):
 
 ```text
-read-only   /Library/Application Support/CMUXMaestroPreview/Copilot/
-read-only   /Library/Application Support/CMUXMaestroPreview/Orchestration/observer/
-read-only   /.copilot/session-state/
-read-write  /Library/Application Support/CMUXMaestroPreview/Beats/
+read-only /Library/Application Support/CMUXMaestroPreview/Copilot/
+read-only /Library/Application Support/CMUXMaestroPreview/Orchestration/observer/
+read-only /.copilot/session-state/
+read-write /Library/Application Support/CMUXMaestroPreview/Beats/
 ```
 
 No network client/server or arbitrary process/data access entitlement is added.
@@ -55,11 +45,7 @@ must run the explicitly selected CLI and write their own integration data. This
 is a personal native distribution tradeoff, **not a claim of Mac App Store
 compatibility**. Temporary file exceptions require distribution/review scrutiny.
 
-A separately signed sandbox probe showed that the `Copilot/` and
-`/.copilot/session-state/` read-only prefixes permit synthetic nested
-identity/event reconstruction, with unrelated reads and writes denied. It did
-not cover `Orchestration/observer/` or the `Beats/` write grant, and it is
-**not** an ExtensionKit-hosted runtime proof. Signed app/host loading and end-to-end
+ Signed app/host loading and end-to-end
 installation remain explicit manual verification gates.
 
 ## Identifiers and upstream contracts
@@ -82,3 +68,5 @@ marketplace or release infrastructure is out of scope.
 Hook manifests follow [command-hook
 reference](https://docs.github.com/en/copilot/reference/hooks-reference), including
 `version: 1`, `type: command`, `bash`, and `timeoutSec`.
+
+[Historical diagnostics and sandbox probe](../evidence/reference.md#build-sandbox-and-identifiers).

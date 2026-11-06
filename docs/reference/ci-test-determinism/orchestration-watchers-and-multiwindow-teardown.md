@@ -17,14 +17,7 @@
   speed assertions. Each of the two teardown tests writes five small immutable
   phase JSON files as events occur. CI always uploads them separately as
   `multiwindow-teardown-phases`, independent of xcresult export and its size cap.
-  The earlier hosted failure's exported diagnostics exceeded
-  the artifact cap, so they do not establish which stage stalled.
-  In #327 (run `39870017753`), both native invalidation callbacks were still
-  missing when the separate-scene test timed out. The retained phase files
-  recorded them about 193 seconds after close, after failure cleanup cancelled
-  the scene observer. This is load-associated XPC callback latency, not evidence
-  that a delivered invalidation failed to clear product scene state; the exact
-  underlying scheduler stall was not captured. `observe` already delivers the
+   `observe` already delivers the
   current scene state synchronously.
   All six `SidebarMultiWindowTests` now run in a dedicated **required** native
   invocation, outside the loaded parallel complement. Their bodies, real XPC
@@ -39,3 +32,5 @@
   Missing or ambiguous evidence blocks the gate even if the native job reports
   success. Isolation removes the known cross-suite load; it does not promise
   bounded OS scheduling or prove live ExtensionKit behavior.
+
+[Historical #327 failure](../../evidence/reference.md#orchestration-watchers-and-multiwindow-teardown).

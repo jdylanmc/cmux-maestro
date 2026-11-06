@@ -48,10 +48,11 @@ mutation. No private source-ID algorithm or guessed provider directory used.
 
 Unrelated plugin identities and public hook rows preserved. Not audited
 through cache aliases or common event names. Live, built-in and opaque unowned
-plugins do not cause blanket refusal. Earlier linked-source/safe-cache-alias
-counterexample remains evidence that such audit was false. Not evidence of
+plugins do not cause blanket refusal. Not evidence of
 safe foreign actions. **An independent unowned plugin can still call the current
 or an older helper and cause extra executions/writes.** Setup neither certifies
 nor suppresses that behavior. Status describes **owned registration** only.
 Unsafe owned paths, owned-name/source collisions and directly inspected
 user-file conflicts remain targeted refusals.
+
+[Historical counterexample](../../evidence/reference.md#plugin-and-observer-hook).

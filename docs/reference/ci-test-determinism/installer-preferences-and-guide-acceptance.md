@@ -19,9 +19,7 @@
   detect a missing event. No manual refresh substitutes for notification delivery.
 - The replay saturation fixture fixes setup event identities before applying
   pressure. A random false positive in its one-word filter is not a product defect.
-- Guide acceptance remains required. The historical missing-evidence failures
-  came from producer source-attribution rejection, not lost environment
-  forwarding. Raw `git cat-file commit` parents bind the exact workflow commit,
+- Guide acceptance remains required. Raw `git cat-file commit` parents bind the exact workflow commit,
   tree and candidate. The event's base SHA may precede a merge or retarget:
   the actual first parent must equal or descend from that event base, or match
   the current base tip returned by one bounded GitHub lookup for this repository,
@@ -36,3 +34,5 @@
   Real-Git regressions accept an advanced or verified retargeted base and reject
   a wrong candidate or unrelated first parent. A forwarding regression verifies
   both original consumer actions receive only fresh successful-producer evidence.
+
+[Historical failures](../../evidence/reference.md#installer-preferences-and-guide-acceptance).

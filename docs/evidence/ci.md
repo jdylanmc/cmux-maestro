@@ -287,3 +287,115 @@ From run 38662873916's `test.sh` log:
   20.4 s (2 cases); `titleAndFixedNativeActionGroup(dark:width:)` 14.3 s
   (8 cases); `focusAcknowledgesExactAttentionOnlyAfterNavigationSucceeds(mode:succeeds:)`
   13.5 s (4 cases).
+
+## Inventory: sources and validate-native
+
+From [`docs/reference/ci-setup-reuse/inventory.md`](../reference/ci-setup-reuse/inventory.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+
+#### Sources
+
+All figures come from GitHub step logs (`gh run view --job <id> --log`).
+Phase boundaries are the logged `Fetched CmuxExtensionKit`, `Verified … build
+namespace`, `Command line invocation`, `** TEST BUILD SUCCEEDED **`,
+`** TEST EXECUTE SUCCEEDED **` and `Test run with …` lines. All three runs
+were cold: nothing was restored.
+
+| Run | Event | Head |
+| --- | --- | --- |
+| A: 38695672938 | pull request | `c057972` |
+| B: 38728842209 | pull request | `02fa9e0` |
+| C: 38731543660 | pull request, `ci/runner-placement` | `79f2ade` |
+
+Each run built at Xcode 26.6 (17F113) and ran all suites. Guide-acceptance
+sub-phases come from its uploaded evidence (`integrated-test-scope-evidence`):
+the probe `.xcresult` `startTime`/`finishTime` in `result-summary.log`, and task
+counts in `build-for-testing.log`. `xcodebuild` output for that build is
+captured, not printed to the step log.
+
+#### `validate-native`: `./scripts/test.sh`
+
+This job is the critical path.
+
+| Phase | A | B | C | Kind |
+| --- | --- | --- | --- | --- |
+| Pinned SDK fetch (curl and untar) | 10s | 12s | 3s | network |
+| Preference test client `swiftc`, `-showBuildSettings`, namespace check | 35s | 45s | 47s | compile |
+| `build-for-testing` (`.build/tests`) | 3m11s | 3m57s | 3m59s | compile |
+| – Of which: planning, `Command line invocation` (log line 113) to the first `CreateBuildDirectory` (line 178) | 14s | 27s | 12s | compile |
+| – Of which: PCM window, first to last `SwiftExplicitDependencyGeneratePcm` (lines 550 to 1778 to 1785; overlaps other compiles) | 64s | 60s | 72s | compile |
+| – Of which: `CmuxExtensionKit` module, before the sidebar target | 24s | 19s | 15s | compile |
+| – Of which: `CMUXMaestroPreviewTests` Swift compile | 1m47s | 2m22s | 2m30s | compile |
+| – Task counts: `SwiftCompile` / `SwiftExplicitDependencyGeneratePcm` | 230 / 213 | 230 / 213 | 230 / 213 | |
+| Isolated-scope execution | 15s | 13s | 13s | test |
+| Guide acceptance, whole | 2m59s | 2m47s | 3m23s | compile and test |
+| – Of which: source checks, settings and `build-for-testing` in its own DerivedData, to probe start | 41s | 40s | 51s | compile |
+| – Of which: probe `test-without-building` (`.xcresult` start to finish) | 2m11s | 2m03s | 2m24s | test |
+| – Of which: result export and recheck | 7s | 5s | 8s | test |
+| – Guide build task counts: `SwiftCompile` / PCM | 19 / 65 | 19 / 65 | 19 / 65 | |
+| Remaining scopes (956 tests) | 8m27s | 7m36s | 8m46s | test |
+| Whole step | 16m14s | 16m05s | 17m59s | |
+
+## Inventory: other suites and existing reuse
+
+From [`docs/reference/ci-setup-reuse/validate-contracts.md`](../reference/ci-setup-reuse/validate-contracts.md). One-time measurements moved here verbatim.
+
+| Step | A | B | C | Notes |
+| --- | --- | --- | --- | --- |
+| `build-unsigned.sh` | 1m27s | 1m43s | 2m02s | `xcodebuild build`: 58s, 1m09s and 1m30s. |
+| `test-copilot-setup.sh` | 3m07s | 3m13s | 3m00s | Its three `swiftc` compiles take about 47 to 53s before the tests start (B, C). The tests take 91 to 99s. |
+| `test-copilot-shell-reducer.sh`, `test-copilot-hook.sh`, `test-copilot-sandbox.sh` | 8s, 5s, 3s | 12s, 8s, 5s | 12s, 6s, 4s | Compile and run. |
+| `test-local-preview.py` | 3m20s | 3m37s | 3m06s | Its bridge is compiled once per suite already, by `test-copilot-setup.sh --compile-only` (18 to 29s, from `test-performance.md`). |
+
+### `guide-ui-consumer-probe`
+
+- SDK fetch: 10s, 3s and 6s.
+- Probe build and run: 1m28s, 57s and 1m17s.
+- The probe uses a fresh DerivedData directory per invocation by design.
+
+## Concurrency and queueing
+
+From [`docs/reference/ci-runner-placement/concurrency-and-queueing.md`](../reference/ci-runner-placement/concurrency-and-queueing.md). One-time measurements of the 2026-10-14/15 window moved here verbatim.
+
+macOS concurrency is limited per account, not per repository, and
+`pr-sniper` shares it.
+
+| Simultaneous account macOS jobs | Minutes in the window |
+| --- | --- |
+| 0 | 438 |
+| 1 | 305 |
+| 2 | 143 |
+| 3 | 137 |
+| 4 | 114 |
+| 5 | 240 |
+
+- The maximum was **5**, which is GitHub's macOS limit for this plan. It was
+  never exceeded.
+- During the 240 minutes at 5, `pr-sniper` held 702 and `cmux-maestro` 500 of
+  the macOS slot-minutes.
+- Execution in the window: `cmux-maestro` 1,344 macOS minutes, `pr-sniper`
+  1,318.
+
+Queue delay of `cmux-maestro` macOS jobs, by the most account macOS jobs active
+while the job waited:
+
+| Most active while waiting | Jobs | Median queue | Longest queue |
+| --- | --- | --- | --- |
+| 0 to 3 | 41 | 0.1 min | 0.2 min |
+| 4 | 2 | 0.7 min | 0.7 min |
+| 5 | 34 | 12.7 min | 41.2 min |
+
+- Every queue over one minute coincided with the account at 5 macOS jobs.
+  Below the ceiling, a macOS job started within 12 seconds.
+- Examples:
+  - Run 38662873916's jobs queued 40.6 and 41.2 minutes (00:56Z).
+  - Six PR and push runs created at 00:37Z queued 10.6 to 18.0 minutes.
+  - In run 38676895215 (the #196 layout), `guide-ui-consumer-probe` queued
+    5m50s. From 03:39:27Z to 03:41:40Z four macOS jobs ran from two runs, and
+    the account peaked at five.
+  - In run 38695672938, all three macOS jobs started within 2 seconds.
+- Linux jobs (`ci-classify`, `ci-gate`) queued 2 to 3 seconds in every run.
+  Linux has its own, larger pool.
+- One cancelled job held a macOS slot for 5h06m: run 38680234264 attempt 1,
+  `validate`, in "Verify Settings guide and setup process isolation", from
+  04:41Z to 09:18Z. #191 does not change that. #190 forbids arbitrary timeout
+  cuts, and the hang keeps its existing owner.

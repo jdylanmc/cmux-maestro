@@ -43,3 +43,18 @@ guide from the installer's own plugin, preserving unrelated and global skills.
 No live files changed for this correction. Installed Settings UI acceptance and
 any consentful refresh are separate from the observed global discovery
 success.
+
+## Managed steering and turn boundaries (#163)
+
+From [`docs/native-messaging/managed-steering.md`](../native-messaging/managed-steering.md). Historical observations and per-paragraph limits moved here verbatim.
+
+The managed path used to choose after-turn enqueue, so a long PM turn could
+delay peer input by contract even while tools ran.
+
+The #163 screenshot showed
+four queued messages but did not establish their arrival times, contents,
+consumption or the sole cause of delay.
+
+The historical operator report of
+blocked decisions and fleet shutdown is unresolved impact evidence until actual
+native acceptance, not just a changed mode.

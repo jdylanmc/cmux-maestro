@@ -306,3 +306,10 @@ old packaged guide below is no longer shipped):
   launcher/proof/skill, 10 Node adapter, 15 metadata, 60 local-preview tests**.
   `git diff --check` passed. These are targeted results, not a claim that the
   parent's final full CI/review or live installed-product checks are complete.
+
+## Bounded live checks and cleanup
+
+From [`docs/delivery-proof/live-checks.md`](../delivery-proof/live-checks.md). Historical observations and per-paragraph limits moved here verbatim.
+
+The earlier worker-only 44/45 result
+came from forcing `TMPDIR` inside this Git worktree, not the normal parent run.

@@ -30,10 +30,10 @@ npx skills add . --skill maestro maestro-demo --agent github-copilot --global --
 ```
 
 Settings embeds no branch refs, automatic refresh, or release machinery.
-User already proved this global local-source path with `skills` **1.5.26** at
-`2026-09-22T12:03:56.533Z`: it installed to `~/.agents/skills/maestro`, and Copilot
-global discovery succeeded. That is an observed location. Do not assume
+ That is an observed location. Do not assume
 all global skills live under `.copilot`. Bare plugin loading and explicit
 `--plugin-dir` both failed live. No upstream root cause is claimed. See the
 [public findings](../../delivery-proof/guide-distribution.md).
 Refresh of user's existing global copy remains a separate consentful action.
+
+[Dated discovery evidence](../../evidence/reference.md#maestro-demo-guide-and-pr-acceptance).

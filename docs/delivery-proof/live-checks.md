@@ -52,8 +52,7 @@ is installed into real CMUX or Copilot sessions.
 
 Parent validation before the permission correction: **all 9 declared repository
 CI command steps passed on first attempts**, including **45/45** orchestrator
-tests and **7 Python + 7 Node** proof tests. The earlier worker-only 44/45 result
-came from forcing `TMPDIR` inside this Git worktree, not the normal parent run.
+tests and **7 Python + 7 Node** proof tests.
 The permission correction adds targeted Python coverage for default/opt-in
 launches, preserved denies/pins, serialized opt-in, refusal outside proof, and
 old stored-node compatibility. Full post-correction CI belongs to the parent.
@@ -70,3 +69,5 @@ demonstrated**, including fresh explicit YOLO launches and the bounded
 [app-background observation](../evidence/delivery-proof.md#l3-app-background-delivery-observation);
 complete sidebar-hidden verification before
 claiming that condition.
+
+[Archived evidence](../evidence/delivery-proof.md#bounded-live-checks-and-cleanup).

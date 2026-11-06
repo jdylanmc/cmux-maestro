@@ -54,6 +54,7 @@ Filtering only inside host's traversal or navigation getter does not remove
 ignored objects from the public children attribute. Raw omitted/ignored
 controls, their attributes/actions, and leaf buttons remain intact. Complete
 public snapshots must still contain exactly one exposed positive control.
-Consumer never filters duplicate controls. Local parser checks reject both the
-recorded two-node and earlier three-node failures. Only fresh hosted snapshots
+Consumer never filters duplicate controls. Only fresh hosted snapshots
 can establish that the public projection is repaired.
+
+[Historical failures](../../evidence/reference.md#acceptance-composition-and-runner).

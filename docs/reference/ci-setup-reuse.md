@@ -22,11 +22,11 @@ together.
 
 ### Sources
 
-[Sources](ci-setup-reuse/inventory.md#sources)
+[Sources](../evidence/ci.md#sources-1)
 
 ### `validate-native`: `./scripts/test.sh`
 
-[`validate-native`: `./scripts/test.sh`](ci-setup-reuse/inventory.md#validate-native-scriptstestsh)
+[`validate-native`: `./scripts/test.sh`](../evidence/ci.md#validate-native-scriptstestsh)
 
 ### `validate-contracts`
 
@@ -34,7 +34,7 @@ together.
 
 ### `guide-ui-consumer-probe`
 
-[`guide-ui-consumer-probe`](ci-setup-reuse/validate-contracts.md#guide-ui-consumer-probe)
+[`guide-ui-consumer-probe`](../evidence/ci.md#guide-ui-consumer-probe)
 
 ### Existing reuse within a run
 

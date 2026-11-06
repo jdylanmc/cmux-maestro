@@ -6,10 +6,9 @@ Metadata supervision regression has a test-only, executor-independent
 30-second bound for each subcase. A stall records subcase, real deadline
 sample count/age and one-second all-thread sample. Then it exits test
 host unsuccessfully. The 30 seconds is a diagnostic capture budget, not a new
-provider deadline. It exceeds twice the observed 12.002-second passing integrated
-test. This leaves contention headroom. Original 2-second and 0.1-second
+provider deadline. Original 2-second and 0.1-second
 subcase deadlines still determine results. Progress never renews the
-diagnostic budget. Hosted behavior still needs verification.
+diagnostic budget.
 Sampler gets three seconds. Then kill its exact unreaped child PID and
 give it one second to reap. A separate five-second hard bound signals any still-owned
 sampler and fails test host even if diagnostic work stalls. Unconfirmed
@@ -27,10 +26,7 @@ missing-file failure behavior.
 This exposes a
 blocked boundary. It does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions stay unchanged.
-The separate metadata-cancellation test (#174,
-`cancellingMetadataStopsItsOwnedProcessBeforeReturning(launchDelay:)`) was
-removed on 2026-10-15 by owner decision after intermittent stalls whose cause
-was not established. No test now cancels an in-flight metadata exchange.
+ No test now cancels an in-flight metadata exchange.
 
 The watchdog report keeps `runnerMetadataReturned` and
 `outerTaskValueReceived` flags, captured at the watchdog deadline. They stay
@@ -38,3 +34,5 @@ false unless a caller reports the runner result or task value; no current
 integrated test does. False flags do not establish where a continuation is
 blocked. Sampler exit/signal/timeout and reap status save independently of a
 missing or unreadable sample file. Its error is retained as `sampleReadError`.
+
+[History and hosted status](../../evidence/reference.md#metadata-supervision-regression).
