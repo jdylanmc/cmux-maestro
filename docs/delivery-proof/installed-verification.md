@@ -1,6 +1,6 @@
 # Parent-owned installed-product verification
 
-Part of the [native delivery proof](../delivery-proof.md). Previous page is [Installed adapter wiring](installed-adapter.md).
+[↑ Native delivery proof](../delivery-proof.md) | [← Installed adapter wiring](installed-adapter.md)
 
 No installed replacement or provider launch was performed by the implementation
 worker. After full CI/review and explicit setup approval:

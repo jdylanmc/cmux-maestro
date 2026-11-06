@@ -8,8 +8,7 @@ older backups, including versions without the new bridge. It differs from
 automatic combined failure recovery. It may require explicit integration
 maintenance afterward.
 The stock host's identity-disappearance/reappearance behavior motivates the
-automatic registration transition. Mocked registry tests do not establish
-real loaded-generation or focus-preservation acceptance.
+automatic registration transition.
 
 Updates may replace a changed development build with the same build number.
 They never silently downgrade. `install` also upgrades an existing receipt-owned
@@ -30,3 +29,5 @@ A previous preview with fewer approved read-only grants is
 allowed. Missing sandbox, broader or unknown grants, unsigned components and
 test namespaces are refused. Normal publication/install validation still
 requires the current build number. This feature does not bump it.
+
+[Limit](../../evidence/reference.md#copilot-refresh-and-same-build-updates).

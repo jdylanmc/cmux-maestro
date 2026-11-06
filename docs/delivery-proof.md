@@ -6,17 +6,7 @@ the prototype-only restriction for the installed adapter, existing
 controller/setup/resources, tests, global `/maestro` guide and related
 documentation. The historical proof remains reproducible, and old
 `deliveryProof` records and `a`/`b` routes remain compatible. No live proof
-sessions are adopted, restarted or modified.
-
-**Status: native A → B → A delivery observed after human permission approvals,
-with unsent draft preservation and editability explicitly confirmed by the
-human. A fresh explicit YOLO-launch exchange worked without approval clicks,
-and a separate parent-controlled check observed app-background delivery. The
-core mechanism is demonstrated, and the pages below list the remaining checks.**
-Question: can two Maestro-launched visible Copilot sessions exchange native
-prompts without touching human input or changing focus? Source inspection
-cannot answer the UI question, and contract tests mock Copilot, so they are not
-live proof.
+sessions are adopted, restarted or modified. [Dated proof status and question](evidence/delivery-proof.md#native-delivery-proof-54-child-of-38).
 
 ## Contract and boundary
 

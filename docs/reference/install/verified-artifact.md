@@ -34,7 +34,6 @@ both LaunchServices and the extension registry. Exit status zero is not enough.
 The extension parser accepts pluginkit's documented election markers, including
 `=` (superseded) and `?` (unknown). Retained sibling registrations do not prevent
 an exact match. They are never removed merely for appearing in the listing.
-This does not claim CMUX has selected or loaded the new extension.
 
 Copilot setup is included. The installer invokes a production-only, non-UI
 bridge from its verified candidate, preserving the stable destination helper
@@ -54,3 +53,5 @@ upgraded or restored. An old source artifact lacking the bridge is rejected
 before launch, to avoid its GUI interpreting an unknown argument.
 Completion reports configured all/subset disables or unresolved disable-key
 applicability separately from ordinary current-on-disk state.
+
+[Limit](../../evidence/reference.md#install-a-verified-artifact).

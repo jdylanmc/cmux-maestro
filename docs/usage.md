@@ -1,6 +1,6 @@
 # Using Maestro: managed sessions and relaunch
 
-Part of the [README](../README.md) usage notes.
+[↑ README](../README.md)
 
 Agents launched by Maestro are normal interactive Copilot sessions. You can type to them. They never run headless.
 

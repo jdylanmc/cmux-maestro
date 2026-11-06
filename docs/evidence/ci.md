@@ -441,3 +441,21 @@ From [`docs/reference/test-performance/local-preview-and-swift.md`](../reference
 None. Changing gated Swift fixtures needs a profile of rendering, text
 recognition and pixel conversion inside those tests first, and full `test.sh`
 before/after runs on a quiet machine.
+
+## Portability proof
+
+From [`docs/reference/ci-runner-placement/portability-proof.md`](../reference/ci-runner-placement/portability-proof.md). Portability checks run for #191 and the counterfactual failure, moved here verbatim.
+
+**Other differences checked:**
+
+| Difference | Result |
+| --- | --- |
+| Case-sensitive file system | Every configured link and skill folder matches a tracked path exactly. Inbound links are compared as exact path strings on both systems. |
+| Unicode path normalization | No tracked path contains non-ASCII characters. |
+| Line endings | The repository has no `.gitattributes`, and both checkouts write the same bytes. |
+| Node version | The runner images' defaults are Node 22.23.3 on `ubuntu-latest` (Ubuntu 24.04) and Node 24.20.0 on `macos-latest`. Both versions, and also Node 20.20.2, run 13 of 13 tests and verify 9 skill hashes and 119 policy links locally. The roast confirmed the same on 22.23.3. |
+| `node --test` output | It may print TAP (`# tests 13`) or spec (`ℹ tests 13`), depending on the version and terminal. The counts are the same. |
+
+- Unchanged, the move would have failed:
+  - Seven of the nine locked skills would report hash drift.
+  - The `canonical digest` test's pinned hash would no longer match.

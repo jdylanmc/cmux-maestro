@@ -124,3 +124,48 @@ cost.
 Timings exclude two-second pause, host delivery and rendering.
 
 They are not stock-host end-to-end latency claim.
+
+## Copilot refresh and same-build updates
+
+From [`docs/reference/install/copilot-refresh.md`](../reference/install/copilot-refresh.md). Per-paragraph acceptance limit moved here verbatim; the family states it once on its index.
+
+Mocked registry tests do not establish
+real loaded-generation or focus-preservation acceptance.
+
+## Update, rollback and status
+
+From [`docs/reference/install/update-and-rollback.md`](../reference/install/update-and-rollback.md). Per-paragraph acceptance limit moved here verbatim; the family states it once on its index.
+
+Registration and process checks do not prove that the stock host
+observed the disappearance and loaded the replacement.
+
+## Install a verified artifact
+
+From [`docs/reference/install/verified-artifact.md`](../reference/install/verified-artifact.md). Per-paragraph acceptance limit moved here verbatim; the family states it once on its index.
+
+This does not claim CMUX has selected or loaded the new extension.
+
+## Conversion caches and acceptance
+
+From [`docs/reference/reader-lifecycle/conversion-caches.md`](../reference/reader-lifecycle/conversion-caches.md). Per-paragraph acceptance limit moved here verbatim; the family states it once on its index.
+
+That deterministic work count does not measure wall-clock throughput or CPU.
+
+Native callback and controlled-clock tests are not installed ExtensionKit proof.
+
+## Projection reuse and publication
+
+From [`docs/reference/reader-lifecycle/projection-reuse.md`](../reference/reader-lifecycle/projection-reuse.md). Per-paragraph acceptance limit moved here verbatim; the family states it once on its index.
+
+Installed CPU/change-to-pixel acceptance is a separate
+hosted check.
+
+## Guide UI consumer probe
+
+From [`docs/reference/cli-guide-and-uninstall/guide-ui-consumer-probe.md`](../reference/cli-guide-and-uninstall/guide-ui-consumer-probe.md). Per-paragraph acceptance limit moved here verbatim; the family states it once on its index.
+
+This readiness probe does not replace the existing tests,
+their failures, the eleven original commands, or the full guide action matrix.
+
+Neither a screenshot nor a new
+probe pass establishes full native guide acceptance.

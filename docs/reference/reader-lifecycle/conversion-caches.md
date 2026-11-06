@@ -37,12 +37,14 @@ OS daemon/vnode scheduling is not a deterministic required-CI dependency. Requir
 tests inject event delivery into the production registration plan, including
 30,000 events under 1,000 non-shown directories over a controlled 60-second
 schedule: zero event-driven reads, 30 fallback reads (0.5/s after initial discovery).
-That deterministic work count does not measure wall-clock throughput or CPU.
+
 No timing allowlist exception is added or hidden by the opt-in inventory.
-Native callback and controlled-clock tests are not installed ExtensionKit proof.
+
 After authorized installation, measure idle CPU with
 `python3 scripts/measure-sidebar-cpu.py --pid <exact-extension-pid> --output <new-private-directory>`.
 Compare matched workloads before/after (target <=2% idle CPU). For latency, use
 only a generic hosted fixture and record durable-change time to the first matching
 pixel/accessibility update, with sample count/distribution. The coordinator
 owns these acceptance checks, and this change includes no production install.
+
+[Limits](../../evidence/reference.md#conversion-caches-and-acceptance).

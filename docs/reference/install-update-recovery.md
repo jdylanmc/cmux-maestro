@@ -4,6 +4,8 @@ How to install, update, roll back, recover and remove the stable local preview,
 and the transaction contract behind those commands. Short version:
 [README](../../README.md). Terms: [CONTEXT](../../CONTEXT.md).
 
+Acceptance limit for this family: install tests use synthetic fixtures, injected adapters and mocked registries. Neither they nor registration and process checks prove that stock CMUX observed a disappearance, selected or loaded the new extension, or preserved loaded generations and focus. Live signed installation, host selection and visual verification are separate gates.
+
 ## Install a stable local preview
 
 [Install a stable local preview](install/local-preview.md) | [Install a verified artifact](install/verified-artifact.md)

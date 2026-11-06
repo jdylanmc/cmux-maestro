@@ -31,8 +31,7 @@ Relaunch intent/results are journaled for interrupted recovery.
 Helpers, extensions and unverifiable processes still block replacement.
 They are never force-killed. No operation quits CMUX, restarts a CLI session,
 injects terminal input or uses an activation/keystroke fallback.
-Registration and process checks do not prove that the stock host
-observed the disappearance and loaded the replacement. Hosted native acceptance
+ Hosted native acceptance
 is still required.
 
 An unrelated application's updater can leave a live process whose old executable
@@ -67,3 +66,5 @@ python3 scripts/local-preview.py rollback
 # Cancel preparation without changing the installed build:
 python3 scripts/local-preview.py recover
 ```
+
+[Limit](../../evidence/reference.md#update-rollback-and-status).

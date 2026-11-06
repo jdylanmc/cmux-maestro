@@ -2,6 +2,8 @@
 
 Global /maestro guide, guide acceptance evidence, enable and uninstall rules. Short version: [README](../../README.md). Terms: [CONTEXT](../../CONTEXT.md).
 
+Acceptance limit for this family: neither a screenshot nor a guide probe pass establishes full native guide acceptance, and the readiness probe does not replace the existing guide tests, the eleven original commands or the full guide action matrix.
+
 ### CLI Integration: install the global guide
 
 Maestro's native **Settings > CLI Integration** tab explains the guide. It

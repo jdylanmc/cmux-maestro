@@ -27,9 +27,6 @@ None of them calls `xcrun`, `swiftc`, `xcodebuild`, `plutil`, `sw_vers`, `sips`,
   `ubuntu-latest` sets `C.UTF-8`, which Node maps to `en-US-u-va-posix`.
 - POSIX collation puts uppercase paths first (`README.md`, `SKILL.md`,
   `agents/…`). en-US puts `agents/…` first.
-- Unchanged, the move would have failed:
-  - Seven of the nine locked skills would report hash drift.
-  - The `canonical digest` test's pinned hash would no longer match.
 - Fix: `check-skill-overrides.mjs` sorts with an explicit `Intl.Collator("en-US")`.
   This matches the macOS hosts that wrote `skills-lock.json` and the macOS CI
   runs that verified it.
@@ -41,15 +38,7 @@ None of them calls `xcrun`, `swiftc`, `xcodebuild`, `plutil`, `sw_vers`, `sips`,
   the default `Intl.Collator`, and requires en-US order. Reverting to either
   `localeCompare` or a default `Intl.Collator()` fails it.
 
-**Other differences checked:**
-
-| Difference | Result |
-| --- | --- |
-| Case-sensitive file system | Every configured link and skill folder matches a tracked path exactly. Inbound links are compared as exact path strings on both systems. |
-| Unicode path normalization | No tracked path contains non-ASCII characters. |
-| Line endings | The repository has no `.gitattributes`, and both checkouts write the same bytes. |
-| Node version | The runner images' defaults are Node 22.23.3 on `ubuntu-latest` (Ubuntu 24.04) and Node 24.20.0 on `macos-latest`. Both versions, and also Node 20.20.2, run 13 of 13 tests and verify 9 skill hashes and 119 policy links locally. The roast confirmed the same on 22.23.3. |
-| `node --test` output | It may print TAP (`# tests 13`) or spec (`ℹ tests 13`), depending on the version and terminal. The counts are the same. |
+Other portability differences checked for #191 (case sensitivity, Unicode normalization, line endings, Node versions, `node --test` output) and the failures the unfixed move would have caused are [archived](../../evidence/ci.md#portability-proof).
 
 **What a live run must confirm.** In the `validate-portable` job of the first
 run, check the following. Compare the counts with a local macOS run at the same

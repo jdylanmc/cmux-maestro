@@ -24,8 +24,7 @@ Identified real-guide root must itself be the public scroll view. Its frame
 intersected with the window supplies the positive guide viewport.
 Missing negative-control exposure fails the probe, not skips it.
 Fixture diagnostics never substitute for guide content, and no whole-app
-guide fallback exists. This readiness probe does not replace the existing tests,
-their failures, the eleven original commands, or the full guide action matrix.
+guide fallback exists.
 
 `./scripts/test-guide-ui-validation.sh --compile-only` builds both new targets
 without launching an app or test. Without that flag, the wrapper refuses outside
@@ -52,5 +51,6 @@ checks the exact test plan independently from the project/target URL and
 reconciles XCTest's empty-argument method spelling with its reported identifier.
 Missing or mismatched identities remain failures.
 Text logs redact checkout/home paths. Framework-owned xcresult may
-contain the disposable runner's build paths. Neither a screenshot nor a new
-probe pass establishes full native guide acceptance.
+contain the disposable runner's build paths.
+
+[Limits](../../evidence/reference.md#guide-ui-consumer-probe).

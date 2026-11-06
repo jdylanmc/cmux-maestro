@@ -22,8 +22,7 @@ timestamp-only publication would leave those copies stale and hide current
 status, session names and pets. Exactly equal output still avoids invalidation.
 The structural projection cache is independent of publication. The fallback
 reader cadence remains two seconds, and file-driven wakeups are coalesced
-separately (#325). Installed CPU/change-to-pixel acceptance is a separate
-hosted check. Beats liveness, born-root naming and external tag refresh consume
+separately (#325). Beats liveness, born-root naming and external tag refresh consume
 a separate bounded latest-evidence stream, independent of SwiftUI rendering.
 
 Managed presentation has its own one-shot deadline, independent of Copilot
@@ -36,3 +35,5 @@ identical or Copilot has no sessions. Unchanged polls keep the deadline instead
 of postponing it, and a poll that overtakes a due timer preserves its redraw.
 Visibility, topology, connection changes and read failures cancel obsolete
 deadlines. No periodic view timer is added.
+
+[Limit](../../evidence/reference.md#projection-reuse-and-publication).

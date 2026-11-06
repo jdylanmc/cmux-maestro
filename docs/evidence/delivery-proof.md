@@ -510,3 +510,17 @@ No route is unlinked to make a duplicate launch work. Uninstall removes the
 entry point and new-launch configuration, not live bindings/adapters. Conversation
 replacement, restart or missing/unsupported CLI extension APIs do not trigger
 adoption, restart, keystroke fallback or retries.
+
+## Native delivery proof (#54, child of #38)
+
+From [`docs/delivery-proof.md`](../delivery-proof.md). Dated status of the #54 proof moved here verbatim.
+
+**Status: native A → B → A delivery observed after human permission approvals,
+with unsent draft preservation and editability explicitly confirmed by the
+human. A fresh explicit YOLO-launch exchange worked without approval clicks,
+and a separate parent-controlled check observed app-background delivery. The
+core mechanism is demonstrated, and the pages below list the remaining checks.**
+Question: can two Maestro-launched visible Copilot sessions exchange native
+prompts without touching human input or changing focus? Source inspection
+cannot answer the UI question, and contract tests mock Copilot, so they are not
+live proof.
