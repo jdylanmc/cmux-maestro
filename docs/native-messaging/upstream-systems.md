@@ -4,63 +4,62 @@
 
 ## Orca: durable mailbox, two different attention paths
 
-At `33ba1ff3df247652c546985201d9a6f4edaec80b`, Orca persists mail before notifying
-the recipient. Its notification is a pointer telling the agent to check mail;
-the complete body arrives through the subsequent CLI/tool result.
-The terminal path writes into a pseudoterminal (PTY) and separately submits Enter.
-The structured path instead journals a user message and dispatches it through an
-Orca-owned provider session. These are not interchangeable transports.
+At `33ba1ff3df247652c546985201d9a6f4edaec80b`, Orca persists mail, then sends
+the recipient a pointer to check it. The body arrives in the later CLI/tool
+result. The terminal path writes into a pseudoterminal (PTY) and submits Enter
+separately. The structured path journals a user message and dispatches it
+through an Orca-owned provider session. These transports are not interchangeable.
 See [staging][orca-stage], [submission][orca-submit], [structured delivery][orca-structured], [notification][orca-notify].
 
-The structured adapter router contains Claude and Codex, not Copilot
-([router][orca-router]). Orca therefore does not demonstrate injection-free
-delivery into an arbitrary existing Copilot terminal. Its durable mailbox and
-separate acknowledgements are useful contrasts, not features Maestro needs to
-copy: Orca itself distinguishes durable enqueue from attention, reading and
+The structured router covers Claude and Codex, not Copilot ([router][orca-router]),
+so Orca shows no injection-free delivery into an existing Copilot terminal. Its
+durable mailbox and separate acknowledgements are contrasts Maestro need not
+copy. Orca itself separates durable enqueue from attention, reading and
 completion ([delivery contract][orca-contract]).
 
 ## Paseo: daemon-owned provider sessions, including Copilot over ACP
 
-At `2c8e8a826810337492cc5a38bb0bbd705b6fb632`, Paseo's daemon owns agent runtimes.
-An agent tool dispatches a prompt; a daemon watcher can notify the caller through provider input,
-not a UI notification or Model Context Protocol server push into the model
-([watcher][paseo-watcher]).
+At `2c8e8a826810337492cc5a38bb0bbd705b6fb632`, Paseo's daemon owns agent
+runtimes. An agent tool dispatches a prompt, and a daemon watcher can notify the
+caller through provider input, not a UI notification or Model Context Protocol
+server push ([watcher][paseo-watcher]).
 
-Copilot runs as `copilot --acp`, using Agent Client Protocol (ACP) with piped
-stdin/stdout ([adapter][paseo-copilot], [process launch][paseo-spawn]).
-This establishes focus-independent orchestration for daemon-managed sessions,
-not attachment to arbitrary human-operated native terminals. Ordinary dispatch
-can replace active work; steering also has fallback behavior
-([send][paseo-send], [steering][paseo-steer]). Maestro imports none of these mechanisms.
+Copilot runs as `copilot --acp`: Agent Client Protocol (ACP) over piped
+stdin/stdout ([adapter][paseo-copilot], [process launch][paseo-spawn]). That is
+focus-independent orchestration of daemon-managed sessions, not attachment to
+human-operated native terminals. Ordinary dispatch can replace active work, and
+steering has fallbacks ([send][paseo-send], [steering][paseo-steer]). Maestro
+imports none of this.
 
 ## Herdr: identity reporting is not its message delivery channel
 
-At `28360107c1bfab57fb0de99d74bfa48e74423ca8`, Herdr's Copilot hook reports native
-session identity to Herdr ([hook][herdr-hook]). Cross-agent prompt delivery uses
-the recipient terminal: text, delay, then Enter. Copilot also receives a
-synthetic focus-gained terminal event ([prompt path][herdr-prompt],
-[Copilot handling][herdr-focus]). That is input injection even without activating
-an operating-system window.
+At `28360107c1bfab57fb0de99d74bfa48e74423ca8`, Herdr's Copilot hook reports
+native session identity to Herdr ([hook][herdr-hook]). Prompts between agents
+go through the recipient terminal as text, a delay and Enter, plus a synthetic
+focus-gained event for Copilot ([prompt path][herdr-prompt],
+[Copilot handling][herdr-focus]). That is input injection, even with no
+operating-system window activated.
 
-Ordered terminal writes do not establish safe coexistence with a human's unsent
-draft. Status waiting and terminal readback are also not exact request/reply
-correlation ([wait contract][herdr-wait]). Identity observation is distinct from model-context delivery.
+Ordered terminal writes do not make a human's unsent draft safe, and status
+waits plus terminal readback are not exact request/reply correlation
+([wait contract][herdr-wait]). Identity observation is not model-context
+delivery.
 
 ## Upstream CMUX: background transport is not a draft-safe mailbox
 
-At `aa4cc90348b96c2d087e6c5e9dee4b6756891bc4`, CMUX provides explicit terminal
-targets, improved runtime binding, and background text/key delivery
-([binding][cmux-binding], [send implementation][cmux-send]).
-The sidebar SDK has no terminal-input messaging action ([actions][cmux-actions], [host][cmux-host]).
+At `aa4cc90348b96c2d087e6c5e9dee4b6756891bc4`, CMUX offers explicit terminal
+targets, improved runtime binding and background text/key delivery
+([binding][cmux-binding], [send implementation][cmux-send]). The sidebar SDK
+has no terminal-input messaging action ([actions][cmux-actions], [host][cmux-host]).
 
-The original terminal-injection investigation found no atomic send-if-unfocused
-operation in the inspected interfaces. Separate focus observation and send would
-race; buffered input does not preserve a provider's draft, and the mobile-chat
-path explicitly clears input ([input replay][cmux-replay],
-[mobile chat][cmux-mobile]). Those findings remain valid for terminal injection,
-but **the proposed focus-gate host patch is no longer needed for this feature**:
-Maestro now delivers through Copilot's native conversation API, not CMUX input.
-No host fork, foreground gate, or sidebar rewrite follows from this decision.
+The terminal-injection investigation found no atomic send-if-unfocused
+operation in the inspected interfaces. Separate focus check and send would race,
+buffered input loses a provider's draft, and the mobile-chat path explicitly
+clears input ([input replay][cmux-replay], [mobile chat][cmux-mobile]). Those
+findings still hold for injection, but **the proposed focus-gate host patch is
+no longer needed for this feature**: Maestro delivers through Copilot's native
+conversation API, not CMUX input. No host fork, foreground gate or sidebar
+rewrite follows.
 
 [cmux-actions]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Packages/macOS/CmuxExtensionKit/Sources/CmuxExtensionKit/Sidebar/CMUXSidebarAction.swift#L10-L26
 [cmux-binding]: https://github.com/manaflow-ai/cmux/blob/aa4cc90348b96c2d087e6c5e9dee4b6756891bc4/Sources/TerminalController%2BControlTerminalBinding.swift#L7-L50
