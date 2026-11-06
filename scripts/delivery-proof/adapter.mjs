@@ -717,6 +717,20 @@ function cmuxEnvironment(environment) {
     surfaceId: environment.CMUX_SURFACE_ID.toLowerCase() };
 }
 
+// Exact refutation only: unknown stays false and joins as before (ADR 0002, 0025).
+export async function outsideCmux({ environment = process.env, parentPid = process.ppid, signal, ms = 5000,
+  check = (request, bound) => invokeController("native-placement", request, defaultController(), bound) } = {}) {
+  if (!cmuxEnvironment(environment) || parentPid <= 1 ||
+    Number(environment.COPILOT_EXTENSION_PARENT_PID) !== parentPid) return false;
+  const bound = AbortSignal.timeout(ms);
+  try {
+    return (await check({ pid: parentPid }, signal ? AbortSignal.any([signal, bound]) : bound))?.placement === "outside";
+  } catch {
+    signal?.throwIfAborted();
+    return false;
+  }
+}
+
 async function invokeEnroll(request, controller, signal) {
   try {
     return await invokeController("native-enroll", request, controller, signal);

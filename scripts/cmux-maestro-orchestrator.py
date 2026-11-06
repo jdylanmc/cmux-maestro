@@ -19,6 +19,7 @@ import shutil
 import selectors
 import signal
 import shlex
+import socket
 import stat
 import subprocess
 import sys
@@ -2067,6 +2068,28 @@ class Cmux:
         walk(report)
         return normalized_tty(found[0]) if len(found) == 1 else None
 
+    def terminal_ttys(self):
+        """Every terminal surface's TTY across all CMUX windows (`top --all`). Unknown raises."""
+        report = self.run("top", "--all")
+        ttys = set()
+
+        def walk(value):
+            if isinstance(value, dict):
+                if value.get("kind") == "surface" and value.get("type") != "browser":
+                    terminal = normalized_tty(value.get("tty")) if value.get("type") == "terminal" else None
+                    if terminal is None:
+                        raise OrchestrationError("CMUX did not report every terminal's TTY.")
+                    ttys.add(terminal)
+                for child in value.values():
+                    walk(child)
+            elif isinstance(value, list):
+                for child in value:
+                    walk(child)
+        if not isinstance(report, dict) or not isinstance(report.get("windows"), list):
+            raise OrchestrationError("CMUX top report is invalid.")
+        walk(report["windows"])
+        return ttys
+
     def set_resume_binding(self, workspace, surface, cwd, session, argv):
         """Attach Maestro's restart command to one exact surface. Identifiers only, no secrets."""
         invocation = [self.executable, "surface", "resume", "set", "--workspace", workspace,
@@ -2841,6 +2864,42 @@ def require_born_custody(actor):
         require_session_custody(actor["copilotSessionId"], actor["providerProcess"])
     except EnrollmentRefused as error:
         raise OrchestrationError(CUSTODY_LOST) from error
+
+
+def command_native_placement():
+    """Whether the invoking provider's terminal is any CMUX terminal (ADR 0002).
+
+    An app or multiplexer started from a CMUX tab passes that tab's CMUX_* values to its own
+    terminals. Only exact refutation answers "outside": the socket those values name does not
+    exist, or CMUX reports every terminal's TTY and none is the provider's. A refused connection
+    may be a stale file or a full backlog, so it stays unknown. Unknown raises."""
+    try:
+        raw = sys.stdin.buffer.read(8193)
+        if len(raw) > 8192:
+            raise ValueError()
+        request = json.loads(raw)
+        if not isinstance(request, dict) or set(request) != {"pid"}:
+            raise ValueError()
+    except (UnicodeError, ValueError) as error:
+        raise OrchestrationError("Placement request is invalid.") from error
+    pid = request["pid"]
+    if (type(pid) is not int or pid <= 1
+            or str(pid) != os.environ.get("COPILOT_EXTENSION_PARENT_PID")):
+        raise OrchestrationError("Placement request does not match the invoking provider.")
+    socket_path = os.environ.get("CMUX_SOCKET_PATH")
+    if socket_path:
+        probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe.settimeout(2)
+        try:
+            probe.connect(socket_path)
+        except FileNotFoundError:
+            return {"placement": "outside"}
+        finally:
+            probe.close()
+    terminal = process_tty(pid)
+    if terminal is None:
+        raise OrchestrationError("Provider terminal is unknown.")
+    return {"placement": "cmux" if terminal in Cmux().terminal_ttys() else "outside"}
 
 
 def command_native_custody(root):
@@ -7963,6 +8022,7 @@ def parser():
     ended.add_argument("--workspace", required=True)
     commands.add_parser("native-session-end", help=argparse.SUPPRESS)
     commands.add_parser("native-custody", help=argparse.SUPPRESS)
+    commands.add_parser("native-placement", help=argparse.SUPPRESS)
     commands.add_parser("process-observe", help=argparse.SUPPRESS)
     resume = commands.add_parser("resume", help="Resume one ended managed session in its restored CMUX surface")
     resume.add_argument("session_id")
@@ -8175,7 +8235,7 @@ def main(argv=None):
             return 0
         cmux = None if args.command in {
             "launch-settings", "capacity", "runtime", "report", "native-observe", "archive-ended",
-            "native-session-end", "native-custody", "process-observe",
+            "native-session-end", "native-custody", "native-placement", "process-observe",
         } else Cmux()
         if args.command == "launch-settings":
             output = command_launch_settings(root)
@@ -8201,6 +8261,8 @@ def main(argv=None):
             output = command_native_session_end(root, cmux)
         elif args.command == "native-custody":
             output = command_native_custody(root)
+        elif args.command == "native-placement":
+            output = command_native_placement()
         elif args.command == "process-observe":
             output = command_process_observe(root)
         elif args.command == "archive-ended":

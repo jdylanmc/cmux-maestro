@@ -11,7 +11,7 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   ENROLLMENT_MESSAGES, createScheduleGateway, createSessionEndGate, currentTimeZone, fileLedger, managedToolSpecs, planBeatSchedules, readBeats, start, startBeats,
-  startBornManaged, startManaged, startReadiness, validateSend,
+  outsideCmux, startBornManaged, startManaged, startReadiness, validateSend,
 } from "./delivery-proof/adapter.mjs";
 import { createProcessObserver, runProcessObserve, sessionNeedsWatching } from "./delivery-proof/processes.mjs";
 import { modelCapabilities } from "./delivery-proof/models.mjs";
@@ -499,8 +499,13 @@ async function loaderFixture(t) {
   });
   await fs.writeFile(route, JSON.stringify(binding), { mode: 0o600 });
   await fs.writeFile(path.join(root, "sdk.mjs"), `
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 export async function joinSession(config) {
+  if (process.env.FIXTURE_JOINS) {
+    appendFileSync(process.env.FIXTURE_JOINS, JSON.stringify({
+      options: Object.keys(config), hooks: Object.keys(config.hooks ?? {}).sort(),
+    }) + "\\n");
+  }
   if (process.env.FIXTURE_READINESS) {
     writeFileSync(process.env.FIXTURE_STAGE, JSON.stringify({
       options: Object.keys(config), tools: config.tools.map(tool => tool.name),
@@ -605,7 +610,7 @@ process.stdin.on("end", () => process.stdout.write(JSON.stringify({ ok: true, ob
     return info?.isSocket() && (info.mode & 0o777) === 0o600;
   });
   // A born root (no launcher inputs) whose installed controller enrolls it and logs each call.
-  async function launchBorn() {
+  async function launchBorn({ placement } = {}) {
     const home = path.join(root, "home");
     const bin = path.join(home, "Library/Application Support/CMUXMaestroPreview/Orchestration/bin");
     await fs.mkdir(bin, { recursive: true, mode: 0o700 });
@@ -622,7 +627,8 @@ process.stdin.on("end", () => {
   appendFileSync(${JSON.stringify(calls)}, command + "\\n");
   process.stdout.write(JSON.stringify(command === "native-enroll" ? { ok: true, nodeId: ${JSON.stringify(binding.nodeId)},
     workspaceId: ${JSON.stringify(binding.workspaceId)}, sessionId: ${JSON.stringify(binding.sessionId)}, generation: 1,
-    routes: ${JSON.stringify(root)}, peer: ${JSON.stringify(binding.peer)} } : { ok: true }));
+    routes: ${JSON.stringify(root)}, peer: ${JSON.stringify(binding.peer)} }
+    : command === "native-placement" ? { ok: true, placement: ${JSON.stringify(placement ?? "cmux")} } : { ok: true }));
 });
 `, { mode: 0o700 });
     const child = spawn(process.execPath, [
@@ -633,11 +639,13 @@ process.stdin.on("end", () => {
         PATH: process.env.PATH, HOME: home, SESSION_ID: binding.sessionId, CMUX_WORKSPACE_ID: binding.workspaceId,
         CMUX_SURFACE_ID: surfaceId, COPILOT_EXTENSION_PARENT_PID: String(process.pid), FIXTURE_SESSION_END: "1",
         FIXTURE_STAGE: path.join(root, "born-stage"), FIXTURE_ERRORS: path.join(root, "born-errors"),
+        FIXTURE_JOINS: path.join(root, "born-joins"),
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
-    const item = { child, done: once(child, "exit"), stderr: "",
-      calls: async () => ((await exists(calls)) ? (await fs.readFile(calls, "utf8")).trim().split("\n") : []) };
+    const lines = async file => ((await exists(file)) ? (await fs.readFile(file, "utf8")).trim().split("\n") : []);
+    const item = { child, done: once(child, "exit"), stderr: "", calls: () => lines(calls),
+      joins: async () => (await lines(path.join(root, "born-joins"))).map(line => JSON.parse(line)) };
     child.stderr.setEncoding("utf8").on("data", chunk => { item.stderr += chunk; });
     child.stdout.resume();
     children.push(item);
@@ -675,12 +683,33 @@ for (const [signal, recorded] of [["SIGHUP", false], ["SIGTERM", true]]) {
     // Once managed, the session also asks for one owned-process pass (ADR 0029).
     await f.waitFor(async () => (await born.calls()).includes("process-observe"));
     const calls = async () => (await born.calls()).filter(call => call !== "process-observe");
-    assert.deepEqual(await calls(), ["native-enroll"]);
+    assert.deepEqual(await calls(), ["native-placement", "native-enroll"]);
     assert.deepEqual(await f.stop(born, signal), [0, null], born.stderr);
-    assert.deepEqual(await calls(), recorded ? ["native-enroll", "native-session-end"] : ["native-enroll"]);
+    assert.deepEqual(await calls(), ["native-placement", "native-enroll", ...recorded ? ["native-session-end"] : []]);
     assert.equal(await f.exists(f.endpoint), null);
   });
 }
+
+test("actual native loader outside CMUX never joins, so Copilot asks for no hook permission", async (t) => {
+  // An app started from a CMUX tab passes that tab's CMUX_* values to its own terminals.
+  for (const placement of ["outside", "cmux"]) {
+    const f = await loaderFixture(t);
+    const born = await f.launchBorn({ placement });
+    if (placement === "cmux") {
+      await f.listening();
+      assert.deepEqual(await born.joins(), [{ options: ["tools", "hooks"],
+        hooks: ["onAgentStop", "onPostToolUse", "onSessionEnd", "onSessionStart", "onUserPromptSubmitted"] }]);
+    } else {
+      await f.waitFor(async () => (await born.calls()).includes("native-placement"));
+    }
+    assert.deepEqual(await f.stop(born), [0, null], born.stderr);
+    if (placement === "outside") {
+      assert.deepEqual(await born.calls(), ["native-placement"]);
+      assert.deepEqual(await born.joins(), []);
+      assert.equal(await f.exists(f.endpoint), null);
+    }
+  }
+});
 
 test("actual native loader treats SIGHUP as a hangup and closes its listener", async (t) => {
   const f = await loaderFixture(t);
@@ -3467,6 +3496,36 @@ test("born managed: outside CMUX or with launcher inputs the path is inert", asy
       joinSession: () => { joins++; }, enroll: () => assert.fail("must not enroll") }), null);
   }
   assert.equal(joins, 0);
+});
+
+test("placement: only an exact outside answer for the verified provider skips the join", async () => {
+  const environment = { SESSION_ID: randomUUID(), CMUX_WORKSPACE_ID: ordinaryWorkspace.toUpperCase(),
+    CMUX_SURFACE_ID: ordinarySurface, COPILOT_EXTENSION_PARENT_PID: "4242" };
+  const requests = [];
+  const answer = value => async (request, signal) => {
+    requests.push({ request, bounded: signal instanceof AbortSignal });
+    if (value instanceof Error) throw value;
+    return value;
+  };
+  assert.equal(await outsideCmux({ environment, parentPid: 4242, check: answer({ ok: true, placement: "outside" }) }), true);
+  assert.deepEqual(requests, [{ request: { pid: 4242 }, bounded: true }]);
+  for (const value of [{ ok: true, placement: "cmux" }, { ok: true, placement: "Outside" }, { ok: true }, null,
+    new Error("controller-unavailable: file")]) {
+    assert.equal(await outsideCmux({ environment, parentPid: 4242, check: answer(value) }), false);
+  }
+  // Bounded: an unanswered check joins as before.
+  assert.equal(await outsideCmux({ environment, parentPid: 4242, ms: 1,
+    check: (request, signal) => new Promise((_, reject) => signal.addEventListener("abort", () => reject(signal.reason))) }),
+  false);
+  // No CMUX values or an unverified provider: nothing is asked.
+  for (const [env, parentPid] of [[{ ...environment, CMUX_SURFACE_ID: undefined }, 4242], [{}, 4242],
+    [environment, 4243], [{ ...environment, COPILOT_EXTENSION_PARENT_PID: "1" }, 1]]) {
+    assert.equal(await outsideCmux({ environment: env, parentPid, check: () => assert.fail("must not ask") }), false);
+  }
+  const aborted = new AbortController();
+  aborted.abort();
+  await assert.rejects(outsideCmux({ environment, parentPid: 4242, signal: aborted.signal,
+    check: (request, signal) => { signal.throwIfAborted(); } }), { name: "AbortError" });
 });
 
 test("born managed: the controller transport keeps only known refusal reasons", async (t) => {

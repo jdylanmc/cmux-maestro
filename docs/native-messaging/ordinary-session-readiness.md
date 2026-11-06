@@ -7,7 +7,9 @@ session, it can join **only its own CLI-owned conversation** and register
 `maestro_readiness({})`. This is a nonprivileged diagnostic, not
 participation. It adds no private binding lookup, socket, controller call,
 account lookup, prompt hook, permission handler, enrollment, replacement
-session or restart. Managed startup and native tools are unchanged, and a
+session or restart. The loader's earlier `native-placement` check skips this
+branch outside CMUX (see [Born managed sessions](born-managed-sessions.md)).
+Managed startup and native tools are unchanged, and a
 failed managed initialization never falls back to this branch.
 
 The diagnostic reports its joined Copilot session UUID after matching the

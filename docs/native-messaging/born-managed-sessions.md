@@ -16,6 +16,14 @@ generation, or `diagnostic-only` with that reason.
 [ADR 0025](../adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md)
 lists the checks.
 
+Before joining, the loader asks the controller's private `native-placement`
+command whether the verified provider runs in any CMUX terminal. Values
+inherited by an app or multiplexer started from a CMUX tab name a CMUX surface
+from outside CMUX. When the named socket does not exist, or CMUX reports every
+terminal TTY and none is the provider's, the loader does not join, so Copilot
+asks for no hook permission. Any unknown answer joins as before
+([ADR 0025 amendment](../adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md#amendment-2026-11-06-inherited-cmux-values-outside-cmux-never-join)).
+
 Reasons: `enrollment-pending`, `enrolled-runtime-unavailable`, `enrolled-node-unavailable`,
 `provider-process-unverified`, `account-unverified`, `integration-not-installed`,
 `awaiting-first-prompt`, `session-not-persisted`, `enrollment-busy`, `cmux-identity-unverified`, `surface-owned`,

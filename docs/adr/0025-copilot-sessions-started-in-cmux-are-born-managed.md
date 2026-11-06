@@ -132,3 +132,26 @@ signalled or restarted, and the sidebar still writes no bindings. Users no
 longer need to exit fully and `copilot --resume` after `/restart` or `/update`.
 Known limit: two restarts with no hook in between leave a grandchild that is
 not followed. That session stays ambiguous until the bound process exits.
+
+## Amendment (2026-11-06): inherited CMUX values outside CMUX never join
+
+An app or multiplexer started from a CMUX tab passes that tab's `CMUX_*` values
+to its own terminals. Copilot sessions there had valid-looking workspace and
+surface IDs, so the extension joined with hooks. Copilot then asked the human
+to elevate Maestro ("register hooks") in a session the controller would always
+refuse with `cmux-identity-unverified`.
+
+Before the born-managed and readiness paths join, the loader now asks the
+controller's private `native-placement` command about the verified provider PID (the PID
+Copilot gave the extension, equal to its parent). It answers `outside` only on
+exact evidence: the socket named by `CMUX_SOCKET_PATH` does not exist, or CMUX
+`top --all` reports a TTY for every terminal surface and none is the provider's
+controlling TTY. Then the extension does not join: no tools, no hooks, no
+elevation prompt, the same as a session with no `CMUX_*` values. Everything
+else (inside CMUX, any other surface, an unknown provider TTY, an unreported
+terminal TTY, a refused socket, which may be stale or full, a controller error
+or the 5-second bound) joins exactly as before, and enrollment still runs every
+check above. An unverified provider is not checked and still reports
+`provider-process-unverified`. Known limit: outside CMUX, a session still asks
+when CMUX is unreachable but its socket file remains, or when CMUX omits a
+terminal's TTY.

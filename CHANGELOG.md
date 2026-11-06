@@ -4,6 +4,14 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Fixed
+
+- Copilot sessions outside CMUX that inherited a CMUX tab's `CMUX_*` values,
+  such as terminals of an app started from CMUX, no longer ask to elevate
+  `user:maestro` to register hooks. The extension skips the join only on exact
+  evidence that the provider is in no CMUX terminal; sessions in CMUX are
+  unchanged (ADR 0025).
+
 ### Changed
 
 - Agent previews and the agent **Active window** footer omit **Workspace path**.
