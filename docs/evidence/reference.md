@@ -1,6 +1,6 @@
 # Evidence archive: reference
 
-Archived 2026-11-06. Verbatim text moved out of the living documentation so those pages describe current behavior only. Nothing here is a current contract; follow the links back for that.
+Archived 2026-11-06. Dated evidence moved verbatim from the living documentation. Where a statement here is still current, the linked living page restates it.
 
 ## Build, sandbox, and identifiers
 

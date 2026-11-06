@@ -1,13 +1,20 @@
 # Native messaging: architecture and research findings
 
-Maestro's public research. Comparisons are **pinned source evidence**, not
-tests of those products' installed behavior, and need no private research
-artifacts. Maestro's own live observations and outstanding acceptance are in
+These pages record Maestro's public research and the native messaging contract.
+Comparisons with other products are **pinned source evidence**, not tests of
+their installed behavior, and need no private research artifacts. Maestro's own
+live observations and outstanding acceptance are in
 [delivery findings](delivery-proof.md).
+
+<a id="acceptance-limit"></a>
+Acceptance limit for this family: native messaging tests mock Copilot sessions
+and transports. They do not simulate Copilot's scheduler or prove native UI
+behavior, reliable delivery, input-to-action latency or draft preservation.
+Live native acceptance is separate and needs explicit authorization.
 
 ## What the upstream systems actually do
 
-[What the upstream systems do](native-messaging/upstream-systems.md)
+Pinned-source comparisons of Orca, Paseo, Herdr and upstream CMUX are recorded as evidence in [ADR 0005](adr/0005-native-peer-messaging-is-fire-and-forget.md#evidence-what-the-upstream-systems-do).
 
 ### Orca: durable mailbox, two different attention paths
 
@@ -54,4 +61,14 @@ verifies it first, and a refusal leaves it unmanaged. See
 
 ## Evidence, corrected assumptions, and remaining gap
 
-[Evidence and remaining gap](native-messaging/evidence.md): SDK versions, corrected assumptions and the remaining acceptance gap.
+<a id="evidence"></a>
+Source declarations justified an experiment, not a compatibility or
+draft-safety guarantee. The installed exchange disproves a dependency on
+selecting the Maestro sidebar, not all visibility conditions, and does not show
+reliable delivery. Mocked transport/setup tests and packaging checks do not
+prove native UI behavior. No exact upstream cause of the plugin-based
+guide-discovery failure is claimed. Observed global guide discovery is not a
+guarantee across CLI versions or proof of every live messaging condition.
+Installed Settings UI acceptance and any consentful guide refresh remain
+separate from that observed discovery success. SDK versions, corrected
+assumptions and dated observations are [archived](evidence/native-messaging.md#evidence-corrected-assumptions-and-remaining-gap).

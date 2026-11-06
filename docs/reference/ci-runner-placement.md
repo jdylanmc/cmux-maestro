@@ -7,7 +7,7 @@ Policy: [merge policy](../agents/merge-policy.md). Entrypoints:
 
 ## Sources
 
-[Sources](ci-runner-placement/sources.md)
+The 2026-10-14/15 Actions window, timing method and reproduction command are archived. [Archived evidence](../evidence/ci.md#sources).
 
 ## Concurrency and queueing
 
@@ -15,7 +15,7 @@ Policy: [merge policy](../agents/merge-policy.md). Entrypoints:
 
 ## Run timings by layout
 
-[Run timings by layout](ci-runner-placement/run-timings-by-layout.md)
+Per-layout run timings before and after the #196 split are archived. [Archived evidence](../evidence/ci.md#run-timings-by-layout).
 
 ## Dependencies between suites
 
@@ -31,4 +31,4 @@ Policy: [merge policy](../agents/merge-policy.md). Entrypoints:
 
 ## Effect
 
-[Effect](ci-runner-placement/effect.md)
+Documentation-only pull requests (`docs/**`, `README.md`, `CHANGELOG.md`, `CONTEXT.md` or `AGENTS.md`, other than the merge policy) run no macOS job; `validate-portable` runs on Linux. Merge-policy changes still run `validate-contracts`, because `scripts/test-build-metadata.py` reads the policy. The measured before/after effect is archived. The Linux execution estimate for `validate-portable` still needs a live run to confirm. [Archived evidence](../evidence/ci.md#effect).

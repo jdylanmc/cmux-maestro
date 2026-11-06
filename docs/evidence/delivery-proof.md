@@ -1,13 +1,13 @@
 # Evidence archive: delivery proof
 
-Archived 2026-11-06. Verbatim text moved out of the living documentation so those pages describe current behavior only. Nothing here is a current contract; follow the links back for that.
+Archived 2026-11-06. Dated evidence moved verbatim from the living documentation. Where a statement here is still current, the linked living page restates it.
 
 ## Delivery proof: contract and boundary
 
-From [`docs/delivery-proof/contract.md`](../delivery-proof/contract.md). Dated proof records moved here verbatim.
+From `docs/delivery-proof/contract.md` (page since merged into [its family index](../delivery-proof.md#contract)). Dated proof records moved here verbatim.
 
 This page and the live observations in
-[source grounding and live observations](../delivery-proof/source-grounding.md)
+[source grounding and live observations](../delivery-proof.md#source-grounding)
 record the original **enqueue** proof. The current managed transport requests native **immediate** steering;
 legacy/disposable proof routes still enqueue. See the
 [managed steering contract](../native-messaging/managed-steering.md)
@@ -49,7 +49,7 @@ conversation requires fresh fixtures. No stale socket is automatically unlinked.
 
 ## Delivery proof: source grounding and live observations
 
-From [`docs/delivery-proof/source-grounding.md`](../delivery-proof/source-grounding.md). Dated proof records moved here verbatim.
+From `docs/delivery-proof/source-grounding.md` (page since merged into [its family index](../delivery-proof.md#source-grounding)). Dated proof records moved here verbatim.
 
 The inspected npm-installed Copilot package was `1.0.83` (`e6a98f1`), with bundled
 SDK source labelled `1.0.13-preview.4`. Package-relative references:
@@ -75,7 +75,7 @@ body `violet-54-1` and rendered final answer `violet-54-1`. B's earlier initial
 turn returned “No response was returned”. It did not prevent the later exchange.
 External MCP startup warnings were also present. That exchange alone did not
 verify draft preservation or every
-[bounded live check](../delivery-proof/live-checks.md).
+[bounded live check](../delivery-proof.md#live-checks).
 
 ### L3 live draft-preservation observation
 
@@ -133,7 +133,7 @@ source-versus-runtime distinctions. This proof does not redo that research.
 
 ## Guide distribution decision after live proof
 
-From [`docs/delivery-proof/guide-distribution.md`](../delivery-proof/guide-distribution.md). Dated proof records moved here verbatim.
+From `docs/delivery-proof/guide-distribution.md` (page since merged into [its family index](../delivery-proof.md#guide-distribution)). Dated proof records moved here verbatim.
 
 Parent research against the exact `1.0.87-0` executable found the installed
 `cmux-maestro-native` `1.1.0` plugin enabled in CLI discovery, while a fresh
@@ -197,7 +197,7 @@ The change adds no receipts, retries, custom scheduling, new timers or host chan
 
 ## Parent-reported installed exchange and skill-name correction
 
-From [`docs/delivery-proof/installed-exchange.md`](../delivery-proof/installed-exchange.md). Dated proof records moved here verbatim.
+From `docs/delivery-proof/installed-exchange.md` (page since merged into [its family index](../delivery-proof.md#installed-exchange)). Dated proof records moved here verbatim.
 
 The parent installed revision `93d6968` through the normal updater and the human
 successfully used **Enable Copilot Integration**. Three fresh managed participants
@@ -233,7 +233,7 @@ later listed the installed messaging skill as `name: maestro`,
 `cmux-maestro-native`, while `skillsInvocationName` returns the bare skill name.
 At that stage, the plugin used slash command `/cmux-maestro-native:maestro`
 and skill-tool argument `{"skill":"maestro"}`. That distinction did not fix live
-discovery. The [final distribution decision](../delivery-proof/guide-distribution.md)
+discovery. The [final distribution decision](../delivery-proof.md#guide-distribution)
 supersedes plugin messaging-guide installation and invocation with global
 `/maestro`. Lifecycle/icon slash references remain qualified.
 
@@ -245,12 +245,12 @@ the cause of that startup/current-inventory difference. Neither the namespace
 correction nor plugin discovery proved live skill execution. Subsequent bare
 plugin and explicit-plugin-directory live failures led to the observed successful
 global installation in
-[guide distribution](../delivery-proof/guide-distribution.md). No private registry contents, account/model data,
+[guide distribution](../delivery-proof.md#guide-distribution). No private registry contents, account/model data,
 credentials or full debug transcripts are included in these findings.
 
 ## Installed implementation: checkpoint and validation
 
-From [`docs/delivery-proof/installed-validation.md`](../delivery-proof/installed-validation.md). Dated proof records moved here verbatim.
+From `docs/delivery-proof/installed-validation.md` (page since merged into [its family index](../delivery-proof.md#installed-validation)). Dated proof records moved here verbatim.
 
 **Implementation checkpoint:** runtime/setup/resource wiring and their targeted
 contracts are implemented. The user-confirmed intent is stored unchanged at
@@ -309,14 +309,14 @@ old packaged guide below is no longer shipped):
 
 ## Bounded live checks and cleanup: worktree test note
 
-From [`docs/delivery-proof/live-checks.md`](../delivery-proof/live-checks.md). Historical observations and per-paragraph limits moved here verbatim.
+From `docs/delivery-proof/live-checks.md` (page since merged into [its family index](../delivery-proof.md#live-checks)). Historical observations and per-paragraph limits moved here verbatim.
 
 The earlier worker-only 44/45 result
 came from forcing `TMPDIR` inside this Git worktree, not the normal parent run.
 
 ## Parent-only preparation and live launch
 
-From [`docs/delivery-proof/live-launch.md`](../delivery-proof/live-launch.md). Historical proof procedure moved here verbatim.
+From `docs/delivery-proof/live-launch.md` (page since merged into [its family index](../delivery-proof.md#live-launch)). Historical proof procedure moved here verbatim.
 
 Do not run these as an unattended test. Use a **new disposable CMUX workspace and
 coordinator terminal**, with its actual `CMUX_WORKSPACE_ID`/`CMUX_SURFACE_ID`.
@@ -401,7 +401,7 @@ authentication or replacement control store is created.
 
 ## Bounded live checks and cleanup
 
-From [`docs/delivery-proof/live-checks.md`](../delivery-proof/live-checks.md). Historical proof procedure and results moved here verbatim.
+From `docs/delivery-proof/live-checks.md` (page since merged into [its family index](../delivery-proof.md#live-checks)). Historical proof procedure and results moved here verbatim.
 
 ### Bounded live checks
 
@@ -475,7 +475,7 @@ claiming that condition.
 
 ## Installed adapter wiring
 
-From [`docs/delivery-proof/installed-adapter.md`](../delivery-proof/installed-adapter.md). Implementation record moved here verbatim.
+From `docs/delivery-proof/installed-adapter.md` (page since merged into [its family index](../delivery-proof.md#installed-adapter)). Implementation record moved here verbatim.
 
 The existing explicit production **Enable Copilot Integration** action now
 packages and writes the shared adapter and minimal native loader under

@@ -1,10 +1,10 @@
 # Evidence archive: behavioral parity
 
-Archived 2026-11-06. Verbatim text moved out of the living documentation so those pages describe current behavior only. Nothing here is a current contract; follow the links back for that.
+Archived 2026-11-06. Dated evidence moved verbatim from the living documentation. Where a statement here is still current, the linked living page restates it.
 
 ## Coordinated alpha installation (#114)
 
-From [`docs/behavioral-parity/alpha-installation.md`](../behavioral-parity/alpha-installation.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/alpha-installation.md` (page since merged into [its family index](../behavioral-parity.md#alpha-installation)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Focused Python tests cover ordinary `install` upgrades, exact registered
 identical no-ops (no app replacement, receipt change or lost backup), automatic
@@ -20,7 +20,7 @@ ordered withdrawal and re-registration, untouched unrelated registrations,
 bounded waiting and restoration when release fails, with no UI selection, host
 restart or script-sidebar reload.
 
-The containing app is not an indefinitely busy extension. A changed-app update
+The normal containing app is no longer treated as an indefinitely busy extension. A changed-app update
 journals the running app's exact owner/start generation, executable and code
 identity, then requests only `NSRunningApplication.terminate()`. Refusal or
 failure to exit aborts without force termination. An exact-URL `NSWorkspace`
@@ -46,7 +46,7 @@ no-op neither deletes retirement nor republishes registration.
 
 ## Alpha installation: retired slots and native publication
 
-From [`docs/behavioral-parity/install-retired-slots.md`](../behavioral-parity/install-retired-slots.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/install-retired-slots.md` (page since merged into [its family index](../behavioral-parity.md#install-retired-slots)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 A changed install stages and verifies the new bridge before reclaiming the old
 retired slot. A `reclaiming` transaction journals exact digest/node-based
@@ -88,7 +88,7 @@ separate production consent.
 
 ## Alpha installation: integration checkpoint
 
-From [`docs/behavioral-parity/install-integration-checkpoint.md`](../behavioral-parity/install-integration-checkpoint.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/install-integration-checkpoint.md` (page since merged into [its family index](../behavioral-parity.md#install-integration-checkpoint)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 `build-register.sh` hands its verified artifact to the same `install`
 entrypoint instead of registering the development extension separately. The
@@ -138,7 +138,7 @@ as red evidence, not relabeled as supported behavior.
 
 ## Alpha installation: plugin identity and disabled state
 
-From [`docs/behavioral-parity/install-plugin-state.md`](../behavioral-parity/install-plugin-state.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/install-plugin-state.md` (page since merged into [its family index](../behavioral-parity.md#install-plugin-state)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Plugin mutations use public sessionless RPCs and check the supported status
 before the mutation request. An install receipt supplies the exact owned
@@ -169,10 +169,10 @@ file keeps its independent choice.
 
 ## Alpha installation: plugin-state recovery and tests
 
-From [`docs/behavioral-parity/install-plugin-recovery.md`](../behavioral-parity/install-plugin-recovery.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/install-plugin-recovery.md` (page since merged into [its family index](../behavioral-parity.md#install-plugin-recovery)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 If a disable response is lost or fails, or the process exits between the
-operations in [plugin identity and disabled state](../behavioral-parity/install-plugin-state.md),
+operations in [plugin identity and disabled state](../behavioral-parity.md#install-plugin-state),
 recovery uses the durable intent, independently re-established source authority
 and official disabled-state restoration. Exact prior cache/source and settings
 are verified before the app rollback completes. An intact prior payload is not
@@ -217,7 +217,7 @@ fixtures.
 
 ## Background-shell representation
 
-From [`docs/behavioral-parity/background-shell.md`](../behavioral-parity/background-shell.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/background-shell.md` (page since merged into [its family index](../behavioral-parity.md#background-shell)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Structured `shell_completed` and `shell_detached_completed` notifications stay
 decoded but no longer create synthetic "Background shell" work rows, outcome
@@ -240,7 +240,7 @@ or current-head CI.
 
 ## Setup fixture readiness
 
-From [`docs/behavioral-parity/setup-fixture-readiness.md`](../behavioral-parity/setup-fixture-readiness.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/setup-fixture-readiness.md` (page since merged into [its family index](../behavioral-parity.md#setup-fixture-readiness)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
 sample before arming the unchanged three-second child-readiness watchdog. The
@@ -269,7 +269,7 @@ test remains the bounded dispatch-progress regression.
 
 ## Hosted integrated runner
 
-From [`docs/behavioral-parity/hosted-integrated-runner.md`](../behavioral-parity/hosted-integrated-runner.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/hosted-integrated-runner.md` (page since merged into [its family index](../behavioral-parity.md#hosted-integrated-runner)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 The hosted integrated runner builds once, runs the **one unchanged test**
 `concurrentSupervisionDoesNotOccupyCooperativeExecutor` alone in the integrated
@@ -321,7 +321,7 @@ unchanged and required.
 
 ## Dedicated observer registration (#114)
 
-From [`docs/behavioral-parity/observer-registration.md`](../behavioral-parity/observer-registration.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/observer-registration.md` (page since merged into [its family index](../behavioral-parity.md#observer-registration)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Explicit setup manages a dedicated version-1 user file for exactly
 `sessionStart`, `userPromptSubmitted` and `postToolUse`. The bundled helper,
@@ -343,7 +343,7 @@ explicit messages. Real errors and usage keep nonzero exits.
 Setup attempts **stable Copilot CLI 1.x releases using SDK protocol 3**, with
 public metadata, exact-source and operation-readback checks. Other major
 versions, prereleases and protocols refuse before registration changes. The
-historical live probes in [provider probe evidence](../behavioral-parity/observer-provider-probes.md)
+historical live probes in [provider probe evidence](../behavioral-parity.md#observer-provider-probes)
 cover 1.0.88 and 1.0.89, not every release the range admits. Setup uses only
 `status.get`, `hooks.discover` and `plugins.list` over a new, bounded public
 stdio connection. It sends no agent/session creation or model request, never
@@ -364,7 +364,7 @@ nor widens the original process-cleanup/readiness deadlines.
 
 ## Observer registration: provider probe evidence
 
-From [`docs/behavioral-parity/observer-provider-probes.md`](../behavioral-parity/observer-provider-probes.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/observer-provider-probes.md` (page since merged into [its family index](../behavioral-parity.md#observer-provider-probes)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 The 1.0.89 maintenance probe covers public metadata, inactive file staging,
 official plugin settings normalization, real-core migration/install/update/
@@ -401,7 +401,7 @@ disabled. Setup does not claim to repair provider-wide enforcement.
 
 ## Observer registration: migration and restoration
 
-From [`docs/behavioral-parity/observer-migration.md`](../behavioral-parity/observer-migration.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/observer-migration.md` (page since merged into [its family index](../behavioral-parity.md#observer-migration)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Migration stages only the exact owned **disabled** file, confirms disabled
 discovery, prepares and officially installs the hookless plugin, verifies its
@@ -447,7 +447,7 @@ Preflight/no-write, verified restoration and unverified restoration are
 separate outcomes, and unrelated files and live routes remain untouched.
 Standalone maintenance keeps this in-process compensation; the normal alpha
 installer adds the durable coordinated boundary in
-[coordinated alpha installation](../behavioral-parity/alpha-installation.md).
+[coordinated alpha installation](../behavioral-parity.md#alpha-installation).
 
 A later failed step reports the last completed phase; the next phase may have
 partly refreshed setup resources. Retry revalidates recorded generations and
@@ -457,7 +457,7 @@ keys, unrelated hooks and live messaging route/session state.
 
 ## Direct interactive launch and legacy startup (#61)
 
-From [`docs/behavioral-parity/direct-interactive-launch.md`](../behavioral-parity/direct-interactive-launch.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/direct-interactive-launch.md` (page since merged into [its family index](../behavioral-parity.md#direct-interactive-launch)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 The controller Harness reproduces a runtime delayed past caller timeout and a
 child whose exact attachment is delayed. The first used to revoke the lease
@@ -499,7 +499,7 @@ not a replacement for real CLI/provider proof.
 
 ## Launch: legacy fixtures and lock budgets
 
-From [`docs/behavioral-parity/launch-legacy-fixtures.md`](../behavioral-parity/launch-legacy-fixtures.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/launch-legacy-fixtures.md` (page since merged into [its family index](../behavioral-parity.md#launch-legacy-fixtures)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Preserved legacy tests still cover attachment-ticket serialization, late-claim
 refusal, strict reports and exact resume. The inherited eight-pending fixture
@@ -540,14 +540,14 @@ capacities. The reference-scaled budget is an explicit policy change, not an
 inference that shorter critical sections alone fixed CI.
 
 The pending-capacity fixture scales its bounded six-second result wait by the
-same factor, so the wait cannot expire before an allowed runtime acquisition
+same factor: its old wait must not expire before an allowed runtime acquisition
 can finish. This synthetic allowance changes no production result deadline,
 still requires every exact completed report and provider call, and keeps
 simultaneous maximum reservations, over-cap refusal and archive protection.
 
 ## Launch: workspace capacity
 
-From [`docs/behavioral-parity/launch-workspace-capacity.md`](../behavioral-parity/launch-workspace-capacity.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/launch-workspace-capacity.md` (page since merged into [its family index](../behavioral-parity.md#launch-workspace-capacity)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Workspace capacity regressions cover persisted CLI configuration, rejected
 worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and
@@ -578,7 +578,7 @@ provider latency.
 
 ## Launch: native-child permissions
 
-From [`docs/behavioral-parity/launch-child-permissions.md`](../behavioral-parity/launch-child-permissions.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/launch-child-permissions.md` (page since merged into [its family index](../behavioral-parity.md#launch-child-permissions)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Prospective native-child permission regressions exercise explicit recorded
 parent mode/allow/deny inheritance, deny-only additions, explicit list/false
@@ -598,7 +598,7 @@ explicit.
 
 ## Launch: model selection
 
-From [`docs/behavioral-parity/launch-model-selection.md`](../behavioral-parity/launch-model-selection.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/launch-model-selection.md` (page since merged into [its family index](../behavioral-parity.md#launch-model-selection)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Optional launch-selection tests exercise real native assignment forwarding,
 sanitized session-scoped model metadata, account rechecking, malformed/foreign
@@ -657,7 +657,7 @@ experiments need a separately authorized release.
 
 ## Deep-outline fixture readiness
 
-From [`docs/behavioral-parity/deep-outline-fixtures.md`](../behavioral-parity/deep-outline-fixtures.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/deep-outline-fixtures.md` (page since merged into [its family index](../behavioral-parity.md#deep-outline-fixtures)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Focus-layout fixtures own **available content width**, not AppKit's preferred
 scroller style. A test-host-only modifier applies `scrollIndicators(.never)` to
@@ -713,7 +713,7 @@ neither substitutes for the other.
 
 ## Managed Git provenance
 
-From [`docs/behavioral-parity/managed-git-provenance.md`](../behavioral-parity/managed-git-provenance.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/managed-git-provenance.md` (page since merged into [its family index](../behavioral-parity.md#managed-git-provenance)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Managed Git branch/worktree labels, verification times and change counts
 describe the **assigned directory**, not Copilot's current `/cwd` or a tool's
@@ -764,7 +764,7 @@ sensitivity evidence still need hosted CI.
 
 ## Lazy preference observation (#169)
 
-From [`docs/behavioral-parity/lazy-preference-observation.md`](../behavioral-parity/lazy-preference-observation.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/lazy-preference-observation.md` (page since merged into [its family index](../behavioral-parity.md#lazy-preference-observation)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Layout stays read-only until an explicit action. When the target is absent, its
 file presenter watches the nearest existing container. Changes to the
@@ -787,7 +787,7 @@ installed-runtime acceptance.
 
 ## Bounded oversized event projection
 
-From [`docs/behavioral-parity/oversized-event-projection.md`](../behavioral-parity/oversized-event-projection.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/oversized-event-projection.md` (page since merged into [its family index](../behavioral-parity.md#oversized-event-projection)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 The reader keeps its 1 MiB ordinary-line limit, 4 MiB per-session / 8 MiB
 per-read I/O budgets and 2,048-line per-session budget. When a line exceeds the
@@ -848,7 +848,7 @@ admits exactly 65,536 encoded bytes across open objects and rejects 65,537.
 
 ## Multi-turn child identity and completion attribution
 
-From [`docs/behavioral-parity/multi-turn-child-identity.md`](../behavioral-parity/multi-turn-child-identity.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/multi-turn-child-identity.md` (page since merged into [its family index](../behavioral-parity.md#multi-turn-child-identity)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
 original spawn task, then start another interaction on the same child without
@@ -881,7 +881,7 @@ installed-app or live grandchild acceptance.
 
 ## Multi-turn child identity: unknown turns and capability
 
-From [`docs/behavioral-parity/multi-turn-unknown-and-capability.md`](../behavioral-parity/multi-turn-unknown-and-capability.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/multi-turn-unknown-and-capability.md` (page since merged into [its family index](../behavioral-parity.md#multi-turn-unknown-and-capability)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 **Missing current-turn proof remains Unknown.** The earlier review packet did
 not establish message tags, and its negative regressions stay:
@@ -930,7 +930,7 @@ asset pair.
 
 ## Explicit owned-descendant and subtree close (#90, #91, #377)
 
-From [`docs/behavioral-parity/owned-descendant-close.md`](../behavioral-parity/owned-descendant-close.md). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
+From `docs/behavioral-parity/owned-descendant-close.md` (page since merged into [its family index](../behavioral-parity.md#owned-descendant-close)). Regression evidence, test inventories and limits moved here verbatim; the page now lists test names and links the contract.
 
 The contract is in [explicit close](../reference/hierarchy-launch-lifecycle/explicit-close.md),
 with admission and host detail in

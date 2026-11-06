@@ -53,4 +53,4 @@ Missing or mismatched identities remain failures.
 Text logs redact checkout/home paths. Framework-owned xcresult may
 contain the disposable runner's build paths.
 
-[Limits](../../evidence/reference.md#guide-ui-consumer-probe).
+[Limits](../cli-guide-and-uninstall.md#acceptance-limit).

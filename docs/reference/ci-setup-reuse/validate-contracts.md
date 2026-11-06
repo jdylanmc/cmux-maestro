@@ -1,6 +1,6 @@
 # Inventory: other suites and existing reuse
 
-[↑ CI setup reuse](../ci-setup-reuse.md) | [← Inventory: sources and validate-native](inventory.md) | [Measured cost and benefit of the realistic candidate →](measured-cost-and-benefit-of-the.md)
+[↑ CI setup reuse](../ci-setup-reuse.md)
 
 Per-step timings of the other suites and the guide probe are [archived](../../evidence/ci.md#inventory-other-suites-and-existing-reuse).
 

@@ -1,10 +1,10 @@
 # Evidence archive: ci
 
-Archived 2026-11-06. Verbatim text moved out of the living documentation so those pages describe current behavior only. Nothing here is a current contract; follow the links back for that.
+Archived 2026-11-06. Dated evidence moved verbatim from the living documentation. Where a statement here is still current, the linked living page restates it.
 
 ## Sources
 
-From [`docs/reference/ci-runner-placement/sources.md`](../reference/ci-runner-placement/sources.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/ci-runner-placement/sources.md` (page since merged into [its family index](../reference/ci-runner-placement.md#sources)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 - **Window:** every Actions job the `jdylanmc` account ran from 2026-10-14 12:41Z to
   2026-10-15 11:40Z: 54 `cmux-maestro` CI runs (77 macOS jobs that started), plus
@@ -33,7 +33,7 @@ From [`docs/reference/ci-runner-placement/sources.md`](../reference/ci-runner-pl
 
 ## Run timings by layout
 
-From [`docs/reference/ci-runner-placement/run-timings-by-layout.md`](../reference/ci-runner-placement/run-timings-by-layout.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/ci-runner-placement/run-timings-by-layout.md` (page since merged into [its family index](../reference/ci-runner-placement.md#run-timings-by-layout)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 macOS execution is the sum over the run's macOS jobs. Wall time runs from
 creation to the last job's completion.
@@ -54,12 +54,12 @@ creation to the last job's completion.
 
 ## Effect
 
-From [`docs/reference/ci-runner-placement/effect.md`](../reference/ci-runner-placement/effect.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/ci-runner-placement/effect.md` (page since merged into [its family index](../reference/ci-runner-placement.md#effect)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 - **Documentation-only pull requests** (`docs/**`, `README.md`, `CHANGELOG.md`,
   `CONTEXT.md` or `AGENTS.md`, other than this policy):
   - Before: `validate-contracts` took a macOS slot for 9.7 to 16.6 minutes of
-    execution in the split runs in [run timings by layout](../reference/ci-runner-placement/run-timings-by-layout.md), plus any queue at the ceiling. Docs-only
+    execution in the split runs in [run timings by layout](../reference/ci-runner-placement.md#run-timings-by-layout), plus any queue at the ceiling. Docs-only
     probe PR #248, run 38728899842:
     - `ci-classify` took 7 seconds.
     - `validate-native` and the probe were not applicable.
@@ -85,7 +85,7 @@ From [`docs/reference/ci-runner-placement/effect.md`](../reference/ci-runner-pla
 
 ## Measured cost and benefit of the realistic candidate
 
-From [`docs/reference/ci-setup-reuse/measured-cost-and-benefit-of-the.md`](../reference/ci-setup-reuse/measured-cost-and-benefit-of-the.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/ci-setup-reuse/measured-cost-and-benefit-of-the.md` (page since merged into [its family index](../reference/ci-setup-reuse.md#measured-cost-and-benefit-of-the)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 DerivedData reuse is the only candidate on the critical path. The test build
 takes 3 to 4 minutes of a 16 to 18 minute job.
@@ -120,7 +120,7 @@ only indicative of ratios:
 
 ## Interpretation
 
-From [`docs/reference/ci-setup-reuse/interpretation.md`](../reference/ci-setup-reuse/interpretation.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/ci-setup-reuse/interpretation.md` (page since merged into [its family index](../reference/ci-setup-reuse.md#interpretation)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 - After a checkout, Xcode recompiles every Swift file regardless of the cache.
   Restored DerivedData saves only the explicit-module (PCM) generation and some
@@ -147,7 +147,7 @@ From [`docs/reference/ci-setup-reuse/interpretation.md`](../reference/ci-setup-r
 
 ## Sources and separating the costs
 
-From [`docs/reference/test-performance/sources.md`](../reference/test-performance/sources.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/test-performance/sources.md` (page since merged into [its family index](../reference/test-performance.md#sources)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 - **CI:** PR run 38662873916 (`validate` job, macOS GitHub-hosted runner).
   Step times come from the jobs API; test times come from the suites' own
@@ -181,7 +181,7 @@ CI `validate` step, run 38662873916:
 
 ## Orchestrator suite evidence
 
-From [`docs/reference/test-performance/orchestrator-evidence.md`](../reference/test-performance/orchestrator-evidence.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/test-performance/orchestrator-evidence.md` (page since merged into [its family index](../reference/test-performance.md#orchestrator-evidence)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 Back-to-back local runs, same machine, same timing runner, 144 tests each, all
 passing:
@@ -219,7 +219,7 @@ applied.
 
 ## Orchestrator suite: Orchestrator profile
 
-From [`docs/reference/test-performance/orchestrator-suite.md`](../reference/test-performance/orchestrator-suite.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/test-performance/orchestrator-suite.md` (page since merged into [its family index](../reference/test-performance.md#orchestrator-suite)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 ### Orchestrator profile
 
@@ -290,7 +290,7 @@ From run 38662873916's `test.sh` log:
 
 ## Inventory: sources and validate-native
 
-From [`docs/reference/ci-setup-reuse/inventory.md`](../reference/ci-setup-reuse/inventory.md). One-time measurements moved here verbatim; numbers describe the cited runs.
+From `docs/reference/ci-setup-reuse/inventory.md` (page since merged into [its family index](../reference/ci-setup-reuse.md#inventory)). One-time measurements moved here verbatim; numbers describe the cited runs.
 
 #### Sources
 
@@ -402,7 +402,7 @@ while the job waited:
 
 ## Orchestrator suite: Orchestrator changes
 
-From [`docs/reference/test-performance/orchestrator-suite.md`](../reference/test-performance/orchestrator-suite.md). #195 change record moved here verbatim.
+From `docs/reference/test-performance/orchestrator-suite.md` (page since merged into [its family index](../reference/test-performance.md#orchestrator-suite)). #195 change record moved here verbatim.
 
 ### Orchestrator changes
 

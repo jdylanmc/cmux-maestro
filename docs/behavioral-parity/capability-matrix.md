@@ -17,4 +17,4 @@ their actual acceptance scope.
   install, update and rollback, and terminal-backed orchestration with managed
   polling.
 
-[Bounded oversized event projection](oversized-event-projection.md) | [Multi-turn child identity](multi-turn-child-identity.md)
+[Bounded oversized event projection](../behavioral-parity.md#oversized-event-projection) | [Multi-turn child identity](../behavioral-parity.md#multi-turn-child-identity)

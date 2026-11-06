@@ -41,14 +41,14 @@ or against the current accepted owner turn when no origin is recorded.
 Explicit contradictions cannot complete current work or advance its causal tip.
 Matching tags do not create missing tool ownership.
 
-Copilot can persist `subagent.configured(multiTurn: true)`, complete the
+Copilot (observed in 1.0.88) can persist `subagent.configured(multiTurn: true)`, complete the
 original spawn task, then start another interaction on the same child without
 another `subagent.started`. The reducer keeps that child's observed name, kind
 and ancestry on the fresh interaction and retires the old spawn-result join.
 Completion stays a terminal task outcome until fresh activity is observed.
 Documented `subagent.selected` profile metadata neither replaces the spawn
 identity nor revokes that capability; other unknown subagent lifecycle events
-still invalidate it. `assistant.message` carries both the current
+still invalidate it. An approved metadata-only probe observed in Copilot 1.0.88 that `assistant.message` carries both the current
 `interactionId` and `turnId`, even across root-owned warning/hook envelopes,
 while its linked `assistant.turn_end` carries only the reused turn number. The
 reducer reads only those two bounded message identifiers, verifies the exact

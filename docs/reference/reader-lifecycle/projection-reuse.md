@@ -36,4 +36,4 @@ of postponing it, and a poll that overtakes a due timer preserves its redraw.
 Visibility, topology, connection changes and read failures cancel obsolete
 deadlines. No periodic view timer is added.
 
-[Limit](../../evidence/reference.md#projection-reuse-and-publication).
+[Limit](../reader-lifecycle-and-retention.md#acceptance-limit).

@@ -2,12 +2,45 @@
 
 [↑ Reader, lifecycle, and retention](../reader-lifecycle-and-retention.md) | [← Catch-up and tail failures](tail-failures.md)
 
-- Oversized `session.binary_asset` events keep bounded, validated outer
-  envelope. Their opaque `data` object is discarded incrementally. Uploaded
-  screenshots therefore cannot permanently invalidate later working/idle state.
-  Root identity, type, parent-event metadata, duplicate-key rejection, nesting
-  bounds and complete-record boundaries still apply. Other oversized events and
-  malformed envelopes stay fail-closed. The 1 MiB retained-line limit is not raised.
+- A line longer than the ordinary 1 MiB limit (`maximumLineBytes`, default
+  1,048,576 bytes) is not buffered. A streaming envelope validates its full JSON
+  structure and keeps only the event decoder's metadata keys (root `id`, `type`,
+  `agentId`, `data`, `timestamp`, `parentId` and the decoder's selected `data`
+  fields); arguments, results, message content and binary payloads are discarded
+  incrementally. The 1 MiB retained-line limit is not raised.
+  - **Projected:** `tool.execution_start`, `tool.execution_complete`,
+    `tool.execution_partial_result`, and any event type the reducer does not
+    know, such as `session.binary_asset` (whose `data` must be an object),
+    `assistant.message` and `model.*` diagnostics. They keep their ordinary
+    decoder semantics, so uploaded screenshots or large tool results cannot
+    permanently invalidate later working/idle state.
+  - **Refused (fail closed):** every other known lifecycle event, such as
+    `assistant.turn_start`. The line marks the session malformed and
+    `readLimitReached`; the previous state is kept.
+  - Unknown work-lifecycle types (`subagent.`, `tool.execution_` or
+    `assistant.turn_` prefixes) are projected but still reach the reducer's
+    explicit degradation, not healthy state.
+  - **Bounds:** 64 container levels, 1,024 encoded bytes per key, 65,536
+    encoded key bytes across open objects, and 2,048 encoded bytes per retained
+    scalar. Binary-asset `metadata` and tool-result `structuredContent` maps
+    have no separate per-object key-count ceiling. The projected envelope must
+    fit the ordinary line limit. Malformed tokens, invalid UTF-8, duplicate keys
+    and truncated structure are rejected; anything that fails these checks is
+    malformed, not projected.
+  - Publication still needs a complete newline and a verified file/identity
+    boundary; torn appends keep the previous observation.
+  - Tests: `CopilotAssetEnvelopeTests` in
+    [`CopilotAssetEnvelopeTests.swift`](../../../CMUXMaestroPreviewTests/CopilotAssetEnvelopeTests.swift),
+    including `oversizedLifecycleDataStillFailsClosed`,
+    `validOpaquePayloadDoesNotPoisonLaterState`,
+    `toolCompletionPreservesOutcomeAcrossLineLimit`,
+    `unsupportedLifecycleAndMalformedMetadataDoNotBecomeHealthyByProjection`,
+    `envelopeResourceBoundsAreExplicitAndFailClosed`,
+    `arbitraryAssetAndToolMapsRecoverAcrossOrdinaryLineLimit`,
+    `arbitraryMapStillRejectsExactAggregateKeyBudgetOverflow` and
+    `incompleteOversizedAppendNeverPublishesBeforeValidNewline`. This is
+    source-level recovery for #121, not proof of every reported
+    missing/Unknown row.
 - Binding rerouted during read is deliberately omitted, **not** returned
   with its superseded surface/session identity as ambiguous row. Other
   verified granted sessions stay visible. Snapshot reports

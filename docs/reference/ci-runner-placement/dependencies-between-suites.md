@@ -1,6 +1,6 @@
 # Dependencies between suites
 
-[↑ CI runner placement](../ci-runner-placement.md) | [← Run timings by layout](run-timings-by-layout.md) | [Portability proof →](portability-proof.md)
+[↑ CI runner placement](../ci-runner-placement.md) | [Portability proof →](portability-proof.md)
 
 - `validate-native` runs only `./scripts/test.sh`. It fetches the SDK and
   builds in its own derived data. It reads no other job's output (#196).

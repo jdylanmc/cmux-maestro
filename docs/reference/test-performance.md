@@ -6,7 +6,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ## Sources
 
-[Sources and separating the costs](test-performance/sources.md)
+The cited CI run (38662873916) and local measurement setup are archived. [Archived evidence](../evidence/ci.md#sources-and-separating-the-costs).
 
 ## Separating the costs
 
@@ -14,7 +14,10 @@ Entrypoints: [build and test](build-and-test.md).
 
 ## Orchestrator suite
 
-[Orchestrator suite](test-performance/orchestrator-suite.md) | [Orchestrator suite evidence](test-performance/orchestrator-evidence.md)
+<a id="orchestrator-evidence"></a>
+Before/after timings and mutation results for the #195 orchestrator changes are archived. [Archived evidence](../evidence/ci.md#orchestrator-suite-evidence).
+
+The orchestrator profile and the #195 fixture changes are [archived](../evidence/ci.md#orchestrator-profile) with their [change record](../evidence/ci.md#orchestrator-changes). The default 32-slot fill is still exercised by `test_pending_launches_hold_all_live_resource_slots`.
 
 ### Profile
 
@@ -26,7 +29,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Evidence
 
-[Orchestrator suite evidence](test-performance/orchestrator-evidence.md)
+[Orchestrator suite evidence](#orchestrator-evidence)
 
 ## Local preview suite
 

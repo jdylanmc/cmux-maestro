@@ -1,6 +1,6 @@
 # Parent-owned installed-product verification
 
-[↑ Native delivery proof](../delivery-proof.md) | [← Installed adapter wiring](installed-adapter.md)
+[↑ Native delivery proof](../delivery-proof.md)
 
 No installed replacement or provider launch was performed by the implementation
 worker. After full CI/review and explicit setup approval:
@@ -12,7 +12,7 @@ worker. After full CI/review and explicit setup approval:
    only sanitized `launch-settings` (`ready` and `messagingInstalled`), not secrets.
    Open **Settings > CLI Integration** and verify the displayed command and copy
    affordance. Before merge, use the local-source command in
-   [guide distribution](guide-distribution.md) only with explicit
+   [guide distribution](../delivery-proof.md#guide-distribution) only with explicit
    consent to refresh the user's already-working global copy; do not use an
    unpublished GitHub source as an acceptance proxy.
 2. In a fresh disposable workspace, use existing lifecycle registration/spawn
@@ -25,7 +25,7 @@ worker. After full CI/review and explicit setup approval:
    participants, not an unmanaged terminal, old proof session, or other workspace.
    Ask one participant for one ordinary send/reply through `maestro_send`.
    Verify exact-generation return addresses and no implicit lifecycle authority.
-4. Reuse the [bounded live checks](live-checks.md), keeping draft preservation, app-background
+4. Reuse the [bounded live checks](../delivery-proof.md#live-checks), keeping draft preservation, app-background
    and sidebar-hidden observations separate. Historical live proof demonstrates
    the mechanism, **not** installation or new multi-peer acceptance. Sidebar-hidden
    remains unverified until explicitly observed.

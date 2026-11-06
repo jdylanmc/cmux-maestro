@@ -47,4 +47,4 @@ only a generic hosted fixture and record durable-change time to the first matchi
 pixel/accessibility update, with sample count/distribution. The coordinator
 owns these acceptance checks, and this change includes no production install.
 
-[Limits](../../evidence/reference.md#conversion-caches-and-acceptance).
+[Limits](../reader-lifecycle-and-retention.md#acceptance-limit).

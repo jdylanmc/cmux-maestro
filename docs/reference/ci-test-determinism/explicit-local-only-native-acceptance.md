@@ -14,7 +14,7 @@ Pure phase/reduced-motion, key-chain, layout-budget, retention/dismissal-identit
 and form-state tests remain required. This is a deliberate reduction of *native
 venue* guarantees at the merge gate, not a claim the venue tests were repaired.
 The key-window test and all six viewport positive/negative controls remain
-required: no failures for them were established in the mined history.
+required: no failures for them were established in the mined history. #127's runtime mechanism is not declared solved. #174's cancellation stall was already removed by an earlier owner decision and remains unresolved.
 
 The #307 mounted-sidebar probe is also opt-in: it observes real display cycles with
 synthetic idle or working/input rows, enabled pets and frozen poll inputs. Two
@@ -61,5 +61,3 @@ clean results without scheduling real Git. Parser rejection tests also stay requ
 real Git collection is local acceptance, not a promise about runner speed.
 Native local acceptance can require an interactive graphical session; use a
 disposable validation venue, not a live Maestro installation.
-
-[Issue history](../../evidence/reference.md#explicit-local-only-native-acceptance).

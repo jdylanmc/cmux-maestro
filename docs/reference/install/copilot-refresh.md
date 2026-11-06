@@ -30,4 +30,4 @@ allowed. Missing sandbox, broader or unknown grants, unsigned components and
 test namespaces are refused. Normal publication/install validation still
 requires the current build number. This feature does not bump it.
 
-[Limit](../../evidence/reference.md#copilot-refresh-and-same-build-updates).
+[Limit](../install-update-recovery.md#acceptance-limit).

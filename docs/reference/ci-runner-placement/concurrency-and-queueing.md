@@ -1,6 +1,6 @@
 # Concurrency and queueing
 
-[↑ CI runner placement](../ci-runner-placement.md) | [← Sources](sources.md) | [Run timings by layout →](run-timings-by-layout.md)
+[↑ CI runner placement](../ci-runner-placement.md)
 
 CI now cancels superseded pull request runs using a workflow-level group keyed
 by workflow name and PR number. Different PRs do not cancel one another.

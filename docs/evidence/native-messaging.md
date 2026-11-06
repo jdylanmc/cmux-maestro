@@ -1,10 +1,10 @@
 # Evidence archive: native messaging
 
-Archived 2026-11-06. Verbatim text moved out of the living documentation so those pages describe current behavior only. Nothing here is a current contract; follow the links back for that.
+Archived 2026-11-06. Dated evidence moved verbatim from the living documentation. Where a statement here is still current, the linked living page restates it.
 
 ## Evidence, corrected assumptions, and remaining gap
 
-From [`docs/native-messaging/evidence.md`](../native-messaging/evidence.md). Dated proof records moved here verbatim.
+From `docs/native-messaging/evidence.md` (page since merged into [its family index](../native-messaging-architecture.md#evidence)). Dated proof records moved here verbatim.
 
 Initial SDK inspection used npm Copilot **1.0.83**, while live sessions reported
 **1.0.87-0**. Source declarations justified an experiment, not a compatibility

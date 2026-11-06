@@ -8,7 +8,7 @@ sample count/age and one-second all-thread sample. Then it exits test
 host unsuccessfully. The 30 seconds is a diagnostic capture budget, not a new
 provider deadline. Original 2-second and 0.1-second
 subcase deadlines still determine results. Progress never renews the
-diagnostic budget.
+diagnostic budget. Hosted behavior still needs verification.
 Sampler gets three seconds. Then kill its exact unreaped child PID and
 give it one second to reap. A separate five-second hard bound signals any still-owned
 sampler and fails test host even if diagnostic work stalls. Unconfirmed
@@ -35,4 +35,4 @@ integrated test does. False flags do not establish where a continuation is
 blocked. Sampler exit/signal/timeout and reap status save independently of a
 missing or unreadable sample file. Its error is retained as `sampleReadError`.
 
-[History and hosted status](../../evidence/reference.md#metadata-supervision-regression).
+[History](../../evidence/reference.md#metadata-supervision-regression).

@@ -13,4 +13,6 @@
 | Errors, aborts and primary-turn completion | [CopilotAttentionTests](../../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `acceptedRootOutcomeDoesNotEndOrUnblockBackgroundWork`, `primaryTurnEndDoesNotSilentlyAcknowledgeAnEarlierToolError` |
 | Honest tool activity | [CopilotAttentionTests](../../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `activityUsesOwnedToolNamesAndCompletionIdentityNotPayloads`, `multipleExecutingToolsAndDuplicateCompletionKeepHonestActivity` |
 
+No token/context percentage or speculative hung-state parity is claimed.
+
 Runtime evidence and dispositions for each row: [archive](../evidence/behavioral-parity.md#capability-matrix-observation-runtime-evidence).

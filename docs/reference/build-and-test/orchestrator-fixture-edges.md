@@ -29,3 +29,14 @@ name and the recorded launch `PATH`, then `exec`s the controller's `direct-exec`
 bootstrap. It builds the provider environment as a mapping that drops every other
 `CMUX_MAESTRO_` key, including names that are not shell identifiers, and
 `execve`s the provider in place. Other variables such as `HOME` pass through.
+
+The orchestrator suite uses fake CMUX/Copilot processes in temporary roots.
+Its fixture-only Python startup hook carries a shared lifetime descriptor
+through subprocesses and shell execution. Teardown closes fixture admission,
+signals only recorded PID/start identities, and requires exclusive lifetime
+ownership before deleting the root. A writer that outlives the existing
+three-second shutdown budget causes an explicit failure and preserves the
+sandbox, including against automatic temporary-directory cleanup. Do not remove
+a preserved root until its exact fixture processes have stopped. New fixture
+launch paths must preserve the lifetime descriptor and startup hook; neither
+is installed into real CMUX or Copilot sessions.

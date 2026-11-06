@@ -67,4 +67,4 @@ python3 scripts/local-preview.py rollback
 python3 scripts/local-preview.py recover
 ```
 
-[Limit](../../evidence/reference.md#update-rollback-and-status).
+[Limit](../install-update-recovery.md#acceptance-limit).

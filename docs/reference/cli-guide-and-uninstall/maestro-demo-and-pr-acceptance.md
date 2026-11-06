@@ -33,7 +33,7 @@ Settings embeds no branch refs, automatic refresh, or release machinery.
 That is an observed location. Do not assume
 all global skills live under `.copilot`. Bare plugin loading and explicit
 `--plugin-dir` both failed live. No upstream root cause is claimed. See the
-[public findings](../../delivery-proof/guide-distribution.md).
+[public findings](../../delivery-proof.md#guide-distribution).
 Refresh of user's existing global copy remains a separate consentful action.
 
 [Dated discovery evidence](../../evidence/reference.md#maestro-demo-guide-and-pr-acceptance).

@@ -1,6 +1,6 @@
 # Chosen Maestro contract
 
-[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Native messaging: what the upstream systems do](upstream-systems.md) | [Managed steering and turn boundaries (#163) →](managed-steering.md)
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [Managed steering and turn boundaries (#163) →](managed-steering.md)
 
 ```text
 agent A: maestro_send(destination, body)

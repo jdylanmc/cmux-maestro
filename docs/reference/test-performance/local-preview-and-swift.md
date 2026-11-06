@@ -1,6 +1,6 @@
 # Local preview suite, Swift tests and next steps
 
-[↑ Test performance](../test-performance.md) | [← Orchestrator suite evidence](orchestrator-evidence.md)
+[↑ Test performance](../test-performance.md)
 
 ## Local preview suite
 
@@ -8,7 +8,7 @@ Profile and change record: [archive](../../evidence/ci.md#local-preview-profile)
 
 ## Swift tests
 
-Profile and change record: [archive](../../evidence/ci.md#swift-profile).
+Changing gated Swift fixtures needs a profile of rendering, text recognition and pixel conversion inside those tests first, and full `test.sh` before/after runs on a quiet machine. Profile and change record: [archive](../../evidence/ci.md#swift-profile).
 
 ## Recommended next steps
 

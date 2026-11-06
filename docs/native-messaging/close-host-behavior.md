@@ -1,6 +1,6 @@
 # Owned-descendant close: stock host behavior and admission limits
 
-[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Explicit owned-descendant close](owned-descendant-close.md) | [Evidence, corrected assumptions, and remaining gap →](evidence.md)
+[↑ Native messaging: architecture and research findings](../native-messaging-architecture.md) | [← Explicit owned-descendant close](owned-descendant-close.md)
 
 Close inherits stock host behavior, including last-terminal refusal. CMUX 0.65
 requests without the field returned `confirmation_required`, and immutable v0.65.0

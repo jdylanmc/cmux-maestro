@@ -1,6 +1,6 @@
 # Not moved
 
-[↑ CI runner placement](../ci-runner-placement.md) | [← Portability proof](portability-proof.md) | [Effect →](effect.md)
+[↑ CI runner placement](../ci-runner-placement.md) | [← Portability proof](portability-proof.md)
 
 | Command | Why it stays on macOS |
 | --- | --- |

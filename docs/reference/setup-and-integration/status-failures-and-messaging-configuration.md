@@ -20,7 +20,7 @@ Retry revalidates provenance and content. Retained disabled stage stays
 disabled conservatively. Foreign edits require manual review, not automatic
 rollback. Existing sessions keep cached hooks. Any provider reload,
 restart or resume is human-owned. See
-[compatibility limits](../../behavioral-parity/observer-registration.md).
+[compatibility limits](../../behavioral-parity.md#observer-registration).
 
 Messaging launch configuration and stored nodes keep three-field
 `{version, routes, extension}` contract. Obsolete `pluginDirectory` setup

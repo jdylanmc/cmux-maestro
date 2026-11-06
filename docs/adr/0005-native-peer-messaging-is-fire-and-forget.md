@@ -10,7 +10,7 @@ Consequence: no delivery proof. Same-user processes are trusted. Routes are gene
 
 ## Evidence: what the upstream systems do
 
-From [`docs/native-messaging/upstream-systems.md`](../native-messaging/upstream-systems.md). Pinned source research that informed this decision, moved here verbatim. Comparisons are pinned source evidence, not tests of those products' installed behavior.
+From `docs/native-messaging/upstream-systems.md` (page since merged into [its family index](../native-messaging-architecture.md#what-the-upstream-systems-actually-do)). Pinned source research that informed this decision, moved here verbatim. Comparisons are pinned source evidence, not tests of those products' installed behavior.
 
 ### Orca: durable mailbox, two different attention paths
 

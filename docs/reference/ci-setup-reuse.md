@@ -18,7 +18,7 @@ together.
 
 ## Inventory
 
-[Inventory: sources and validate-native](ci-setup-reuse/inventory.md)
+Per-phase timings of three cold CI runs (A, B, C) are archived. [Archived evidence](../evidence/ci.md#inventory-sources-and-validate-native).
 
 ### Sources
 
@@ -46,7 +46,8 @@ together.
 
 ## Measured cost and benefit of the realistic candidate
 
-[Measured cost and benefit of the realistic candidate](ci-setup-reuse/measured-cost-and-benefit-of-the.md)
+<a id="measured-cost-and-benefit-of-the"></a>
+Local DerivedData-reuse measurements are archived. [Archived evidence](../evidence/ci.md#measured-cost-and-benefit-of-the-realistic-candidate).
 
 ### Method
 
@@ -58,7 +59,7 @@ together.
 
 ### Interpretation
 
-[Interpretation](ci-setup-reuse/interpretation.md)
+The projected net saving of reuse is about 10 to 95s, below the 2-minute threshold under "When to revisit", so the decision holds. The derivation is archived. [Archived evidence](../evidence/ci.md#interpretation).
 
 ## Rejected options
 

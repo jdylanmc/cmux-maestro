@@ -54,4 +54,4 @@ before launch, to avoid its GUI interpreting an unknown argument.
 Completion reports configured all/subset disables or unresolved disable-key
 applicability separately from ordinary current-on-disk state.
 
-[Limit](../../evidence/reference.md#install-a-verified-artifact).
+[Limit](../install-update-recovery.md#acceptance-limit).
