@@ -4,6 +4,13 @@ These pages map each legacy-visible capability to native regression evidence,
 an intentional difference or an explicit acceptance limit. They do not claim
 every synthetic edge case was reproduced on the desktop.
 
+Unless a runtime link says otherwise, every test listed in this family uses
+synthetic fixtures, disposable files, mocked providers or offscreen hosts. None
+is installed-host, live CMUX/provider or ExtensionKit runtime acceptance. Each
+page lists its tests and links the reference contract; the per-page regression
+evidence, test inventories and limits are kept verbatim in the
+[behavioral parity evidence archive](evidence/behavioral-parity.md).
+
 The native runtime, history, attention, layout, local installation and icon-led
 presentation merged in [PR26][r26], [PR27][r27], [PR28][r28], [PR29][r29],
 [PR30][r30] and [PR32][r32], and update preparation in [PR33][r33]. Their

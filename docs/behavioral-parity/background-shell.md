@@ -2,21 +2,11 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Structured `shell_completed` and `shell_detached_completed` notifications stay
-decoded but no longer create synthetic "Background shell" work rows, outcome
-attention or dismissal candidates, whatever the exit code. This is an explicit
-UI removal policy (#155), not evidence of deliberate cancellation or successful
-shell/worker execution. Real worker/task errors and independently observed
-`shell:<toolCallId>` tool invocations are unchanged. Raw provider history and
-stored dismissal settings are neither deleted nor migrated.
+Contract: [Other activity, session history and history settings](../reference/history-and-internal-tasks/other-activity-and-session-history.md).
 
-`./scripts/test-copilot-shell-reducer.sh` compiles the actual Foundation
-decoder and reducer without launching the app or a UI test host, and CI runs it
-as its own step. It checks both notification kinds across zero, ordinary
-nonzero, signal-compatible and missing exit codes. It also checks
-replay/reconstruction, independent error preservation, real-work retirement,
-request reuse, one-word replay saturation and 128 bounded lifecycles. The former notification-based
-retirement fixtures now admit and complete real shell tool work, keeping their
-original assertions, bounds and stress, with explicit retirement
-preconditions. These scoped checks do not replace the full hosted test matrix
-or current-head CI.
+Tests:
+
+- [`test-copilot-shell-reducer.sh`](../../scripts/test-copilot-shell-reducer.sh)
+- [`CopilotShellReducerTests.swift`](../../scripts/CopilotShellReducerTests.swift)
+
+Evidence, test inventories and limits: [archive](../evidence/behavioral-parity.md#background-shell-representation).

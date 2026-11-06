@@ -40,3 +40,25 @@ on `tool.execution_complete` are validated against the recorded tool origin,
 or against the current accepted owner turn when no origin is recorded.
 Explicit contradictions cannot complete current work or advance its causal tip.
 Matching tags do not create missing tool ownership.
+
+Copilot can persist `subagent.configured(multiTurn: true)`, complete the
+original spawn task, then start another interaction on the same child without
+another `subagent.started`. The reducer keeps that child's observed name, kind
+and ancestry on the fresh interaction and retires the old spawn-result join.
+Completion stays a terminal task outcome until fresh activity is observed.
+Documented `subagent.selected` profile metadata neither replaces the spawn
+identity nor revokes that capability; other unknown subagent lifecycle events
+still invalidate it. `assistant.message` carries both the current
+`interactionId` and `turnId`, even across root-owned warning/hook envelopes,
+while its linked `assistant.turn_end` carries only the reused turn number. The
+reducer reads only those two bounded message identifiers, verifies the exact
+owner and current interaction/turn, and uses the message as that owner's
+completion anchor. Message content is never decoded or projected. Messages
+cannot create a turn, revive ended work or replace spawn identity, and their
+event IDs use the bounded replay guard. Missing current-turn proof remains
+Unknown (`ambiguousTurn`); see [tool events](tool-events.md). Multi-turn
+capability is private, bounded reducer state, admitted once per observed child
+ID only from strict boolean configuration in a timestamped initial spawn
+window, before any child turn. Explicit false, failed/cancelled child outcomes,
+scoped abort/error, shutdown/resume and uncertain lifecycle boundaries
+invalidate it.

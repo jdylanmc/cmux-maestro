@@ -39,3 +39,11 @@ and unknown work stays visible under the existing display limits. A hidden
 terminal parent remains as **child context** when descendants still need it.
 Running counts and retained/hidden history counts are separate. Empty history
 is not evidence that a session has finished.
+
+Structured `shell_completed` and `shell_detached_completed` notifications stay
+decoded but no longer create synthetic "Background shell" work rows, outcome
+attention or dismissal candidates, whatever the exit code. This is an explicit
+UI removal policy (#155), not evidence of deliberate cancellation or successful
+shell/worker execution. Real worker/task errors and independently observed
+`shell:<toolCallId>` tool invocations are unchanged. Raw provider history and
+stored dismissal settings are neither deleted nor migrated.
