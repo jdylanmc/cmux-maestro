@@ -39,7 +39,10 @@ artifacts. Maestro's own live observations and outstanding acceptance are in
 
 ### Born managed sessions (#252, ADR 0025)
 
-[Born managed sessions](native-messaging/born-managed-sessions.md)
+An eligible Copilot session started in a CMUX terminal with no launcher inputs
+asks to enroll as its own managed root when the loader joins it. The controller
+verifies it first, and a refusal leaves it unmanaged. See
+[born managed sessions](native-messaging/born-managed-sessions.md).
 
 ### Ordinary-session readiness (partial #162)
 
