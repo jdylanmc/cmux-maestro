@@ -11,19 +11,19 @@ artifacts. Maestro's own live observations and outstanding acceptance are in
 
 ### Orca: durable mailbox, two different attention paths
 
-[Orca: durable mailbox, two different attention paths](native-messaging/upstream-systems.md#orca-durable-mailbox-two-different-attention-paths).
+[Orca: durable mailbox, two different attention paths](adr/0005-native-peer-messaging-is-fire-and-forget.md#orca-durable-mailbox-two-different-attention-paths).
 
 ### Paseo: daemon-owned provider sessions, including Copilot over ACP
 
-[Paseo: daemon-owned provider sessions, including Copilot over ACP](native-messaging/upstream-systems.md#paseo-daemon-owned-provider-sessions-including-copilot-over-acp).
+[Paseo: daemon-owned provider sessions, including Copilot over ACP](adr/0005-native-peer-messaging-is-fire-and-forget.md#paseo-daemon-owned-provider-sessions-including-copilot-over-acp).
 
 ### Herdr: identity reporting is not its message delivery channel
 
-[Herdr: identity reporting is not its message delivery channel](native-messaging/upstream-systems.md#herdr-identity-reporting-is-not-its-message-delivery-channel).
+[Herdr: identity reporting is not its message delivery channel](adr/0005-native-peer-messaging-is-fire-and-forget.md#herdr-identity-reporting-is-not-its-message-delivery-channel).
 
 ### Upstream CMUX: background transport is not a draft-safe mailbox
 
-[Upstream CMUX: background transport is not a draft-safe mailbox](native-messaging/upstream-systems.md#upstream-cmux-background-transport-is-not-a-draft-safe-mailbox).
+[Upstream CMUX: background transport is not a draft-safe mailbox](adr/0005-native-peer-messaging-is-fire-and-forget.md#upstream-cmux-background-transport-is-not-a-draft-safe-mailbox).
 
 ## Chosen Maestro contract
 

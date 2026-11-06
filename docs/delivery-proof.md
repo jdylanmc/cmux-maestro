@@ -48,11 +48,11 @@ live proof.
 
 ## Bounded live checks
 
-[Bounded live checks and cleanup](delivery-proof/live-checks.md#bounded-live-checks)
+[Bounded live checks and cleanup](evidence/delivery-proof.md#bounded-live-checks)
 
 ## Local validation and cleanup
 
-[Local validation and cleanup](delivery-proof/live-checks.md#local-validation-and-cleanup)
+[Local validation and cleanup](evidence/delivery-proof.md#local-validation-and-cleanup)
 
 ## Installed implementation and remaining acceptance
 

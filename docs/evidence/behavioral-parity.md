@@ -973,3 +973,132 @@ synthetic or owned test processes and disposable local sources, not live CMUX
 resources. All three runtime suites remain required. Real disposable native
 proof and hosted validation are separate delivery evidence that these
 regression tests do not claim.
+
+## Capability matrix: observation (runtime evidence)
+
+From [`docs/behavioral-parity/capability-matrix-observation.md`](../behavioral-parity/capability-matrix-observation.md). Original table with the runtime evidence or disposition column (dated live-acceptance records), moved here verbatim.
+
+| Visible capability | Native proof | Runtime evidence or disposition |
+|---|---|---|
+| Workspace/surface topology, kinds, order and moves | [HierarchySnapshotTests](../../CMUXMaestroPreviewTests/HierarchySnapshotTests.swift): `mapsEverySurfaceKindWithoutFilteringOrProviderData`, `eachSnapshotAuthoritativelyReplacesPlacementAndOrderWhileIDsRemainStable` | [PR26][r26] delivers native topology, and [layout acceptance][r29] exercises workspace/surface behavior. |
+| Exact session/surface identity despite similar names or directories | [SidebarCopilotTreeTests](../../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `exactSurfacePlacementIgnoresNamesPathsAndLaunchWorkspace`, `rejectsConflictingSessionIDsAndOffWindowRowsButKeepsValidPositives` | [PR30][r30] verifies two live CLI sessions with the same title/directory on distinct surfaces. Names and paths are not identity. |
+| Provider, session and model metadata | [AgentSessionSnapshotTests](../../CMUXMaestroPreviewTests/AgentSessionSnapshotTests.swift): `keepsProviderIdentitySeparateFromCMUXIdentity`; [SidebarCopilotTreeTests](../../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `partialKnownChildrenRemainVisibleWithoutInventingZeroOrModels`; [SidebarClarityTests](../../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `selectionMetadataShowsOnlyObservedModelAndGrantedPaths`, `managedModelUsesOnlyFreshExactSurfaceAndSessionIdentity` | [PR30][r30] covers live Copilot attribution. Selected managed workers need exact fresh session and surface identity, and coordinators need one fresh unambiguous session on their exact surface. Missing, stale, mismatched and ambiguous model data, and unavailable numeric context capacity/usage, are omitted, not guessed. |
+| Nested agents, skills and shell work | [CopilotEventReducerTests](../../CMUXMaestroPreviewTests/CopilotEventReducerTests.swift): `joinsToolOwnerNotChronologicalParentAndPreservesDuplicateNames`, `skillsAndShellUseOnlySupportedMetadataAndExcludePayloads`, `backgroundShellExitUsesStructuredNotificationNotContentOrArguments` | [PR27][r27] verifies real child history, and skills and shell distinctions have Swift proof. Tool-invocation completion is not inferred background-process exit. |
+| Interaction identity, reused turn numbers, timing and replay | [CopilotInteractionTests](../../CMUXMaestroPreviewTests/CopilotInteractionTests.swift): `providerInteractionsReuseZeroAndOneWithoutLosingPrimaryCompletion`, `oldToolProvenanceCannotBeOverriddenByCurrentParent`, `reusedNilEndRequiresCurrentEvidenceAndContradictoryClocksDoNotInventAge` | [PR28][r28] verifies a fresh interaction reusing turns `0/1`, transitioning Idle → Working → Idle with a new Turn finished outcome. Ambiguous identity/timing remains explicit. |
+| Permission and question attention | [CopilotAttentionTests](../../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `requestPairingIncludesOwnerAndKind`; [SidebarAttentionTests](../../CMUXMaestroPreviewTests/SidebarAttentionTests.swift): `blockersCannotBeAcknowledgedEvenWithForgedStoredKeysOrStaleButtons` | [PR28][r28] verifies permission waiting in both views, disabled acknowledgement and normal denial. Swift tests cover answer/request pairing. |
+| Errors, aborts and primary-turn completion | [CopilotAttentionTests](../../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `acceptedRootOutcomeDoesNotEndOrUnblockBackgroundWork`, `primaryTurnEndDoesNotSilentlyAcknowledgeAnEarlierToolError` | [PR28][r28] verifies error acknowledgement/reset/reload and new turn completion. Turn finished does not mean session or background-child completion. |
+| Honest tool activity | [CopilotAttentionTests](../../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `activityUsesOwnedToolNamesAndCompletionIdentityNotPayloads`, `multipleExecutingToolsAndDuplicateCompletionKeepHonestActivity` | Owned executing/last-completed tool metadata has Swift proof. No token/context percentage or speculative hung-state parity is claimed. |
+
+[r26]: https://github.com/jdylanmc/cmux-maestro/pull/26
+[r27]: https://github.com/jdylanmc/cmux-maestro/pull/27#issuecomment-5658114796
+[r28]: https://github.com/jdylanmc/cmux-maestro/pull/28#issuecomment-5659682603
+[r29]: https://github.com/jdylanmc/cmux-maestro/pull/29#issuecomment-5660229219
+[r30]: https://github.com/jdylanmc/cmux-maestro/pull/30#issuecomment-5661185922
+
+## Capability matrix: operations (runtime evidence)
+
+From [`docs/behavioral-parity/capability-matrix-operations.md`](../behavioral-parity/capability-matrix-operations.md). Original table with the runtime evidence or disposition column (dated live-acceptance records), moved here verbatim.
+
+| Visible capability | Native proof | Runtime evidence or disposition |
+|---|---|---|
+| Stable local install, update, rollback and recovery | [test-local-preview.py](../../scripts/test-local-preview.py): `test_first_install_stable_copy_and_exact_registration`, `test_atomic_updates_preserve_one_previous_and_rollback_is_reversible`, `test_ambiguous_recovery_refuses_to_guess` | [PR30][r30] verifies real stable installation, signed Debug/Release update, exact rollback and recovery: local-preview delivery, not public distribution. |
+| Explicit terminal-backed orchestration | [test-cmux-maestro-orchestrator.py](../../scripts/test-cmux-maestro-orchestrator.py): external create/attach/archive ordering, exact surface retention, background-tab startup, exact ownership/resume, strict permission-free `final_answer` reports, caller-explicit private tool policy and descendant non-escalation, visible JSON permission denial, verified-idle report recovery, successful/nonzero/malformed result boundaries, bounded streaming, in-turn heartbeats, live-resource cap/reclamation, archive/recovery, automatic exit and focus contracts, and bounded timestamped Git evidence refresh from explicit working directories; [SidebarOrchestrationTests](../../CMUXMaestroPreviewTests/SidebarOrchestrationTests.swift): exhaustive managed phase titles/symbols, validated ancestry/lifecycle/timestamps, Git evidence status/time, stale qualification and privacy-preserving current-window filtering; [SidebarLayoutRenderingTests](../../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): regenerated mixed-state render and direct density bounds; [test-copilot-sandbox.sh](../../scripts/test-copilot-sandbox.sh): observer-readable/private-sibling-denied proof | Observer projection adds only bounded verified worktree/branch labels, Git evidence status/time and the exact controlled worker session UUID. Full working directories remain private control data. Git probes run outside the state mutation lock, batched per exact assigned directory, with a one-second/4 KiB bound, and never in the sandboxed sidebar. Non-Git, missing, detached, timeout, malformed, overlong and failed-query behavior is covered. Live validation remains operator-gated and unverified in this worktree. |
+
+[r30]: https://github.com/jdylanmc/cmux-maestro/pull/30#issuecomment-5661185922
+
+## Capability matrix: presentation (runtime evidence)
+
+From [`docs/behavioral-parity/capability-matrix-presentation.md`](../behavioral-parity/capability-matrix-presentation.md). Original table with the runtime evidence or disposition column (dated live-acceptance records), moved here verbatim.
+
+| Visible capability | Native proof | Runtime evidence or disposition |
+|---|---|---|
+| Granted workspace/project/surface paths | [SidebarNavigationTests](../../CMUXMaestroPreviewTests/SidebarNavigationTests.swift): `realSDKGrantedNilPathsRemainDistinctFromUnavailable`, `sessionPathPresentationUsesCurrentSurfacePlacementNotLaunchWorkspace`; [SidebarAgentHoverTests](../../CMUXMaestroPreviewTests/SidebarAgentHoverTests.swift): `directoryConsumersKeepHostSourceAndPermissionDistinct`, `directoryUpdatesFollowExactMovedSurfaceWithoutReusingCapturedPlacement`, `retainedOriginalNeverBorrowsReplacementDirectoryButNativeContextSurvives`; [HierarchySnapshotTests](../../CMUXMaestroPreviewTests/HierarchySnapshotTests.swift): `homeRelativeDisplayUsesComponentsWithoutChangingSourcePaths`; [SidebarPinnedDetailsTests](../../CMUXMaestroPreviewTests/SidebarPinnedDetailsTests.swift): `directoryProvenanceRendersInProductionHoverPinnedAndDetails` | The [pinned source contract](../../README.md) is a host surface report with no report time. It does not independently verify the agent/tool current directory. Child labels stay parent-surface context. SDK filtering and synthetic offscreen production-card proof separate denied/nil paths, keep exact subject and home-relative formatting, and keep the field through hover/pinned/details filters. [PR32][r32] acceptance predates this source qualification, and installed-CMUX acceptance for this #77 slice is not done. No full #77, worktree-identity or topology closure is claimed. |
+| Expiry, dismissal and acknowledgement | [SidebarHistoryTests](../../CMUXMaestroPreviewTests/SidebarHistoryTests.swift): `preciseExpiryBoundaryAndNever`, `identityIsSessionChildAndOutcomeNotLabelOrTopology`; [SidebarAttentionTests](../../CMUXMaestroPreviewTests/SidebarAttentionTests.swift): `attentionSurvivesRetentionDismissalAndCollapseUntilExplicitAcknowledgement` | [PR27][r27] verifies real expiry, dismissal/restoration, reload and active-work protection. [PR28][r28] verifies history does not erase outstanding attention and old acknowledgement does not hide a new outcome. |
+| Mode, density and durable expansion | [SidebarPreferencesTests](../../CMUXMaestroPreviewTests/SidebarPreferencesTests.swift): `persistsThroughReconstruction`; [SidebarLayoutTests](../../CMUXMaestroPreviewTests/SidebarLayoutTests.swift): `everyIdentityAndDensityRoundTripAcrossStoreReconstruction`, `collapsedAncestorsKeepRunningBlockingAndAttentionSummaryWithoutChangingProjection` | [PR29][r29] verifies eight density/mode/width combinations, workspace/surface/session expansion, summaries, reload and reset. Live child-collapse was unavailable because the controlled children were leaves, so it remains synthetically covered. |
+| Typed Focus and visible navigation failures | [SidebarNavigationTests](../../CMUXMaestroPreviewTests/SidebarNavigationTests.swift): `navigationUsesTypedHostAndCurrentWorkspaceAfterSurfaceMove`, `hostRejectionsCancellationAndDisconnectNeverExposeRawText`, `unresponsiveNavigationTimesOutWithoutWaitingForCancelledHostWork` | [PR27][r27] and [PR28][r28] verify live Focus, and Swift covers failure/cancellation/timeout cases. Child Focus selects its owning surface, not an invented child terminal. |
+| Privacy, isolation and non-vetoing observation | [CopilotReaderTests](../../CMUXMaestroPreviewTests/CopilotReaderTests.swift): `offSurfaceIndexRecordsNeverReachProcessValidationOrPublicSnapshot`; [CopilotSetupTests](../../CMUXMaestroPreviewTests/CopilotSetupTests.swift): `wrapperExecutesNegativeControlButAlwaysSilencesMissingAndFailingHelpers` | [PR26][r26] delivers direct reading and [PR30][r30] verifies live isolation. Narrow sandbox and compiled-hook checks are separate CI evidence. |
+| Unknown/degraded data, freshness and bounded catch-up | [SidebarCopilotTreeTests](../../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `partialKnownChildrenRemainVisibleWithoutInventingZeroOrModels`, `pollingUsesOnlyGrantedVisibleSurfacesAndClearsOnRevocation`, `staleHistoryCannotTriggerCatchUpAndHideCancelsCatchUpPause` | Partial counts, revocation and stale-data handling have Swift proof. [PR27][r27]/[PR28][r28] verify continuing observations and stable scrolling. Missing evidence never implies success or a hung agent. |
+| Accessibility semantics and glanceability | [SidebarClarityTests](../../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `statusGlyphsUseOneFamilyWithoutRelyingOnColorAlone`, `managedAndObservedWorkUseTheSameStatusGlyphs`, `realDetailsAndFocusHandlersAreIndependentAndKeepTypedNavigationGuards`; [SidebarLayoutRenderingTests](../../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): `syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes`, `managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth` | Deterministic managed and unmanaged renders cover 300- to 340-point hierarchy-first layouts, shared circular state glyphs, duplicate names, long branches, nested ancestry, selected managed model data and explicit vertical/ordinary-row budgets. Only verified working activity is green; idle, completed and uncertain states are neutral and distinguishable by shape and accessible labels. Focus, expansion and selection remain distinct. Spoken VoiceOver and global accessibility settings were neither changed nor claimed tested. |
+| Unified workspace outline and mixed-source density | [SidebarClarityTests](../../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `unifiedOutlineClaimsOnlyExactManagedWorkspaceSurfacePairs`, `outlineMovesPassiveToolActivityToDetailsButRetainsWorkAndAncestors`, `staleManagedStateAndRegistrationNeverClaimRunning`; [SidebarLayoutRenderingTests](../../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): mixed incomplete-history fixture in `syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes` | One workspace heading. Exact managed ownership removes duplicate terminal rows. Single-session terminal rows absorb session presentation. Passive skill/shell activity stays in details and Taskboard. Pixel-recognized fixture titles and a 400-point document budget catch duplicated/missing content. This offscreen evidence is not installed-host acceptance. Stale status cannot claim running, and stale Git labels are explicitly last-verified. |
+
+[r26]: https://github.com/jdylanmc/cmux-maestro/pull/26
+[r27]: https://github.com/jdylanmc/cmux-maestro/pull/27#issuecomment-5658114796
+[r28]: https://github.com/jdylanmc/cmux-maestro/pull/28#issuecomment-5659682603
+[r29]: https://github.com/jdylanmc/cmux-maestro/pull/29#issuecomment-5660229219
+[r30]: https://github.com/jdylanmc/cmux-maestro/pull/30#issuecomment-5661185922
+[r32]: https://github.com/jdylanmc/cmux-maestro/pull/32#issuecomment-5662015261
+
+## Capability matrix: install and orchestration
+
+From [`docs/behavioral-parity/capability-matrix-operations.md`](../behavioral-parity/capability-matrix-operations.md). Behavior restatement and test inventory moved here verbatim.
+
+Managed polling fences read success, failure and task cleanup by generation.
+`SidebarOrchestrationTests.obsoleteReadCannotEraseCurrentStateOrDuplicatePolling`
+covers late success/missing/unsafe reads, current-task cancellation and hide/show
+restart without erasing newer state or adding pollers.
+
+## Intentional differences and explicit limits
+
+From [`docs/behavioral-parity/intentional-differences.md`](../behavioral-parity/intentional-differences.md). Disposition text moved here verbatim; the page now links each disposition to its decision or contract.
+
+- **No observer service or loopback transport.** The proposals in
+  [#9](https://github.com/jdylanmc/cmux-maestro/issues/9) and
+  [#12](https://github.com/jdylanmc/cmux-maestro/issues/12) are superseded.
+  The optional identity hook is non-vetoing, the sandboxed sidebar reads
+  directly, and Focus is a CMUX action. Dismissal and acknowledgement cannot
+  approve, answer, stop or otherwise control the provider.
+- **Managed control is external and explicit.** The sandboxed sidebar remains
+  read-only. A separately installed local command creates unfocused terminal
+  tabs through supported CMUX CLI UUID operations, launches exact Copilot
+  session IDs and stores private control data outside the sidebar-readable
+  projection. It does not inspect or reconstruct Copilot's hidden subagent
+  graph, approve tools, delete tabs, stop sessions, or fall back to
+  `--continue`, recent sessions, titles, paths, focus or terminal text.
+- **Neutral contract versus adapter internals.** The versioned
+  [AgentSessionSnapshot](../../CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift)
+  feeds live polling and projection through the pure
+  [CopilotSnapshotAdapter](../../CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift).
+  `CopilotSnapshot` remains the reader's parsing result, not a sidebar envelope.
+  Optional typed evidence keeps idle/failure/cancellation apart from legacy
+  `done`, liveness apart from work, and launch placement apart from current host
+  binding. `childWork` always stays a valid nested v1 hierarchy; an extra
+  `childWorkObservation` carries ordered literal edges and explicitly marks lossy
+  legacy projections without fabricated parents.
+  [Adapter tests](../../CMUXMaestroPreviewTests/CopilotSnapshotAdapterTests.swift)
+  exercise the real polling reader seam and unknown/partial evidence.
+  [Compatibility tests](../../CMUXMaestroPreviewTests/AgentSnapshotCompatibilityTests.swift)
+  keep the negative unsupported-state control.
+  [Actual frozen validation](../../CMUXMaestroPreviewTests/LegacySnapshotValidationTests.swift)
+  checks the original codec and validator against fixtures and new graph shapes.
+  [Consumer validation](../../CMUXMaestroPreviewTests/NeutralObservationValidationTests.swift)
+  exercises malformed neutral projection and polling, safe peers, retained active
+  descendants, history protection and bounded traversal with explicit unknown
+  omission totals. This delivers the literal
+  [#10](https://github.com/jdylanmc/cmux-maestro/issues/10) data path, not all of
+  #118's lifetime correspondence, recovery, ownership or control gates. No hook
+  policy, independent child focus/resume capability or new runtime is introduced.
+- **Unsupported telemetry stays unknown.** No guessed token/context percentage
+  or hang diagnosis substitutes for unavailable provider evidence.
+- **Bounded uncertainty is visible.** Read/display limits, missing ancestry,
+  unresolved turn causality and replay-filter uncertainty must not keep an
+  obsolete completion as proof that new work ended.
+- **Accessibility evidence has boundaries.** Native accessibility-tree semantics,
+  representative layout checks and synthetic contrast coverage are not spoken
+  VoiceOver testing or a change to global keyboard/contrast settings.
+- **Uninstall and cutover are deliberately limited.** Live uninstall was not
+  performed while cached hooks remained active.
+  `test_uninstall_requires_explicit_hook_retirement_keeps_all_user_data`
+  verifies its guard. Public licensing, notarization and disabling/retiring the
+  legacy plugin remain operator decisions. Coexistence is intentional.
+- **Update preparation is explicit.** [PR33][r33] exposes guarded registration
+  retirement without deleting files or signalling CLI sessions. Its public
+  prepare/recover flow restored the exact receipt and verified registration.
+  Synthetic tests cover one-call recovery when a prepared update fails during
+  copying or before replacement.
+
+With these dispositions the visible-capability inventory has no unexplained
+gaps. That is not a new exhaustive legacy audit, a claim that all
+operator-gated work is finished, or permission to weaken future regression and
+live-verification gates.
+
+[r33]: https://github.com/jdylanmc/cmux-maestro/pull/33#issuecomment-5661869270
