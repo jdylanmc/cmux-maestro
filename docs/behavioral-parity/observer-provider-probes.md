@@ -4,14 +4,14 @@
 
 The 1.0.89 maintenance probe covers public metadata, inactive file staging,
 official plugin settings normalization, real-core migration/install/update/
-removal, and related/unrelated-key refusal using disposable homes. It makes
-zero model calls and does not extend the earlier 1.0.88 event-execution,
-running-session reload or global-disable observations to 1.0.89.
-That initial conservative unrelated-key refusal is superseded only for the
-positively proven unaffected case: complete exact-owned prior keys, all owned
-events enabled, and every global disabled key resolved to an unrelated action.
-Affected subsets, missing keys and ambiguous metadata still refuse. No settings
-migrator, enabled duplicate preview or private key hash is introduced.
+removal, and related/unrelated-key refusal in disposable homes. It makes zero
+model calls and does not extend the earlier 1.0.88 event-execution,
+running-session reload or global-disable observations to 1.0.89. Its initial
+conservative unrelated-key refusal is superseded only for the positively proven
+unaffected case: complete exact-owned prior keys, all owned events enabled, and
+every global disabled key resolved to an unrelated action. Affected subsets,
+missing keys and ambiguous metadata still refuse. No settings migrator, enabled
+duplicate preview or private key hash is introduced.
 
 The earlier 1.0.88 probes established these separate facts:
 
@@ -26,11 +26,11 @@ The earlier 1.0.88 probes established these separate facts:
 
 The implemented fallback is deliberately smaller than a speculative settings
 migrator: when a change needs unavailable destination-key mapping, refuse
-**before changing the legacy registration**. Never enable a duplicate only to
+**before changing the legacy registration**. Never enable a duplicate just to
 discover a key, reverse-engineer hashes, drop old keys or approximate a
 single-event disable with a new blanket policy. Maestro reads global settings
 without writing them. The official CLI can replace `settings.json`; after a
 successful command only identical values or an added empty `enabledPlugins`
-map are acknowledged, with fresh safe-file checks. Any changed disable or
-unrelated value still refuses. An explicit global/file disable preserves a disabled owned
-file. Setup does not claim it repaired provider-wide enforcement.
+map are acknowledged, with fresh safe-file checks, and any changed disable or
+unrelated value refuses. An explicit global/file disable keeps an owned file
+disabled. Setup does not claim to repair provider-wide enforcement.

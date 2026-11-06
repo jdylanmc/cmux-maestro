@@ -1,8 +1,11 @@
 # Capability matrix
 
-Part of [behavioral parity and proof](../behavioral-parity.md). Each row maps a
-legacy-visible capability to its native proof and its runtime evidence or
-disposition.
+[↑ Behavioral parity and proof](../behavioral-parity.md)
+
+Each row maps a legacy-visible capability to its native proof and its runtime
+evidence or disposition. Links point to test files. Named methods are
+representative checks, not each file's entire coverage; runtime links name
+their actual acceptance scope.
 
 - [Observation and attention](capability-matrix-observation.md): topology,
   exact identity, provider metadata, nested agents, interaction timing,
@@ -14,5 +17,4 @@ disposition.
   install, update and rollback, and terminal-backed orchestration with managed
   polling.
 
-Related pages: [bounded oversized event projection](oversized-event-projection.md)
-and [multi-turn child identity](multi-turn-child-identity.md).
+[Bounded oversized event projection](oversized-event-projection.md) | [Multi-turn child identity](multi-turn-child-identity.md)
