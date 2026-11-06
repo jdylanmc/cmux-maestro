@@ -8,38 +8,38 @@ build-register, sandbox shape, bundle and plugin identifiers, upstream contracts
 ./scripts/build-register.sh --provisioning-profile /absolute/path/to/development.provisionprofile
 ```
 
-Explicit script. Preflights the supplied production development profile and one
-usable existing identity, prepares a local build, then signs all native components
-with that identity. The containing app alone embeds the Communication Notifications
-profile. Verifies production namespace, profile, signer consistency and exact
-entitlements before calling the coordinated alpha installer. No new ad-hoc
-publication. See [profile prerequisites](install-update-recovery.md).
-It **does install owned Copilot integration** with stable app.
-It does not enable/select sidebar, restart or adopt sessions, or modify
-unrelated integrations. Build-only and validation scripts stay separate.
-Xcode's own app-registration task can run during requested production
-build. Installer retires only that explicitly identified development
-registration. Final registration checks require production bundle ID and
-canonical stable `.appex` path, not merely command success. They do not prove
-hosted UI loaded.
+This explicit script preflights the supplied production development profile and
+one usable existing identity, prepares a local build, then signs all native
+components with that identity. Only the containing app embeds the Communication
+Notifications profile. The script verifies production namespace, profile, signer
+consistency and exact entitlements before calling the coordinated alpha
+installer, with no new ad-hoc publication
+([profile prerequisites](install-update-recovery.md)). It **does install owned
+Copilot integration** with the stable app. It does not enable/select the
+sidebar, restart or adopt sessions, or modify unrelated integrations.
+Build-only and validation scripts remain separate. Xcode's own app-registration
+task can run during a requested production build, and the installer retires
+only that explicitly identified development registration. Final registration
+checks require the production bundle ID and canonical stable `.appex` path, not
+merely command success, and do not prove the hosted UI loaded.
 
 ### Historical local-build diagnostic
 
-Already-selected preview historically kept a lost connection after replacement.
-Observed workaround: right-click CMUX's sidebar toggle, select default
-sidebar, then reselect **Maestro Sidebar**. In observed case, this recreated host view
-and loaded replacement extension without restarting CMUX or Copilot
-sessions. It is not a universal fix or proof of an OS cause.
-Coordinated installer claims it neither as prerequisite nor as fallback.
-Its automatic registration transition still needs stock-host acceptance.
+An already-selected preview used to keep a lost connection after replacement.
+The observed workaround was to right-click CMUX's sidebar toggle, select the
+default sidebar, then reselect **Maestro Sidebar**. In that case it recreated
+the host view and loaded the replacement extension without restarting CMUX or
+Copilot sessions. It is not a universal fix or proof of an OS cause, and the
+coordinated installer uses it neither as a prerequisite nor as a fallback. Its
+automatic registration transition still needs stock-host acceptance.
 `cmux sidebar reload` applies to interpreted Swift sidebars, not native `.appex`
 extensions.
 
 ## Sandbox and distribution
 
-Extension keeps App Sandbox enabled. Only additional file grants:
-home-relative temporary exceptions, with required leading and trailing slashes.
-All are read-only except the Beats store
+The extension keeps App Sandbox enabled. Its only additional file grants are
+home-relative temporary exceptions, with required leading and trailing slashes,
+all read-only except the Beats store
 ([ADR 0020](../adr/0020-sidebar-writes-beats-store-outside-its-container.md)):
 
 ```text
@@ -49,18 +49,17 @@ read-only   /.copilot/session-state/
 read-write  /Library/Application Support/CMUXMaestroPreview/Beats/
 ```
 
-No network client/server or arbitrary process/data access entitlement added.
-Installer app and identity command-line helper are unsandboxed. They must
-run explicitly selected CLI and write own integration data. This is a
-personal native distribution tradeoff, **not a claim of Mac App Store
+No network client/server or arbitrary process/data access entitlement is added.
+The installer app and identity command-line helper are unsandboxed because they
+must run the explicitly selected CLI and write their own integration data. This
+is a personal native distribution tradeoff, **not a claim of Mac App Store
 compatibility**. Temporary file exceptions require distribution/review scrutiny.
 
-Separately signed sandbox probe established: the `Copilot/` and
+A separately signed sandbox probe showed that the `Copilot/` and
 `/.copilot/session-state/` read-only prefixes permit synthetic nested
-identity/event reconstruction. It did not cover `Orchestration/observer/` or the
-`Beats/` write grant. Unrelated reads and writes
-stay denied. That is **not** an
-ExtensionKit-hosted runtime proof. Signed app/host loading and end-to-end
+identity/event reconstruction, with unrelated reads and writes denied. It did
+not cover `Orchestration/observer/` or the `Beats/` write grant, and it is
+**not** an ExtensionKit-hosted runtime proof. Signed app/host loading and end-to-end
 installation remain explicit manual verification gates.
 
 ## Identifiers and upstream contracts
@@ -75,11 +74,11 @@ installation remain explicit manual verification gates.
 
 Install follows GitHub's [local plugin
 instructions](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/plugins-creating):
-`copilot plugin install <absolute-path>`. Uninstall uses manifest name.
-Installed CLI currently accepts absolute local paths. It warns that direct
-repository, URL, and local-path installation is deprecated for a future release.
-CMUX Maestro intentionally keeps working local-preview path. Public
-marketplace or release infrastructure stays out of scope.
+`copilot plugin install <absolute-path>`, and uninstall uses the manifest name.
+The installed CLI accepts absolute local paths but warns that direct
+repository, URL and local-path installation is deprecated for a future release.
+CMUX Maestro deliberately keeps the working local-preview path; public
+marketplace or release infrastructure is out of scope.
 Hook manifests follow [command-hook
 reference](https://docs.github.com/en/copilot/reference/hooks-reference), including
 `version: 1`, `type: command`, `bash`, and `timeoutSec`.

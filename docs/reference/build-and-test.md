@@ -11,21 +11,21 @@ Where suite time goes: [test performance](test-performance.md).
 - Copilot CLI supporting local plugin installation and the three
   documented command hooks, with canonical session identity in hook input.
 
-CMUX ExtensionKit package pins to CMUX commit
-`ae7fbce99f98c98df5ccf915e548dd080d33cfa8`. Fetch goes into ignored
-`vendor/CmuxExtensionKit/`. No CMUX source changes required.
+The CMUX ExtensionKit package pins CMUX commit
+`ae7fbce99f98c98df5ccf915e548dd080d33cfa8` and is fetched into the ignored
+`vendor/CmuxExtensionKit/`. No CMUX source changes are required.
 
-**Host footer compatibility:** native view reserves absolute 50 points of
-bottom clearance for current CMUX overlaid footer, independent of density.
-SDK provides no footer-inset contract. Rendered-strip regression test checks
-both sidebar modes and densities leave this area clear. Reverify clearance
-when host chrome changes.
+**Host footer compatibility:** the native view reserves an absolute 50 points
+of bottom clearance for the current CMUX overlaid footer, independent of
+density, because the SDK has no footer-inset contract. A rendered-strip
+regression test checks that both sidebar modes and densities leave this area
+clear. Reverify clearance when host chrome changes.
 
-Workspace containers use eager layout inside scroll view. Child trees
-keep existing projection limits. This avoids lazy root-placement loop
-seen during remote accessibility scrolling. Offscreen AppKit regression
-exercises repeated scrolling and mode changes in both densities. Live accessibility scrolling and
-continued history updates stay part of deployment acceptance.
+Workspace containers use eager layout inside the scroll view, and child trees
+keep their projection limits. This avoids the lazy root-placement loop seen
+during remote accessibility scrolling. An offscreen AppKit regression repeats
+scrolling and mode changes in both densities. Live accessibility scrolling and
+continued history updates remain part of deployment acceptance.
 
 ## Build and test
 
@@ -38,22 +38,20 @@ continued history updates stay part of deployment acceptance.
 `fetch-sdk.sh` applies the reviewed patches in `scripts/sdk-patches/` to the
 pinned SDK, exactly and in name order (ADR 0023).
 
-`test.sh` is the full-coverage entrypoint. It builds once. It runs the unchanged
-blocking-observer concurrency regression alone in the integrated host. It verifies
-exact identity/count from the hosted xcresult. Then it runs all other tests
-from that same build without suite serialization. Both scopes must pass.
-Before testing, it enumerates the built test product under the same settings
-(`-enumerate-tests`). Reported identities across both scopes must equal that
-inventory; a missing, unexpected or repeated test fails. Disabled tests and
-skips need a reason in `INTENTIONAL_SKIPS`.
-Results and count evidence stay under `.build/tests/scoped-results/`.
-This full-coverage entrypoint rejects selection/retry overrides.
-Existing `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
-stays opt-in. Attribute its exact skip only when
-`CMUX_MAESTRO_READER_BENCHMARK` is not `"1"`. When enabled, a skip fails coverage.
-Enabled runs require its exact identity with one nonparameterized passed
-execution. Absent benchmark also fails coverage. Infer no other optional-test
-exception.
+`test.sh` is the full-coverage entrypoint. It builds once, runs the unchanged
+blocking-observer concurrency regression alone in the integrated host, verifies
+its exact identity/count from the hosted xcresult, then runs all other tests
+from the same build without suite serialization. Both scopes must pass. Before
+testing, it enumerates the built test product under the same settings
+(`-enumerate-tests`), and the identities reported across both scopes must equal
+that inventory: a missing, unexpected or repeated test fails. Disabled tests and
+skips need a reason in `INTENTIONAL_SKIPS`. Results and count evidence live
+under `.build/tests/scoped-results/`, and the entrypoint rejects selection/retry
+overrides. `CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
+remains opt-in: its exact skip is attributed only when
+`CMUX_MAESTRO_READER_BENCHMARK` is not `"1"`. When enabled, it needs its exact
+identity with one nonparameterized passed execution, and a skip or absence
+fails coverage. No other optional-test exception is inferred.
 
 ### Metadata supervision regression
 

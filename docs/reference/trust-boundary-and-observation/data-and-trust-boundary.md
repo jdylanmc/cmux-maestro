@@ -4,40 +4,41 @@
 
 - Small native executable lives at
   `CMUX Maestro Preview.app/Contents/Helpers/CMUXMaestroCopilotHook`.
-- Only `sessionStart`, `userPromptSubmitted`, `postToolUse` hooks run it.
-  No veto/control, pre-tool, or agent-stop hooks registered.
+- Only the `sessionStart`, `userPromptSubmitted` and `postToolUse` hooks run
+  it. No veto/control, pre-tool or agent-stop hooks are registered.
 - Helper accepts bounded JSON with canonical `sessionId`/`session_id`, plus own
-  inherited `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID`. Never accepts transcript
-  path. Never infers identity from title, current directory, or text.
+  inherited `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID`. It never accepts a
+  transcript path or infers identity from title, current directory or text.
 - Same-user BSD process metadata identifies matching **ancestor**, not
   blindly hook's shell parent. Source `inuse.PID.lock` and stable process
   generation must agree before helper publishes atomic binding.
   Symlink traversal, stale owner generations, mismatched live owners fail
-  closed. Missing early session-start marker can retry on later hook.
-  Helper and sidebar share marker/process verifier: never read marker contents,
-  impose no content-size limit. Birthtime/ctime and rest of marker stat
+  closed. A missing early session-start marker can retry on a later hook. Helper
+  and sidebar share the marker/process verifier, which never reads marker
+  contents and imposes no content-size limit. Birthtime/ctime and rest of marker stat
   snapshot must stay stable. Unknown or multiple live marker owners are
   ambiguous, not guessed.
 - Copilot `/restart` and `/update` hand a live binding to the bound owner's
   exact direct child. See [in-place restart handoff](in-place-restart-handoff.md).
 - Bindings live under
   `~/Library/Application Support/CMUXMaestroPreview/Copilot/bindings/`.
-  Own directories `0700`, files `0600`. Dates use milliseconds since 1970.
-  Last diagnostic is bounded generic status. Never hook payload, path,
-  credential, transcript, or raw CLI error.
+  Owned directories are `0700` and files `0600`. Dates use milliseconds since
+  1970. The last diagnostic is a bounded generic status, never a hook payload,
+  path, credential, transcript or raw CLI error.
 
 ### Session locations and worktrees
 
 - After binding publish, helper also writes `Copilot/locations/<sessionUUID>.json`
   (`0600`, directory `0700`). Holds only `schemaVersion`, `sessionID`, `branch`,
-  `worktree` flag, `recordedAt`. Never path or repository name. Helper reads hook
+  `worktree` flag, `recordedAt`, never a path or repository name. Helper reads hook
   `cwd` and, for `postToolUse`, last absolute file path or leading `cd <path>`
-  in `toolArgs`. Then walks up (at most 40 levels) to `.git` directory or linked-worktree
-  `.git` file and reads `HEAD` (4 KiB cap, no symlinks). Runs no `git` process, spawns
-  nothing. Detached HEAD, no repository, or any surprise omits the branch fact. Best
-  effort. Never changes hook outcome. Taskboard agent card shows that
-  branch (worktree adds `· worktree` suffix and own icon). Otherwise no row.
-  Existing read-only `Copilot/` grant already covers it.
+  in `toolArgs`, then walks up (at most 40 levels) to a `.git` directory or
+  linked-worktree `.git` file and reads `HEAD` (4 KiB cap, no symlinks). It runs
+  no `git` process and spawns nothing. Detached HEAD, no repository or any
+  surprise omits the branch fact. This is best effort and never changes the hook
+  outcome. The Taskboard agent card shows that branch (a worktree adds a
+  `· worktree` suffix and its own icon); otherwise there is no row. The existing
+  read-only `Copilot/` grant covers it.
 - Same record, schema 2, adds the session's current worktree (ADR 0027). Helper reads
   `cwd:` from the exact session's `workspace.yaml` through the proven session
   directory, then Git's plain files there (64 levels, 4 KiB, no symlinks, no `git`
