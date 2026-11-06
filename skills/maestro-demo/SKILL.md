@@ -6,7 +6,7 @@ description: Run a short, human-requested live Maestro demo with two visible int
 # Maestro demo
 
 Invoke `/maestro-demo` to authorize this bounded demo, not general repository work.
-Use two workers by default; add the third only when requested. Aim for a few minutes,
+Use two workers by default. Add the third only when requested. Aim for a few minutes,
 not a timing guarantee. A dry-run request performs read-only preflight only: no
 spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitly.
 
@@ -15,7 +15,7 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
 1. Load `maestro` and `cmux-maestro-native:cmux-maestro-orchestrate` (the installed
    lifecycle skill). Discover native tools before using their actual schemas.
    If `maestro_readiness` exists, require `status: "managed"` and
-   `capabilities.spawn: true`; a failed check stops the demo.
+   `capabilities.spawn: true`. A failed check stops the demo.
    Maestro-launched sessions do not expose readiness: only for that documented
    case, use successful `maestro_identity({})` plus available `maestro_spawn`,
    `maestro_peers`, `maestro_send`, and `maestro_close`. Verify own identity in
@@ -25,7 +25,7 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
    `task`, shell spawn, guessed bindings, or terminal input instead.
 2. Follow the lifecycle guide's capacity check for the exact bound workspace;
    require room for the whole requested cast within live, stored-node, depth and
-   host limits. Do not raise limits or erase history; admission still rechecks.
+   host limits. Do not raise limits or erase history. Admission still rechecks.
    Follow its `launch-settings` check: require `ok: true`,
    `modelPinned: true`, and `messagingInstalled: true`. Confirm the installed
    `cmux-maestro-native:maestro-pet` skill and its `pet_kit.py` are accessible.
@@ -53,7 +53,7 @@ spawn, messages, appearance changes, or cleanup. Never run a rehearsal implicitl
    trust. If only an ancestor is listed, use the closest trusted ancestor itself
    as `cwd`, not a new child directory. Otherwise use a presenter-selected exact
    existing folder from that value.
-   Resolve paths before comparison; never select a directory by title or recency.
+   Resolve paths before comparison. Never select a directory by title or recency.
    If no suitable trusted directory is established, stop before spawning and
    tell the presenter to open Copilot in one chosen folder and approve its
    **Trust this directory** prompt once, then rerun preflight. Never edit Copilot
@@ -82,8 +82,8 @@ create a new launch directory or a `.maestro-demo` directory inside a repository
 Separately create one fresh local temporary artifact directory with `mktemp -d`,
 then `scout`, `builder`, and (only if requested) `critic` subdirectories. Pass
 each resolved absolute artifact path in its task, **not** as `cwd`. Repository
-directories stay read-only; artwork and results stay outside real repositories.
-Keep the artifacts for evidence; this skill does not delete them.
+directories stay read-only. Artwork and results stay outside real repositories.
+Keep the artifacts for evidence. This skill does not delete them.
 
 | Name | Color | Tiny task (generic, no repository or network access) |
 | --- | --- | --- |
@@ -93,11 +93,11 @@ Keep the artifacts for evidence; this skill does not delete them.
 
 Call `maestro_spawn` once per chosen worker with `name`, `cwd`, verified `icon`,
 `color`, and a complete task packet below. Omit `yolo` and `allowTools` to inherit
-the verified/recorded parent launch policy; never add grants or request
+the verified/recorded parent launch policy. Never add grants or request
 `yolo: true`. Preserve denies. Default/unverified parents can still encounter
-permission prompts; do not promise prompt-free execution or auto-answer.
+permission prompts. Do not promise prompt-free execution or auto-answer.
 Leave model preferences omitted. On refusal or uncertainty, stop further launches,
-retain exact accepted ownership, and report the partial cast; no launch retry.
+retain exact accepted ownership, and report the partial cast, with no launch retry.
 Creation acceptance is not readiness, delivery, or task completion.
 
 Include this entire worker contract, its role/task, launch directory, artifact
@@ -110,13 +110,13 @@ address from your own identity call:
 > drawing script, artwork and result in your assigned artifact directory, apart
 > from the explicitly requested controller self-tag and self-pet operations.
 > Use native `maestro_identity({})` for your exact own
-> session UUID; never infer it from another session or private binding files.
+> session UUID. Never infer it from another session or private binding files.
 > Set MAESTRO to
 > `$HOME/Library/Application Support/CMUXMaestroPreview/Orchestration/bin/cmux-maestro-orchestrator`
 > and SESSION to that UUID.
 > Tag yourself, preserving existing tags:
 > `"$MAESTRO" tags add --self --session-id "$SESSION" --tag demo --tag <your-role>`.
-> Require command success; never write the tag store directly or change tag colors.
+> Require command success. Never write the tag store directly or change tag colors.
 > Load `cmux-maestro-native:maestro-pet`; if the skill name is not discovered,
 > read the exact installed guide path verified and supplied by the demo parent,
 > without reloading extensions or substituting an unverified kit.
@@ -128,7 +128,7 @@ address from your own identity call:
 > for imports and disable Python bytecode writes there. View your `preview.png`;
 > fix blank/clipped artwork before adding with
 > `"$MAESTRO" pet --self --session-id "$SESSION" --add "<your-new-pet-folder>"`.
-> Require `ok: true` and the returned `petId`; respect human overrides/hidden pets.
+> Require `ok: true` and the returned `petId`. Respect human overrides/hidden pets.
 > Complete your tiny task. Save a short `result.md` with the task answer, tags,
 > pet name/ID, artifact paths, successful commands and any unresolved failures.
 > For your initial milestone, find the supplied `demoParent` address with
@@ -174,14 +174,14 @@ or close the exact listed demo children. Only specific approval permits serializ
 the lifecycle guide. No subtree close, other sessions, self-close, retry, removal
 wait, process kill, or cleanup fallback. Preserve refusals/unknown outcomes and
 name their owner/next action. Close acceptance is not removal or freed capacity.
-Preserve all result/artwork files; closing is not deleting evidence.
+Preserve all result/artwork files. Closing is not deleting evidence.
 
 ## Presenter notes
 
 - "These are real interactive Copilot sessions; I can continue in any surface."
 - "Distinct Nerd Fonts icons and colors make the cast recognizable in icon cards."
 - "Worktrees groups by repository; Sub-agents shows who spawned whom. We reuse
-  a trusted launch folder read-only; all artwork lives in separate scratch space."
+  a trusted launch folder read-only. All artwork lives in separate scratch space."
 - "Each worker assigned its own demo and role tags; the encore tag shows steering."
 - "Each invented and drew its own animated pet locally. Hover its card to see it;
   a human pet override or hidden pet can still win."

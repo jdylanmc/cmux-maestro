@@ -1,14 +1,22 @@
 # Behavioral parity and proof
 
-This matrix maps the legacy-visible capability inventory to native regression
-evidence, intentional differences, or explicit acceptance limits. It is not a
-claim that every synthetic edge case was reproduced on the desktop.
+These pages map each legacy-visible capability to native regression evidence,
+an intentional difference or an explicit acceptance limit. They do not claim
+every synthetic edge case was reproduced on the desktop.
+
+Unless a runtime link says otherwise, every test listed in this family uses
+synthetic fixtures, disposable files, mocked providers or offscreen hosts. None
+is installed-host, live CMUX/provider or ExtensionKit runtime acceptance. Each
+page lists its tests and links the reference contract; the per-page regression
+evidence, test inventories and limits are kept verbatim in the
+[behavioral parity evidence archive](evidence/behavioral-parity.md).
 
 The native runtime, history, attention, layout, local installation and icon-led
-presentation are merged in [PR26][r26], [PR27][r27], [PR28][r28], [PR29][r29],
-[PR30][r30] and [PR32][r32]. Update preparation in [PR33][r33] is also merged.
-Their public acceptance records distinguish local tests, actual CMUX interaction
-and operational limits; the installed app uses the stable Applications location.
+presentation merged in [PR26][r26], [PR27][r27], [PR28][r28], [PR29][r29],
+[PR30][r30] and [PR32][r32], and update preparation in [PR33][r33]. Their
+public acceptance records keep local tests, actual CMUX interaction and
+operational limits apart. The installed app uses the stable Applications
+location.
 
 ## Run the behavioral suite
 
@@ -16,987 +24,213 @@ and operational limits; the installed app uses the stable Applications location.
 ./scripts/test.sh
 ```
 
-This runs the Swift behavioral tests and builds their existing preference
-fixture client. The [CI workflow](../.github/workflows/ci.yml) also runs build
-metadata, installer transactions, SDK-fetch concurrency, compiled-hook and
-sandbox checks. Validation hosts do not open installation windows or permit
-plugin changes. No new test framework is required.
+This runs the Swift behavioral tests and builds their preference fixture
+client, with no new test framework. The [CI workflow](../.github/workflows/ci.yml)
+also runs build metadata, installer transaction, SDK-fetch concurrency,
+compiled-hook and sandbox checks. Validation hosts do not open installation
+windows or permit plugin changes.
 
 ### Background-shell representation
 
-Structured `shell_completed` and `shell_detached_completed` notifications remain
-decoded, but no longer create synthetic "Background shell" work rows, outcome
-attention or dismissal candidates, regardless of exit code. This is an explicit
-UI removal policy (#155), not evidence of deliberate cancellation or successful
-shell/worker execution. Real worker/task errors and independently observed
-`shell:<toolCallId>` tool invocations remain unchanged. Raw provider history and
-stored dismissal settings are not deleted or migrated.
+<a id="background-shell"></a>
+The contract is in [Other activity, session history and history settings](reference/history-and-internal-tasks/other-activity-and-session-history.md). These scoped checks do not replace the full hosted test matrix or current-head CI.
 
-`./scripts/test-copilot-shell-reducer.sh` compiles the actual Foundation decoder
-and reducer without launching the app or a UI test host. It checks both
-notification kinds across zero, ordinary nonzero, signal-compatible and missing
-exit codes, replay/reconstruction, independent error preservation, real-work
-retirement, request reuse, one-word replay saturation and 128 bounded lifecycles.
-CI runs it as its own step.
-The former notification-based retirement fixtures now admit and complete real
-shell tool work while preserving original assertions, bounds and stress, with
-explicit retirement preconditions. These scoped checks do not substitute for
-the full hosted test matrix or current-head CI.
+- [`test-copilot-shell-reducer.sh`](../scripts/test-copilot-shell-reducer.sh)
+- [`CopilotShellReducerTests.swift`](../scripts/CopilotShellReducerTests.swift)
+
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#background-shell-representation).
 
 ### Setup fixture readiness
 
-Process-cleanup tests wait for the injected clock's first post-`posix_spawn`
-sample before arming the unchanged three-second child-readiness watchdog.
-The test clock publishes a bounded one-shot signal; a driver that returns
-without spawning closes that signal, and a cancelled waiter unwinds. This
-separates task/dispatch scheduling from the fixture's readiness requirement
-without changing the production runner, its timeout, or executor policy.
+The contract is in [Build and test](reference/build-and-test.md), [Required behavioral coverage](reference/ci-test-determinism/required-behavioral-coverage.md). The probes do not establish MainActor inheritance or measure hosted dispatch latency.
 
-`queuedStartupDoesNotConsumeChildReadinessBudget` and
-`lateQueuedStartupRetainsFullChildReadinessBudget` hold the test driver before
-invoking the runner for four and 2.7 seconds respectively. With the old
-watchdog ordering they reproduced both no-launch and started-but-unfinished
-delay failures; the corrected ordering preserves all timeout/cancellation,
-exact process-group/reaping, unrelated-process and late-write assertions.
-The real 0.6-second launcher delay and frozen 0.4-second product deadline
-remain unchanged. These controlled probes report a non-actor-isolated driver;
-they do not establish MainActor inheritance or measure hosted dispatch latency.
+- [`CopilotSetupTests.swift`](../CMUXMaestroPreviewTests/CopilotSetupTests.swift): `queuedStartupDoesNotConsumeChildReadinessBudget`, `lateQueuedStartupRetainsFullChildReadinessBudget`, `concurrentSupervisionDoesNotOccupyCooperativeExecutor`
 
-Early unavailable/cancelled runner outcomes, waiter cancellation, and a
-started runner without a ready writer are separate controls. The independent
-non-yielding `concurrentSupervisionDoesNotOccupyCooperativeExecutor` observer
-retains its three-second budget and detached drivers. There is no suite
-serialization, startup retry or larger readiness timeout. Startup observation
-has no added wall-time limit before the first sample; the existing dedicated
-concurrency test remains the bounded dispatch-progress regression.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#setup-fixture-readiness).
 
-The hosted integrated runner now builds once, executes that **one unchanged
-test** alone in the integrated test host, and executes every remaining test
-from the same build in a second invocation. It does not serialize the remaining
-suite or alter either detached driver, any assertion, or the three-second
-bound. `xcresulttool` must report exactly one executed, correctly identified
-test before that selector may be excluded from the loaded invocation. Both
-scopes must pass with explicit nonzero, reconciled counts; unrelated skipped
-tests and a repeated concurrency test are errors. A selector/count extraction
-failure runs an unfiltered coverage fallback but **still fails** the command.
-There is no retry-until-pass path.
+<a id="hosted-integrated-runner"></a>
+**Hosted integrated runner.** The contract is in [Build and test](reference/build-and-test.md), [Required behavioral coverage](reference/ci-test-determinism/required-behavioral-coverage.md). Earlier hosted concurrency reds and the separate native viewport-settlement failure remain on record. Only a necessary current-head hosted run can establish their state.
 
-The preexisting opt-in
-`CopilotReaderTests/coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
-is the only optional skipped identity: it remains disabled unless the inherited
-`CMUX_MAESTRO_READER_BENCHMARK` is exactly `"1"`. When enabled, its exact identity
-must have one nonparameterized passed execution; absence or a skip fails.
-The harness records that flag and exact skip attribution alongside the verified
-isolated-selector exclusion, without enabling the benchmark or rewriting
-reported counts/details. A skipped parameter, another identity, or an
-unverified selector exclusion is not permitted. Full fallback remains red even
-when the benchmark skip is correctly attributed.
+- [`run-integrated-test-scopes.py`](../scripts/run-integrated-test-scopes.py)
+- [`CopilotSetupTests.swift`](../CMUXMaestroPreviewTests/CopilotSetupTests.swift): `concurrentSupervisionDoesNotOccupyCooperativeExecutor`
+- [`CopilotReaderTests.swift`](../CMUXMaestroPreviewTests/CopilotReaderTests.swift): `coldStartBenchmarkWith230MiBOfIgnoredSyntheticPayloads()`
 
-Result accounting distinguishes logical test cases from recorded executions.
-The top-level summary must match the tree's complete logical status vector;
-device/configuration counters must match normalized execution statuses.
-Parameterized argument groups are not equated blindly with logical parents,
-and parameterized evidence without its execution counters is rejected.
-Unrecognized execution shapes, contradictory parent/run results, hidden runs
-and repetition nodes cannot certify coverage. The known nonparameterized
-isolated method must have exactly one non-repeated execution.
-
-Each hosted invocation retains separate xcresults, raw summary/test JSON and
-`coverage.json` under `.build/tests/scoped-results/`. Raw test trees, summaries
-and reconciled counts also appear in the job log, so the parent verifies the
-actual hosted selector and parameter hierarchy rather than accepting a guessed
-selector or local standalone count. The inherited-MainActor negative remains sensitive because
-the test body and non-yielding observer are unchanged. Previous hosted
-concurrency reds and the separate native viewport-settlement failure remain
-recorded; only a necessary current-head hosted run can establish their state.
-
-CI always uploads every scoped-results JSON file as the separate
-`integrated-test-scope-evidence` artifact, retained for 14 days, including after
-test failure. Missing JSON fails that upload; it is not a success fallback.
-The required `sidebar-layout-offscreen` PNG artifact and all eleven validation
-commands remain unchanged. Full xcresult bundles are not included in this
-diagnostic artifact.
-All eleven workflow commands remain required.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#hosted-integrated-runner).
 
 ### Explicit owned-descendant and subtree close (#90, #91, #377)
 
-The native adapter's `maestro_close` and controller's private `native-close`
-ingress admit one exact, currently owned strict-descendant interactive session
-(#377 widened this from direct children only), then request
-stock `surface.close` once with the documented initial Boolean `force: true`.
-This selects the noninteractive host route while retaining last-terminal
-refusal, not UI confirmation/pinning parity. Earlier CMUX 0.65 requests omitted
-the field and returned `confirmation_required`; tagged source confirms that
-false-default branch. Behavioral fixtures distinguish the published running-
-terminal confirmation and noninteractive branches, including stock refusal
-before force handling. This is source proof, not installed/live acceptance.
-No retry, force-after-refusal or confirmation manipulation follows. It never
-waits for disappearance or starts a provider-exit/retry protocol.
+<a id="owned-descendant-close"></a>
+The contract is in [Explicit close](reference/hierarchy-launch-lifecycle/explicit-close.md), [Explicit owned-descendant close](native-messaging/owned-descendant-close.md), [Owned-descendant close: stock host behavior and admission limits](native-messaging/close-host-behavior.md). All three runtime suites remain required.
 
-Optional scope defaults to target-only and preserves the original flat receipt.
-Explicit subtree captures private descendants once, admits them under the real
-actor, and returns complete exact per-target results descendants-first. Refusal
-or unknown host results do not block valid siblings/parents. Fixed selection,
-retained ended roots, late children, changed generation/session/surface/ancestry,
-source/process/workspace changes and leases have behavioral fixtures. Records,
-routes and resource accounting remain byte-preserved except fixture-owned races.
-Actual subprocess timeout arguments and CLI wire output are exercised across
-127 selected targets: the 45-second pass, five-second target windows, nonwaiting
-locks, and unchanged 60-second/65,536-byte transport bounds are not source-text
-assertions. Oversized complete plans refuse before effects; remaining budget
-targets are reported not attempted. Context deadlines reset after success/failure.
-Real adapter `execFile` fixtures preserve a 127-result reply and report overflow,
-in-flight cancellation and already-aborted refusal without retry. These are
-synthetic source/transport proofs, not real-host survivor or partial-failure proof.
+- [`test-delivery-proof.py`](../scripts/test-delivery-proof.py): `NativeCloseTests`
+- [`test-delivery-proof.mjs`](../scripts/test-delivery-proof.mjs)
 
-`NativeCloseTests` in `scripts/test-delivery-proof.py` exercise private
-actor/invoker authority, strict-descendant scope, stale target fields, process/source
-anchors, workspace movement, launch leases, preflight changes, real store-lock
-exclusion, existing RPC error/timeout behavior and byte-preserved records/routes.
-An owned real subprocess also exits without being reaped while retaining its
-start identity and source marker: close refuses before any host call. Close
-requires affirmative non-zombie process state plus the exact PID/start; unknown
-state refuses. Shared conservative resource-retention observation is unchanged.
-Separate real-process tests cover a live launch wrapper whose distinct direct
-child owns the only source marker, and a same-PID launch/source owner. The
-wrapper case failed with the original marker-PID-equals-launch-PID assumption.
-A zombie source child under a live wrapper, a deeper source descendant,
-controlled sibling/unrelated/foreign ownership, changed parent/start/marker and
-unknown evidence refuse before host calls. Only the evidenced immediate-child
-relationship is supported; stored launch anchors are unchanged.
-Native adapter tests cover strict public input, bound private identity, one
-controller invocation, transport refusal/lost reply/cancellation and no fallback.
-They use synthetic hosts, synthetic or owned test processes and disposable local sources,
-not live CMUX resources. The existing three runtime suites remain required.
-
-Acceptance is explicitly `closeAccepted: true`, `removal: "unconfirmed"`; it
-does not prove removal, release capacity or complete work. Source metadata is
-conservative preflight evidence, not atomic host/provider session-generation
-fencing. Real disposable native proof and hosted validation are separate
-delivery evidence, not claims made by these regression tests.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#explicit-owned-descendant-and-subtree-close-90-91-377).
 
 ### Dedicated observer registration (#114)
 
-Explicit setup now owns a dedicated version-1 user file for exactly
-`sessionStart`, `userPromptSubmitted` and `postToolUse`. The bundled helper,
-identity checks, session reader and renderer are unchanged. The lifecycle/icon
-plugin remains, without observer declarations. Generation/provenance checks,
-bounded descriptor-relative reads, conditional writes, a same-setup lock and
-phase-specific results distinguish missing, stale, disabled, conflicting,
-incomplete and current-on-disk registration.
-Persisted incomplete/conflicting plugin state takes precedence over disable
-classification. A completed receipt binds opaque provider-returned event keys
-to the exact registration generation/version, allowing fresh file-only status
-to distinguish all/subset disables. Unknown keys or missing/stale applicability
-evidence report unresolved, not ordinary current-on-disk. Check Registration
-starts no metadata process. The existing command-line installer treats verified
-enabled, all/subset-disabled and unresolved-applicability completions as success
-while retaining explicit messages; real errors and usage retain nonzero exits.
+<a id="observer-registration"></a>
+The contract is in [Plugin and observer hook](reference/setup-and-integration/plugin-and-observer-hook.md), [Status, failures and messaging configuration](reference/setup-and-integration/status-failures-and-messaging-configuration.md).
 
-Setup attempts **stable Copilot CLI 1.x releases using SDK protocol 3**, retaining
-public metadata, exact-source and operation-readback checks. Other major versions,
-prereleases and protocols refuse before registration changes. Historical live
-probes below cover 1.0.88 and 1.0.89, not every release admitted by the range.
-Setup uses only `status.get`, `hooks.discover` and `plugins.list` over a new,
-bounded public stdio connection. It sends no agent/session creation or model
-request, never attaches to an existing session and shuts the metadata process
-down after its three replies. Framing, malformed replies, output limits,
-timeout, cancellation and process-group cleanup are independently checked.
-No private native module or hash implementation is a product dependency.
-Host-only discovery labels this file `hooks/cmux-maestro-observer.json`;
-project-scoped discovery uses its absolute path. Only those exact user-origin
-labels are recognized, alongside independent file/provenance checks; arbitrary
-relative paths and other origins are not normalized into ownership.
-Registration file work and the setup UI's read-only status checks use a
-concurrent file-worker queue rather than MainActor or the cooperative executor.
-Each invocation awaits its own transaction steps; cancellation joins an
-already-started writer before returning. This does not serialize the test suite
-or widen the original process-cleanup/readiness deadlines.
+- [`CopilotObserverRegistrationTests.swift`](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
+- [`CopilotSetupTests.swift`](../CMUXMaestroPreviewTests/CopilotSetupTests.swift)
 
-The 1.0.89 maintenance probe covers public metadata, inactive file staging,
-official plugin settings normalization, real-core migration/install/update/
-removal, and related/unrelated-key refusal using disposable homes. It makes
-zero model calls and does not extend the earlier 1.0.88 event-execution,
-running-session reload or global-disable observations to 1.0.89.
-That initial conservative unrelated-key refusal is superseded only for the
-positively proven unaffected case: complete exact-owned prior keys, all owned
-events enabled, and every global disabled key resolved to an unrelated action.
-Affected subsets, missing keys and ambiguous metadata still refuse. No settings
-migrator, enabled duplicate preview or private key hash is introduced.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#dedicated-observer-registration-114).
 
-The earlier 1.0.88 probes established these separate facts:
+<a id="observer-provider-probes"></a>
+**Observer registration: provider probe evidence.** The contract is in [Plugin and observer hook](reference/setup-and-integration/plugin-and-observer-hook.md), [Legacy migration and disable preservation](reference/setup-and-integration/legacy-migration-and-disable-preservation.md). Setup does not claim to repair provider-wide enforcement.
 
-| Evidence level | Observed result and limit |
-|---|---|
-| Source/on-disk format | User version-1 files are accepted independently of plugins. Sources combine; there is no provider deduplication. |
-| Public discovery | File-level `disableAllHooks` returns disabled rows but omits their destination disable keys. The actual legacy sorted-key producer and four justified user representations did not preserve legacy keys: normalization changed serialized config order, not inherently source identity. |
-| Disable-key mapping | Additive old/new **global** keys preserve all-three and single-event intent in discovery. Repository `disabledHooks` was ineffective even against the unchanged legacy source. These are not event-execution claims. |
-| Actual activation | `sessionStart` and `userPromptSubmitted` markers preceded the sole quota-rejected model request. Permission-free public `tools.execute` produced `postToolUse` markers. No successful model turn was available. |
-| Concrete session cache | Existing disposable-session `postToolUse` retained A after disk changed to B; a fresh session used B; explicit supported hook reload switched the existing session to B. Other events were not separately re-proved after reload. |
-| Global disable limitation | `disableAllHooks:true` did **not** suppress `postToolUse` on the tested `tools.execute` path, including in a fresh runtime. This is not generalized to a successful model loop. |
+- [`CopilotObserverRegistrationTests.swift`](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 
-The implemented fallback is deliberately smaller than a speculative settings
-migrator: when a change needs unavailable destination-key mapping, refuse
-**before changing the legacy registration**. Never enable a duplicate just to
-discover a key, reverse-engineer hashes, drop old keys or approximate a
-single-event disable with a new blanket policy. Maestro reads global settings
-without writing them. The official CLI can replace `settings.json`; after a
-successful command only identical values or an added empty `enabledPlugins`
-map are acknowledged, with fresh safe-file checks. Any changed disable or
-unrelated value still refuses. An explicit global/file disable preserves a disabled owned
-file; setup does not claim it repaired provider-wide enforcement.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#observer-registration-provider-probe-evidence).
 
-Migration stages only the exact owned **disabled** file, confirms disabled
-discovery, prepares and officially installs the hookless plugin, verifies its
-cached declarations and public metadata, then publishes the intended file.
-Foreign/modified owned registrations, wrong selected owned identities, unsafe
-owned paths and changing inputs refuse rather than being overwritten.
-Exact-source identity is independently bootstrapped by public install into a
-disposable provider home, using the same absolute source path, not a copied
-path or private hash. The supported-version result must match current real-home
-selection and any old receipt before effects. A name-derived receipt is not
-authority; forged or foreign source provenance fails that independent check.
-Fresh-install authority is recorded before real-home provider mutation.
+<a id="observer-migration"></a>
+**Observer registration: migration and restoration.** The contract is in [Legacy migration and disable preservation](reference/setup-and-integration/legacy-migration-and-disable-preservation.md), [Installer process and cancellation](reference/setup-and-integration/installer-process-and-cancellation.md). An unowned plugin may still invoke current or old helpers and cause extra executions or writes. This is neither prevented nor certified harmless.
 
-The false foreign-cache audit has been removed. Public foreign identity/hook
-continuity is checked without reading their source/cache directories or
-claiming selected-source coverage. Unrelated same-event direct, marketplace,
-live, built-in and opaque records are preserved; an unsafe ancestor of the
-actual owned cache still refuses. The historical alias counterexamples are
-preserved as evidence against the old audit, while owned-name/source alias
-cases are mandatory pre-effect rejection tests. An unowned plugin may still
-invoke current/old helpers and cause extra executions or writes; this is
-neither prevented nor certified harmless. Status concerns owned registration,
-not provider-wide uniqueness. Existing directly inspected user-file conflicts,
-disable-key refusals and no-follow guards remain.
-A failure confined to provenance/disabled staging restores and verifies the
-previous owned file/provenance bytes, absence and permissions before returning,
-including on cancellation. Concurrent replacement refuses restoration rather
-than overwriting foreign bytes. All resource inputs and the unchanged socket
-path bound are checked before resource writes begin. The resource fixture uses
-an exclusive short disposable directory rather than depending on checkout
-path length; it also exercises the overlong-path refusal before effects.
-Owned resource preparation now preflights the complete fixed file set and uses
-the existing conditional file-state writer. Its failure path verifies and
-restores earlier resource writes, including executable modes, absent files,
-large bounded font/catalog resources and the obsolete owned guide. A verified
-resource restoration also permits restoration of disabled observer staging.
-Unchanged resource bytes/modes are no-ops rather than inode replacements.
-Real permission-denied late writes exercise reversal, with changed file stamps
-proving an earlier write actually occurred. Unsafe later targets refuse before
-earlier writes. Preflight/no-write, verified restoration and unverified
-restoration are separate outcomes; unrelated files and live routes remain
-untouched. Standalone maintenance retains this in-process compensation. The
-normal alpha installer adds the durable coordinated boundary below.
-A later failed step reports the last completed phase; the next phase may have
-partially refreshed setup resources. Retry revalidates recorded generations
-and known partial preparation, preserving a retained disabled stage. It never
-rolls back blindly or changes existing sessions. Removing integration preserves
-global keys, unrelated hooks and live messaging route/session state.
+- [`CopilotObserverRegistrationTests.swift`](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
+- [`CopilotSetupTests.swift`](../CMUXMaestroPreviewTests/CopilotSetupTests.swift)
+
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#observer-registration-migration-and-restoration).
 
 ### Coordinated alpha installation (#114)
 
-The focused Python suite covers ordinary `install` upgrades, exact registered
-identical no-ops (without app replacement, receipt changes or lost backups),
-automatic restoration after copy/exchange/registration failures, first-install
-absence, interrupted restoration, exact development-source registration
-restoration and refusal to race an unfinished command guardian. Existing
-ownership, integrity, process identity and partial-cleanup controls remain.
-Changed-app publication withdraws only the owned registration, waits at most
-120 seconds for positively identified preview processes to exit, and registers
-the replacement. Unknown process evidence still fails immediately. Tests cover
-ordered withdrawal/re-registration, unchanged unrelated registrations, bounded
-waiting and restoration when release fails; no UI selection, host restart or
-script-sidebar reload is used.
-The normal containing app is no longer treated as an indefinitely busy
-extension. A changed-app update journals the exact running app's owner/start
-generation, executable and code identity, then requests only
-`NSRunningApplication.terminate()`. Refusal or failure to exit aborts without
-force termination. The prior running/hidden choice is restored with an exact
-URL `NSWorkspace` launch configured not to activate, hide other apps, substitute
-another installation, create a duplicate instance or prompt for optional UI.
-Quarantine refuses relaunch rather than bypassing system policy.
+<a id="alpha-installation"></a>
+The contract is in [Update, rollback and status](reference/install/update-and-rollback.md), [Transaction and recovery contract: integrity and retained generations](reference/install/retained-generations.md). The hosted stock-host proof must still establish real release/recreation and focus behavior.
 
-Injected AppKit handles cover ownership mismatches, PID-generation changes,
-other app copies, helper/extension exclusion, refusal and idempotent restoration.
-A separate non-UI process fixture compares the public Security-framework code
-identity with the existing kernel-cached code hash. Installer tests cover
-quit/launch interruptions, failed restoration and rollback after a replacement
-app has started. These tests do not invoke real GUI quit/launch; the hosted
-stock-host proof must still establish real release/recreation and focus behavior.
+- [`test-local-preview.py`](../scripts/test-local-preview.py)
 
-The receipt now distinguishes a healthy `retired` slot from unresolved
-`garbage` deletion. Older schema-1 receipts without `retired` remain readable.
-Slot aliases and more than four managed bundles during preparation (three after
-completion) are rejected. Current and previous remain the working/rollback
-generations; retired is disposable maintenance, not an extra active install.
-A verified no-op neither deletes retirement nor republishes registration.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#coordinated-alpha-installation-114).
 
-For a changed install, the new bridge is staged and verified before the old
-retired slot is reclaimed. A `reclaiming` transaction journals exact
-digest/node-based cleanup while owned registrations are withdrawn and owned
-processes are idle. Failure restores the working app/integration and required
-previous backup; the new verified candidate can remain retired to complete old
-app relaunch and checkpoint release. Partially copied candidates retain the
-original unverified staging cleanup rules. At success, old previous becomes
-retired only after bridge work finishes. The durable `committed` boundary
-distinguishes release/retention cleanup from reversible failures.
+<a id="install-retired-slots"></a>
+**Alpha installation: retired slots and native publication.** The contract is in [Transaction and recovery contract: integrity and retained generations](reference/install/retained-generations.md), [Update, rollback and status](reference/install/update-and-rollback.md). The historical sibling-recovery proposal still needs separate production consent.
 
-Native publication uses exact app/extension state: already-correct registration
-is verified, not force-registered again; an absent pair can be published.
-Verified transaction-owned app-present/extension-absent publication reuses the
-per-component registration primitive to add only the missing extension, with
-source/identity preflight and fresh pair/readback checks. A now-complete pair is
-left alone; a changed unsupported pair refuses. Extension-present/app-absent
-never authorizes a forced app registration while a native view may be hosted.
-Outside the transaction, partial ambiguity still refuses. Staging cleanup keeps
-its transaction until the restored registration verifies. These checks are not
-an atomic macOS service acknowledgment. Restoration establishes the retained candidate's
-registration absence before publishing the old app. No retirement mutation
-follows final publication. Tests cover repeated failure bounds, old apps lacking
-bridge capability, original running/hidden state, interrupted optional deletion,
-release and receipt writes, alias/tamper/missing slots, first-install absence and
-explicit uninstall. These fixtures do not establish asynchronous service drain
-or that stock CMUX observed an identity disappearance.
+- [`test-local-preview.py`](../scripts/test-local-preview.py)
 
-Exact production-ID/public-point sibling preflight precedes staging/provider
-effects on ordinary install and revalidates before native withdrawal. Only
-receipt-owned paths and an explicitly authorized, verified current-checkout
-development source may be retired. External eligible paths and unknown/debugger
-elections produce a concrete error without adoption; ignored/superseded records,
-other points/identifiers and unrelated provider hooks remain unchanged. The
-historical sibling-recovery proposal still needs separate production consent.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#alpha-installation-retired-slots-and-native-publication).
 
-`build-register.sh` now hands its verified artifact to the same `install`
-entrypoint; it no longer separately registers the development extension.
-The installer calls a production-only, non-UI bridge with a transaction UUID
-and stable application path. It prepares an owned integration checkpoint before
-the app exchange, applies Copilot, verifies provider discovery and exact app
-registration, and only then commits current/previous app retention. An identical
-app also checks integration; a fully current repeat skips resource replacement
-and official plugin mutation.
+<a id="install-integration-checkpoint"></a>
+**Alpha installation: integration checkpoint.** The contract is in [Transaction and recovery contract: integration checkpoint](reference/install/integration-checkpoint.md), [Transaction and recovery contract: locks and supervision](reference/install/transaction-contract.md).
 
-The durable integration checkpoint is private `0600` data in
-`Orchestration/install-transaction.json`, outside the sidebar's granted
-`Copilot/` and `Orchestration/observer/` prefixes. No permission is broadened.
-Recovery validates the schema, fixed file paths, original modes/absence,
-expected resource bytes and transaction UUID. It keeps observers inactive while
-compensating through official install/uninstall at the stable owned source,
-restores prior settings only across verified CLI normalization, and verifies
-the original public plugin/hook inventory before the app is restored.
-The fixed owned installed payload is verified too. If source and installed
-copies differed before an interrupted setup, compensation temporarily supplies
-the saved installed payload at that same source, verifies official replacement,
-then conditionally restores the original source bytes. Provider-private state
-and unrelated plugin directories are never rewritten.
-Unexpected concurrent content or disable changes refuse compensation rather
-than being overwritten. Failed compensation retains the checkpoint.
+- [`test-local-preview.py`](../scripts/test-local-preview.py)
+- [`CopilotObserverRegistrationTests.swift`](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 
-Receipt publication now has a write-ahead exact-image boundary. Before a
-staged/current observer receipt can change, the checkpoint validates its
-current image and durably records the complete intended bytes/mode/source
-binding. Missing-`after` recovery cannot substitute generation equality for
-that authorization. Tests change plugin identity and source path/ID without
-changing the generation, and require preserved edited bytes/resources and
-journal with no compensating provider mutation. A real compiled-bridge exit
-after current-receipt publication but before the final snapshot still recovers.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#alpha-installation-integration-checkpoint).
 
-The existing finite command guardian also covers nested provider groups.
-Standalone provider processes retain their independent groups and original
-timeout/cancellation cleanup. Coordinated providers use the same grouping but
-wait behind a launcher gate until the trusted bridge synchronizes their group
-IDs into the inherited install-guard record; providers never inherit that
-descriptor or its environment. The guardian re-reads and drains the complete
-record after bridge exit. If it also dies, fresh recovery refuses while any
-recorded group survives. Actual compiled bridge/provider gates prove this for
-forward and compensation paths, with and without guardian death, preserving
-unrelated processes. The old observed late-write-after-restoration results
-are retained as red evidence, not relabeled as supported behavior.
+<a id="install-plugin-state"></a>
+**Alpha installation: plugin identity and disabled state.** The contract is in [Transaction and recovery contract: plugin disabled state and recovery blocks](reference/install/plugin-disabled-state.md), [Transaction and recovery contract: integration checkpoint](reference/install/integration-checkpoint.md).
 
-Plugin mutations use public sessionless RPCs, with the supported status checked
-before the mutation request. An install receipt supplies the exact owned
-`directSourceId`; later discovery must match. Removal and compensation target
-that identity, not just the manifest name. Even a receipt followed by a failing
-provider-process exit is retained for recovery. Independent bootstrap records
-the same source's identity before real-home mutation, so a lost production
-response can still be compensated without adopting a name-only list row.
-Recovery bootstraps again and checks current selection before effects; source
-files remain until exact-ID removal succeeds. Failed bootstrap and foreign
-identity drift do not grant compensation authority.
+- [`test-local-preview.py`](../scripts/test-local-preview.py)
+- [`CopilotObserverRegistrationTests.swift`](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 
-The pinned [1.0.89 changelog](https://github.com/github/copilot-cli/blob/8dfa6009c4a04b3a22a5ca4a7c36a056edd718dd/changelog.md)
-supersedes the SDK comments claiming direct installs are always enabled.
-Disposable official-provider probes confirm direct disable/enable, zero
-discovered plugin hooks while disabled, and re-enabling on both install and
-update. The installer preserves a verified disabled native plugin without
-provider mutation for no-ops and compatible external-resource-only updates.
-For a required payload replacement it records original state and mutation
-intent before the official operation, keeps dedicated staging inactive, and
-requires official `plugins.disable` plus exact-source readback before
-publication/commit. The disable RPC is attempted on stable 1.x releases using
-protocol 3 and checks the selected identity before its name-based mutation.
-Unsupported operations or failed disabled-state readback still block publication.
-Install/update success alone
-does not prove preservation. Disabled legacy observer migration also disables
-the dedicated file; an existing dedicated file retains its independent choice.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#alpha-installation-plugin-identity-and-disabled-state).
 
-Recovery handles a failed/lost disable response or process exit between the
-operations using the durable intent, independently re-established source
-authority and official disabled-state restoration. Exact prior cache/source and
-settings are verified before the app rollback completes. A prior payload that
-is already intact is not needlessly reinstalled. No private enablement key is
-guessed or edited. User re-enablement after verified apply and foreign identity
-drift refuse rather than being cleared. These are separate provider operations:
-the intermediate enabled state is real, not described as atomic suppression.
-Local tests cover that boundary without executing hooks or restarting sessions;
-actual stock-host and installed-session gates remain separate.
+<a id="install-plugin-recovery"></a>
+**Alpha installation: plugin-state recovery and tests.** The contract is in [Transaction and recovery contract: plugin disabled state and recovery blocks](reference/install/plugin-disabled-state.md), [Recovery commands and diagnostics](reference/install/recovery-commands.md). These tests use a provider double and do not prove real stock-host reload. Current eleven-command hosted CI, source-binding resolution, native lifecycle proof and later installed fresh-session acceptance remain separate gates, as do complete CI, independent review and any later production/live acceptance.
 
-The Python suite executes the compiled Swift bridge in separate processes over
-real disposable files, covering success, no-op, upgrade, late failure, first
-absence and an actual installer-process exit after apply. A fresh installer
-then recovers both generations from disk. These automated tests use a provider
-double and synthetic registries; they do not prove real stock-host reload.
-Another actual process-exit case stops between integration restoration and
-the app exchange: resumed recovery refuses a subsequent foreign edit, then
-completes after the fixture restores the verified input. Pending committed
-checkpoint cleanup blocks legacy maintenance mutations, and false-shaped
-receipt fields cannot bypass coordination.
-The Swift checkpoint suite separately covers stable-source compensation,
-disabled legacy restoration, repeated recovery, arbitrary-path refusal and
-concurrent-write controls. The focused test script's compile-only mode builds
-that non-UI fixture; its normal CI command still runs every existing test.
-Current eleven-command hosted CI, source-binding resolution, native lifecycle
-proof and later installed fresh-session acceptance remain separate gates.
+- [`test-local-preview.py`](../scripts/test-local-preview.py)
+- [`CopilotObserverRegistrationTests.swift`](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
 
-[CopilotObserverRegistrationTests](../CMUXMaestroPreviewTests/CopilotObserverRegistrationTests.swift)
-cover isolated registration, migration, exact event/wrapper content, preserved
-disables, unavailable-key refusal, unsafe/foreign/modified state, interrupted
-phases, retry, concurrent replacement, metadata and owned removal.
-The existing setup cleanup tests retain their original deadlines, negative
-controls and unrelated-process assertions. Complete CI, independent review and
-any later production/live acceptance remain separate candidate gates.
-Metadata cancellation fixtures publish the completed PID marker by same-folder
-rename, not file existence before `printf` finishes. A gate-controlled negative
-control demonstrates the old empty-marker window; the atomic case cannot expose
-it. Error/cancellation paths join the owned task before deleting its fixtures.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#alpha-installation-plugin-state-recovery-and-tests).
 
 ### Direct interactive launch and legacy startup (#61)
 
-The controller Harness reproduces both a delayed runtime after caller timeout
-and a child whose exact attachment is delayed. The former previously revoked
-the lease and produced `Worker launch lease is no longer active`; the latter
-exited on its own attachment timer. These are controlled source mechanisms,
-not a reproduction or explanation of the historical native host trigger.
-The earlier provider-initialization explanation was retracted: supervisor
-identity is recorded **before** the provider is launched.
+<a id="direct-interactive-launch"></a>
+The contract is in [Interactive startup and native bindings](reference/hierarchy-launch-lifecycle/interactive-startup-and-native-bindings.md), [Launch commands and interactive workers](reference/hierarchy-launch-lifecycle/launch-commands-and-interactive-workers.md), [Installed lifecycle and permissions](native-messaging/installed-lifecycle.md). These fixtures do not claim hook delivery or prompt consumption.
 
-New interactive roots/children now directly exec Copilot through
-`initial_command`, with no supervisor/startup polling window. Synthetic
-regressions exercise actual argument quoting and verbatim task wrapping,
-terminal I/O, the validated executable/PATH/cwd, acceptance with missing
-observations, native observation on either side of attachment, cancellation
-and ambiguous creation, exact generation/process identity, account/policy
-boundaries and both admission paths at the configured `MAX_LIVE_WORKERS` cap,
-including managed roots and retained terminals. Native adapter tests exercise
-precreated bindings, exact session join and one independent observation,
-ordinary peer send/reply and no retries. Hooks remain observers; these fixtures
-do not claim hook delivery or prompt consumption.
+- [`test-cmux-maestro-orchestrator.py`](../scripts/test-cmux-maestro-orchestrator.py)
+- [`test-delivery-proof.py`](../scripts/test-delivery-proof.py)
 
-Presentation-model regressions cover fresh exact working/idle/blocked observations
-for interactive coordinators and children after the controller node and projection
-expire, including accepted/pending `launching` nodes. Both row state and workspace
-counts use the same independent observation selection. Missing work does not
-become Working from `turn-running`; stale, duplicate, foreign, denied or ambiguous
-observations remain unknown. Legacy bounded reports, stale Git provenance and
-the distinction between surface suppression and exact session-content ownership
-remain covered. No heartbeat, timestamp refresh or visual styling change follows.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#direct-interactive-launch-and-legacy-startup-61).
 
-Native-loader subprocess regressions use the actual loader/adapter with a fake
-joined session. They reproduce a SIGTERM-left socket blocking a same-binding
-replacement with `EADDRINUSE`, then verify owned-listener cleanup, termination
-during join/observation/chmod, and normal CLI-style reload. Live occupied and
-forced-termination stale sockets remain untouched and refused; diagnostics do
-not reveal raw exception text or private values. This is isolated lifecycle
-evidence, not a replacement for real CLI/provider proof.
+<a id="launch-legacy-fixtures"></a>
+**Launch: legacy fixtures and lock budgets.** The contract is in [Legacy bounded-worker compatibility](reference/messaging-launch-settings/legacy-bounded-worker-compatibility.md), [Workspace launch capacity](reference/messaging-launch-settings/workspace-launch-capacity.md).
 
-Preserved legacy tests still cover attachment-ticket serialization, late-claim
-refusal, strict reports and exact resume. The inherited eight-pending fixture
-previously gave each held runtime a ten-second synthetic barrier deadline
-while sequentially launching all eight and checking rejection/archive. Its
-first runtime could expire before release on hosted runners. That fixture now
-uses an owner-held kernel lock released after the admission assertions, not an
-elapsed-time assumption. The current capacity regression requires the configured
-maximum reservations and eventual results, with any additional launch refused.
-That barrier repair did not enlarge a production or CI timeout.
+- [`test-cmux-maestro-orchestrator.py`](../scripts/test-cmux-maestro-orchestrator.py)
 
-Legacy report fixtures release their synthetic first-turn output after the
-launch receipt, keeping post-start protocol assertions separate from the
-unchanged rejection of an already-failed first boundary during startup.
-Fixture condition waits read committed control state under its shared lock;
-an atomically replaced `state.json` alone does not mean observer publication
-has finished or the writer has released ownership. Snapshot reads copy bounded,
-stable file bytes under that lock, then decode and validate the immutable copy
-after releasing it. A gated validation regression proves a new writer can
-commit without changing the captured snapshot; malformed and invalid snapshots
-still fail. Read-modify-write operations keep their full exclusive transaction
-and bounded acquisition waits. Legacy runtime attachment/token reads share the
-read lock until the exclusive startup mutation; private ticket guards and
-the attachment-file lease remain unchanged. Control-character checks retain
-their UTF-8 byte bounds and exact accepted/rejected characters without a
-per-character Python scan on every node's stored provider path.
-Lock-acquisition budgets scale by `max(1, MAX_LIVE_WORKERS / 8)`, preserving
-the original eight-session allowance against the fixed 32-session reference
-for serialized durable writes; both ordinary and runtime acquisitions use
-that same reference. Per-workspace admission limits (default 32, configurable
-from 1 through 128) do not shrink or enlarge these waits.
-The 50ms retry interval, immediate zero-wait behavior, lock modes and failure
-on exhaustion remain unchanged; this does not extend launch/result deadlines
-or retry a non-contention failure. Deterministic clock tests use real contended
-locks to prove both successful acquisition and bounded refusal at several
-reference capacities. This reference-scaled budget is an explicit policy
-change, not an inference that shorter critical sections alone fixed CI.
-The pending-capacity fixture scales its bounded six-second result wait by the
-same factor: its old wait must not expire before an allowed runtime acquisition
-can finish. This synthetic allowance changes no production result deadline,
-still requires every exact completed report and provider call, and preserves
-simultaneous maximum reservations, over-cap refusal and archive protection.
-Workspace capacity regressions cover persisted CLI configuration, rejected
-worker/cross-workspace changes, root/child admission at limits 2, 32, 64 and 128
-with retained resources, non-double-counted leases, unknown ownership, and
-concurrent admission after an advisory preflight. The 128-boundary proof uses
-synthetic retained resources; it is not a 128-provider load measurement.
-The #167 regressions store 128 synthetic records in workspace A (including
-retired history) while B admits independently, preserve A unchanged, reject A's
-next node, and race last-slot registrations in both workspaces. Saved schema-1
-reload, complete multi-workspace observer output, workspace retained-resource
-bounds and distinct host node/byte protection are checked without real fleets.
-The Swift reader accepts 256 nodes across two 128-node workspaces but rejects
-129 in one workspace and 1,025 host-wide. Source publication does not upgrade
-an older installed reader/controller or demonstrate live activation.
-Managed adapter regressions use 128 private A route/socket pairs plus two B
-participants: B discovers only B, exchanges one send/reply through the real
-local receiver, and refuses cross-workspace routing. Separate checks accept
-1,024 host bindings with128 local participants, refuse129 local or1,025 host,
-and cap directory scans at2,048 entries. Mixed-case equivalent saved workspace
-UUIDs share node/retained quotas without rewriting the original records, matching
-the Swift reader's UUID grouping. A decoded observer-wire control explicitly
-mixes127 lowercase plus one uppercase spelling of the same workspace UUID:
-128 is accepted; a129th equivalently spelled record is refused.
-These are synthetic contract tests, not
-1,024 real sessions or a provider-latency measurement.
-Prospective native-child permission regressions exercise explicit recorded
-parent mode/allow/deny inheritance, deny-only additions, explicit list/false
-narrowing, coordinator-only broad requests and contradictory-intent refusal.
-Finite narrowing under recorded YOLO does not require redundant explicit parent
-allow strings: empty and redundant lists produce the same default-mode child,
-one reservation/lease/launch and retained denies. Default-mode parent escalation
-and wildcard grants still refuse; matching deny strings remove allows.
-Actual Store normalization preserves negative provenance when filling a missing
-interactive tool policy; a missing mode remains missing. Neither becomes verified
-parent policy. Exclusive reservation rechecks the recorded snapshot before adding
-a child or lease. Legacy bounded normalization and explicit worker YOLO refusals
-remain unchanged. These checks establish recorded/requested policy only: they do
-not inspect human-modified live permissions, prove atomic provider-policy
-comparison, or guarantee actual manual startup when provider defaults/environment
-request allow-all. That runtime acceptance gap remains explicit.
-Optional launch-selection tests exercise real native assignment forwarding,
-sanitized session-scoped model metadata, account rechecking, malformed/foreign
-evidence refusal, supported argv and warned configured fallback. Generic
-omission performs no model query; unavailable experimental lookup preserves
-the prior launch. Model-specific tier/effort fallback retains a valid selected
-model. No available configured fallback means refusal, not arbitrary selection.
-Root model precedence stays unchanged, and new options without joined evidence
-warn without injecting unsupported flags. These are synthetic source contracts,
-not observed child model/context settings, entitlements or a numeric long-context
-window; full catalog/billing data is absent from persisted selection metadata.
-For #152, a disposable extension-free SDK session using installed CLI and SDK
-1.0.100 returned 23 public model entries. Its raw CAPI snake_case effort and
-pricing-tier fields differ from `models.list`'s typed camelCase `Model` shape.
-A minimized projection in `scripts/fixtures/model-list-1.0.100.json` reproduces
-the previous loss of all effort/long-context support. Native adapter tests and
-the real Python selection/argument path now preserve those capabilities for
-model-only and model+tier+effort requests. An absent `gpt-5.4-mini` request warns
-and falls back to a configured model present in the catalog; it does not bypass
-the configured-fallback requirement.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#launch-legacy-fixtures-and-lock-budgets).
 
-The original installed generic proof-route refusal was **not reproduced** by
-that isolated catalog. No affected live session was modified or retried; #199's
-root cause remains unproven. Separate negative controls name account drift,
-malformed/foreign evidence, the 32-KiB evidence and 64-KiB request bounds,
-controller refusal, invalid success/JSON replies and process-output failure.
-The real 23-entry projection fits both bounds. These controls distinguish
-failure stages; they do not establish which stage failed in the reported session.
-The new parser module participates in app resources, coordinated setup,
-installed readiness and resource-size checks. No live installation is evidence
-from this repair; an authorized post-install native attempt remains outstanding.
-Mixed-catalog controls distinguish valid provider-native effort defaults from
-malformed non-advertised defaults before known-CLI projection. Unrepresentable
-valid defaults are omitted without poisoning another supported model; selected
-models without a representable default retain the provider default with a warning
-and no fabricated effort argument.
-Optional identity-observation regressions exercise the exact joined session's
-current model read, account/binding recheck, bounded field projection and explicit
-unavailable reasons. Omitted or false `includeModel` performs no model query and
-preserves the old identity response. Missing effort/context is not filled from
-configuration; provider-native safe effort values remain observations rather
-than invented CLI overrides. Wrong-session calls and account drift refuse.
-These mocked SDK responses are source-contract evidence, not an installed-child
-demonstration; spawning still does not wait for an observation.
-The failed-attachment
-capacity fixture stops only its completed synthetic supervisors while retaining
-every terminal, and requires the actual configured resource-limit error, not a busy
-store error. Separate live-supervisor capacity and recovery cases remain intact.
+<a id="launch-workspace-capacity"></a>
+**Launch: workspace capacity.** The contract is in [Workspace launch capacity](reference/messaging-launch-settings/workspace-launch-capacity.md), [Host safety limits](reference/messaging-launch-settings/host-safety-limits.md).
 
-Fixtures are not installed workers, live provider readiness, visible native
-acceptance or evidence that the historical host delay is understood. Full
-delivery CI and independent review remain separate gates; live host/provider
-experiments require a separately authorized release.
+- [`test-cmux-maestro-orchestrator.py`](../scripts/test-cmux-maestro-orchestrator.py)
+- [`test-delivery-proof.py`](../scripts/test-delivery-proof.py)
+
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#launch-workspace-capacity).
+
+<a id="launch-child-permissions"></a>
+**Launch: native-child permissions.** The contract is in [Native-child launch policy](reference/messaging-launch-settings/native-child-launch-policy.md).
+
+- [`test-cmux-maestro-orchestrator.py`](../scripts/test-cmux-maestro-orchestrator.py)
+
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#launch-native-child-permissions).
+
+<a id="launch-model-selection"></a>
+**Launch: model selection.** The contract is in [Preference refusals and launch selection](reference/messaging-launch-settings/preference-refusals-and-launch-selection.md), [Local agent launch settings and per-launch preferences](reference/messaging-launch-settings/local-agent-launch-settings.md). #199's root cause remains unproven, and the controls do not show which stage failed in the reported session. An authorized post-install native attempt is still outstanding. Fixtures are not evidence that the historical host delay is understood. Full delivery CI and independent review remain separate gates, and live host/provider experiments need a separately authorized release.
+
+- [`test-cmux-maestro-orchestrator.py`](../scripts/test-cmux-maestro-orchestrator.py)
+- [`test-delivery-proof.py`](../scripts/test-delivery-proof.py)
+- [`model-list-1.0.100.json`](../scripts/fixtures/model-list-1.0.100.json)
+
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#launch-model-selection).
 
 ### Deep-outline fixture readiness
 
-Focus-layout fixtures own **available content width**, not AppKit's preferred
-scroller style. A test-host-only modifier applies `scrollIndicators(.never)`
-to the unchanged production sidebar/tree and reserves a constant trailing
-gutter derived from the public `NSScrollView.contentSize` API, separately for
-overlay and legacy budgets. No gutter size is hardcoded and no content width
-is frozen: resizing the owned window still changes the viewport and title.
-These are **overlay/legacy-equivalent available-width inputs**, not native
-indicator appearance or identical row-geometry claims.
+<a id="deep-outline-fixtures"></a>
+The contract is in [Outline grouping and density](reference/layout-and-visual-validation/outline-grouping-and-density.md), [Explicit local-only native acceptance](reference/ci-test-determinism/explicit-local-only-native-acceptance.md). The matching hosted width delta still does not establish its trigger.
 
-The stronger policy is intentional:
-[`.hidden` can still show macOS indicators when a mouse is connected](https://developer.apple.com/documentation/swiftui/scrollindicatorvisibility/hidden);
-[`.never` overrides that policy](https://developer.apple.com/documentation/swiftui/scrollindicatorvisibility/never).
-Before immutable baseline capture, preparation requires absent native scrollers,
-no native width gutter, a visible deep title, document/clip width agreement and
-matching geometry samples. It does not claim native quiescence or pin style:
-[AppKit can subsequently update style and retile](https://developer.apple.com/documentation/appkit/nsscroller/preferredscrollerstyle).
-Cold-start evidence observed that update on both fixed-budget fixtures without
-changing their title/viewport frames, alongside an unmodified native control
-whose width changed. A one-time explicit style assignment alone failed that
-stress. The matching hosted width delta still does not establish its trigger.
+- [`SidebarLayoutRenderingTests.swift`](../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): `deepOutlineFixedViewportSurvivesNativeStyleChanges`, `nativeEightLevelOutlineRetainsMinimumTitleWidthAt280`, `deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline`
 
-`deepOutlineFixedViewportSurvivesNativeStyleChanges` compares each budget's
-available viewport against a separate, real-native production render, then
-requires exact title/viewport equality through both native style-transition
-directions. Focus and no-focus tests run both budgets; focus retains both
-densities and appearances, the 124-point minimum, height/depth caps and 20 ms
-effect interval. The real-window-width negative control also runs both budgets,
-requires the full 26-point viewport loss and still rejects changed title frames.
-
-`nativeEightLevelOutlineRetainsMinimumTitleWidthAt280` separately protects the
-actual native depth-eight title at a 280-point host: at least 124 points wide,
-at most 70 points high, in both densities, light/dark appearances and both
-native scroller styles. It verifies the requested style and visible native
-geometry before each static measurement, without the fixed-input inset or a
-subsequent timed equality check. This absolute guard is necessary because the
-equivalent-width fixture's inset changes indentation and gives its legacy
-title two extra points; that fixture alone cannot protect the native minimum.
-Style assignment is not treated as a pin against later AppKit updates.
-
-`deepOutlineLateNativeStyleChangeInvalidatesSampledBaseline` exercises both
-overlay-to-legacy and legacy-to-overlay transitions through the public setter,
-in run-owned offscreen fixtures without focus. It requires opposite viewport
-width directions, equal title/viewport width deltas and an unchanged title
-height; the original exact frame comparison rejects both changes. This control
-and all ordinary full production renders remain outside the fixed-input modifier.
-Neither layer restores geometry after baseline. Global preferences, production
-layout and AppKit test gates remain unchanged. Fixed-input focus coverage and
-actual native composition/transition coverage are separate layers; neither
-substitutes for the other.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#deep-outline-fixture-readiness).
 
 ## Managed Git provenance
 
-Managed Git branch/worktree labels, verification times and change counts describe
-the **assigned directory**, not Copilot's current `/cwd` or a tool's working
-directory. The controller's `collect_git_evidence` probes `node.workingDirectory`
-via `git_display_metadata`, applies evidence only to the matching run/directory,
-and publishes bounded labels/counts through `Orchestration/observer/current.json`.
-The sidebar's existing reader validates that projection; `managedGitDetails`
-shares the assigned-directory qualifier across inspector, hover, pinned details
-and row tooltips. Compact row labels remain unchanged; the count badge identifies
-the assigned directory in its caption, tooltip and accessibility description.
+The contract is in [Outline rows and Git evidence](reference/sidebar/outline-rows.md), [Managed Git context and notices](reference/sidebar/managed-git-context.md). This correction references #119/#59 without completing either. These tests need the unchanged hosted native suite. The cause of an earlier owner-label failure remains inferred, and repair execution and sensitivity evidence still need hosted CI.
 
-The existing 60-second Git freshness checks still suppress current branch/worktree
-fields and counts when stale. Last-verified labels remain explicitly historical;
-unavailable evidence never proves a non-repository, and detached HEAD does not
-require a branch label. CMUX **Surface directory** and **Parent surface directory**
-remain separate host reports with unchanged permission and provenance rules.
-No dynamic directory collector, worktree identity/grouping key or new grant is
-introduced. This correction references #119/#59 without completing either.
+- [`SidebarAgentHoverTests.swift`](../CMUXMaestroPreviewTests/SidebarAgentHoverTests.swift): `managedGitConsumersQualifyAssignedDirectoryWithoutChangingFreshness`
 
-`SidebarAgentHoverTests.managedGitConsumersQualifyAssignedDirectoryWithoutChangingFreshness`
-covers shared fresh, stale, unavailable, absent, stale-count and detached-HEAD
-presentation. Existing pinned-detail and native row-tooltip assertions retain
-their identity, freshness and compact-layout checks. These tests require the
-unchanged hosted native suite; source inspection or an unsigned build alone
-does not establish test execution or installed-host acceptance.
-
-The combined owner/task-depth render supplies its frozen observation clock through
-the shared `sidebarPresentationNow` environment seam. Outline placement, retained
-context, details, hover and action revalidation use that clock; production still
-reads `Date()` on demand, with the same eight-second identity freshness boundary.
-`controlledPresentationAgeExpiresRetainedOwnerWithoutChangingObservations`
-checks the exact retained-owner label at eight seconds and its expiry at 8.001
-seconds in both modes without refreshing observations. Geometry assertions remain
-unchanged and failures include native owner labels and observation ages.
-
-Footer model rendering uses the same zero-tolerance native-pixel comparator as
-the inspector, against an independent literal `verified-model` reference in its
-expected region. All eight production size/theme combinations retain copy and
-geometry checks. Both themes also require rejection of wrong `verifled-model`,
-suffix, missing, hidden, clipped and elsewhere text. This replaces only the
-model-line OCR oracle, not production typography or content; whole-image OCR
-misread the visible line in both initial hosted runs. A prior owner-label failure
-is consistent with the fixture's frozen clock crossing wall-clock freshness, but
-its failure-time labels/ages were not logged, so that historical cause remains
-inferred. Repair execution and sensitivity evidence still require hosted CI.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#managed-git-provenance).
 
 ## Lazy preference observation (#169)
 
-Layout remains read-only until an explicit action. Its file presenter watches
-the nearest existing container when the target is absent. Changes to that
-presenter's own item invalidate the target through the existing refresh path,
-including directory-content and attribute notifications. Unrelated subitem
-events remain filtered; no polling, eager directory creation or new writer is
-added. Each accepted notification schedules one existing byte-bounded coordinated
-read; equal values do not publish a new store value.
+<a id="lazy-preference-observation"></a>
+The contract is in [Sidebar order and layout storage](reference/layout-and-visual-validation/sidebar-order-and-layout-storage.md).
 
-`SidebarLayoutTests.lazyPresenterOwnItemChangesRefreshWithoutCreatingTarget`
-uses the actual presenter through `NSFilePresenter`, with an absent nested
-target and unrelated-event controls.
-`presenterOwnItemChangesRetainCoordinatedReadAndNoticeSemantics` checks repeated
-unchanged reads, file-byte preservation and explicit malformed-file notices.
-The original two-process lazy-layout convergence test and its ten-second
-deadline, observation, layout/history/attention assertions remain unchanged.
-These deterministic callback regressions establish the documented invalidation
-path, not the exclusive cause of the prior hosted convergence failure or
-installed-runtime acceptance.
+- [`SidebarLayoutTests.swift`](../CMUXMaestroPreviewTests/SidebarLayoutTests.swift): `lazyPresenterOwnItemChangesRefreshWithoutCreatingTarget`, `presenterOwnItemChangesRetainCoordinatedReadAndNoticeSemantics`
+
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#lazy-preference-observation-169).
 
 ## Capability matrix
 
-Links below point to test files; named methods identify representative checks,
-not the entire coverage of each file. Runtime links identify their actual
-acceptance scope.
-
-| Visible capability | Native proof | Runtime evidence or disposition |
-|---|---|---|
-| Workspace/surface topology, kinds, order and moves | [HierarchySnapshotTests](../CMUXMaestroPreviewTests/HierarchySnapshotTests.swift): `mapsEverySurfaceKindWithoutFilteringOrProviderData`, `eachSnapshotAuthoritativelyReplacesPlacementAndOrderWhileIDsRemainStable` | Native topology is delivered in [PR26][r26]; workspace/surface behavior is exercised in [layout acceptance][r29]. |
-| Exact session/surface identity despite similar names or directories | [SidebarCopilotTreeTests](../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `exactSurfacePlacementIgnoresNamesPathsAndLaunchWorkspace`, `rejectsConflictingSessionIDsAndOffWindowRowsButKeepsValidPositives` | [PR30][r30] verifies two live CLI sessions with the same title/directory on distinct surfaces. Names and paths are not identity. |
-| Provider, session and model metadata | [AgentSessionSnapshotTests](../CMUXMaestroPreviewTests/AgentSessionSnapshotTests.swift): `keepsProviderIdentitySeparateFromCMUXIdentity`; [SidebarCopilotTreeTests](../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `partialKnownChildrenRemainVisibleWithoutInventingZeroOrModels`; [SidebarClarityTests](../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `selectionMetadataShowsOnlyObservedModelAndGrantedPaths`, `managedModelUsesOnlyFreshExactSurfaceAndSessionIdentity` | Live Copilot attribution is covered by [PR30][r30]. Selected managed workers require exact fresh session and surface identity; coordinators require one fresh unambiguous session on their exact surface. Missing, stale, mismatched and ambiguous model data plus unavailable numeric context capacity/usage are omitted rather than guessed. |
-| Nested agents, skills and shell work | [CopilotEventReducerTests](../CMUXMaestroPreviewTests/CopilotEventReducerTests.swift): `joinsToolOwnerNotChronologicalParentAndPreservesDuplicateNames`, `skillsAndShellUseOnlySupportedMetadataAndExcludePayloads`, `backgroundShellExitUsesStructuredNotificationNotContentOrArguments` | Real child history is verified in [PR27][r27]. Skills and shell distinctions have Swift proof. Tool-invocation completion is not inferred background-process exit. |
-| Interaction identity, reused turn numbers, timing and replay | [CopilotInteractionTests](../CMUXMaestroPreviewTests/CopilotInteractionTests.swift): `providerInteractionsReuseZeroAndOneWithoutLosingPrimaryCompletion`, `oldToolProvenanceCannotBeOverriddenByCurrentParent`, `reusedNilEndRequiresCurrentEvidenceAndContradictoryClocksDoNotInventAge` | [PR28][r28] verifies a fresh interaction reusing turns `0/1`, transitioning Idle → Working → Idle with a new Turn finished outcome. Ambiguous identity/timing remains explicit. |
-| Permission and question attention | [CopilotAttentionTests](../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `requestPairingIncludesOwnerAndKind`; [SidebarAttentionTests](../CMUXMaestroPreviewTests/SidebarAttentionTests.swift): `blockersCannotBeAcknowledgedEvenWithForgedStoredKeysOrStaleButtons` | [PR28][r28] verifies permission waiting in both views, disabled acknowledgement and normal denial. Answer/request pairing is additionally Swift-covered. |
-| Errors, aborts and primary-turn completion | [CopilotAttentionTests](../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `acceptedRootOutcomeDoesNotEndOrUnblockBackgroundWork`, `primaryTurnEndDoesNotSilentlyAcknowledgeAnEarlierToolError` | [PR28][r28] verifies error acknowledgement/reset/reload and new turn completion. Turn finished does not mean session or background-child completion. |
-| Honest tool activity | [CopilotAttentionTests](../CMUXMaestroPreviewTests/CopilotAttentionTests.swift): `activityUsesOwnedToolNamesAndCompletionIdentityNotPayloads`, `multipleExecutingToolsAndDuplicateCompletionKeepHonestActivity` | Owned executing/last-completed tool metadata has Swift proof. No token/context percentage or speculative hung-state parity is claimed. |
-| Granted workspace/project/surface paths | [SidebarNavigationTests](../CMUXMaestroPreviewTests/SidebarNavigationTests.swift): `realSDKGrantedNilPathsRemainDistinctFromUnavailable`, `sessionPathPresentationUsesCurrentSurfacePlacementNotLaunchWorkspace`; [SidebarAgentHoverTests](../CMUXMaestroPreviewTests/SidebarAgentHoverTests.swift): `directoryConsumersKeepHostSourceAndPermissionDistinct`, `directoryUpdatesFollowExactMovedSurfaceWithoutReusingCapturedPlacement`, `retainedOriginalNeverBorrowsReplacementDirectoryButNativeContextSurvives`; [HierarchySnapshotTests](../CMUXMaestroPreviewTests/HierarchySnapshotTests.swift): `homeRelativeDisplayUsesComponentsWithoutChangingSourcePaths`; [SidebarPinnedDetailsTests](../CMUXMaestroPreviewTests/SidebarPinnedDetailsTests.swift): `directoryProvenanceRendersInProductionHoverPinnedAndDetails` | The [pinned source contract](../README.md) is a host surface report, not independently verified agent/tool current directory; report time is not supplied. Child labels remain parent-surface context. SDK filtering and synthetic offscreen production-card proof distinguish denied/nil paths, preserve exact subject and home-relative formatting, and retain the field through hover/pinned/details filters. Existing [PR32][r32] acceptance predates this source qualification; installed-CMUX acceptance for this #77 slice remains unperformed. No full #77, worktree-identity or topology closure is claimed. |
-| Expiry, dismissal and acknowledgement | [SidebarHistoryTests](../CMUXMaestroPreviewTests/SidebarHistoryTests.swift): `preciseExpiryBoundaryAndNever`, `identityIsSessionChildAndOutcomeNotLabelOrTopology`; [SidebarAttentionTests](../CMUXMaestroPreviewTests/SidebarAttentionTests.swift): `attentionSurvivesRetentionDismissalAndCollapseUntilExplicitAcknowledgement` | [PR27][r27] verifies real expiry, dismissal/restoration, reload and active-work protection. [PR28][r28] verifies that history does not erase outstanding attention and old acknowledgement does not hide a new outcome. |
-| Mode, density and durable expansion | [SidebarPreferencesTests](../CMUXMaestroPreviewTests/SidebarPreferencesTests.swift): `persistsThroughReconstruction`; [SidebarLayoutTests](../CMUXMaestroPreviewTests/SidebarLayoutTests.swift): `everyIdentityAndDensityRoundTripAcrossStoreReconstruction`, `collapsedAncestorsKeepRunningBlockingAndAttentionSummaryWithoutChangingProjection` | [PR29][r29] verifies eight density/mode/width combinations, workspace/surface/session expansion, summaries, reload and reset. Live child-collapse was unavailable because the controlled children were leaves; it remains synthetically covered. |
-| Typed Focus and visible navigation failures | [SidebarNavigationTests](../CMUXMaestroPreviewTests/SidebarNavigationTests.swift): `navigationUsesTypedHostAndCurrentWorkspaceAfterSurfaceMove`, `hostRejectionsCancellationAndDisconnectNeverExposeRawText`, `unresponsiveNavigationTimesOutWithoutWaitingForCancelledHostWork` | Live Focus is verified in [PR27][r27] and [PR28][r28]. Failure/cancellation/timeout cases are Swift-covered. Child Focus selects its owning surface, not an invented child terminal. |
-| Privacy, isolation and non-vetoing observation | [CopilotReaderTests](../CMUXMaestroPreviewTests/CopilotReaderTests.swift): `offSurfaceIndexRecordsNeverReachProcessValidationOrPublicSnapshot`; [CopilotSetupTests](../CMUXMaestroPreviewTests/CopilotSetupTests.swift): `wrapperExecutesNegativeControlButAlwaysSilencesMissingAndFailingHelpers` | Direct reading is delivered in [PR26][r26]; live isolation is verified in [PR30][r30]. Narrow sandbox and compiled-hook checks provide separate CI evidence. |
-| Unknown/degraded data, freshness and bounded catch-up | [SidebarCopilotTreeTests](../CMUXMaestroPreviewTests/SidebarCopilotTreeTests.swift): `partialKnownChildrenRemainVisibleWithoutInventingZeroOrModels`, `pollingUsesOnlyGrantedVisibleSurfacesAndClearsOnRevocation`, `staleHistoryCannotTriggerCatchUpAndHideCancelsCatchUpPause` | Partial counts, revocation and stale-data handling have Swift proof. Continuing observations and stable scrolling are verified in [PR27][r27]/[PR28][r28]. Missing evidence never implies success or a hung agent. |
-| Accessibility semantics and glanceability | [SidebarClarityTests](../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `statusGlyphsUseOneFamilyWithoutRelyingOnColorAlone`, `managedAndObservedWorkUseTheSameStatusGlyphs`, `realDetailsAndFocusHandlersAreIndependentAndKeepTypedNavigationGuards`; [SidebarLayoutRenderingTests](../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): `syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes`, `managedRowsStayWithinCompactHeightBudgetAtThreeHundredWidth` | Deterministic managed and unmanaged renders cover 300–340-point hierarchy-first layouts, shared circular state glyphs, duplicate names, long branches, nested ancestry, selected managed model data and explicit vertical/ordinary-row budgets. Only verified working activity is green; idle, completed and uncertain states are neutral and remain distinguishable by shape and accessible labels. Focus, expansion and selection remain distinct. Spoken VoiceOver/global accessibility settings were not changed or claimed tested. |
-| Unified workspace outline and mixed-source density | [SidebarClarityTests](../CMUXMaestroPreviewTests/SidebarClarityTests.swift): `unifiedOutlineClaimsOnlyExactManagedWorkspaceSurfacePairs`, `outlineMovesPassiveToolActivityToDetailsButRetainsWorkAndAncestors`, `staleManagedStateAndRegistrationNeverClaimRunning`; [SidebarLayoutRenderingTests](../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): mixed incomplete-history fixture in `syntheticSidebarRendersAtNarrowWidthsInBothDensitiesAndModes` | One workspace heading; exact managed ownership removes duplicate terminal rows. Single-session terminal rows absorb session presentation. Passive skill/shell activity remains in details and Taskboard. Pixel-recognized fixture titles and a 400-point document budget catch duplicated/missing content; this offscreen evidence is not installed-host acceptance. Stale status cannot claim running; stale Git labels are explicitly last-verified. |
-| Stable local install, update, rollback and recovery | [test-local-preview.py](../scripts/test-local-preview.py): `test_first_install_stable_copy_and_exact_registration`, `test_atomic_updates_preserve_one_previous_and_rollback_is_reversible`, `test_ambiguous_recovery_refuses_to_guess` | [PR30][r30] verifies real stable installation, signed Debug/Release update, exact rollback and recovery. This is local-preview delivery, not public distribution. |
-| Explicit terminal-backed orchestration | [test-cmux-maestro-orchestrator.py](../scripts/test-cmux-maestro-orchestrator.py): external create/attach/archive ordering, exact surface retention, background-tab startup, exact ownership/resume, strict permission-free `final_answer` reports, caller-explicit private tool policy and descendant non-escalation, visible JSON permission denial, verified-idle report recovery, successful/nonzero/malformed result boundaries, bounded streaming, in-turn heartbeats, live-resource cap/reclamation, archive/recovery, automatic exit and focus contracts, and bounded timestamped Git evidence refresh from explicit working directories; [SidebarOrchestrationTests](../CMUXMaestroPreviewTests/SidebarOrchestrationTests.swift): exhaustive managed phase titles/symbols, validated ancestry/lifecycle/timestamps, Git evidence status/time, stale qualification and privacy-preserving current-window filtering; [SidebarLayoutRenderingTests](../CMUXMaestroPreviewTests/SidebarLayoutRenderingTests.swift): regenerated mixed-state render and direct density bounds; [test-copilot-sandbox.sh](../scripts/test-copilot-sandbox.sh): observer-readable/private-sibling-denied proof | Observer projection adds only bounded verified worktree/branch labels, Git evidence status/time and the exact controlled worker session UUID. Full working directories remain private control data. Git probes run outside the state mutation lock, are batched per exact assigned directory, have a one-second/4 KiB bound and never run in the sandboxed sidebar. Non-Git, missing, detached, timeout, malformed, overlong and failed-query behavior is covered. Live validation remains operator-gated and unverified in this worktree. |
-
-Managed polling fences read success, failure, and task cleanup by generation.
-`SidebarOrchestrationTests.obsoleteReadCannotEraseCurrentStateOrDuplicatePolling`
-covers late success/missing/unsafe reads, current-task cancellation, and hide/show
-restart without erasing newer state or creating extra pollers.
+[Capability matrix](behavioral-parity/capability-matrix.md): each visible capability with its native proof and runtime evidence.
 
 ### Bounded oversized event projection
 
-The reader retains its 1 MiB ordinary-line limit, 4 MiB per-session / 8 MiB
-per-read I/O budgets, and 2,048-line per-session budget. When a line exceeds
-the ordinary limit, the existing streaming envelope seam validates its full
-JSON structure while retaining only the event decoder's metadata keys. Tool
-start/completion/partial-result payloads, assistant messages, binary assets and
-otherwise opaque events (including model diagnostics) can therefore preserve
-their ordinary decoder semantics without retaining arguments, results or
-message content. Other known lifecycle events still fail closed when oversized.
-Unknown work-lifecycle events still reach the reducer's explicit degradation;
-they are not treated as harmless model diagnostics.
+<a id="oversized-event-projection"></a>
+The contract is in [Oversized assets, rerouting and fast retry](reference/reader-lifecycle/oversized-and-rerouting.md), [Bounded retention and discovery](reference/reader-lifecycle/bounded-retention.md).
 
-The streaming validator rejects malformed tokens, invalid UTF-8/escapes,
-unpaired Unicode surrogates, duplicate keys (including escaped equivalents),
-and invalid/truncated container structure. Bounds are 64 total container
-levels, 1,024 encoded bytes per key and 65,536 encoded key bytes across open
-objects. Arbitrary binary-asset `metadata` and tool-result `structuredContent`
-maps have no separate per-object key-count ceiling. Even an empty JSON string
-key costs two encoded bytes including its quotes, so the aggregate budget
-implies at most 32,768 live key entries across the open objects. This is a
-conservative cardinality bound, not a 64 KiB heap-allocation limit: Swift
-String/Set storage and frame overhead are additional, with their cardinality
-bounded by the same budget and depth limit. Wide maps can cost more overhead
-than narrow maps within that bound. Retained projection-field cardinality is
-separately fixed by the existing decoder's CodingKeys; admitting wider opaque
-maps does not add projected fields. Arrays and opaque strings are scanned,
-not buffered.
-Selected scalar retention is capped at 2,048 encoded bytes per field. A scalar
-beyond that cap remains present but unusable to the existing decoder, never
-silently omitted or defaulted; irrelevant fields of opaque events stay ignored.
-The final projected envelope must fit the unchanged ordinary-line limit.
-These resource bounds can conservatively reject otherwise valid pathological
-JSON. They are not permission to clear a previous reader error.
+- [`CopilotAssetEnvelopeTests.swift`](../CMUXMaestroPreviewTests/CopilotAssetEnvelopeTests.swift)
 
-Work is linear in consumed bytes with bounded stack/key storage. Crossing the
-line limit additionally scans the already-buffered prefix once (at most 1 MiB
-with defaults); it does not reread or accumulate the remainder of the payload.
-A complete newline and verified file/identity boundary are still required for
-publication. Torn appends retain the previous complete observation and report
-loading; malformed completed lines retain explicit degradation. No Working or
-Idle state is inferred from process liveness, and no persisted tail is repaired
-by discarding errors.
-
-`CopilotAssetEnvelopeTests` covers synthetic below/exact/above default and
-reduced line limits, ordered/escaped/chunked payloads, malformed and incomplete
-JSON, resource boundaries, tool success/failure and wrong-owner/turn/replay
-controls, advisory message attribution, and a multi-batch large-history
-reader-to-sidebar Working-to-Idle transition. This is source-level recovery
-evidence for #121, not installed-app acceptance or proof of every reported
-missing/Unknown row.
-
-The wide-map regressions cover 64, 65 and 256 unique keys in asset metadata
-and tool structured results, both below and above the ordinary line limit
-and across chunk boundaries. Their red/green proof corrects the earlier
-unsupported 64-key ceiling rather than waiving a producer-contract failure.
-Duplicate keys and malformed values after the 64th entry remain rejected;
-the aggregate-key control admits exactly 65,536 encoded bytes across open
-objects and rejects 65,537.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#bounded-oversized-event-projection).
 
 ### Multi-turn child identity and completion attribution
 
-Copilot 1.0.88 can persist `subagent.configured(multiTurn: true)`, complete the
-original spawn task, then start another interaction on the same child without
-another `subagent.started`. The reducer retains that child's observed name,
-kind and ancestry on the fresh interaction, retiring the old spawn-result join.
-Completion remains a terminal task outcome until fresh activity is observed.
-Documented `subagent.selected` profile metadata does not replace the spawn
-identity or revoke that capability. Other unknown subagent lifecycle events
-still invalidate it. Reused turn numbers require the existing causal guards.
-`CopilotInteractionTests.demonstratedMultiTurnFragmentPreservesIdentityOnlyOnFreshContinuation`
-replays a redacted seven-event producer fragment; its omitted causal envelopes
-do not prove an untagged final end.
+<a id="multi-turn-child-identity"></a>
+The contract is in [Turn identity and causal bridging](reference/reader-lifecycle/turn-identity.md).
 
-An approved metadata-only Copilot 1.0.88 probe subsequently established that
-`assistant.message` carries both the current `interactionId` and `turnId`, even
-across root-owned warning/hook envelopes. Its linked `assistant.turn_end` still
-carries only the reused turn number. The reducer reads only those two bounded
-message identifiers, verifies the exact owner and current interaction/turn, and
-uses the message as that owner's completion anchor. Message content is never
-decoded or projected. Messages cannot create a turn, revive ended work, or
-replace spawn identity. Their event IDs use the existing bounded replay guard.
+- [`CopilotInteractionTests.swift`](../CMUXMaestroPreviewTests/CopilotInteractionTests.swift): `demonstratedMultiTurnFragmentPreservesIdentityOnlyOnFreshContinuation`, `producerTaggedMessagesProveRepeatedChildFollowUpCompletion`, `readerProjectsTaggedInterleavedParentChildAndGrandchildIdle`
 
-`producerTaggedMessagesProveRepeatedChildFollowUpCompletion` and
-`readerProjectsTaggedInterleavedParentChildAndGrandchildIdle` cover this
-producer-shaped attribution through repeated follow-ups and the reader/tree
-seams, retaining identity and ancestry while returning to Idle. The nested
-fixture is a synthetic composition of the observed single-child sequence,
-not a claim of installed-app or live grandchild acceptance.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#multi-turn-child-identity-and-completion-attribution).
 
-**Missing current-turn proof remains Unknown.** The earlier review packet did
-not establish message tags; its negative regressions remain intact:
-`interleavedUntaggedFollowUpNeedsOwnedProofNotGlobalChronology`,
-`repeatedProducerShapedUntaggedFollowUpsRemainExplicitlyUnknown` and the matching
-reader/tree regression preserve the child's name/kind/ancestry but report
-Unknown / `ambiguousTurn`, including repeated follow-ups. The global chronological
-chain is not treated as ownership proof. Partial, malformed, null, conflicting,
-wrong-owner and replayed message tags cannot borrow a current parent link.
-Unusable advisory message metadata does not suppress the whole session; a
-completion lacking another valid anchor reports the explicit ambiguity.
-Legacy untagged same-owner envelope linkage and current-tool-origin controls
-remain supported. A tool first observed after a gap still cannot attest a turn.
+<a id="multi-turn-unknown-and-capability"></a>
+**Multi-turn child identity: unknown turns and capability.** The contract is in [Turn identity and causal bridging](reference/reader-lifecycle/turn-identity.md), [Tool events and missing causal evidence](reference/reader-lifecycle/tool-events.md). This does not complete #118/#119, select a shared runtime architecture, add saved-session resurrection, or grant child control/placement.
 
-Capability is private, bounded reducer state: strict boolean configuration in a
-timestamped initial spawn window, before any child turn, with one admission per
-observed child ID. Missing/late configuration, missing spawn evidence,
-known old timestamps and reused child IDs cannot grant continuation, even if the
-old child became Unknown and was retired before its configuration was observed.
-Explicit false revokes it. Failed/cancelled child outcomes, scoped abort/error,
-shutdown/resume and uncertain lifecycle boundaries invalidate it; a root-turn
-abort/error does not imply independent background children ended. Retired rows
-remain retired. Legacy model projection, including lagging configuration
-timestamps, is independent of capability admission; public snapshots are unchanged.
-This fixes demonstrated continuation identity and tagged-message attribution, not every Unknown agent or a
-particular screenshot, and does not complete #118/#119, select a shared runtime
-architecture, add saved-session resurrection, or grant child control/placement.
+- [`CopilotInteractionTests.swift`](../CMUXMaestroPreviewTests/CopilotInteractionTests.swift): `interleavedUntaggedFollowUpNeedsOwnedProofNotGlobalChronology`, `repeatedProducerShapedUntaggedFollowUpsRemainExplicitlyUnknown`
 
-Managed report fixtures include the real terminal sequence: `final_answer`,
-`assistant.turn_end`, `session.usage_checkpoint`, `assistant.idle`, then `result`.
-Only non-content terminal bookkeeping is permitted; later assistant/tool work
-and post-result events remain rejected. Policy denial requires a failed tool's
-structured error code, not words found inside successful output.
-Resumed-session empty `session.background_tasks_changed` invalidations are also
-accepted as notifications, never as proof that background work finished.
-The CLI's ephemeral `assistant.reasoning` auxiliary envelope is ignored without
-using or publishing its contents; it is not a new reply or a task report.
-
-Owned pre-orchestration installs may lack the newer controller/skill assets when
-their signed profile has no orchestration grant. Their exact receipts remain
-required for status, preparation, recovery, update and rollback. New sources and
-any profile granting orchestration access still require the complete asset pair.
+[Evidence, test inventories and limits](evidence/behavioral-parity.md#multi-turn-child-identity-unknown-turns-and-capability).
 
 ## Intentional differences and explicit limits
 
-- **No observer service or loopback transport.** The proposals in
-  [#9](https://github.com/jdylanmc/cmux-maestro/issues/9) and
-  [#12](https://github.com/jdylanmc/cmux-maestro/issues/12) are superseded.
-  The optional identity hook is non-vetoing; the sandboxed sidebar reads
-  directly. Focus is a CMUX action. Dismissal and acknowledgement cannot approve,
-  answer, stop or otherwise control the provider.
-- **Managed control is external and explicit.** The sandboxed sidebar remains
-  read-only. A separately installed local command creates unfocused terminal
-  tabs through supported CMUX CLI UUID operations and launches exact Copilot
-  session IDs. It stores private control data outside the sidebar-readable
-  projection. It does not inspect or reconstruct Copilot's hidden subagent
-  graph, approve tools, delete tabs, stop sessions, or fall back to
-  `--continue`, recent sessions, titles, paths, focus, or terminal text.
-- **Neutral contract versus adapter internals.** The versioned
-  [AgentSessionSnapshot](../CMUXMaestroPreview/Domain/AgentSessionSnapshot.swift)
-  now feeds live polling and projection through the pure
-  [CopilotSnapshotAdapter](../CMUXMaestroPreview/CopilotShared/CopilotSnapshotAdapter.swift).
-  `CopilotSnapshot` remains the reader's parsing result, not a sidebar envelope.
-  Optional typed evidence preserves idle/failure/cancellation separately from
-  legacy `done`, liveness independently from work, and launch placement separately
-  from current host binding. The existing `childWork` always remains a valid
-  nested v1 hierarchy; additional `childWorkObservation` carries ordered literal
-  edges and explicitly marks lossy legacy projections without fabricated parents.
-  [Adapter tests](../CMUXMaestroPreviewTests/CopilotSnapshotAdapterTests.swift)
-  exercise the real polling reader seam and unknown/partial evidence.
-  [Compatibility tests](../CMUXMaestroPreviewTests/AgentSnapshotCompatibilityTests.swift)
-  retain the negative unsupported-state control.
-  [Actual frozen validation](../CMUXMaestroPreviewTests/LegacySnapshotValidationTests.swift)
-  checks the original codec and validator against fixtures and new graph shapes.
-  [Consumer validation](../CMUXMaestroPreviewTests/NeutralObservationValidationTests.swift)
-  exercises malformed neutral projection and polling, safe peers, retained active
-  descendants, history protection and bounded traversal with explicit unknown
-  omission totals. This implements the literal
-  [#10](https://github.com/jdylanmc/cmux-maestro/issues/10) data path, not all of
-  #118's lifetime correspondence, recovery, ownership or control gates. No hook
-  policy, independent child focus/resume capability or new runtime is introduced.
-- **Unsupported telemetry stays unknown.** No guessed token/context percentage
-  or hang diagnosis substitutes for unavailable provider evidence.
-- **Bounded uncertainty is visible.** Read/display limits, missing ancestry,
-  unresolved turn causality and replay-filter uncertainty must not preserve
-  obsolete completion as proof that new work ended.
-- **Accessibility evidence has boundaries.** Native accessibility-tree semantics,
-  representative layout checks and synthetic contrast coverage do not constitute
-  spoken VoiceOver testing or a change to global keyboard/contrast settings.
-- **Uninstall and cutover are deliberately limited.** Live uninstall was not
-  performed while cached hooks remained active.
-  `test_uninstall_requires_explicit_hook_retirement_keeps_all_user_data`
-  verifies its guard. Public licensing, notarization and disabling/retiring the
-  legacy plugin remain operator decisions. Coexistence is intentional.
-- **Update preparation is explicit.** [PR33][r33] exposes guarded registration
-  retirement without deleting files or signalling CLI sessions. Its public
-  prepare/recover flow restored the exact receipt and verified registration;
-  synthetic tests additionally cover one-call recovery after a prepared update
-  fails during copying or before replacement.
-
-There are no unexplained gaps in this visible-capability inventory after these
-dispositions. This statement is not a new exhaustive legacy audit, a claim that
-all operator-gated work is finished, or permission to weaken future regression
-and live-verification gates.
+[Intentional differences and explicit limits](behavioral-parity/intentional-differences.md): superseded proposals, deliberate gaps and acceptance boundaries.
 
 [r26]: https://github.com/jdylanmc/cmux-maestro/pull/26
 [r27]: https://github.com/jdylanmc/cmux-maestro/pull/27#issuecomment-5658114796

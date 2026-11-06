@@ -2,7 +2,7 @@
 
 **See every Copilot agent. Trust none of the guesses.**
 
-Maestro is a macOS sidebar for [CMUX](https://github.com/manaflow-ai/cmux). It shows your GitHub Copilot sessions, their sub-agents, and what each one needs from you. Many agents running. One column to watch.
+Maestro is a macOS sidebar for [CMUX](https://github.com/manaflow-ai/cmux). It shows your GitHub Copilot sessions, their sub-agents, and what each one needs from you, in one column.
 
 <p align="center">
   <img src="docs/images/sidebar.png" alt="Maestro sidebar: workspaces, agents, internal tasks, and the pinned details footer" width="340">
@@ -13,10 +13,10 @@ Maestro is a macOS sidebar for [CMUX](https://github.com/manaflow-ai/cmux). It s
 
 ## Why
 
-Run five agents and you lose track. Which one waits on a permission? Which one died? Which one is on the wrong branch? Maestro answers from evidence, not vibes.
+With several agents running, it is easy to lose track of which one waits on a permission, which one died, and which one is on the wrong branch. Maestro answers from recorded evidence.
 
 - **Honest.** Unknown stays unknown. No guessing owners from titles. No "done" from a quiet terminal.
-- **Safe.** Sidebar is sandboxed. Reads sanitized files. No transcripts, no credentials, no daemon.
+- **Safe.** The sidebar is sandboxed. It shows only sanitized, allowlisted metadata, never transcripts or credentials, and runs no daemon.
 - **Calm.** Passive previews. Finished work hides. Failures stay until you dismiss them.
 
 ## What you get
@@ -44,8 +44,8 @@ Needs macOS 14+, Xcode 26.6 (to build), CMUX with sidebar extensions, and Copilo
 ./scripts/build-register.sh --provisioning-profile /absolute/path/to/development.provisionprofile
 ```
 
-Requires an existing development identity and matching production-app Communication
-Notifications profile. [Signing prerequisites](docs/reference/install-update-recovery.md).
+Requires an existing development identity and a matching production-app Communication
+Notifications profile. See [signing prerequisites](docs/reference/install/local-preview.md).
 
 That installs `~/Applications/CMUX Maestro Preview.app` and the Copilot integration in one transaction. Then select **Maestro Sidebar** as the sidebar in CMUX.
 
@@ -62,7 +62,7 @@ npx skills add jdylanmc/cmux-maestro --skill maestro maestro-demo --agent github
 
 With integration enabled, `/maestro-demo` launches two visible workers with
 icons, tags and original self-drawn pets, then steers each with one message.
-Three workers on request; closing requires separate approval.
+It launches three workers on request, and closing requires separate approval.
 For pre-merge local-source installation, see [CLI guides](docs/reference/cli-guide-and-uninstall.md).
 
 ## Use
@@ -73,11 +73,9 @@ For pre-merge local-source installation, see [CLI guides](docs/reference/cli-gui
 4. Eye icon on a workspace reveals idle and finished internal tasks.
 5. Click an agent's pet or icon to change it. `⇧⌘R` renames a workspace (CMUX does that, not us).
 
-Agents launched by Maestro are normal interactive Copilot sessions. You can type to them. They never run headless.
-
-Copilot sessions you start in CMUX after setup enroll as managed when they are eligible: they see their workspace peers and can spawn children. Sessions that were already running are left alone. A session can stay unmanaged (for example at capacity, or when an identity check fails); `maestro_readiness` gives the reason, and [ADR 0025](docs/adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md) lists the limits.
-
-After CMUX quits and reopens, sessions Maestro launched are designed to come back on their exact session once you approve Maestro's resume command prefix in **CMUX Settings > Terminal > Resume Commands**. Sessions you started come back only through CMUX's own Copilot restore, which needs CMUX's Copilot hooks and does not work for sessions started with `--name`. Wrapped launches (such as Agency) are not covered. This is not yet verified in a live CMUX; see [relaunch restore](docs/reference/relaunch-restore.md) for the gaps and the live checks.
+Maestro-launched agents are normal interactive Copilot sessions. How new
+sessions enroll as managed and how sessions come back after CMUX relaunches is
+in [using Maestro](docs/usage.md).
 
 ## Rules of the house
 
@@ -86,7 +84,7 @@ After CMUX quits and reopens, sessions Maestro launched are designed to come bac
 - Maestro never kills, restarts, or types into your live sessions.
 - Preview install is yours, not a release. No license yet.
 
-Why each rule exists: [decisions](docs/adr/).
+The reasons for each rule are in the [decisions](docs/adr/).
 
 ## Docs
 

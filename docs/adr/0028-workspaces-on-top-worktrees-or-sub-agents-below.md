@@ -8,4 +8,4 @@ Why: the owner decided on 2026-10-19 that workspaces stay the organizing level, 
 
 Rejected: the three-way Worktrees / Sub-agents / Workspace selector of the September design (#58). A per-workspace choice. Grouping by branch label, repository name, pane, title, or a parent's worktree.
 
-Consequence: assigned-directory context and activity captions no longer appear on agent rows; both remain in the row's help, and the assigned directory in hover cards and details. Agents with no current-worktree evidence group under `Unknown` until their next hook. The layout record gains a `worktreeGroup` disclosure kind; an older build cannot read a layout record that contains one and shows its existing layout notice.
+Consequence: assigned-directory context and activity captions no longer appear on agent rows; both remain in the row's help, and the assigned directory in hover cards and details. Agents with no current-worktree evidence group under `Unknown` until their next hook. The layout record gains a `worktreeGroup` disclosure kind. An older build cannot read a layout record that contains one and shows its existing layout notice.

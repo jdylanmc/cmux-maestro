@@ -12,7 +12,7 @@ SHA-256 of the concatenated patches, so editing a patch refetches the SDK.
 
 To change a patch, edit a freshly fetched `vendor/CmuxExtensionKit`, then
 regenerate the patch against a pristine extract of the same commit with
-`diff -ruN a b` from the `Sources/` parents. Strip timestamps; use
+`diff -ruN a b` from the `Sources/` parents. Strip timestamps. Use
 `/dev/null` for new files. Never commit `vendor/`.
 
 Drop a patch when the pinned commit contains an equivalent upstream change.

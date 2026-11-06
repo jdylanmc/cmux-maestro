@@ -1,84 +1,29 @@
 # Pet moods
 
 The pet uses the exact session's sanitized presentation inputs, not its status
-icon or terminal text. Missing facts stay unknown. A mood changes only art and
-its accessibility description/tooltip; status, attention, acknowledgement,
+icon or terminal text, and missing facts stay unknown. A mood changes only art
+and its accessibility description/tooltip. Status, attention, acknowledgement,
 history and lifecycle remain independent.
 
 Self-reports require fresh, exact, alive Copilot observations and the reader's
-six-field generation match. Native sessions do not heartbeat the orchestration
-snapshot or node timestamps: their age alone does not expire an otherwise
-eligible report. Unavailable observations, invalid stores and cold-start
-suppression still disable the overlay.
+six-field generation match. Native sessions do not heartbeat the orchestration snapshot or node timestamps,
+so their age alone does not expire an otherwise eligible report. Unavailable
+observations, invalid stores and cold-start suppression still disable the
+overlay.
 
-For a legacy registered coordinator without a session UUID, hover and inspector
-reuse the existing unique fresh live observation on its exact workspace/surface
-for derived moods. This placement fallback never authorizes a self-report.
+For derived moods of a legacy registered coordinator without a session UUID,
+hover and inspector reuse the unique fresh live observation on its exact
+workspace/surface. This placement fallback never authorizes a self-report.
 
-The active footer retains a pet for one uniquely identified, freshly observed
-ended session on its surface, so Gone can preempt a hold. This does not restore
-live session names, model text, tags, managed Git fields or copyable paths.
-Ambiguous occupancy and replacement bindings do not inherit an ended pet.
+The active footer keeps a pet for one uniquely identified, freshly observed
+ended session on its surface, so Gone can preempt a hold. It does not restore
+live session names, model text, tags, managed Git fields or copyable paths, and
+ambiguous occupancy and replacement bindings do not inherit an ended pet.
 
-First matching rule wins:
+## Mood rules
 
-1. Pending permission → **Needs permission**.
-2. Pending answer → **Question**.
-3. Explicit dead liveness → **Gone**, not success or failure.
-4. Observation unavailable → neutral **Idle** art with an unavailable basis.
-5. Failed root or relevant internal task with an unacknowledged error → **Sad**.
-6. Cancelled with `user_abort` → **Startled**; other/unknown reasons → neutral art.
-7. Quota/authorization, model trouble, or three consecutive tool failures →
-   **Confused**. This never relabels a failed lifecycle as recoverable.
-8. Eligible exact-generation self-report → **Proud** (`happy`), **Celebrating**,
-   or **Confused**. The description includes “Self-reported: happy”, etc.
-9. Active compaction → **Compacting**.
-10. Working internal subagent task → **Delegating**. Managed child sessions,
-    shells and skills do not count.
-11. Executing tool → **Working**.
-12. Open primary turn → **Thinking**.
-13. Unacknowledged Turn finished older than 60 seconds → **Sleepy**; otherwise,
-    positively observed clean turn → **Content**, never proof of a good outcome.
-14. Otherwise → **Idle**, with an explicit observed-idle or neutral basis.
+[Mood rules](pet-moods/mood-rules.md)
 
-`SidebarPetMood` owns the three tuning constants: `minimumMoodHold` (3 seconds),
-`sleepyAfter` (60 seconds), and `confusedToolFailureThreshold` (3).
+## Timing, preview and motion
 
-Each visible pet owns a cancellable display deadline through
-`SidebarPetMoodDisplay`. A shown expression holds for the minimum duration, then
-snaps to the *current* candidate without requiring another event. Ended
-intermediate moods are skipped. Same-mood observations do not rearm the hold.
-Question, Needs permission, Sad and Gone preempt immediately. Exact placement,
-session, managed node/run/generation or bound-process changes reset the hold.
-Disappearance cancels the deadline; nothing is persisted.
-
-Sleepy uses the existing unacknowledged Turn finished timestamp, not process idle
-time. Acknowledgement removes that candidate; the ordinary art hold still applies.
-It does not expire or acknowledge an outcome. One deadline handles hold
-catch-up, Sleepy and explicit cosmetic preview slots/expiry, with an injectable
-clock for deterministic tests.
-
-A human-requested `maestro_mood({"mood":"preview"})` temporarily shows all fifteen
-expressions at five seconds each, without altering the ordinary resolver.
-The real current mood remains available in the description. Every preview pet
-shows a small play glyph in the art's physical top-left corner, without
-changing the pet frame; the glyph is hidden from accessibility, and the pet's
-label and help carry the localized cosmetic basis. Urgent facts, observation
-loss and identity changes immediately halt that request in every pet view
-showing the session, including views created later.
-An urgent fact that starts and ends while the sidebar is hidden is not
-observed, so the rest of the 75-second window may play when it is shown again.
-`cancel-preview` and the 75-second expiry snap to ordinary resolution without
-the three-second art hold. The request's fixed timeline never restarts on
-duplicate observations or late view creation.
-
-Reduce Motion displays frame zero of the same selected mood and obeys the same
-precedence and hold. Held art is described separately from the current mood/basis.
-Footer status and attention badges never wait for the art. Hover previews remain
-passive. Sheet selection uses the existing mood playback API, including each
-legacy fallback's own loop length. Bundled art updates are separate (#383);
-legacy fallback rows need not be visually distinct.
-
-See [self-reported moods](self-reported-moods.md) for identity validation,
-cold-start suppression and malformed-store safeguards, and
-[pets and icons](pets-and-icons.md) for the atlas contract.
+[Timing, preview and motion](pet-moods/timing-preview-and-motion.md)

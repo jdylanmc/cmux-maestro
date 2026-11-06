@@ -31,7 +31,7 @@ Sanitized record tying one session to its exact workspace, surface, process, and
 _Avoid_: association, mapping
 
 **Observation**:
-Bounded, sanitized fact read from Copilot or CMUX. Evidence only; grants no authority.
+Bounded, sanitized fact read from Copilot or CMUX. Evidence only. Grants no authority.
 _Avoid_: event, log, status feed
 
 **Observation loss**:
@@ -43,7 +43,7 @@ The session or child that owns a turn, tool call, request, or outcome.
 _Avoid_: process, parent
 
 **Location record**:
-Session ID, branch, and worktree flag, plus the session's current worktree. No path.
+Session ID, branch, and worktree flag, plus the session's current worktree. It records no path.
 _Avoid_: repository record
 
 **Current worktree**:
@@ -171,7 +171,7 @@ Maestro takes back a human-started root that CMUX's own restore or the human res
 _Avoid_: adoption
 
 **Workspace capacity**:
-Launch limit (1 to 128, default 32) against current managed usage. Preflight is advisory; reservation rechecks.
+Launch limit (1 to 128, default 32) against current managed usage. Preflight is advisory. Reservation rechecks.
 _Avoid_: quota
 
 **Launch receipt**:
@@ -185,7 +185,7 @@ Outline view of workspaces, surfaces, sessions, and agents.
 _Avoid_: tree view
 
 **Projection**:
-How the Hierarchy groups each workspace's agents: Worktrees (by current worktree) or Sub-agents (by spawning parent). One global choice; workspaces stay on top. (ADR 0028)
+How the Hierarchy groups each workspace's agents: Worktrees (by current worktree) or Sub-agents (by spawning parent). One global choice. Workspaces stay on top. (ADR 0028)
 _Avoid_: view, mode, grouping workspace
 
 **Icon card**:
@@ -218,7 +218,7 @@ Nerd Font glyph plus identity color, scoped to one session or surface.
 _Avoid_: avatar
 
 **Tag**:
-Short canonical slug on an agent session, assigned by the human, by the agent for itself, or both. Its color belongs to the slug, everywhere; only the human picks it. (ADR 0026)
+Short canonical slug on an agent session, assigned by the human, by the agent for itself, or both. Its color belongs to the slug, everywhere. Only the human picks it. (ADR 0026)
 _Avoid_: label, category
 
 **Pet**:
@@ -234,7 +234,7 @@ failure and Gone preempt. Never work, attention, liveness or completion evidence
 _Avoid_: sentiment, status
 
 **Self-reported mood**:
-Optional `happy`, `celebrating` or `confused` an agent reports for its own exact session; `clear` withdraws it. Authored presentation metadata, never work, success or completion evidence (ADR 0031).
+Optional `happy`, `celebrating` or `confused` an agent reports for its own exact session. `clear` withdraws it. Authored presentation metadata, never work, success or completion evidence (ADR 0031).
 _Avoid_: emotion, feeling
 
 **Cosmetic mood preview**:
@@ -252,7 +252,7 @@ _Avoid_: footer inset
 _Avoid_: settings blob
 
 **Sidebar order**:
-Maestro-only order of workspaces in a window and of surfaces in a workspace, kept in `sidebar-order.json`. Never sent to CMUX; CMUX's order is the base.
+Maestro-only order of workspaces in a window and of surfaces in a workspace, kept in `sidebar-order.json`. Never sent to CMUX. CMUX's order is the base.
 _Avoid_: CMUX order, tab order, sort
 
 ### Install and trust
