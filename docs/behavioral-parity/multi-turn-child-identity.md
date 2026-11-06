@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [Multi-turn child identity: unknown turns and capability →](multi-turn-unknown-and-capability.md)
 
-Contract: [Turn identity and causal bridging](../reference/reader-lifecycle/turn-identity.md).
+The contract is in [Turn identity and causal bridging](../reference/reader-lifecycle/turn-identity.md).
 
 Tests:
 

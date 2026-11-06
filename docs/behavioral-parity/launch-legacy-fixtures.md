@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Direct interactive launch](direct-interactive-launch.md) | [Launch: workspace capacity →](launch-workspace-capacity.md)
 
-Contract: [Legacy bounded-worker compatibility](../reference/messaging-launch-settings/legacy-bounded-worker-compatibility.md), [Workspace launch capacity](../reference/messaging-launch-settings/workspace-launch-capacity.md).
+The contract is in [Legacy bounded-worker compatibility](../reference/messaging-launch-settings/legacy-bounded-worker-compatibility.md), [Workspace launch capacity](../reference/messaging-launch-settings/workspace-launch-capacity.md).
 
 Tests:
 

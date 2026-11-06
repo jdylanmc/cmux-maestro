@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Retired slots and native publication](install-retired-slots.md) | [Alpha installation: plugin identity and disabled state →](install-plugin-state.md)
 
-Contract: [Transaction and recovery contract: integration checkpoint](../reference/install/integration-checkpoint.md), [Transaction and recovery contract: locks and supervision](../reference/install/transaction-contract.md).
+The contract is in [Transaction and recovery contract: integration checkpoint](../reference/install/integration-checkpoint.md), [Transaction and recovery contract: locks and supervision](../reference/install/transaction-contract.md).
 
 Tests:
 

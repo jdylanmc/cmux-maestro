@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Dedicated observer registration](observer-registration.md) | [Migration and restoration →](observer-migration.md)
 
-Contract: [Plugin and observer hook](../reference/setup-and-integration/plugin-and-observer-hook.md), [Legacy migration and disable preservation](../reference/setup-and-integration/legacy-migration-and-disable-preservation.md).
+The contract is in [Plugin and observer hook](../reference/setup-and-integration/plugin-and-observer-hook.md), [Legacy migration and disable preservation](../reference/setup-and-integration/legacy-migration-and-disable-preservation.md).
 
 Tests:
 

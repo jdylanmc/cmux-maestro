@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [Launch: legacy fixtures and lock budgets →](launch-legacy-fixtures.md)
 
-Contract: [Interactive startup and native bindings](../reference/hierarchy-launch-lifecycle/interactive-startup-and-native-bindings.md), [Launch commands and interactive workers](../reference/hierarchy-launch-lifecycle/launch-commands-and-interactive-workers.md), [Installed lifecycle and permissions](../native-messaging/installed-lifecycle.md).
+The contract is in [Interactive startup and native bindings](../reference/hierarchy-launch-lifecycle/interactive-startup-and-native-bindings.md), [Launch commands and interactive workers](../reference/hierarchy-launch-lifecycle/launch-commands-and-interactive-workers.md), [Installed lifecycle and permissions](../native-messaging/installed-lifecycle.md).
 
 Tests:
 

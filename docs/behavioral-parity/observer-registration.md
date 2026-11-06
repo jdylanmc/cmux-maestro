@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [Observer registration: provider probe evidence →](observer-provider-probes.md)
 
-Contract: [Plugin and observer hook](../reference/setup-and-integration/plugin-and-observer-hook.md), [Status, failures and messaging configuration](../reference/setup-and-integration/status-failures-and-messaging-configuration.md).
+The contract is in [Plugin and observer hook](../reference/setup-and-integration/plugin-and-observer-hook.md), [Status, failures and messaging configuration](../reference/setup-and-integration/status-failures-and-messaging-configuration.md).
 
 Tests:
 

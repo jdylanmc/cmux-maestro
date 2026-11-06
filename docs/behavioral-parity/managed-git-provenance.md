@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Contract: [Outline rows and Git evidence](../reference/sidebar/outline-rows.md), [Managed Git context and notices](../reference/sidebar/managed-git-context.md).
+The contract is in [Outline rows and Git evidence](../reference/sidebar/outline-rows.md), [Managed Git context and notices](../reference/sidebar/managed-git-context.md).
 
 Tests:
 

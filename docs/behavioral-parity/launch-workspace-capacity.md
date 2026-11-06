@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Legacy fixtures and lock budgets](launch-legacy-fixtures.md) | [Launch: native-child permissions →](launch-child-permissions.md)
 
-Contract: [Workspace launch capacity](../reference/messaging-launch-settings/workspace-launch-capacity.md), [Host safety limits](../reference/messaging-launch-settings/host-safety-limits.md).
+The contract is in [Workspace launch capacity](../reference/messaging-launch-settings/workspace-launch-capacity.md), [Host safety limits](../reference/messaging-launch-settings/host-safety-limits.md).
 
 Tests:
 

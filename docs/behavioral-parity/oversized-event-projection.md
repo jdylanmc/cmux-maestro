@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Contract: [Oversized assets, rerouting and fast retry](../reference/reader-lifecycle/oversized-and-rerouting.md), [Bounded retention and discovery](../reference/reader-lifecycle/bounded-retention.md).
+The contract is in [Oversized assets, rerouting and fast retry](../reference/reader-lifecycle/oversized-and-rerouting.md), [Bounded retention and discovery](../reference/reader-lifecycle/bounded-retention.md).
 
 Tests:
 

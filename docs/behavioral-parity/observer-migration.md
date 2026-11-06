@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Provider probe evidence](observer-provider-probes.md)
 
-Contract: [Legacy migration and disable preservation](../reference/setup-and-integration/legacy-migration-and-disable-preservation.md), [Installer process and cancellation](../reference/setup-and-integration/installer-process-and-cancellation.md).
+The contract is in [Legacy migration and disable preservation](../reference/setup-and-integration/legacy-migration-and-disable-preservation.md), [Installer process and cancellation](../reference/setup-and-integration/installer-process-and-cancellation.md).
 
 Tests:
 

@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Contract: [Explicit close](../reference/hierarchy-launch-lifecycle/explicit-close.md), [Explicit owned-descendant close](../native-messaging/owned-descendant-close.md), [Owned-descendant close: stock host behavior and admission limits](../native-messaging/close-host-behavior.md).
+The contract is in [Explicit close](../reference/hierarchy-launch-lifecycle/explicit-close.md), [Explicit owned-descendant close](../native-messaging/owned-descendant-close.md), [Owned-descendant close: stock host behavior and admission limits](../native-messaging/close-host-behavior.md).
 
 Tests:
 

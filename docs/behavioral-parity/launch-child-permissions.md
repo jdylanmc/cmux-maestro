@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Workspace capacity](launch-workspace-capacity.md) | [Launch: model selection →](launch-model-selection.md)
 
-Contract: [Native-child launch policy](../reference/messaging-launch-settings/native-child-launch-policy.md).
+The contract is in [Native-child launch policy](../reference/messaging-launch-settings/native-child-launch-policy.md).
 
 Tests:
 

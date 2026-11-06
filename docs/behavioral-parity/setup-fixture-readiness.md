@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [Hosted integrated runner →](hosted-integrated-runner.md)
 
-Contract: [Build and test](../reference/build-and-test.md), [Required behavioral coverage](../reference/ci-test-determinism/required-behavioral-coverage.md).
+The contract is in [Build and test](../reference/build-and-test.md), [Required behavioral coverage](../reference/ci-test-determinism/required-behavioral-coverage.md).
 
 Tests:
 

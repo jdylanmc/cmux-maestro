@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Multi-turn child identity and completion attribution](multi-turn-child-identity.md)
 
-Contract: [Turn identity and causal bridging](../reference/reader-lifecycle/turn-identity.md), [Tool events and missing causal evidence](../reference/reader-lifecycle/tool-events.md).
+The contract is in [Turn identity and causal bridging](../reference/reader-lifecycle/turn-identity.md), [Tool events and missing causal evidence](../reference/reader-lifecycle/tool-events.md).
 
 Tests:
 

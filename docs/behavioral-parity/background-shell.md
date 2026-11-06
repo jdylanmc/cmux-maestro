@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Contract: [Other activity, session history and history settings](../reference/history-and-internal-tasks/other-activity-and-session-history.md).
+The contract is in [Other activity, session history and history settings](../reference/history-and-internal-tasks/other-activity-and-session-history.md).
 
 Tests:
 

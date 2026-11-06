@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Contract: [Outline grouping and density](../reference/layout-and-visual-validation/outline-grouping-and-density.md), [Explicit local-only native acceptance](../reference/ci-test-determinism/explicit-local-only-native-acceptance.md).
+The contract is in [Outline grouping and density](../reference/layout-and-visual-validation/outline-grouping-and-density.md), [Explicit local-only native acceptance](../reference/ci-test-determinism/explicit-local-only-native-acceptance.md).
 
 Tests:
 

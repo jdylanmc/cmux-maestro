@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md)
 
-Contract: [Sidebar order and layout storage](../reference/layout-and-visual-validation/sidebar-order-and-layout-storage.md).
+The contract is in [Sidebar order and layout storage](../reference/layout-and-visual-validation/sidebar-order-and-layout-storage.md).
 
 Tests:
 

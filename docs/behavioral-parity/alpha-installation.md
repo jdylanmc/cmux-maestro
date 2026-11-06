@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [Alpha installation: retired slots and native publication →](install-retired-slots.md)
 
-Contract: [Update, rollback and status](../reference/install/update-and-rollback.md), [Transaction and recovery contract: integrity and retained generations](../reference/install/retained-generations.md).
+The contract is in [Update, rollback and status](../reference/install/update-and-rollback.md), [Transaction and recovery contract: integrity and retained generations](../reference/install/retained-generations.md).
 
 Tests:
 

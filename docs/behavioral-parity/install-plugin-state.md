@@ -2,7 +2,7 @@
 
 [↑ Behavioral parity and proof](../behavioral-parity.md) | [← Integration checkpoint](install-integration-checkpoint.md) | [Alpha installation: plugin-state recovery and tests →](install-plugin-recovery.md)
 
-Contract: [Transaction and recovery contract: plugin disabled state and recovery blocks](../reference/install/plugin-disabled-state.md), [Transaction and recovery contract: integration checkpoint](../reference/install/integration-checkpoint.md).
+The contract is in [Transaction and recovery contract: plugin disabled state and recovery blocks](../reference/install/plugin-disabled-state.md), [Transaction and recovery contract: integration checkpoint](../reference/install/integration-checkpoint.md).
 
 Tests:
 
