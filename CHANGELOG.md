@@ -331,6 +331,11 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ### Fixed
 
+- Sessions restarted in place with Copilot `/restart` or `/update` keep their
+  name, state and agent footer. The observer rebinds to the session's new
+  process when it is the exact direct child of the bound one and holds the only
+  session lock; the sidebar recovers immediately, read-only. You no longer need
+  to exit fully and resume. Every other live-owner conflict still refuses.
 - Mood refusals distinguish busy, proof, identity, placement and store failures
   without exposing private diagnostics or automatically retrying. Failures after
   the store is replaced stay uncertain rather than refused.

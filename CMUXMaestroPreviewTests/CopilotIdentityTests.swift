@@ -105,6 +105,100 @@ nonisolated struct CopilotIdentityTests {
         #expect(ambiguous.liveness == .ambiguous && ambiguous.state == .unknown)
     }
 
+    /// `/restart` or `/update` before the next hook: the binding still names the live parent
+    /// (4242) and its direct child (5000) holds the session's only live lock.
+    private func restartLookup(
+        _ fixture: CopilotReaderFixture, extra: [Int32: CopilotProcessIdentity] = [:]
+    ) -> @Sendable (Int32) -> CopilotProcessLookup {
+        let table = [
+            fixture.process.pid: fixture.process,
+            5000: CopilotProcessIdentity(pid: 5000, parentPID: fixture.process.pid, uid: getuid(),
+                                         startSeconds: 2, startMicroseconds: 0),
+        ].merging(extra) { _, new in new }
+        return { pid in table[pid].map { .found($0) } ?? .dead }
+    }
+
+    private func moveLock(_ fixture: CopilotReaderFixture, to pids: [Int32]) throws {
+        try FileManager.default.removeItem(at: fixture.session.appendingPathComponent("inuse.\(fixture.process.pid).lock"))
+        for pid in pids { try Data().write(to: fixture.session.appendingPathComponent("inuse.\(pid).lock")) }
+    }
+
+    @Test func inPlaceRestartChildHoldingTheOnlyLockKeepsTheSessionAlive() async throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        try fixture.writeEvents([copilotTestEvent("session.idle")])
+        try moveLock(fixture, to: [5000])
+
+        let snapshot = try await fixture.reader(lookup: restartLookup(fixture)).read(surfaceIDs: [fixture.surface])
+
+        let session = try #require(snapshot.sessions.first)
+        #expect(session.liveness == .alive)
+        #expect(session.state == .idle)
+        #expect(session.sessionIssues?.isEmpty ?? true)
+        let descriptor = try CopilotFileAccess.openDirectory(fixture.session, owner: getuid())
+        defer { close(descriptor) }
+        let evidence = try CopilotIdentityVerifier(lookup: restartLookup(fixture))
+            .inspect(record: fixture.record, sessionDirectory: descriptor)
+        #expect(evidence.status == .alive && evidence.process?.pid == 5000)
+        // A different process later holding that lock is a changed identity, not the same session.
+        let replaced = restartLookup(fixture, extra: [5000: CopilotProcessIdentity(
+            pid: 5000, parentPID: fixture.process.pid, uid: getuid(), startSeconds: 3, startMicroseconds: 0)])
+        #expect(try CopilotIdentityVerifier(lookup: replaced)
+            .verifyStable(evidence, record: fixture.record, sessionDirectory: descriptor).status == .changed)
+    }
+
+    @Test(arguments: ["no-lock", "parent-and-child", "two-children", "grandchild", "unrelated", "older-child", "other-session"])
+    func boundOwnerAliveWithoutExactRestartEvidenceIsNotAlive(_ variant: String) throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let owner = fixture.process
+        var extra: [Int32: CopilotProcessIdentity] = [:]
+        var expected = CopilotIdentityStatus.ambiguous
+        switch variant {
+        case "no-lock":
+            try moveLock(fixture, to: [])
+            expected = .unknown
+        case "parent-and-child":
+            try Data().write(to: fixture.session.appendingPathComponent("inuse.5000.lock"))
+        case "two-children":
+            try moveLock(fixture, to: [5000, 5001])
+            extra[5001] = .init(pid: 5001, parentPID: owner.pid, uid: getuid(), startSeconds: 2, startMicroseconds: 0)
+        case "grandchild":
+            try moveLock(fixture, to: [6000])
+            extra[6000] = .init(pid: 6000, parentPID: 5000, uid: getuid(), startSeconds: 3, startMicroseconds: 0)
+        case "unrelated":
+            try moveLock(fixture, to: [5000])
+            extra[5000] = .init(pid: 5000, parentPID: 1, uid: getuid(), startSeconds: 2, startMicroseconds: 0)
+        case "older-child":
+            try moveLock(fixture, to: [5000])
+            extra[5000] = .init(pid: 5000, parentPID: owner.pid, uid: getuid(), startSeconds: 1, startMicroseconds: 0)
+        default:
+            let other = try fixture.addSession(surface: fixture.surface)
+            try moveLock(fixture, to: [])
+            try Data().write(to: other.appendingPathComponent("inuse.5000.lock"))
+            expected = .unknown
+        }
+        let descriptor = try CopilotFileAccess.openDirectory(fixture.session, owner: getuid())
+        defer { close(descriptor) }
+
+        let evidence = try CopilotIdentityVerifier(lookup: restartLookup(fixture, extra: extra))
+            .inspect(record: fixture.record, sessionDirectory: descriptor)
+
+        #expect(evidence.status == expected)
+    }
+
+    @Test func liveParentHoldingItsOwnLockStaysTheVerifiedProcess() throws {
+        let fixture = try CopilotReaderFixture()
+        defer { fixture.remove() }
+        let descriptor = try CopilotFileAccess.openDirectory(fixture.session, owner: getuid())
+        defer { close(descriptor) }
+
+        let evidence = try CopilotIdentityVerifier(lookup: restartLookup(fixture))
+            .inspect(record: fixture.record, sessionDirectory: descriptor)
+
+        #expect(evidence.status == .alive && evidence.process == fixture.process)
+    }
+
     @Test func processGenerationChangesDuringReadDiscardTheCandidate() async throws {
         let fixture = try CopilotReaderFixture()
         defer { fixture.remove() }

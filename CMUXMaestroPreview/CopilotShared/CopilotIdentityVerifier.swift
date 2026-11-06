@@ -98,6 +98,7 @@ nonisolated struct CopilotIdentityVerifier: Sendable {
         let entries = try CopilotFileAccess.names(at: sessionDirectory, limit: 512)
         guard !entries.limited else { return .init(status: .ambiguous) }
         var live: [String: CopilotFileStamp] = [:]
+        var holders: [String: CopilotProcessIdentity] = [:]
         var uncertain = false
         for name in entries.names where name.hasPrefix("inuse.") && name.hasSuffix(".lock") {
             try Task.checkCancellation()
@@ -121,6 +122,7 @@ nonisolated struct CopilotIdentityVerifier: Sendable {
                     continue
                 }
                 live[name] = stamp
+                holders[name] = process
             }
         }
         guard !uncertain, live.count <= 1 else { return .init(status: .ambiguous) }
@@ -128,10 +130,27 @@ nonisolated struct CopilotIdentityVerifier: Sendable {
             return .init(status: live.isEmpty ? absentStatus : .ambiguous)
         }
         let expected = "inuse.\(record.ownerPID).lock"
-        guard live[expected] != nil else {
-            return .init(status: live.isEmpty ? .unknown : .ambiguous)
+        if live[expected] != nil {
+            return .init(status: .alive, process: owner, markers: live)
         }
-        return .init(status: .alive, process: owner, markers: live)
+        // Read-only acceptance of an in-place restart the hook has not rebound yet. The evidence
+        // names the child, so `verifyStable` detects a changed holder.
+        if live.count == 1, let name = live.keys.first, let holder = holders[name],
+           Self.isInPlaceRestart(of: owner, by: holder) {
+            return .init(status: .alive, process: holder, markers: live)
+        }
+        return .init(status: live.isEmpty ? .unknown : .ambiguous)
+    }
+
+    /// Copilot's in-place restart (`/restart`, `/update`) keeps the original CLI process alive as
+    /// the parent and continues the same session in a new direct child. Exact process identity
+    /// only: same user, the child's own parent PID is the live bound owner, and it started after
+    /// it. Callers must also prove the child holds the session's only live `inuse.<PID>.lock` and
+    /// that the session and placement match. Mirrors the controller's custody rule (ADR 0025):
+    /// the provider or its direct child, never a further descendant.
+    static func isInPlaceRestart(of owner: CopilotProcessIdentity, by child: CopilotProcessIdentity) -> Bool {
+        child.uid == owner.uid && child.pid != owner.pid && child.parentPID == owner.pid
+            && (child.startSeconds, child.startMicroseconds) > (owner.startSeconds, owner.startMicroseconds)
     }
 
     func verifyStable(

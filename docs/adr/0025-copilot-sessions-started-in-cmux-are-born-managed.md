@@ -106,3 +106,29 @@ Re-enrollment does not detach children from their recorded root.
 
 This does not authorize peer-message bodies, grant provider permissions, adopt
 other workspace roots, close sessions automatically or infer completion.
+
+## Amendment (2026-11-05): observer binding follows an in-place restart
+
+Copilot's `/restart` and `/update` keep the session ID but leave the original
+CLI process alive as a parent; the session continues in a new direct child that
+holds `inuse.<PID>.lock`. The controller already accepted that custody (the
+provider or its direct child). The observer binding did not: the hook helper
+refused to replace a binding whose recorded owner was still alive, and the
+sidebar verifier called a live owner without its own lock ambiguous. The row
+showed `Copilot session` with a plain-terminal footer until the parent exited.
+
+The observer now applies the controller's direct-child rule, with one extra
+condition: the child must have started after the bound owner. The hook helper
+rebinds when the
+recorded owner is alive and is the direct parent (same user, child started
+after it) of the hook's own owner, that child holds the session's only live
+marker, and session, workspace and surface match the existing binding. It
+archives the superseded binding first and writes the new one atomically. The
+sidebar verifier accepts the same evidence as alive, read-only, before the next
+hook. A chain of restarts is followed only from the current bound owner to its
+direct child; any other live-owner case still refuses or stays ambiguous.
+No title, path, chronology or process name is used, nothing is adopted,
+signalled or restarted, and the sidebar still writes no bindings. Users no
+longer need to exit fully and `copilot --resume` after `/restart` or `/update`.
+Known limit: two restarts with no hook in between leave a grandchild that is
+not followed; that session stays ambiguous until the bound process exits.

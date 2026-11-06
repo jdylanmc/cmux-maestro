@@ -93,6 +93,7 @@ nonisolated struct CopilotHookRecorder {
     let processID: Int32
     let process: @Sendable (Int32) -> CopilotProcessLookup
     var bindingLock: @Sendable (Int32, Int32) -> Int32 = { flock($0, $1) }
+    var syncDirectory: @Sendable (Int32) -> Int32 = { fsync($0) }
 
     static func canonicalUUID(_ value: String?) -> UUID? {
         guard let value, value.count == 36, let id = UUID(uuidString: value),
@@ -209,6 +210,15 @@ nonisolated struct CopilotHookRecorder {
         let bindings: Int32
         let bindingsMetadata: CopilotFileStamp
         let currentSource: Int32
+        let root: Int32
+        /// The live parent's binding this `bind` replaces after an in-place restart.
+        let restartedFrom: CopilotIdentityRecord?
+    }
+
+    private enum ExistingBinding {
+        case refused(HookOutcome)
+        case replaceable
+        case restartHandoff(CopilotIdentityRecord)
     }
 
     private struct ProcessAncestry {
@@ -232,7 +242,9 @@ nonisolated struct CopilotHookRecorder {
             recordedAt: own.startDate)
         let verifier = CopilotIdentityVerifier(uid: own.uid, lookup: process)
         let proof = try verifier.inspect(record: record, sessionDirectory: source)
-        guard proof.status == .alive else { return diagnose(.noOwner) }
+        // The owner was chosen by its lock merely existing; the proof must name that same process.
+        // A lock moving to a restarted child in between would otherwise prove the old parent.
+        guard proof.status == .alive, proof.process == owner else { return diagnose(.noOwner) }
         let root = try HookFiles.privateDirectory(integrationRoot)
         defer { close(root) }
         let bindingURL = integrationRoot.appendingPathComponent("bindings")
@@ -248,9 +260,12 @@ nonisolated struct CopilotHookRecorder {
         guard bindingLock(lock, lockMode) == 0 else { return diagnose(.unavailable) }
         defer { flock(lock, LOCK_UN) }
 
-        if let refusal = existingBindingRefusal(
-            request, intent: intent, own: own, owner: owner, bindings: bindings
-        ) { return diagnose(refusal) }
+        let restartedFrom: CopilotIdentityRecord?
+        switch existingBinding(request, intent: intent, own: own, owner: owner, proof: proof, bindings: bindings) {
+        case .refused(let refusal): return diagnose(refusal)
+        case .replaceable: restartedFrom = nil
+        case .restartHandoff(let previous): restartedFrom = previous
+        }
 
         // Reopen the named source and marker immediately before committing:
         // a renamed directory, replaced lock, dead owner or reused PID fails closed.
@@ -268,7 +283,8 @@ nonisolated struct CopilotHookRecorder {
         return try commit(Ownership(
             request: request, own: own, ancestors: ancestry.ancestors, record: record, verifier: verifier,
             proof: proof, sourceURL: sourceURL, sourceMetadata: sourceMetadata, bindingURL: bindingURL,
-            bindings: bindings, bindingsMetadata: bindingsMetadata, currentSource: currentSource
+            bindings: bindings, bindingsMetadata: bindingsMetadata, currentSource: currentSource,
+            root: root, restartedFrom: restartedFrom
         ))
     }
 
@@ -291,41 +307,58 @@ nonisolated struct CopilotHookRecorder {
 
     // A live, newer or foreign binding supersedes this one. Only `bind` may
     // proceed without a binding, and others must match it exactly.
-    private func existingBindingRefusal(
-        _ request: HookRequest, intent: Intent, own: HookProcess, owner: HookProcess, bindings: Int32
-    ) -> HookOutcome? {
+    private func existingBinding(
+        _ request: HookRequest, intent: Intent, own: HookProcess, owner: HookProcess,
+        proof: CopilotIdentityEvidence, bindings: Int32
+    ) -> ExistingBinding {
         let name = request.bindingName
         let existingFD = openat(bindings, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard existingFD >= 0 else {
-            if intent.requiresExistingBinding { return .noOwner }
-            return errno != ENOENT ? .unavailable : nil
+            if intent.requiresExistingBinding { return .refused(.noOwner) }
+            return errno != ENOENT ? .refused(.unavailable) : .replaceable
         }
         close(existingFD)
         guard let (existing, _) = try? CopilotFileAccess.readIdentity(
             at: bindings, filename: name, owner: own.uid
-        ) else { return .superseded }
+        ) else { return .refused(.superseded) }
+        let samePlacement = existing.sessionID == request.session && existing.surfaceID == request.surface
+            && existing.launchWorkspaceID == request.workspace
         if intent.requiresExistingBinding {
-            guard existing.sessionID == request.session, existing.surfaceID == request.surface,
-                  existing.launchWorkspaceID == request.workspace, owner.owns(existing) else {
-                return .noOwner
-            }
+            guard samePlacement, owner.owns(existing) else { return .refused(.noOwner) }
         }
         switch process(existing.ownerPID) {
         case .found(let live):
-            if live.uid != own.uid || (live.owns(existing)
-                && (!owner.owns(existing) || existing.recordedAt > own.startDate)) {
-                return .superseded
+            guard live.uid == own.uid, live.owns(existing) else {
+                return live.uid == own.uid ? .replaceable : .refused(.superseded)
             }
+            guard existing.recordedAt <= own.startDate else { return .refused(.superseded) }
+            if owner.owns(existing) { return .replaceable }
+            // In-place restart: the bound owner is alive only as the direct parent of the
+            // session's sole live lock holder, in the same session and placement.
+            guard case .bind = intent, samePlacement,
+                  proof.markers.keys.sorted() == ["inuse.\(owner.pid).lock"],
+                  CopilotIdentityVerifier.isInPlaceRestart(of: live, by: owner) else {
+                return .refused(.superseded)
+            }
+            return .restartHandoff(existing)
         case .unavailable:
-            return .superseded
-        case .dead: break
+            return .refused(.superseded)
+        case .dead:
+            return .replaceable
         }
-        return nil
     }
 
     // MARK: Commits
 
     private func commitBinding(_ ownership: Ownership) throws -> HookOutcome {
+        if let previous = ownership.restartedFrom {
+            // Keep the superseded parent's sanitized identity, as retirement does. No archive, no handoff:
+            // a failed archive throws before the binding is replaced.
+            let archive = try CopilotBindingRetirement.openArchive(
+                integrationRoot: integrationRoot, root: ownership.root, syncDirectory: syncDirectory)
+            defer { close(archive) }
+            try CopilotBindingRetirement.preserve(previous, archive: archive, syncDirectory: syncDirectory)
+        }
         try HookFiles.atomicWrite(
             CopilotIdentityJSON.encode(ownership.record), name: ownership.request.bindingName,
             directory: ownership.bindings
