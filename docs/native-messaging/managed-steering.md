@@ -38,6 +38,4 @@ Unresolved findings and their provenance are preserved, and a newer message is
 not treated as resolution. The change affects future sends only: earlier queued
 messages are not read, promoted, replayed or discarded.
 
-[Earlier behavior and #163 evidence](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163).
-
-Tests: [`test-delivery-proof.mjs`](../../scripts/test-delivery-proof.mjs). [Steering test inventory and limits](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163).
+Tests: [`test-delivery-proof.mjs`](../../scripts/test-delivery-proof.mjs). [Earlier behavior and #163 evidence](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163) | [Steering test inventory and limits](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163-1).

@@ -45,7 +45,7 @@ must run the explicitly selected CLI and write their own integration data. This
 is a personal native distribution tradeoff, **not a claim of Mac App Store
 compatibility**. Temporary file exceptions require distribution/review scrutiny.
 
- Signed app/host loading and end-to-end
+Signed app/host loading and end-to-end
 installation remain explicit manual verification gates.
 
 ## Identifiers and upstream contracts

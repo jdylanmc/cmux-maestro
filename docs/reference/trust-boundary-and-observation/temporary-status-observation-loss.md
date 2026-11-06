@@ -29,7 +29,7 @@ outcomes. Actual open background tabs stay reachable through current host
 metadata. Never fabricate unknown chats without real open surface.
 Browser replacing terminal cannot inherit terminal's agent observation.
 
- Possible 100-chat day
+Possible 100-chat day
 remains nonblocking goal. This slice does not complete #119. It does not authorize
 installation, broader settings architecture, or lifecycle changes.
 

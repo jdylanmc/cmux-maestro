@@ -26,7 +26,7 @@ missing-file failure behavior.
 This exposes a
 blocked boundary. It does not establish or repair the cause of a prior CI hang.
 Production timeouts, cleanup and all original assertions stay unchanged.
- No test now cancels an in-flight metadata exchange.
+No test now cancels an in-flight metadata exchange.
 
 The watchdog report keeps `runnerMetadataReturned` and
 `outerTaskValueReceived` flags, captured at the watchdog deadline. They stay

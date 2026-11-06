@@ -307,7 +307,7 @@ old packaged guide below is no longer shipped):
   `git diff --check` passed. These are targeted results, not a claim that the
   parent's final full CI/review or live installed-product checks are complete.
 
-## Bounded live checks and cleanup
+## Bounded live checks and cleanup: worktree test note
 
 From [`docs/delivery-proof/live-checks.md`](../delivery-proof/live-checks.md). Historical observations and per-paragraph limits moved here verbatim.
 
@@ -471,7 +471,7 @@ demonstrated**, including fresh explicit YOLO launches and the bounded
 complete sidebar-hidden verification before
 claiming that condition.
 
-[Archived evidence](delivery-proof.md#bounded-live-checks-and-cleanup).
+[Archived evidence](delivery-proof.md#bounded-live-checks-and-cleanup-worktree-test-note).
 
 ## Installed adapter wiring
 

@@ -30,7 +30,7 @@ npx skills add . --skill maestro maestro-demo --agent github-copilot --global --
 ```
 
 Settings embeds no branch refs, automatic refresh, or release machinery.
- That is an observed location. Do not assume
+That is an observed location. Do not assume
 all global skills live under `.copilot`. Bare plugin loading and explicit
 `--plugin-dir` both failed live. No upstream root cause is claimed. See the
 [public findings](../../delivery-proof/guide-distribution.md).
