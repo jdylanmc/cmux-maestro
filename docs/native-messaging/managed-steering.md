@@ -38,12 +38,6 @@ Unresolved findings and their provenance are preserved, and a newer message is
 not treated as resolution. The change affects future sends only: earlier queued
 messages are not read, promoted, replayed or discarded.
 
-Real-socket tests with mocked native sessions verify steering selection,
-unchanged envelopes, independent submissions while admission is pending, and
-visible rejection without fallback or application acknowledgements. They do not
-simulate Copilot's scheduler. Live input-to-action latency, draft preservation
-and the state transitions above need separately authorized native acceptance.
-The tests establish no numeric SLA, active-tool preemption guarantee or
-end-to-end #163 closure.
-
 [Earlier behavior and #163 evidence](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163).
+
+Tests: [`test-delivery-proof.mjs`](../../scripts/test-delivery-proof.mjs). [Steering test inventory and limits](../evidence/native-messaging.md#managed-steering-and-turn-boundaries-163).

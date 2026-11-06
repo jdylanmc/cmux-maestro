@@ -20,14 +20,4 @@ preferences, containers, native plugin settings and source builds are retained.
 No purge option exists. Neither removal nor update touches `maestro-cmux`,
 legacy settings, hooks, sidebars, other apps or CMUX configuration.
 
-The synthetic install tests exercise real macOS atomic renames in
-repository-local fixture directories, with injected signing, process and
-registration adapters. They never access real Applications, Copilot settings
-or user runtime data. Controlled fixture processes deliberately close their
-descriptors, leave a delayed mutating descendant, and lose their caller or
-supervisor to `SIGKILL`. Tests prove recovery/new installation stay blocked
-until those synthetic workers finish. No real app/session/tool is killed.
-CI retains all existing build/test commands and adds these transaction
-regressions. Compiled non-UI bridge fixtures also exercise app-plus-integration
-publication and recovery across an actual installer-process exit. Live signed
-installation, host selection and visual verification remain separate gates.
+Tests: [`test-local-preview.py`](../../../scripts/test-local-preview.py). [Install test inventory and limits](../../evidence/reference.md#remove-only-the-owned-local-preview).

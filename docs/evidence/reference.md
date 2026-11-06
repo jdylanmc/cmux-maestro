@@ -96,3 +96,31 @@ runtime mechanism is not declared solved.
 
 #174's cancellation stall was already removed by an
 earlier owner decision and remains unresolved.
+
+## Remove only the owned local preview
+
+From [`docs/reference/install/remove-local-preview.md`](../reference/install/remove-local-preview.md). Test inventories and per-paragraph limits moved here verbatim.
+
+The synthetic install tests exercise real macOS atomic renames in
+repository-local fixture directories, with injected signing, process and
+registration adapters. They never access real Applications, Copilot settings
+or user runtime data. Controlled fixture processes deliberately close their
+descriptors, leave a delayed mutating descendant, and lose their caller or
+supervisor to `SIGKILL`. Tests prove recovery/new installation stay blocked
+until those synthetic workers finish. No real app/session/tool is killed.
+CI retains all existing build/test commands and adds these transaction
+regressions. Compiled non-UI bridge fixtures also exercise app-plus-integration
+publication and recovery across an actual installer-process exit. Live signed
+installation, host selection and visual verification remain separate gates.
+
+## Temporary status observation loss
+
+From [`docs/reference/trust-boundary-and-observation/temporary-status-observation-loss.md`](../reference/trust-boundary-and-observation/temporary-status-observation-loss.md). Test inventories and per-paragraph limits moved here verbatim.
+
+Regression workload uses 20 synthetic open background tabs with real bounded
+file reads, fake-clock idle/failure transitions, and measured reader/projection
+cost.
+
+Timings exclude two-second pause, host delivery and rendering.
+
+They are not stock-host end-to-end latency claim.

@@ -399,3 +399,45 @@ while the job waited:
   `validate`, in "Verify Settings guide and setup process isolation", from
   04:41Z to 09:18Z. #191 does not change that. #190 forbids arbitrary timeout
   cuts, and the hang keeps its existing owner.
+
+## Orchestrator suite: Orchestrator changes
+
+From [`docs/reference/test-performance/orchestrator-suite.md`](../reference/test-performance/orchestrator-suite.md). #195 change record moved here verbatim.
+
+### Orchestrator changes
+
+1. **Fixture controller start.** `controller-fixture.py` loads the controller
+   and `scripts/test-fixtures/orchestrator-controller-edges.py` as modules
+   through a run-scoped `sys.pycache_prefix`, instead of `runpy` on the
+   controller and the whole suite. The same fixture edges apply; the shipped
+   controller is unchanged. Start-up fell to 45 ms with Xcode Python (from 127 to
+   130 ms) and to 58 ms with Homebrew Python (from 182 to 195 ms), median of 25.
+2. **Resource-accounting capacity cases.** Four tests prove what counts
+   against the live-resource limit: a retained terminal across archive, a failed
+   attachment's surface, completed workers until their exact surface is
+   retired, and unobserved direct sessions. They now set a workspace limit of 4
+   through the public `capacity --limit` command and fill it, instead of filling
+   the default 32. The admission check is the same for any limit, and
+   configured limits are already covered end to end by `WorkspaceCapacityCLITests`.
+   `test_pending_launches_hold_all_live_resource_slots` still fills the default
+   32-slot reference budget with concurrent pending launches.
+
+## Local preview suite, Swift tests and next steps: Local preview changes
+
+From [`docs/reference/test-performance/local-preview-and-swift.md`](../reference/test-performance/local-preview-and-swift.md). #195 change record moved here verbatim.
+
+#### Local preview changes
+
+None. The dominant costs are durable writes, real child processes and the
+bridge compile that the tests exist to exercise. Replacing `fsync`, renames or
+processes would mock the transaction under test.
+
+## Local preview suite, Swift tests and next steps: Swift changes
+
+From [`docs/reference/test-performance/local-preview-and-swift.md`](../reference/test-performance/local-preview-and-swift.md). #195 change record moved here verbatim.
+
+#### Swift changes
+
+None. Changing gated Swift fixtures needs a profile of rendering, text
+recognition and pixel conversion inside those tests first, and full `test.sh`
+before/after runs on a quiet machine.

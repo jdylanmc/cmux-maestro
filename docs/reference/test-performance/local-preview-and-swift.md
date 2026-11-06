@@ -4,19 +4,11 @@
 
 ## Local preview suite
 
-### Local preview changes
-
-None. The dominant costs are durable writes, real child processes and the
-bridge compile that the tests exist to exercise. Replacing `fsync`, renames or
-processes would mock the transaction under test.
+Profile and change record: [archive](../../evidence/ci.md#local-preview-profile).
 
 ## Swift tests
 
-### Swift changes
-
-None. Changing gated Swift fixtures needs a profile of rendering, text
-recognition and pixel conversion inside those tests first, and full `test.sh`
-before/after runs on a quiet machine.
+Profile and change record: [archive](../../evidence/ci.md#swift-profile).
 
 ## Recommended next steps
 

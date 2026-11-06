@@ -58,3 +58,15 @@ consumption or the sole cause of delay.
 The historical operator report of
 blocked decisions and fleet shutdown is unresolved impact evidence until actual
 native acceptance, not just a changed mode.
+
+## Managed steering and turn boundaries (#163)
+
+From [`docs/native-messaging/managed-steering.md`](../native-messaging/managed-steering.md). Test inventories and per-paragraph limits moved here verbatim.
+
+Real-socket tests with mocked native sessions verify steering selection,
+unchanged envelopes, independent submissions while admission is pending, and
+visible rejection without fallback or application acknowledgements. They do not
+simulate Copilot's scheduler. Live input-to-action latency, draft preservation
+and the state transitions above need separately authorized native acceptance.
+The tests establish no numeric SLA, active-tool preemption guarantee or
+end-to-end #163 closure.

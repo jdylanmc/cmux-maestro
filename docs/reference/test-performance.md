@@ -22,7 +22,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Changes
 
-[Orchestrator changes](test-performance/orchestrator-suite.md#orchestrator-changes)
+[Orchestrator changes](../evidence/ci.md#orchestrator-changes)
 
 ### Evidence
 
@@ -38,7 +38,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Changes
 
-[Local preview changes](test-performance/local-preview-and-swift.md#local-preview-changes)
+[Local preview changes](../evidence/ci.md#local-preview-changes)
 
 ## Swift tests
 
@@ -50,7 +50,7 @@ Entrypoints: [build and test](build-and-test.md).
 
 ### Changes
 
-[Swift changes](test-performance/local-preview-and-swift.md#swift-changes)
+[Swift changes](../evidence/ci.md#swift-changes)
 
 ## Recommended next steps
 
