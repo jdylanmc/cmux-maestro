@@ -19,7 +19,7 @@ do not copy its source or history, modify it, or make this project depend on it.
 - `.agents/skills/cmux-maestro-orchestrate/`: repository-owned installed
   terminal orchestration skill.
 - `skills/maestro/`: confirmed intent and globally distributed peer discovery/
-  send/reply guide; reuse the lifecycle skill instead of duplicating it.
+  send/reply guide. Reuse the lifecycle skill instead of duplicating it.
   Distribute only through the human-run `npx skills` command in Settings >
   CLI Integration, not app resources or the runtime plugin.
 - `scripts/delivery-proof/adapter.mjs`: shared installed native-session
@@ -48,9 +48,9 @@ do not copy its source or history, modify it, or make this project depend on it.
 - Keep orchestration control outside the sandboxed sidebar. The sidebar may
   read only sanitized bounded metadata from its exact read-only grants, read and
   write only its Beats store outside its container (ADR 0020), and use typed host
-  navigation; never add
-  raw observed prompts/results/tokens (Beat prompts are authored definitions, not observed content), a daemon, loopback server, socket client, focus
-  inference, automatic tool approval, or automatic terminal/process cleanup.
+  navigation. Never add raw observed prompts/results/tokens, a daemon, loopback
+  server, socket client, focus inference, automatic tool approval, or automatic
+  terminal/process cleanup.
 - New workers are interactive Copilot sessions with inherited terminal I/O and
   direct human follow-ups. Do not create new headless-worker tabs or infer task
   completion from an interactive session's exit. Issue #54's confirmed product
@@ -61,12 +61,9 @@ do not copy its source or history, modify it, or make this project depend on it.
   Newly launched managed participants receive wiring automatically. Every
   Copilot session in CMUX with the production integration installed is managed
   as its own root when Maestro's own extension joins it: new, resumed,
-  relaunched or already running (ADR 0025). That enrollment is not adoption;
-  never control, signal, restart, or trigger a reload of a live session. An
-  ended managed session may resume only under ADR 0024. Its same-workspace peer messaging is
+  relaunched or already running (ADR 0025). Same-workspace peer messaging is
   fire-and-forget, independent of visual focus, and grants no process control.
-  Preserve human typing/drafts. Do not use terminal keystrokes as a fallback.
-  Copilot owns prompt scheduling; add no custom busy scheduler, acknowledgements,
+  Preserve human typing/drafts. Copilot owns prompt scheduling; add no custom busy scheduler, acknowledgements,
   receipts, retries, completion tracker, or beat timer. Only the existing explicit
   production setup action may install the inert native loader; no constructor
   side effects, host changes, generic plugin framework or standalone broker.
@@ -123,7 +120,7 @@ Moved here from the README. Reasons are in the ADRs.
 - Never infer ownership from titles, paths, focus, chronology, or terminal text. Unknown stays unknown. ([ADR 0002](docs/adr/0002-exact-identity-evidence-never-heuristics.md))
 - Never infer success, progress, hang, or completion from process presence, idle time, file timestamps, terminal output, launch acceptance, or expired history. ([ADR 0003](docs/adr/0003-liveness-work-attention-completion-stay-separate.md))
 - Never read, store, or display raw transcripts, observed session prompts, tool arguments or results, credentials, tokens, or unsanitized errors. Beat prompts are authored Beat definitions, not observed session content. ([ADR 0020](docs/adr/0020-sidebar-writes-beats-store-outside-its-container.md)) Narrow owner-approved exceptions: read exact bound provider argv transiently to derive launch-mode evidence, never persist or display it ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md)); Copilot's session name (`workspace.yaml` `name:` only) may be displayed for its exact session, although an automatic name can reproduce the first prompt, because the CMUX terminal title already shows it. ([ADR 0022](docs/adr/0022-agent-rows-use-copilot-session-name.md))
-- Never use terminal keystrokes as a messaging or control fallback. Never restart, control, or signal live sessions, and never trigger their extension reload. A CMUX session's own Maestro extension enrolls it when it joins, including a running session. That only adds tools and is not adoption ([ADR 0025](docs/adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md)). An ended managed session comes back only by exact recorded identity as a new generation: a Maestro launch through its own human-approved resume binding after a CMUX relaunch, and a human-started root when CMUX or the human resumes it. ([ADR 0004](docs/adr/0004-interactive-workers-only.md), [0005](docs/adr/0005-native-peer-messaging-is-fire-and-forget.md), [0024](docs/adr/0024-resume-ended-managed-sessions-after-relaunch.md))
+- Never use terminal keystrokes as a messaging or control fallback. Never restart, control, or signal live sessions, and never trigger their extension reload. Enrollment when a session's own Maestro extension joins, including a running session, only adds tools and is not adoption ([ADR 0025](docs/adr/0025-copilot-sessions-started-in-cmux-are-born-managed.md)). An ended managed session comes back only by exact recorded identity as a new generation: a Maestro launch through its own human-approved resume binding after a CMUX relaunch, and a human-started root when CMUX or the human resumes it. ([ADR 0004](docs/adr/0004-interactive-workers-only.md), [0005](docs/adr/0005-native-peer-messaging-is-fire-and-forget.md), [0024](docs/adr/0024-resume-ended-managed-sessions-after-relaunch.md))
 - Never treat recorded launch policy as live permissions. Deny wins. Explicit worker YOLO refuses. ([ADR 0006](docs/adr/0006-recorded-launch-policy-deny-wins.md))
 - Never key dismissal by label, path, or timestamp. Keep history presentation limits apart from ingestion limits. ([ADR 0009](docs/adr/0009-dismissal-by-event-identity.md))
 - History fails open. Replay and capacity fail closed. Never evict exact evidence to admit more. ([ADR 0010](docs/adr/0010-history-fails-open-replay-fails-closed.md))
@@ -190,12 +187,10 @@ npx --yes skills remove joe-mode-orca --yes
 ```
 
 Keep the wildcard quoted. This refreshes the existing upstream workflow skills,
-then removes the intentionally excluded Orca coordinator from the project.
-Commit the changed `.agents/skills/` files and lockfile together.
-These commands do not install globally.
-The lock records sources and content hashes,
-not immutable upstream revisions, so review lockfile changes after restoring
-or refreshing skills.
+then removes the intentionally excluded Orca coordinator from the project. These
+commands do not install globally. The lock records sources and content hashes,
+not immutable upstream revisions, so review lockfile changes and commit the
+changed `.agents/skills/` files and lockfile together.
 
 The upstream CMUX skillset is also installed project-locally for GitHub Copilot:
 
@@ -212,12 +207,9 @@ this application's implementation. `cmux-cua` still requires the user's
 explicit request. Installing the guide grants no computer-use permission.
 Keep Maestro spawning and peer messaging on the existing lifecycle/native
 adapter path. These skills neither enable that adapter nor adopt existing
-sessions. Restore missing dependency files with `npx skills experimental_install`;
-review and commit the skill files and lockfile together.
-
-These skills are available as contextual guidance. Agents should use them when
-they materially improve the work, while retaining judgment for simple or
-unrelated tasks:
+sessions.
+Use these skills as contextual guidance when they materially improve the work,
+with judgment for simple or unrelated tasks:
 
 | Skill | Useful context |
 | --- | --- |
