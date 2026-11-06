@@ -56,7 +56,7 @@ owner and current interaction/turn, and uses the message as that owner's
 completion anchor. Message content is never decoded or projected. Messages
 cannot create a turn, revive ended work or replace spawn identity, and their
 event IDs use the bounded replay guard. Missing current-turn proof remains
-Unknown (`ambiguousTurn`, see [tool events](tool-events.md)). Multi-turn
+Unknown (`ambiguousTurn`, see [tool events](tool-events.md)). Partial, malformed, null, conflicting, wrong-owner and replayed message tags cannot borrow a current parent link. A tool first observed after a gap still cannot attest a turn. Multi-turn
 capability is private, bounded reducer state, admitted once per observed child
 ID only from strict boolean configuration in a timestamped initial spawn
 window, before any child turn. Explicit false, failed/cancelled child outcomes,
