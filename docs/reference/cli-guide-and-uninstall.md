@@ -30,36 +30,36 @@ Integration** action, including the existing lifecycle and icon plugin skills.
 
 #### Maestro demo guide
 
-See [Maestro demo guide and PR acceptance](cli-guide-and-uninstall/maestro-demo-and-pr-acceptance.md).
+[Maestro demo guide and PR acceptance](cli-guide-and-uninstall/maestro-demo-and-pr-acceptance.md)
 
 #### Development and PR acceptance
 
-See [development and PR acceptance](cli-guide-and-uninstall/maestro-demo-and-pr-acceptance.md#development-and-pr-acceptance).
+[Development and PR acceptance](cli-guide-and-uninstall/maestro-demo-and-pr-acceptance.md#development-and-pr-acceptance)
 
 #### Re-check and installed guide status
 
-See [re-check, installed guide status and acceptance evidence](cli-guide-and-uninstall/re-check-and-installed-guide-status.md).
+[Re-check, installed guide status and acceptance evidence](cli-guide-and-uninstall/re-check-and-installed-guide-status.md)
 
 #### Guide acceptance evidence
 
-See [guide acceptance evidence](cli-guide-and-uninstall/re-check-and-installed-guide-status.md#guide-acceptance-evidence).
+[Guide acceptance evidence](cli-guide-and-uninstall/re-check-and-installed-guide-status.md#guide-acceptance-evidence)
 
 #### Acceptance composition and runner
 
-See [acceptance composition and runner](cli-guide-and-uninstall/acceptance-composition-and-runner.md).
+[Acceptance composition and runner](cli-guide-and-uninstall/acceptance-composition-and-runner.md)
 
 #### Fresh acceptance provenance
 
-See [fresh acceptance provenance](cli-guide-and-uninstall/fresh-acceptance-provenance.md).
+[Fresh acceptance provenance](cli-guide-and-uninstall/fresh-acceptance-provenance.md)
 
 #### Guide UI consumer probe
 
-See [guide UI consumer probe](cli-guide-and-uninstall/guide-ui-consumer-probe.md).
+[Guide UI consumer probe](cli-guide-and-uninstall/guide-ui-consumer-probe.md)
 
 #### Obsolete guide cleanup
 
-See [obsolete guide cleanup, disable and uninstall](cli-guide-and-uninstall/obsolete-guide-cleanup.md).
+[Obsolete guide cleanup, disable and uninstall](cli-guide-and-uninstall/obsolete-guide-cleanup.md)
 
 ### Disable or uninstall
 
-See [disable or uninstall](cli-guide-and-uninstall/obsolete-guide-cleanup.md#disable-or-uninstall).
+[Disable or uninstall](cli-guide-and-uninstall/obsolete-guide-cleanup.md#disable-or-uninstall)

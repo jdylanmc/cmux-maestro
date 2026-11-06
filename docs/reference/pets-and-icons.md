@@ -4,28 +4,28 @@ Codex pets, session icon CLI, appearance security. Short version: [README](../..
 
 ## Pets: `/cmux-maestro-native:maestro-pet`
 
-See [pets: `/cmux-maestro-native:maestro-pet`](pets-and-icons/pets-cmux-maestro-native-maestro-pet.md).
+[Pets: `/cmux-maestro-native:maestro-pet`](pets-and-icons/pets-cmux-maestro-native-maestro-pet.md)
 
 ### Mood atlas contract
 
-See [mood atlas contract](pets-and-icons/mood-atlas-contract.md).
+[Mood atlas contract](pets-and-icons/mood-atlas-contract.md)
 
 ### Reproduce the bundled art
 
-See [reproduce the bundled art and upgrade copies](pets-and-icons/reproduce-the-bundled-art.md).
+[Reproduce the bundled art and upgrade copies](pets-and-icons/reproduce-the-bundled-art.md)
 
 ### Explicit offline copy upgrade
 
-See [explicit offline copy upgrade](pets-and-icons/reproduce-the-bundled-art.md#explicit-offline-copy-upgrade).
+[Explicit offline copy upgrade](pets-and-icons/reproduce-the-bundled-art.md#explicit-offline-copy-upgrade)
 
 ## Choose your session icon: `/cmux-maestro-native:maestro-icon`
 
-See [choose your session icon](pets-and-icons/choose-your-session-icon-cmux-maestro.md).
+[Choose your session icon](pets-and-icons/choose-your-session-icon-cmux-maestro.md)
 
 ### Human color picker
 
-See [human color picker](pets-and-icons/choose-your-session-icon-cmux-maestro.md#human-color-picker).
+[Human color picker](pets-and-icons/choose-your-session-icon-cmux-maestro.md#human-color-picker)
 
 ### Agent appearance records
 
-See [agent appearance records](pets-and-icons/agent-appearance-records.md).
+[Agent appearance records](pets-and-icons/agent-appearance-records.md)

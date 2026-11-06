@@ -7,28 +7,28 @@ Policy: [merge policy](../agents/merge-policy.md). Entrypoints:
 
 ## Sources
 
-See [sources](ci-runner-placement/sources.md).
+[Sources](ci-runner-placement/sources.md)
 
 ## Concurrency and queueing
 
-See [concurrency and queueing](ci-runner-placement/concurrency-and-queueing.md).
+[Concurrency and queueing](ci-runner-placement/concurrency-and-queueing.md)
 
 ## Run timings by layout
 
-See [run timings by layout](ci-runner-placement/run-timings-by-layout.md).
+[Run timings by layout](ci-runner-placement/run-timings-by-layout.md)
 
 ## Dependencies between suites
 
-See [dependencies between suites](ci-runner-placement/dependencies-between-suites.md).
+[Dependencies between suites](ci-runner-placement/dependencies-between-suites.md)
 
 ## Portability proof
 
-See [portability proof](ci-runner-placement/portability-proof.md).
+[Portability proof](ci-runner-placement/portability-proof.md)
 
 ## Not moved
 
-See [not moved](ci-runner-placement/not-moved.md).
+[Not moved](ci-runner-placement/not-moved.md)
 
 ## Effect
 
-See [effect](ci-runner-placement/effect.md).
+[Effect](ci-runner-placement/effect.md)

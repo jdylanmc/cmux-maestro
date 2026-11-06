@@ -4,20 +4,20 @@ What the agent hover shows about processes an agent started (#78) and the TCP po
 
 ## Producer
 
-See [producer](processes-and-ports/producer.md).
+[Producer](processes-and-ports/producer.md)
 
 ## `observer/processes.json`
 
-See [`observer/processes.json`](processes-and-ports/observer-processes-json.md).
+[`observer/processes.json`](processes-and-ports/observer-processes-json.md)
 
 ## Triggers
 
-See [triggers](processes-and-ports/triggers.md).
+[Triggers](processes-and-ports/triggers.md)
 
 ## Sidebar
 
-See [sidebar and known limits](processes-and-ports/sidebar.md).
+[Sidebar and known limits](processes-and-ports/sidebar.md)
 
 ## Known limits
 
-See [known limits](processes-and-ports/sidebar.md#known-limits).
+[Known limits](processes-and-ports/sidebar.md#known-limits)

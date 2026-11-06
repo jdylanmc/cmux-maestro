@@ -7,24 +7,24 @@ consumes eligible claims after higher-priority derived facts.
 
 ## Agent interface
 
-See [agent interface and cosmetic preview](self-reported-moods/agent-interface.md).
+[Agent interface and cosmetic preview](self-reported-moods/agent-interface.md)
 
 ## Explicit cosmetic preview
 
-See [explicit cosmetic preview](self-reported-moods/agent-interface.md#explicit-cosmetic-preview).
+[Explicit cosmetic preview](self-reported-moods/agent-interface.md#explicit-cosmetic-preview)
 
 ## Refusals
 
-See [refusals](self-reported-moods/refusals.md).
+[Refusals](self-reported-moods/refusals.md)
 
 ## Store version 1
 
-See [store version 1](self-reported-moods/store-version-1.md).
+[Store version 1](self-reported-moods/store-version-1.md)
 
 ## Reader and consumer contract
 
-See [reader and consumer contract, and local validation](self-reported-moods/reader-and-consumer-contract.md).
+[Reader and consumer contract, and local validation](self-reported-moods/reader-and-consumer-contract.md)
 
 ## Local validation paths
 
-See [local validation paths](self-reported-moods/reader-and-consumer-contract.md#local-validation-paths).
+[Local validation paths](self-reported-moods/reader-and-consumer-contract.md#local-validation-paths)

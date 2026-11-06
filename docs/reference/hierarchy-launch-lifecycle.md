@@ -4,19 +4,19 @@ Coordinators, interactive workers, launch contract, maestro_close. Short version
 
 ## Sidebar layout
 
-See [sidebar layout](hierarchy-launch-lifecycle/sidebar-layout.md).
+[Sidebar layout](hierarchy-launch-lifecycle/sidebar-layout.md)
 
 ## Launch commands and interactive workers
 
-See [launch commands and interactive workers](hierarchy-launch-lifecycle/launch-commands-and-interactive-workers.md).
+[Launch commands and interactive workers](hierarchy-launch-lifecycle/launch-commands-and-interactive-workers.md)
 
 ## Explicit close
 
-See [explicit close](hierarchy-launch-lifecycle/explicit-close.md).
+[Explicit close](hierarchy-launch-lifecycle/explicit-close.md)
 
 ## Interactive startup and native bindings
 
-See [interactive startup and native bindings](hierarchy-launch-lifecycle/interactive-startup-and-native-bindings.md).
+[Interactive startup and native bindings](hierarchy-launch-lifecycle/interactive-startup-and-native-bindings.md)
 
 ## Launch receipt evidence
 

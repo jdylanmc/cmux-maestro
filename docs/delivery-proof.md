@@ -1,62 +1,58 @@
 # Native delivery proof (#54, child of #38)
 
-**Product scope update:** the user confirmed conversion of this proof into the
-installed feature, in one final pull request with its findings. The prototype-only
-restriction is superseded for the installed adapter, existing controller/setup/
-resources, tests, global `/maestro` guide and associated documentation. The historical
-proof below remains reproducible; old `deliveryProof` records and `a`/`b` routes
-remain compatible. No live proof sessions are adopted, restarted or modified.
+**Product scope update:** the user confirmed turning this proof into the
+installed feature, in one final pull request with its findings. That supersedes
+the prototype-only restriction for the installed adapter, existing
+controller/setup/resources, tests, global `/maestro` guide and related
+documentation. The historical proof remains reproducible, and old
+`deliveryProof` records and `a`/`b` routes remain compatible. No live proof
+sessions are adopted, restarted or modified.
 
-**Status: native A → B → A delivery observed after human permission approvals;
-unsent draft preservation and editability explicitly confirmed by the human.
-Fresh explicit YOLO-launch exchange also demonstrated without approval clicks.
-App-background delivery observed in a separate parent-controlled check.
-Core mechanism demonstrated. The remaining checks are listed in the pages
-below.**
+**Status: native A → B → A delivery observed after human permission approvals,
+with unsent draft preservation and editability explicitly confirmed by the
+human. A fresh explicit YOLO-launch exchange worked without approval clicks,
+and a separate parent-controlled check observed app-background delivery. The
+core mechanism is demonstrated, and the pages below list the remaining checks.**
 Question: can two Maestro-launched visible Copilot sessions exchange native
-prompts, without touching human input or changing focus? Source inspection cannot
-answer the UI question. Contract tests mock Copilot and are not live proof.
+prompts without touching human input or changing focus? Source inspection
+cannot answer the UI question, and contract tests mock Copilot, so they are not
+live proof.
 
 ## Contract and boundary
 
-The extension joins its exact session and enqueues one native prompt per send.
-See [contract and boundary](delivery-proof/contract.md).
+[Contract and boundary](delivery-proof/contract.md)
 
 ## Source grounding
 
-The inspected Copilot sources and the live L3 and L4 observations are in
-[source grounding and live observations](delivery-proof/source-grounding.md).
+[Source grounding and live observations](delivery-proof/source-grounding.md)
 
 ### L3 live draft-preservation observation
 
-See [L3 live draft-preservation observation](delivery-proof/source-grounding.md#l3-live-draft-preservation-observation).
+[L3 live draft-preservation observation](delivery-proof/source-grounding.md#l3-live-draft-preservation-observation)
 
 ### L3 app-background delivery observation
 
-See [L3 app-background delivery observation](delivery-proof/source-grounding.md#l3-app-background-delivery-observation).
+[L3 app-background delivery observation](delivery-proof/source-grounding.md#l3-app-background-delivery-observation)
 
 ### L4 fresh YOLO-launch observation
 
-See [L4 fresh YOLO-launch observation](delivery-proof/source-grounding.md#l4-fresh-yolo-launch-observation).
+[L4 fresh YOLO-launch observation](delivery-proof/source-grounding.md#l4-fresh-yolo-launch-observation)
 
 ### Guide distribution decision after live proof
 
-The global `/maestro` guide ships only through a human-run `npx skills`
-command. See [guide distribution decision](delivery-proof/guide-distribution.md).
+[Guide distribution decision](delivery-proof/guide-distribution.md)
 
 ## Parent-only preparation and live launch
 
-Disposable workspace preparation and the two proof launches are in
-[parent-only preparation and live launch](delivery-proof/live-launch.md).
+[Parent-only preparation and live launch](delivery-proof/live-launch.md)
 
 ## Bounded live checks
 
-Single synthetic sends under focus, draft and background conditions are in
-[bounded live checks and cleanup](delivery-proof/live-checks.md#bounded-live-checks).
+[Bounded live checks and cleanup](delivery-proof/live-checks.md#bounded-live-checks)
 
 ## Local validation and cleanup
 
-See [local validation and cleanup](delivery-proof/live-checks.md#local-validation-and-cleanup).
+[Local validation and cleanup](delivery-proof/live-checks.md#local-validation-and-cleanup)
 
 ## Installed implementation and remaining acceptance
 
@@ -68,5 +64,4 @@ See [local validation and cleanup](delivery-proof/live-checks.md#local-validatio
 
 ### Parent-owned installed-product verification
 
-The remaining parent-owned acceptance steps are in
-[installed-product verification](delivery-proof/installed-verification.md).
+[Installed-product verification](delivery-proof/installed-verification.md)

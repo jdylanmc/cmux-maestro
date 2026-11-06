@@ -57,24 +57,24 @@ exception.
 
 ### Metadata supervision regression
 
-See [metadata supervision regression](build-and-test/metadata-supervision-regression.md).
+[Metadata supervision regression](build-and-test/metadata-supervision-regression.md)
 
 #### Watchdog report slots
 
-See [watchdog report slots](build-and-test/watchdog-report-slots.md).
+[Watchdog report slots](build-and-test/watchdog-report-slots.md)
 
 ### Setup controls and focused diagnostics
 
-See [Setup controls and focused diagnostics](build-and-test/setup-controls-and-focused-diagnostics.md).
+[Setup controls and focused diagnostics](build-and-test/setup-controls-and-focused-diagnostics.md)
 
 ### Validation builds
 
-See [validation builds](build-and-test/validation-builds.md).
+[Validation builds](build-and-test/validation-builds.md)
 
 ### Isolated setup, hook and sandbox checks
 
-See [isolated setup, hook and sandbox checks](build-and-test/isolated-setup-hook-and-sandbox-checks.md).
+[Isolated setup, hook and sandbox checks](build-and-test/isolated-setup-hook-and-sandbox-checks.md)
 
 ## Orchestrator fixture edges
 
-See [orchestrator fixture edges](build-and-test/orchestrator-fixture-edges.md).
+[Orchestrator fixture edges](build-and-test/orchestrator-fixture-edges.md)
