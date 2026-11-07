@@ -354,6 +354,123 @@ class MoodTests(unittest.TestCase):
                 fn(args, self.root, Host())
 
 
+class NativePlacementTests(unittest.TestCase):
+    """Inherited CMUX_* values outside CMUX are refuted only by exact evidence (ADR 0002)."""
+
+    def setUp(self):
+        self.api = CONTROLLER_API
+        self.directory = short_fixture_directory("placement-")
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.socket_path = os.path.join(self.directory, "s")
+        self.environment = {"COPILOT_EXTENSION_PARENT_PID": "4242", "CMUX_SOCKET_PATH": self.socket_path}
+
+    def listen(self):
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        server.bind(self.socket_path)
+        server.listen(16)
+
+    def placement(self, request=None, tty="ttys015", report=None, held=...):
+        fn = self.api["command_native_placement"]
+        calls = []
+
+        class Cmux(self.api["Cmux"]):
+            def __init__(self):
+                self.executable = "/synthetic/cmux"
+
+            def run(self, *args):
+                calls.append(args)
+                return report
+        replaced = {"process_tty": lambda pid: tty if pid == 4242 else None, "Cmux": Cmux}
+        if held is not ...:
+            replaced["socket_held"] = lambda path: held if path == self.socket_path else None
+        with patch.dict(os.environ, self.environment), patch.dict(fn.__globals__, replaced), \
+                patch("sys.stdin", unittest.mock.Mock(buffer=io.BytesIO(json.dumps(
+                    {"pid": 4242} if request is None else request).encode()))), \
+                patch("sys.stdout", new_callable=io.StringIO) as stdout, \
+                patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            code = self.api["main"](["native-placement"])
+        output = json.loads(stdout.getvalue() if code == 0 else stderr.getvalue())
+        return code, output, calls
+
+    @staticmethod
+    def report(*surfaces):
+        return {"windows": [{"workspaces": [{"panes": [{"surfaces": [
+            {"kind": "surface", "id": str(uuid.uuid4()), **surface} for surface in surfaces]}]}]}]}
+
+    def test_provider_terminal_in_any_cmux_window_is_cmux(self):
+        self.listen()
+        code, output, calls = self.placement(report=self.report(
+            {"type": "terminal", "tty": "ttys000"}, {"type": "browser", "tty": None},
+            {"type": "terminal", "tty": "/dev/ttys015"}))
+        self.assertEqual((code, output), (0, {"ok": True, "placement": "cmux"}))
+        self.assertEqual(calls, [("top", "--all")])
+
+    def test_provider_terminal_no_cmux_terminal_owns_is_outside(self):
+        self.listen()
+        code, output, _ = self.placement(report=self.report({"type": "terminal", "tty": "ttys014"}))
+        self.assertEqual((code, output), (0, {"ok": True, "placement": "outside"}))
+
+    def test_missing_named_socket_is_outside_without_asking_cmux(self):
+        code, output, calls = self.placement()
+        self.assertEqual((code, output), (0, {"ok": True, "placement": "outside"}))
+        self.assertEqual(calls, [])
+
+    def test_refused_socket_nobody_holds_is_outside(self):
+        # A CMUX that quit can leave its socket file; connections refuse and no process holds it.
+        stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        stale.bind(self.socket_path)
+        stale.close()
+        code, output, calls = self.placement(report=self.report({"type": "terminal", "tty": "ttys000"}),
+                                             tty="ttys000")
+        self.assertEqual((code, output), (0, {"ok": True, "placement": "outside"}))
+        self.assertEqual(calls, [])
+
+    def test_refused_socket_still_held_or_unknown_stays_unknown(self):
+        # A live listener with a full backlog also refuses (macOS); lsof then names its holder.
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        server.bind(self.socket_path)
+        server.listen(1)
+        clients = []
+        self.addCleanup(lambda: [client.close() for client in clients])
+        refused = False
+        for _ in range(8):
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5)
+            clients.append(client)
+            try:
+                client.connect(self.socket_path)
+            except ConnectionRefusedError:
+                refused = True
+                break
+        self.assertTrue(refused, "a full backlog must refuse for this case to mean anything")
+        report = self.report({"type": "terminal", "tty": "ttys014"})
+        code, output, calls = self.placement(report=report)
+        self.assertEqual((code, output["ok"], calls), (2, False, []))
+        server.close()
+        for held in (True, None):
+            with self.subTest(held=held):
+                code, output, calls = self.placement(report=report, held=held)
+                self.assertEqual((code, output["ok"], calls), (2, False, []))
+
+    def test_unknown_evidence_never_answers_outside(self):
+        self.listen()
+        for name, kwargs in (
+            ("no provider tty", {"tty": None, "report": self.report({"type": "terminal", "tty": "ttys000"})}),
+            ("terminal tty unreported", {"report": self.report({"type": "terminal", "tty": None})}),
+            ("surface type unreported", {"report": self.report({"tty": "ttys000"})}),
+            ("invalid report", {"report": {"surfaces": []}}),
+            ("foreign pid", {"request": {"pid": 4243}}),
+            ("boolean pid", {"request": {"pid": True}}),
+            ("extra key", {"request": {"pid": 4242, "surfaceId": str(uuid.uuid4())}}),
+        ):
+            with self.subTest(name=name):
+                code, output, _ = self.placement(**kwargs)
+                self.assertEqual(code, 2)
+                self.assertFalse(output["ok"])
+
+
 class NotificationTests(unittest.TestCase):
     def setUp(self):
         self.api = CONTROLLER_API

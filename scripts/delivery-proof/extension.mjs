@@ -1,5 +1,5 @@
 import { joinSession } from "@github/copilot-sdk/extension";
-import { sessionEndGate, startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
+import { outsideCmux, sessionEndGate, startBeats, startBornManaged, startManaged, startReadiness } from "./adapter.mjs";
 
 const shutdown = new AbortController();
 const diagnosticCodes = new Set([
@@ -51,6 +51,9 @@ startManaged({
   };
   let session = managed?.session;
   if (managed === null) {
+    // An app started from a CMUX tab passes that tab's CMUX_* values to its own terminals. Outside
+    // CMUX nothing joins, so Copilot never asks to elevate Maestro to register hooks there.
+    if (await outsideCmux({ signal: shutdown.signal })) return;
     // A session born in CMUX enrolls itself (ADR 0025); otherwise readiness only.
     const born = await startBornManaged({
       joinSession: join, signal: shutdown.signal, onListener: managedListener, onJoined: beatsFor,
