@@ -370,7 +370,7 @@ class NativePlacementTests(unittest.TestCase):
         server.bind(self.socket_path)
         server.listen(16)
 
-    def placement(self, request=None, tty="ttys015", report=None):
+    def placement(self, request=None, tty="ttys015", report=None, held=...):
         fn = self.api["command_native_placement"]
         calls = []
 
@@ -381,9 +381,10 @@ class NativePlacementTests(unittest.TestCase):
             def run(self, *args):
                 calls.append(args)
                 return report
-        with patch.dict(os.environ, self.environment), \
-                patch.dict(fn.__globals__, {"process_tty": lambda pid: tty if pid == 4242 else None,
-                                            "Cmux": Cmux}), \
+        replaced = {"process_tty": lambda pid: tty if pid == 4242 else None, "Cmux": Cmux}
+        if held is not ...:
+            replaced["socket_held"] = lambda path: held if path == self.socket_path else None
+        with patch.dict(os.environ, self.environment), patch.dict(fn.__globals__, replaced), \
                 patch("sys.stdin", unittest.mock.Mock(buffer=io.BytesIO(json.dumps(
                     {"pid": 4242} if request is None else request).encode()))), \
                 patch("sys.stdout", new_callable=io.StringIO) as stdout, \
@@ -415,14 +416,43 @@ class NativePlacementTests(unittest.TestCase):
         self.assertEqual((code, output), (0, {"ok": True, "placement": "outside"}))
         self.assertEqual(calls, [])
 
-    def test_refused_socket_stays_unknown(self):
-        # A stale file and a full backlog both refuse; neither proves CMUX is gone.
+    def test_refused_socket_nobody_holds_is_outside(self):
+        # A CMUX that quit can leave its socket file; connections refuse and no process holds it.
         stale = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         stale.bind(self.socket_path)
         stale.close()
-        code, output, calls = self.placement(report=self.report({"type": "terminal", "tty": "ttys014"}))
-        self.assertEqual((code, output["ok"]), (2, False))
+        code, output, calls = self.placement(report=self.report({"type": "terminal", "tty": "ttys000"}),
+                                             tty="ttys000")
+        self.assertEqual((code, output), (0, {"ok": True, "placement": "outside"}))
         self.assertEqual(calls, [])
+
+    def test_refused_socket_still_held_or_unknown_stays_unknown(self):
+        # A live listener with a full backlog also refuses (macOS); lsof then names its holder.
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(server.close)
+        server.bind(self.socket_path)
+        server.listen(1)
+        clients = []
+        self.addCleanup(lambda: [client.close() for client in clients])
+        refused = False
+        for _ in range(8):
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(5)
+            clients.append(client)
+            try:
+                client.connect(self.socket_path)
+            except ConnectionRefusedError:
+                refused = True
+                break
+        self.assertTrue(refused, "a full backlog must refuse for this case to mean anything")
+        report = self.report({"type": "terminal", "tty": "ttys014"})
+        code, output, calls = self.placement(report=report)
+        self.assertEqual((code, output["ok"], calls), (2, False, []))
+        server.close()
+        for held in (True, None):
+            with self.subTest(held=held):
+                code, output, calls = self.placement(report=report, held=held)
+                self.assertEqual((code, output["ok"], calls), (2, False, []))
 
     def test_unknown_evidence_never_answers_outside(self):
         self.listen()

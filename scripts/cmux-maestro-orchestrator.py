@@ -2866,13 +2866,28 @@ def require_born_custody(actor):
         raise OrchestrationError(CUSTODY_LOST) from error
 
 
+def socket_held(path):
+    """Whether any process holds the socket at path (`lsof`), or None when lsof cannot tell."""
+    try:
+        result = subprocess.run(["/usr/sbin/lsof", "-t", "--", path],
+                                capture_output=True, text=True, timeout=close_timeout(5))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode == 0 and result.stdout.strip():
+        return True
+    if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
+        return False
+    return None
+
+
 def command_native_placement():
     """Whether the invoking provider's terminal is any CMUX terminal (ADR 0002).
 
     An app or multiplexer started from a CMUX tab passes that tab's CMUX_* values to its own
     terminals. Only exact refutation answers "outside": the socket those values name does not
-    exist, or CMUX reports every terminal's TTY and none is the provider's. A refused connection
-    may be a stale file or a full backlog, so it stays unknown. Unknown raises."""
+    exist, refuses with no process holding it (a stale file left by a CMUX that quit), or CMUX
+    reports every terminal's TTY and none is the provider's. A live listener with a full backlog
+    also refuses, so refusal alone stays unknown. Unknown raises."""
     try:
         raw = sys.stdin.buffer.read(8193)
         if len(raw) > 8192:
@@ -2894,6 +2909,10 @@ def command_native_placement():
             probe.connect(socket_path)
         except FileNotFoundError:
             return {"placement": "outside"}
+        except ConnectionRefusedError:
+            if socket_held(socket_path) is False:
+                return {"placement": "outside"}
+            raise OrchestrationError("CMUX socket refused while held or unknown.")
         finally:
             probe.close()
     terminal = process_tty(pid)

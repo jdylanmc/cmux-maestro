@@ -144,14 +144,18 @@ refuse with `cmux-identity-unverified`.
 Before the born-managed and readiness paths join, the loader now asks the
 controller's private `native-placement` command about the verified provider PID (the PID
 Copilot gave the extension, equal to its parent). It answers `outside` only on
-exact evidence: the socket named by `CMUX_SOCKET_PATH` does not exist, or CMUX
-`top --all` reports a TTY for every terminal surface and none is the provider's
-controlling TTY. Then the extension does not join: no tools, no hooks, no
+exact evidence: the socket named by `CMUX_SOCKET_PATH` does not exist; it
+refuses connections and `lsof` finds no process holding it (a file left by a
+CMUX that quit); or CMUX `top --all` reports a TTY for every terminal surface
+and none is the provider's controlling TTY. Then the extension does not join: no tools, no hooks, no
 elevation prompt, the same as a session with no `CMUX_*` values. Everything
 else (inside CMUX, any other surface, an unknown provider TTY, an unreported
-terminal TTY, a refused socket, which may be stale or full, a controller error
+terminal TTY, a refused socket that a process still holds (a live CMUX with a
+full backlog also refuses) or that `lsof` cannot read, a controller error
 or the 5-second bound) joins exactly as before, and enrollment still runs every
 check above. An unverified provider is not checked and still reports
-`provider-process-unverified`. Known limit: outside CMUX, a session still asks
-when CMUX is unreachable but its socket file remains, or when CMUX omits a
+`provider-process-unverified`. A live socket answer alone is not used: the
+`top --all` TTY match already needs CMUX to answer, and an answering CMUX does
+not prove the provider is one of its terminals. Known limit: outside CMUX, a
+session still asks when a live CMUX does not answer in time or omits a
 terminal's TTY.
