@@ -58,6 +58,9 @@ private func run() {
     var recorder = CopilotHookRecorder(integrationRoot: root, sessionStateRoot: state,
                                        processID: pid, process: lookup)
     #if MAESTRO_HOOK_TESTING
+    // The synthetic owner has no terminal; the fixture decides whether CMUX lists it.
+    let placed = inherited("MAESTRO_TEST_UNPLACED") == nil
+    recorder.placement = { _, _ in placed }
     if let descriptor = inherited("MAESTRO_TEST_LOCK_READY_FD").flatMap(Int32.init) {
         recorder.bindingLock = { fd, operation in
             let result = flock(fd, operation | LOCK_NB)

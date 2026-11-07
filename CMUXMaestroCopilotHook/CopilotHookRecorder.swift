@@ -21,7 +21,134 @@ extension CopilotProcessIdentity {
 }
 
 nonisolated enum HookOutcome: String, Sendable {
-    case recorded, disabled, invalidInput, noOwner, unavailable, superseded
+    case recorded, disabled, invalidInput, noOwner, unavailable, superseded, unplaced
+}
+
+/// Whether a Copilot owner runs in the CMUX surface its environment names (ADR 0002, 0025).
+/// An app or multiplexer started from a CMUX tab passes that tab's CMUX_* values to its own
+/// terminals; their sessions must never bind to that tab. Only a live CMUX reporting that exact
+/// surface with the owner's controlling TTY places it. No answer in time, an unknown TTY or any
+/// other doubt leaves the session unbound: a wrong binding shows another app's session on a tab.
+nonisolated enum CopilotTerminalPlacement {
+    static let timeout: TimeInterval = 2
+    static let maximumReport = 4 * 1_048_576
+
+    static func verify(owner: Int32, surface: UUID) -> Bool {
+        guard let terminal = controllingTerminal(owner), let report = cmuxTop() else { return false }
+        return surfaceTerminal(in: report, surface: surface) == terminal
+    }
+
+    static func controllingTerminal(_ pid: Int32) -> String? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+        let count = withUnsafeMutablePointer(to: &info) { proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, $0, size) }
+        guard count == size, info.e_tdev != UInt32.max,
+              let name = devname(dev_t(bitPattern: info.e_tdev), S_IFCHR) else { return nil }
+        return normalized(String(cString: name))
+    }
+
+    static func normalized(_ value: Any?) -> String? {
+        guard var text = value as? String else { return nil }
+        if text.hasPrefix("/dev/") { text.removeFirst(5) }
+        let suffix = text.dropFirst(3)
+        guard text.hasPrefix("tty"), (1...16).contains(suffix.count),
+              suffix.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
+        return text
+    }
+
+    /// The TTY of the one surface with this ID in a `cmux top` JSON report, or nil.
+    static func surfaceTerminal(in report: Data, surface: UUID) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: report) else { return nil }
+        var found: [Any?] = []
+        func walk(_ value: Any) {
+            if let dictionary = value as? [String: Any] {
+                if dictionary["kind"] as? String == "surface", let id = dictionary["id"] as? String,
+                   UUID(uuidString: id) == surface {
+                    found.append(dictionary["tty"])
+                }
+                dictionary.values.forEach(walk)
+            } else if let array = value as? [Any] {
+                array.forEach(walk)
+            }
+        }
+        walk(object)
+        return found.count == 1 ? normalized(found[0]) : nil
+    }
+
+    /// `cmux top --all` as JSON, bounded in time and size. The CLI reaches the CMUX this
+    /// terminal's environment names; a quit or foreign CMUX answers nothing.
+    static func cmuxTop(
+        executable: String? = cmuxExecutable(), timeout: TimeInterval = timeout
+    ) -> Data? {
+        guard let executable else { return nil }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["--json", "--id-format", "uuids", "top", "--all"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        let finished = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in finished.signal() }
+        let collected = DispatchSemaphore(value: 0)
+        let buffer = ReportBuffer()
+        do { try process.run() } catch { return nil }
+        DispatchQueue.global().async {
+            let reader = output.fileHandleForReading
+            while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty {
+                if !buffer.append(chunk, limit: maximumReport) { process.terminate() }
+            }
+            collected.signal()
+        }
+        guard finished.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            _ = finished.wait(timeout: .now() + 1)
+            return nil
+        }
+        guard collected.wait(timeout: .now() + 1) == .success,
+              process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
+        return buffer.data
+    }
+
+    /// The CLI CMUX puts in its terminals, else `cmux` on PATH; only a trusted regular file.
+    static func cmuxExecutable(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        var candidates: [String] = []
+        if let bundled = environment["CMUX_BUNDLED_CLI_PATH"] { candidates.append(bundled) }
+        for directory in (environment["PATH"] ?? "").split(separator: ":") {
+            candidates.append(String(directory) + "/cmux")
+        }
+        for candidate in candidates where candidate.hasPrefix("/") {
+            guard let resolved = realpath(candidate, nil) else { continue }
+            defer { free(resolved) }
+            var info = stat()
+            guard stat(resolved, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o022 == 0,
+                  info.st_uid == 0 || info.st_uid == getuid(), access(resolved, X_OK) == 0 else { continue }
+            return String(cString: resolved)
+        }
+        return nil
+    }
+
+    private final class ReportBuffer: @unchecked Sendable {
+        private let lock = NSLock()
+        private var bytes = Data()
+        private var overflowed = false
+
+        func append(_ chunk: Data, limit: Int) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !overflowed, bytes.count + chunk.count <= limit else { overflowed = true; return false }
+            bytes.append(chunk)
+            return true
+        }
+
+        var data: Data? {
+            lock.lock()
+            defer { lock.unlock() }
+            return overflowed ? nil : bytes
+        }
+    }
 }
 
 /// All path traversal is descriptor-relative. The helper never follows a source
@@ -94,6 +221,9 @@ nonisolated struct CopilotHookRecorder {
     let process: @Sendable (Int32) -> CopilotProcessLookup
     var bindingLock: @Sendable (Int32, Int32) -> Int32 = { flock($0, $1) }
     var syncDirectory: @Sendable (Int32) -> Int32 = { fsync($0) }
+    /// Whether the owner runs in the claimed CMUX surface. Asked only before a binding is created
+    /// or moved, never on a refresh of this owner's own binding in the same placement.
+    var placement: @Sendable (_ owner: Int32, _ surface: UUID) -> Bool = CopilotTerminalPlacement.verify
 
     static func canonicalUUID(_ value: String?) -> UUID? {
         guard let value, value.count == 36, let id = UUID(uuidString: value),
@@ -250,6 +380,10 @@ nonisolated struct CopilotHookRecorder {
         let bindingURL = integrationRoot.appendingPathComponent("bindings")
         let bindings = try HookFiles.privateDirectory(bindingURL)
         defer { close(bindings) }
+        if case .bind = intent, !bound(request, owner: owner, bindings: bindings),
+           !placement(owner.pid, request.surface) {
+            return diagnose(.unplaced)
+        }
         let lockName = ".\(request.session.uuidString.lowercased()).lock"
         let lock = openat(bindings, lockName, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
         guard lock >= 0 else { return diagnose(.unavailable) }
@@ -303,6 +437,15 @@ nonisolated struct CopilotHookRecorder {
             next = candidate.parentPID
         }
         return ProcessAncestry(ancestors: ancestors, owner: nil)
+    }
+
+    // This owner already holds this session's binding in the same placement (placed when written).
+    private func bound(_ request: HookRequest, owner: HookProcess, bindings: Int32) -> Bool {
+        guard let (existing, _) = try? CopilotFileAccess.readIdentity(
+            at: bindings, filename: request.bindingName, owner: getuid()
+        ) else { return false }
+        return owner.owns(existing) && existing.sessionID == request.session
+            && existing.surfaceID == request.surface && existing.launchWorkspaceID == request.workspace
     }
 
     // A live, newer or foreign binding supersedes this one. Only `bind` may

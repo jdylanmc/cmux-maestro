@@ -58,8 +58,14 @@ def invoke(binary, arguments, payload, env=environment):
 
 try:
     args = ["--fixture-root", str(fixture)]
-    invoke("synthetic-hook", args, json.dumps({"sessionId": session}).encode())
     binding = fixture / "integration" / "bindings" / (session + ".json")
+    # Inherited CMUX_* values in a terminal CMUX does not list: nothing is bound (ADR 0002).
+    invoke("synthetic-hook", args, json.dumps({"sessionId": session}).encode(),
+           env={**environment, "MAESTRO_TEST_UNPLACED": "1"})
+    assert not binding.exists()
+    status = json.loads((fixture / "integration" / "hook-status.json").read_text())
+    assert status == {"status": "unplaced"}, status
+    invoke("synthetic-hook", args, json.dumps({"sessionId": session}).encode())
     record = json.loads(binding.read_text())
     assert record["ownerPID"] == 9001 and record["ownerStartSeconds"] == 1
     assert record["sessionID"].lower() == session

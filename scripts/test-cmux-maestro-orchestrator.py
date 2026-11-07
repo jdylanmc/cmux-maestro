@@ -609,7 +609,8 @@ try:
     if "top" in args and "--workspace" in args:
         # Per-surface controlling TTY, as `cmux top` reports it.
         result = {"windows": [{"workspaces": [{"id": args[args.index("--workspace") + 1], "panes": [{"surfaces": [
-            {"kind": "surface", "id": item, "tty": state.get("ttys", {}).get(item)} for item in state["surfaces"]
+            {"kind": "surface", "id": item, "tty": state.get("ttys", {}).get(item, "ttysfixture")}
+            for item in state["surfaces"]
         ]}]}]}]}
         print(json.dumps(result))
         raise SystemExit(0)
@@ -2591,6 +2592,70 @@ class AdmissionGateTests(unittest.TestCase):
         self.assertEqual(self.h.calls(), [])
 
 
+class CallerTerminalTests(unittest.TestCase):
+    """register and launch-coordinator need the caller in the claimed tab's own terminal (ADR 0002)."""
+
+    def setUp(self):
+        self.h = Harness()
+        self.addCleanup(self.h.close)
+
+    def test_inherited_cmux_values_in_another_terminal_refuse_register_and_launch(self):
+        surface = str(uuid.uuid4())
+        self.h.add_surface(surface)
+        before = self.h.state()
+        surfaces = list(self.h.cmux_data()["surfaces"])
+        for case, caller in (("another app's terminal", "ttys015"), ("no terminal", "")):
+            env = {**self.h.env, "CMUX_SURFACE_ID": surface, "FAKE_CALLER_TTY": caller}
+            for command in (["register", "--name", "Inherited"],
+                            ["launch-coordinator", "--cwd", str(REPO), "--task", "Coordinate.",
+                             "--account", "synthetic-account"]):
+                with self.subTest(case=case, command=command[0]):
+                    refused = self.h.run(command[0], "--workspace", self.h.workspace, "--surface", surface,
+                                         *command[1:], env=env, check=False)
+                    self.assertEqual(refused["returncode"], 2)
+                    self.assertIn("is not the CMUX tab its CMUX_WORKSPACE_ID and CMUX_SURFACE_ID name",
+                                  refused["stderr"])
+        self.assertEqual(self.h.state(), before)
+        self.assertEqual(self.h.cmux_data()["surfaces"], surfaces)
+        self.assertEqual(self.h.calls(), [])
+
+    def test_caller_in_the_claimed_tab_still_registers(self):
+        surface = str(uuid.uuid4())
+        self.h.add_surface(surface)
+        registered = self.h.run("register", "--workspace", self.h.workspace, "--surface", surface,
+                                "--name", "Placed", env={**self.h.env, "CMUX_SURFACE_ID": surface,
+                                                         "FAKE_CALLER_TTY": "ttysfixture"})
+        self.assertEqual(self.h.state()["nodes"][registered["coordinatorId"]]["surfaceId"], surface)
+
+    def test_caller_terminal_is_the_nearest_ancestor_with_one(self):
+        fn = CONTROLLER_API["caller_terminal"]
+        ttys = {10: None, 9: None, 8: "ttys000", 7: "ttys001"}
+        parents = {10: 9, 9: 8, 8: 7}
+        with patch.dict(fn.__globals__, {"process_tty": ttys.get, "process_parent": parents.get}), \
+                patch.object(os, "getpid", return_value=10):
+            self.assertEqual(fn(), "ttys000")
+        for parents in ({10: 1}, {10: None}, {10: 9, 9: 10}):
+            with self.subTest(parents=parents), patch.dict(fn.__globals__, {
+                    "process_tty": lambda pid: None, "process_parent": parents.get}), \
+                    patch.object(os, "getpid", return_value=10):
+                self.assertIsNone(fn())
+
+    def test_caller_terminal_reads_a_real_controlling_terminal(self):
+        probe = (
+            "import fcntl, json, os, pty, runpy, sys, termios\n"
+            "master, slave = pty.openpty()\n"
+            "os.setsid()\n"
+            "fcntl.ioctl(slave, termios.TIOCSCTTY, 0)\n"
+            "api = runpy.run_path(sys.argv[1])\n"
+            "print(json.dumps([os.ttyname(slave)[5:], api['caller_terminal']()]))\n"
+        )
+        result = subprocess.run([sys.executable, "-c", probe, str(CONTROLLER)],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        own, found = json.loads(result.stdout)
+        self.assertEqual(found, own)
+
+
 class RecordedAccountTests(unittest.TestCase):
     """One recorded account per node: observed when reported, else the launch's pinned login."""
 
@@ -3467,7 +3532,9 @@ class BornManagedEnrollmentTests(BornFixture, unittest.TestCase):
 
     def test_register_and_launch_coordinator_name_the_born_owner(self):
         first = self.enroll()
-        env = {**self.h.env, "CMUX_SURFACE_ID": first["surface"]}
+        # The caller sits in that tab's own terminal; only the born owner refuses it.
+        env = {**self.h.env, "CMUX_SURFACE_ID": first["surface"],
+               "FAKE_CALLER_TTY": self.h.cmux_data()["ttys"][first["surface"]]}
         ended = self.h.run("register", "--workspace", self.h.workspace, "--surface", first["surface"],
                            "--name", "Refused", env=env, check=False)
         self.assertIn("archive-ended", ended["stderr"])

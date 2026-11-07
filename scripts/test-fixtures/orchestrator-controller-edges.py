@@ -22,6 +22,9 @@ def fixture_edges(environment, driver):
 def configure_fixture_controller(api, driver):
     controller = api["main"].__globals__
     controller.update(fixture_edges(os.environ, driver))
+    # Fixture callers run without a terminal; the fake CMUX reports this TTY for every surface
+    # unless a case names another (`ttys`), and a case can claim another caller TTY.
+    controller["caller_terminal"] = lambda: os.environ.get("FAKE_CALLER_TTY", "ttysfixture") or None
     controller["launch_reserved_session"] = legacy_fixture_launcher(controller["launch_reserved_session"], api)
     if "FAKE_FAIL_STATE_FSYNC_AT" in os.environ or "FAKE_FAIL_PROJECTION_AT" in os.environ:
         controller["Store"]._atomic = staticmethod(failing_after_replace(controller["Store"]._atomic))

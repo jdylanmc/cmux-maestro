@@ -2183,6 +2183,46 @@ def require_current_surface(workspace, surface):
         raise OrchestrationError("Registration must match the current caller CMUX surface.")
 
 
+def process_parent(pid):
+    try:
+        result = subprocess.run(["/bin/ps", "-o", "ppid=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=close_timeout(3))
+        return int(result.stdout.strip()) if result.returncode == 0 else None
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def caller_terminal():
+    """The controlling TTY of this process or its nearest ancestor that has one, or None.
+
+    An agent's shell tool often has no terminal; its Copilot provider does."""
+    pid = os.getpid()
+    for _ in range(32):
+        terminal = process_tty(pid)
+        if terminal is not None:
+            return terminal
+        pid = process_parent(pid)
+        if pid is None or pid <= 1:
+            return None
+    return None
+
+
+def require_caller_terminal(cmux, workspace, surface):
+    """The caller runs in the claimed surface's own terminal, as CMUX reports it now (ADR 0002).
+
+    An app or multiplexer started from a CMUX tab passes that tab's CMUX_* values to its own
+    terminals; they name the tab but not its TTY. Unknown refuses."""
+    terminal = caller_terminal()
+    try:
+        placed = terminal is not None and cmux.surface_tty(workspace, surface) == terminal
+    except OrchestrationError:
+        placed = False
+    if not placed:
+        raise OrchestrationError(
+            "This terminal is not the CMUX tab its CMUX_WORKSPACE_ID and CMUX_SURFACE_ID name "
+            "(values inherited from another app's terminal?). Run this from that CMUX tab.")
+
+
 def descendants(state, actor):
     children = {}
     for node in state["nodes"].values():
@@ -2464,6 +2504,7 @@ def command_register(args, root, cmux):
     cwd = assigned_directory(args.cwd)
     metadata = git_display_metadata(cwd) if cwd is not None else absent_git_metadata()
     pane = cmux.validate_surface(workspace, surface)
+    require_caller_terminal(cmux, workspace, surface)
 
     def register(state):
         require_node_capacity(state, workspace)
@@ -2484,6 +2525,7 @@ def command_launch_coordinator(args, root, cmux):
     source_surface = canonical_uuid(args.surface, "surface ID")
     require_current_surface(workspace, source_surface)
     pane = cmux.validate_surface(workspace, source_surface)
+    require_caller_terminal(cmux, workspace, source_surface)
     snapshot = read_state(root)
     require_node_capacity(snapshot, workspace)
     holder = next((current for current in snapshot["nodes"].values()

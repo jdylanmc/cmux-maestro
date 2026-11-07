@@ -4,6 +4,15 @@ Notable changes are recorded using Keep a Changelog categories.
 
 ## Unreleased
 
+### Fixed
+
+- Sessions in another app's terminal that inherited a CMUX tab's `CMUX_*`
+  values no longer bind to that tab. The observer binds only when a live CMUX
+  reports the claimed surface with the session's own terminal; any doubt
+  leaves the session unbound (ADR 0013).
+- `register` and `launch-coordinator` refuse, with a plain reason, when the
+  caller's terminal is not the CMUX tab its `CMUX_*` values name.
+
 ### Changed
 
 - Agent previews and the agent **Active window** footer omit **Workspace path**.

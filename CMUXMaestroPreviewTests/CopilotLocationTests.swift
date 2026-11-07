@@ -213,11 +213,12 @@ struct CopilotLocationHookTests: Sendable {
         let state = try scratch.directory("state/\(session.uuidString.lowercased())")
         if let workspaceYAML { try Data(workspaceYAML.utf8).write(to: state.appendingPathComponent("workspace.yaml")) }
         try Data().write(to: state.appendingPathComponent("inuse.101.lock"))
-        let recorder = CMUXMaestroPreview.CopilotHookRecorder(
+        var recorder = CMUXMaestroPreview.CopilotHookRecorder(
             integrationRoot: scratch.root.appendingPathComponent("integration"),
             sessionStateRoot: scratch.root.appendingPathComponent("state"), processID: 103,
             process: { @Sendable pid in lookup(pid) }
         )
+        recorder.placement = { _, _ in true }
         var body = payload
         body["sessionId"] = session.uuidString
         return recorder.bind(
