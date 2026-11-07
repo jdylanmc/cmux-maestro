@@ -373,10 +373,15 @@ struct CopilotHookTests: Sendable {
         }
     }
 
-    private func recorder(_ root: URL, process: (@Sendable (Int32) -> HookLookup)? = nil) -> CopilotHookRecorder {
-        CopilotHookRecorder(integrationRoot: root.appendingPathComponent("integration"),
-                            sessionStateRoot: root.appendingPathComponent("state"),
-                            processID: 103, process: process ?? { @Sendable pid in lookup(pid) })
+    private func recorder(
+        _ root: URL, process: (@Sendable (Int32) -> HookLookup)? = nil,
+        placement: @escaping @Sendable (Int32, UUID) -> Bool = { _, _ in true }
+    ) -> CopilotHookRecorder {
+        var recorder = CopilotHookRecorder(integrationRoot: root.appendingPathComponent("integration"),
+                                           sessionStateRoot: root.appendingPathComponent("state"),
+                                           processID: 103, process: process ?? { @Sendable pid in lookup(pid) })
+        recorder.placement = placement
+        return recorder
     }
 
     private func binding(_ root: URL) throws -> CopilotIdentityRecord {
@@ -404,6 +409,90 @@ struct CopilotHookTests: Sendable {
         #expect((directory[.posixPermissions] as? NSNumber)?.intValue == 0o700)
         #expect(try !FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path)
             .contains(where: { $0.hasPrefix(".pending-") }))
+    }
+
+    @Test func inheritedCMUXValuesOutsideTheirSurfaceRecordNothing() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        let asked = HookProbeCalls()
+        let outcome = recorder(root, placement: { owner, claimed in
+            _ = asked.next()
+            return !(owner == 101 && claimed == surface)
+        }).bind(payload: payload, environment: environment)
+        #expect(outcome == .unplaced)
+        #expect(asked.peek() == 1)
+        let bindings = root.appendingPathComponent("integration/bindings")
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: bindings.path)) ?? [])
+            .filter { !$0.hasPrefix(".") }.isEmpty)
+        let status = try String(contentsOf: root.appendingPathComponent("integration/hook-status.json"), encoding: .utf8)
+        #expect(status == "{\"status\":\"unplaced\"}\n")
+    }
+
+    @Test func placementIsAskedOnlyBeforeABindingIsCreatedOrMoved() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try marker(root)
+        let asked = HookProbeCalls()
+        let placement: @Sendable (Int32, UUID) -> Bool = { _, _ in _ = asked.next(); return true }
+        #expect(recorder(root, placement: placement).bind(payload: payload, environment: environment) == .recorded)
+        #expect(recorder(root, placement: placement).bind(payload: payload, environment: environment) == .recorded)
+        #expect(asked.peek() == 1)
+        let moved = environment.merging(["CMUX_SURFACE_ID": UUID().uuidString]) { _, new in new }
+        #expect(recorder(root, placement: { _, _ in _ = asked.next(); return false })
+            .bind(payload: payload, environment: moved) == .unplaced)
+        #expect(asked.peek() == 2)
+        #expect(try binding(root).surfaceID == surface)
+    }
+
+    @Test func surfaceTerminalReadsOnlyTheOneExactSurface() throws {
+        func report(_ surfaces: [[String: Any]]) throws -> Data {
+            try JSONSerialization.data(withJSONObject: ["windows": [["workspaces": [["panes": [
+                ["surfaces": surfaces.map { ["kind": "surface"].merging($0) { _, new in new } }]
+            ]]]]]])
+        }
+        let other = UUID().uuidString
+        let place = CopilotTerminalPlacement.surfaceTerminal
+        #expect(place(try report([["id": other, "tty": "ttys000"], ["id": surface.uuidString.lowercased(),
+                                                                       "tty": "/dev/ttys014"]]), surface) == "ttys014")
+        #expect(place(try report([["id": other, "tty": "ttys014"]]), surface) == nil)
+        #expect(place(try report([["id": surface.uuidString, "tty": "ttys014"],
+                                  ["id": surface.uuidString, "tty": "ttys014"]]), surface) == nil)
+        for tty: Any in [NSNull(), "", "??", "pts/1", "tty../x", 7] {
+            #expect(place(try report([["id": surface.uuidString, "tty": tty]]), surface) == nil)
+        }
+        #expect(place(Data("not json".utf8), surface) == nil)
+    }
+
+    @Test func cmuxTopIsBoundedAndOnlyATrustedSuccessfulAnswerCounts() throws {
+        let root = try fixture()
+        defer { try? FileManager.default.removeItem(at: root) }
+        func tool(_ name: String, _ body: String, mode: Int = 0o700) throws -> String {
+            let url = root.appendingPathComponent(name)
+            try Data("#!/bin/sh\n\(body)\n".utf8).write(to: url)
+            try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
+            return url.path
+        }
+        // System binaries, not fresh scripts: a parallel fork can hold a just-written file open
+        // (ETXTBSY). Generous hang guards on a loaded runner; only the silent case uses the bound.
+        let guardTime: TimeInterval = 60
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: "/bin/echo", timeout: guardTime)
+            .map { String(decoding: $0, as: UTF8.self) } == "--json --id-format uuids top --all\n")
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: "/usr/bin/false", timeout: guardTime) == nil)
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: "/usr/bin/yes", timeout: guardTime) == nil)
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("silent", "exec tail -f /dev/null"),
+                                                 timeout: 0.2) == nil)
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: nil) == nil)
+
+        let writable = try tool("writable", "true", mode: 0o772)
+        #expect(CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": writable]) == nil)
+        #expect(CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": "relative/cmux"]) == nil)
+        let trusted = try tool("trusted", "true")
+        let resolved = CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": trusted])
+        #expect(resolved.map { URL(fileURLWithPath: $0).lastPathComponent } == "trusted")
+        _ = try tool("cmux", "true")
+        #expect(CopilotTerminalPlacement.cmuxExecutable(environment: ["PATH": "relative:\(root.path)"])
+            .map { URL(fileURLWithPath: $0).lastPathComponent } == "cmux")
     }
 
     @Test func rejectsMalformedUnknownConflictingAndOversizedPayloads() throws {

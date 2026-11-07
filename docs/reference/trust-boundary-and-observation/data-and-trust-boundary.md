@@ -9,6 +9,13 @@
 - Helper accepts bounded JSON with canonical `sessionId`/`session_id`, plus own
   inherited `CMUX_WORKSPACE_ID` and `CMUX_SURFACE_ID`. It never accepts a
   transcript path or infers identity from title, current directory or text.
+- Those values are only a claim. Before a binding is created or moved to
+  another placement, a live CMUX must report the claimed surface with the
+  owner's controlling TTY (`cmux top --all`, bounded to 2 s and 4 MiB). An app
+  or multiplexer started from a CMUX tab passes that tab's values to its own
+  terminals; their sessions stay unbound (`unplaced`). Any doubt (no answer,
+  unknown TTY, untrusted CLI) also leaves the session unbound. A refresh of this
+  owner's own binding in the same placement is not re-asked.
 - Same-user BSD process metadata identifies matching **ancestor**, not
   blindly hook's shell parent. Source `inuse.PID.lock` and stable process
   generation must agree before helper publishes atomic binding.

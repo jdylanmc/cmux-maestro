@@ -136,6 +136,10 @@ title, directory, screen contents, or current focus:
   --name "Coordinator"
 ```
 
+Run it from that CMUX tab itself: `register` and `launch-coordinator` refuse
+when the caller's terminal is not the TTY CMUX reports for `--surface` (for
+example, values inherited by another app's terminal). Do not work around it.
+
 Retain the returned `coordinatorId` and `controlToken` privately for this
 orchestration run. `--cwd` is explicit probe provenance for the coordinator's
 verified Git worktree and branch. Non-Git directories produce no Git labels;

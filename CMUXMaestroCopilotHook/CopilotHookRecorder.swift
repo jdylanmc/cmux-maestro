@@ -21,7 +21,143 @@ extension CopilotProcessIdentity {
 }
 
 nonisolated enum HookOutcome: String, Sendable {
-    case recorded, disabled, invalidInput, noOwner, unavailable, superseded
+    case recorded, disabled, invalidInput, noOwner, unavailable, superseded, unplaced
+}
+
+/// Whether a Copilot owner runs in the CMUX surface its environment names (ADR 0002, 0025).
+/// An app or multiplexer started from a CMUX tab passes that tab's CMUX_* values to its own
+/// terminals; their sessions must never bind to that tab. Only a live CMUX reporting that exact
+/// surface with the owner's controlling TTY places it. No answer in time, an unknown TTY or any
+/// other doubt leaves the session unbound: a wrong binding shows another app's session on a tab.
+nonisolated enum CopilotTerminalPlacement {
+    static let timeout: TimeInterval = 2
+    static let maximumReport = 4 * 1_048_576
+
+    static func verify(owner: Int32, surface: UUID) -> Bool {
+        guard let terminal = controllingTerminal(owner), let report = cmuxTop() else { return false }
+        return surfaceTerminal(in: report, surface: surface) == terminal
+    }
+
+    static func controllingTerminal(_ pid: Int32) -> String? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+        let count = withUnsafeMutablePointer(to: &info) { proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, $0, size) }
+        guard count == size, info.e_tdev != UInt32.max,
+              let name = devname(dev_t(bitPattern: info.e_tdev), S_IFCHR) else { return nil }
+        return normalized(String(cString: name))
+    }
+
+    static func normalized(_ value: Any?) -> String? {
+        guard var text = value as? String else { return nil }
+        if text.hasPrefix("/dev/") { text.removeFirst(5) }
+        let suffix = text.dropFirst(3)
+        guard text.hasPrefix("tty"), (1...16).contains(suffix.count),
+              suffix.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber) }) else { return nil }
+        return text
+    }
+
+    /// The TTY of the one surface with this ID in a `cmux top` JSON report, or nil.
+    static func surfaceTerminal(in report: Data, surface: UUID) -> String? {
+        guard let object = try? JSONSerialization.jsonObject(with: report) else { return nil }
+        var found: [Any?] = []
+        func walk(_ value: Any) {
+            if let dictionary = value as? [String: Any] {
+                if dictionary["kind"] as? String == "surface", let id = dictionary["id"] as? String,
+                   UUID(uuidString: id) == surface {
+                    found.append(dictionary["tty"])
+                }
+                dictionary.values.forEach(walk)
+            } else if let array = value as? [Any] {
+                array.forEach(walk)
+            }
+        }
+        walk(object)
+        return found.count == 1 ? normalized(found[0]) : nil
+    }
+
+    /// `cmux top --all` as JSON, bounded in time and size. The CLI reaches the CMUX this
+    /// terminal's environment names; a quit or foreign CMUX answers nothing. Spawned directly
+    /// (no inherited descriptors) and reaped by its own PID only.
+    static func cmuxTop(
+        executable: String? = cmuxExecutable(), timeout: TimeInterval = timeout
+    ) -> Data? {
+        guard let executable else { return nil }
+        var output: [Int32] = [-1, -1]
+        guard pipe(&output) == 0 else { return nil }
+        defer { for fd in output where fd >= 0 { close(fd) } }
+        var actions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        var attributes: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
+              posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO) == 0,
+              posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0 else { return nil }
+        let arguments = [executable, "--json", "--id-format", "uuids", "top", "--all"]
+        var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, executable, &actions, &attributes, &argv, environ) == 0 else { return nil }
+        close(output[1])
+        output[1] = -1
+
+        let deadline = Date().addingTimeInterval(timeout)
+        var bytes = Data()
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        var complete = false
+        while !complete {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            var descriptor = pollfd(fd: output[0], events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptor, 1, Int32(min(remaining, 1) * 1_000) + 1)
+            if ready < 0 && errno != EINTR { break }
+            guard ready > 0 else { continue }
+            let count = read(output[0], &buffer, buffer.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { complete = count == 0; break }
+            guard bytes.count + count <= maximumReport else { break }
+            bytes.append(contentsOf: buffer.prefix(count))
+        }
+        var status: Int32 = 0
+        var exited = false
+        while !exited {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid { exited = true; break }
+            if result < 0 && errno != EINTR { break }
+            if !complete || Date() >= deadline { break }
+            usleep(5_000)
+        }
+        if !exited {
+            // Ask our own unanswered child to stop; it is reaped if it stops promptly.
+            kill(pid, SIGTERM)
+            for _ in 0..<100 where waitpid(pid, &status, WNOHANG) == 0 { usleep(10_000) }
+            return nil
+        }
+        guard complete, (status & 0x7f) == 0, (status >> 8) & 0xff == 0 else { return nil }
+        return bytes
+    }
+
+    /// The CLI CMUX puts in its terminals, else `cmux` on PATH; only a trusted regular file.
+    static func cmuxExecutable(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> String? {
+        var candidates: [String] = []
+        if let bundled = environment["CMUX_BUNDLED_CLI_PATH"] { candidates.append(bundled) }
+        for directory in (environment["PATH"] ?? "").split(separator: ":") {
+            candidates.append(String(directory) + "/cmux")
+        }
+        for candidate in candidates where candidate.hasPrefix("/") {
+            guard let resolved = realpath(candidate, nil) else { continue }
+            defer { free(resolved) }
+            var info = stat()
+            guard stat(resolved, &info) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_mode & 0o022 == 0,
+                  info.st_uid == 0 || info.st_uid == getuid(), access(resolved, X_OK) == 0 else { continue }
+            return String(cString: resolved)
+        }
+        return nil
+    }
 }
 
 /// All path traversal is descriptor-relative. The helper never follows a source
@@ -94,6 +230,9 @@ nonisolated struct CopilotHookRecorder {
     let process: @Sendable (Int32) -> CopilotProcessLookup
     var bindingLock: @Sendable (Int32, Int32) -> Int32 = { flock($0, $1) }
     var syncDirectory: @Sendable (Int32) -> Int32 = { fsync($0) }
+    /// Whether the owner runs in the claimed CMUX surface. Asked only before a binding is created
+    /// or moved, never on a refresh of this owner's own binding in the same placement.
+    var placement: @Sendable (_ owner: Int32, _ surface: UUID) -> Bool = CopilotTerminalPlacement.verify
 
     static func canonicalUUID(_ value: String?) -> UUID? {
         guard let value, value.count == 36, let id = UUID(uuidString: value),
@@ -250,6 +389,10 @@ nonisolated struct CopilotHookRecorder {
         let bindingURL = integrationRoot.appendingPathComponent("bindings")
         let bindings = try HookFiles.privateDirectory(bindingURL)
         defer { close(bindings) }
+        if case .bind = intent, !bound(request, owner: owner, bindings: bindings),
+           !placement(owner.pid, request.surface) {
+            return diagnose(.unplaced)
+        }
         let lockName = ".\(request.session.uuidString.lowercased()).lock"
         let lock = openat(bindings, lockName, O_RDWR | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC, 0o600)
         guard lock >= 0 else { return diagnose(.unavailable) }
@@ -303,6 +446,15 @@ nonisolated struct CopilotHookRecorder {
             next = candidate.parentPID
         }
         return ProcessAncestry(ancestors: ancestors, owner: nil)
+    }
+
+    // This owner already holds this session's binding in the same placement (placed when written).
+    private func bound(_ request: HookRequest, owner: HookProcess, bindings: Int32) -> Bool {
+        guard let (existing, _) = try? CopilotFileAccess.readIdentity(
+            at: bindings, filename: request.bindingName, owner: getuid()
+        ) else { return false }
+        return owner.owns(existing) && existing.sessionID == request.session
+            && existing.surfaceID == request.surface && existing.launchWorkspaceID == request.workspace
     }
 
     // A live, newer or foreign binding supersedes this one. Only `bind` may
