@@ -76,38 +76,67 @@ nonisolated enum CopilotTerminalPlacement {
     }
 
     /// `cmux top --all` as JSON, bounded in time and size. The CLI reaches the CMUX this
-    /// terminal's environment names; a quit or foreign CMUX answers nothing.
+    /// terminal's environment names; a quit or foreign CMUX answers nothing. Spawned directly
+    /// (no inherited descriptors) and reaped by its own PID only.
     static func cmuxTop(
         executable: String? = cmuxExecutable(), timeout: TimeInterval = timeout
     ) -> Data? {
         guard let executable else { return nil }
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = ["--json", "--id-format", "uuids", "top", "--all"]
-        let output = Pipe()
-        process.standardOutput = output
-        process.standardError = FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        let collected = DispatchSemaphore(value: 0)
-        let buffer = ReportBuffer()
-        do { try process.run() } catch { return nil }
-        DispatchQueue.global().async {
-            let reader = output.fileHandleForReading
-            while let chunk = try? reader.read(upToCount: 65_536), !chunk.isEmpty {
-                if !buffer.append(chunk, limit: maximumReport) { process.terminate() }
-            }
-            collected.signal()
+        var output: [Int32] = [-1, -1]
+        guard pipe(&output) == 0 else { return nil }
+        defer { for fd in output where fd >= 0 { close(fd) } }
+        var actions: posix_spawn_file_actions_t?
+        guard posix_spawn_file_actions_init(&actions) == 0 else { return nil }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        var attributes: posix_spawnattr_t?
+        guard posix_spawnattr_init(&attributes) == 0 else { return nil }
+        defer { posix_spawnattr_destroy(&attributes) }
+        guard posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0) == 0,
+              posix_spawn_file_actions_adddup2(&actions, output[1], STDOUT_FILENO) == 0,
+              posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0) == 0,
+              posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT)) == 0 else { return nil }
+        let arguments = [executable, "--json", "--id-format", "uuids", "top", "--all"]
+        var argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, executable, &actions, &attributes, &argv, environ) == 0 else { return nil }
+        close(output[1])
+        output[1] = -1
+
+        let deadline = Date().addingTimeInterval(timeout)
+        var bytes = Data()
+        var buffer = [UInt8](repeating: 0, count: 65_536)
+        var complete = false
+        while !complete {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { break }
+            var descriptor = pollfd(fd: output[0], events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptor, 1, Int32(min(remaining, 1) * 1_000) + 1)
+            if ready < 0 && errno != EINTR { break }
+            guard ready > 0 else { continue }
+            let count = read(output[0], &buffer, buffer.count)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { complete = count == 0; break }
+            guard bytes.count + count <= maximumReport else { break }
+            bytes.append(contentsOf: buffer.prefix(count))
         }
-        guard finished.wait(timeout: .now() + timeout) == .success else {
-            process.terminate()
-            _ = finished.wait(timeout: .now() + 1)
+        var status: Int32 = 0
+        var exited = false
+        while !exited {
+            let result = waitpid(pid, &status, WNOHANG)
+            if result == pid { exited = true; break }
+            if result < 0 && errno != EINTR { break }
+            if !complete || Date() >= deadline { break }
+            usleep(5_000)
+        }
+        if !exited {
+            // Ask our own unanswered child to stop; it is reaped if it stops promptly.
+            kill(pid, SIGTERM)
+            for _ in 0..<100 where waitpid(pid, &status, WNOHANG) == 0 { usleep(10_000) }
             return nil
         }
-        guard collected.wait(timeout: .now() + 1) == .success,
-              process.terminationReason == .exit, process.terminationStatus == 0 else { return nil }
-        return buffer.data
+        guard complete, (status & 0x7f) == 0, (status >> 8) & 0xff == 0 else { return nil }
+        return bytes
     }
 
     /// The CLI CMUX puts in its terminals, else `cmux` on PATH; only a trusted regular file.
@@ -128,26 +157,6 @@ nonisolated enum CopilotTerminalPlacement {
             return String(cString: resolved)
         }
         return nil
-    }
-
-    private final class ReportBuffer: @unchecked Sendable {
-        private let lock = NSLock()
-        private var bytes = Data()
-        private var overflowed = false
-
-        func append(_ chunk: Data, limit: Int) -> Bool {
-            lock.lock()
-            defer { lock.unlock() }
-            guard !overflowed, bytes.count + chunk.count <= limit else { overflowed = true; return false }
-            bytes.append(chunk)
-            return true
-        }
-
-        var data: Data? {
-            lock.lock()
-            defer { lock.unlock() }
-            return overflowed ? nil : bytes
-        }
     }
 }
 

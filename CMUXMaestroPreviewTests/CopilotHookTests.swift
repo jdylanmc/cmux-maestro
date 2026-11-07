@@ -473,24 +473,23 @@ struct CopilotHookTests: Sendable {
             try FileManager.default.setAttributes([.posixPermissions: mode], ofItemAtPath: url.path)
             return url.path
         }
-        let answer = try tool("answer", #"[ "$*" = "--json --id-format uuids top --all" ] || exit 3; echo '{"windows":[]}'"#)
-        // Generous hang guards on a loaded runner; only the silent case exercises the bound.
+        // System binaries, not fresh scripts: a parallel fork can hold a just-written file open
+        // (ETXTBSY). Generous hang guards on a loaded runner; only the silent case uses the bound.
         let guardTime: TimeInterval = 60
-        #expect(CopilotTerminalPlacement.cmuxTop(executable: answer, timeout: guardTime)
-            .map { String(decoding: $0, as: UTF8.self) } == "{\"windows\":[]}\n")
-        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("refused", "echo '{}'; exit 1"),
-                                                 timeout: guardTime) == nil)
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: "/bin/echo", timeout: guardTime)
+            .map { String(decoding: $0, as: UTF8.self) } == "--json --id-format uuids top --all\n")
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: "/usr/bin/false", timeout: guardTime) == nil)
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: "/usr/bin/yes", timeout: guardTime) == nil)
         #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("silent", "exec tail -f /dev/null"),
                                                  timeout: 0.2) == nil)
-        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("flood", "exec cat /dev/zero"),
-                                                 timeout: guardTime) == nil)
         #expect(CopilotTerminalPlacement.cmuxTop(executable: nil) == nil)
 
         let writable = try tool("writable", "true", mode: 0o772)
         #expect(CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": writable]) == nil)
         #expect(CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": "relative/cmux"]) == nil)
-        let resolved = CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": answer])
-        #expect(resolved.map { URL(fileURLWithPath: $0).lastPathComponent } == "answer")
+        let trusted = try tool("trusted", "true")
+        let resolved = CopilotTerminalPlacement.cmuxExecutable(environment: ["CMUX_BUNDLED_CLI_PATH": trusted])
+        #expect(resolved.map { URL(fileURLWithPath: $0).lastPathComponent } == "trusted")
         _ = try tool("cmux", "true")
         #expect(CopilotTerminalPlacement.cmuxExecutable(environment: ["PATH": "relative:\(root.path)"])
             .map { URL(fileURLWithPath: $0).lastPathComponent } == "cmux")
