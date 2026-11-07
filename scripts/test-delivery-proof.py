@@ -24,6 +24,9 @@ import uuid
 REPO = Path(__file__).resolve().parents[1]
 PROOF = runpy.run_path(str(REPO / "scripts/delivery-proof/fixture.py"))
 CONTROLLER = runpy.run_path(str(REPO / "scripts/cmux-maestro-orchestrator.py"))
+# These contract fixtures drive launches without a terminal; the caller-terminal guard has its own
+# tests (CallerTerminalTests in test-cmux-maestro-orchestrator.py).
+CONTROLLER["main"].__globals__["require_caller_terminal"] = lambda cmux, workspace, surface: None
 MAX_LIVE_WORKERS = CONTROLLER["MAX_LIVE_WORKERS"]
 
 

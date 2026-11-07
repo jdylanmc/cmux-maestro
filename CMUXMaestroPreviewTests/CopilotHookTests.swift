@@ -474,13 +474,16 @@ struct CopilotHookTests: Sendable {
             return url.path
         }
         let answer = try tool("answer", #"[ "$*" = "--json --id-format uuids top --all" ] || exit 3; echo '{"windows":[]}'"#)
-        #expect(CopilotTerminalPlacement.cmuxTop(executable: answer).map { String(decoding: $0, as: UTF8.self) }
-            == "{\"windows\":[]}\n")
-        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("refused", "echo '{}'; exit 1")) == nil)
-        // Hang guards, not timing assertions: an unanswered or unbounded CLI is no answer.
+        // Generous hang guards on a loaded runner; only the silent case exercises the bound.
+        let guardTime: TimeInterval = 60
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: answer, timeout: guardTime)
+            .map { String(decoding: $0, as: UTF8.self) } == "{\"windows\":[]}\n")
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("refused", "echo '{}'; exit 1"),
+                                                 timeout: guardTime) == nil)
         #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("silent", "exec tail -f /dev/null"),
                                                  timeout: 0.2) == nil)
-        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("flood", "exec cat /dev/zero")) == nil)
+        #expect(CopilotTerminalPlacement.cmuxTop(executable: try tool("flood", "exec cat /dev/zero"),
+                                                 timeout: guardTime) == nil)
         #expect(CopilotTerminalPlacement.cmuxTop(executable: nil) == nil)
 
         let writable = try tool("writable", "true", mode: 0o772)
